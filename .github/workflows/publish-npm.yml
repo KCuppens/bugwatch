@@ -1,0 +1,89 @@
+name: Publish npm Package
+
+on:
+  push:
+    tags:
+      - "@bugwatch/*@*"
+
+env:
+  NODE_VERSION: "20"
+
+jobs:
+  publish:
+    name: Publish to npm
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Parse tag
+        id: parse
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          # Extract package name and version from tag like @bugwatch/core@0.1.0
+          PACKAGE_NAME=$(echo "$TAG" | sed 's/@[^@]*$//')
+          VERSION=$(echo "$TAG" | sed 's/.*@//')
+
+          # Map package name to directory
+          case "$PACKAGE_NAME" in
+            "@bugwatch/core")
+              PACKAGE_DIR="packages/sdk/core"
+              ;;
+            "@bugwatch/node")
+              PACKAGE_DIR="packages/sdk/node"
+              ;;
+            "@bugwatch/react")
+              PACKAGE_DIR="packages/sdk/react"
+              ;;
+            "@bugwatch/nextjs")
+              PACKAGE_DIR="packages/sdk/nextjs"
+              ;;
+            "@bugwatch/cli")
+              PACKAGE_DIR="packages/cli"
+              ;;
+            *)
+              echo "Unknown package: $PACKAGE_NAME"
+              exit 1
+              ;;
+          esac
+
+          echo "package_name=$PACKAGE_NAME" >> $GITHUB_OUTPUT
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "package_dir=$PACKAGE_DIR" >> $GITHUB_OUTPUT
+
+          echo "Publishing $PACKAGE_NAME@$VERSION from $PACKAGE_DIR"
+
+      - name: Verify version matches
+        run: |
+          PACKAGE_VERSION=$(node -p "require('./${{ steps.parse.outputs.package_dir }}/package.json').version")
+          if [ "$PACKAGE_VERSION" != "${{ steps.parse.outputs.version }}" ]; then
+            echo "Version mismatch: package.json has $PACKAGE_VERSION but tag is ${{ steps.parse.outputs.version }}"
+            exit 1
+          fi
+          echo "Version verified: $PACKAGE_VERSION"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "npm"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build all packages
+        run: npm run build
+
+      - name: Run tests
+        run: npm test -- --filter=${{ steps.parse.outputs.package_name }}
+
+      - name: Publish to npm
+        run: |
+          cd ${{ steps.parse.outputs.package_dir }}
+          npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

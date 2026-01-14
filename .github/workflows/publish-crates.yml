@@ -1,0 +1,59 @@
+name: Publish Rust SDK to crates.io
+
+on:
+  push:
+    tags:
+      - "bugwatch-rust@*"
+
+jobs:
+  publish:
+    name: Publish to crates.io
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/sdk/rust
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Parse tag
+        id: parse
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          VERSION=$(echo "$TAG" | sed 's/bugwatch-rust@//')
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Publishing bugwatch (Rust) version $VERSION"
+
+      - name: Verify version matches
+        run: |
+          CARGO_VERSION=$(grep -oP '^version = "\K[^"]+' Cargo.toml)
+          if [ "$CARGO_VERSION" != "${{ steps.parse.outputs.version }}" ]; then
+            echo "Version mismatch: Cargo.toml has $CARGO_VERSION but tag is ${{ steps.parse.outputs.version }}"
+            exit 1
+          fi
+          echo "Version verified: $CARGO_VERSION"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            packages/sdk/rust/target
+          key: ${{ runner.os }}-cargo-sdk-${{ hashFiles('packages/sdk/rust/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-sdk-
+
+      - name: Run tests
+        run: cargo test --all-features
+
+      - name: Dry run publish
+        run: cargo publish --dry-run
+
+      - name: Publish to crates.io
+        run: cargo publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}

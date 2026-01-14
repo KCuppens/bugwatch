@@ -1,0 +1,232 @@
+name: Release All Packages
+
+on:
+  push:
+    tags:
+      - "v*"
+
+env:
+  NODE_VERSION: "20"
+  PYTHON_VERSION: "3.11"
+
+jobs:
+  # Parse version and verify all packages match
+  prepare:
+    name: Prepare Release
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.parse.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Parse tag
+        id: parse
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          VERSION="${TAG#v}"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Releasing version $VERSION"
+
+      - name: Verify all package versions match
+        run: |
+          VERSION="${{ steps.parse.outputs.version }}"
+          ERRORS=0
+
+          # Check npm packages
+          for pkg in packages/sdk/core packages/sdk/node packages/sdk/react packages/sdk/nextjs packages/cli; do
+            PKG_VERSION=$(node -p "require('./$pkg/package.json').version")
+            if [ "$PKG_VERSION" != "$VERSION" ]; then
+              echo "❌ $pkg: expected $VERSION, got $PKG_VERSION"
+              ERRORS=$((ERRORS + 1))
+            else
+              echo "✓ $pkg: $PKG_VERSION"
+            fi
+          done
+
+          # Check Python package
+          PYPI_VERSION=$(grep -oP 'version = "\K[^"]+' packages/sdk/python/pyproject.toml)
+          if [ "$PYPI_VERSION" != "$VERSION" ]; then
+            echo "❌ Python SDK: expected $VERSION, got $PYPI_VERSION"
+            ERRORS=$((ERRORS + 1))
+          else
+            echo "✓ Python SDK: $PYPI_VERSION"
+          fi
+
+          # Check Rust package
+          RUST_VERSION=$(grep -oP '^version = "\K[^"]+' packages/sdk/rust/Cargo.toml)
+          if [ "$RUST_VERSION" != "$VERSION" ]; then
+            echo "❌ Rust SDK: expected $VERSION, got $RUST_VERSION"
+            ERRORS=$((ERRORS + 1))
+          else
+            echo "✓ Rust SDK: $RUST_VERSION"
+          fi
+
+          if [ $ERRORS -gt 0 ]; then
+            echo ""
+            echo "Version mismatch in $ERRORS package(s). Please update versions before releasing."
+            exit 1
+          fi
+
+  # Publish npm packages in dependency order
+  publish-npm:
+    name: Publish npm Packages
+    runs-on: ubuntu-latest
+    needs: prepare
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "npm"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build all packages
+        run: npm run build
+
+      - name: Run tests
+        run: npm test
+
+      # Publish in dependency order
+      - name: Publish @bugwatch/core
+        run: npm publish --access public
+        working-directory: packages/sdk/core
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Publish @bugwatch/node
+        run: npm publish --access public
+        working-directory: packages/sdk/node
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Publish @bugwatch/react
+        run: npm publish --access public
+        working-directory: packages/sdk/react
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Publish @bugwatch/nextjs
+        run: npm publish --access public
+        working-directory: packages/sdk/nextjs
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Publish @bugwatch/cli
+        run: npm publish --access public
+        working-directory: packages/cli
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  # Publish Python SDK
+  publish-pypi:
+    name: Publish Python SDK
+    runs-on: ubuntu-latest
+    needs: prepare
+    permissions:
+      contents: read
+      id-token: write
+    defaults:
+      run:
+        working-directory: packages/sdk/python
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install build tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install hatch twine
+
+      - name: Install dev dependencies and run tests
+        run: |
+          pip install -e ".[dev]"
+          pytest
+
+      - name: Build package
+        run: hatch build
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: packages/sdk/python/dist/
+          password: ${{ secrets.PYPI_TOKEN }}
+
+  # Publish Rust SDK
+  publish-crates:
+    name: Publish Rust SDK
+    runs-on: ubuntu-latest
+    needs: prepare
+    defaults:
+      run:
+        working-directory: packages/sdk/rust
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            packages/sdk/rust/target
+          key: ${{ runner.os }}-cargo-sdk-${{ hashFiles('packages/sdk/rust/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-sdk-
+
+      - name: Run tests
+        run: cargo test --all-features
+
+      - name: Publish to crates.io
+        run: cargo publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+  # Create GitHub Release
+  create-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: [publish-npm, publish-pypi, publish-crates]
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          body: |
+            ## Packages Published
+
+            ### npm
+            - [@bugwatch/core](https://www.npmjs.com/package/@bugwatch/core)
+            - [@bugwatch/node](https://www.npmjs.com/package/@bugwatch/node)
+            - [@bugwatch/react](https://www.npmjs.com/package/@bugwatch/react)
+            - [@bugwatch/nextjs](https://www.npmjs.com/package/@bugwatch/nextjs)
+            - [@bugwatch/cli](https://www.npmjs.com/package/@bugwatch/cli)
+
+            ### PyPI
+            - [bugwatch-sdk](https://pypi.org/project/bugwatch-sdk/)
+
+            ### crates.io
+            - [bugwatch](https://crates.io/crates/bugwatch)
