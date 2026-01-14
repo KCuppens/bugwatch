@@ -1,0 +1,144 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "bugwatch-sdk"
+version = "0.1.0"
+description = "Official Python SDK for Bugwatch - AI-Powered Error Tracking"
+readme = "README.md"
+license = "MIT"
+authors = [
+    { name = "Bugwatch Team", email = "support@bugwatch.io" }
+]
+maintainers = [
+    { name = "Bugwatch Team", email = "support@bugwatch.io" }
+]
+keywords = [
+    "bugwatch",
+    "error-tracking",
+    "monitoring",
+    "logging",
+    "exceptions",
+    "debugging",
+    "observability",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Bug Tracking",
+    "Topic :: Software Development :: Quality Assurance",
+    "Topic :: System :: Monitoring",
+    "Framework :: Django",
+    "Framework :: Flask",
+    "Framework :: FastAPI",
+    "Typing :: Typed",
+]
+requires-python = ">=3.9"
+dependencies = []
+
+[project.optional-dependencies]
+async = ["httpx>=0.25.0"]
+django = ["django>=3.2"]
+flask = ["flask>=2.0"]
+fastapi = ["fastapi>=0.100.0", "starlette>=0.27.0"]
+celery = ["celery>=5.0"]
+all = [
+    "httpx>=0.25.0",
+    "django>=3.2",
+    "flask>=2.0",
+    "fastapi>=0.100.0",
+    "starlette>=0.27.0",
+    "celery>=5.0",
+]
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21",
+    "pytest-cov>=4.0",
+    "mypy>=1.0",
+    "ruff>=0.1.0",
+    "httpx>=0.25.0",
+]
+
+[project.urls]
+Homepage = "https://bugwatch.io"
+Documentation = "https://docs.bugwatch.io/sdk/python"
+Repository = "https://github.com/bugwatch/bugwatch"
+Changelog = "https://github.com/bugwatch/bugwatch/blob/main/CHANGELOG.md"
+Issues = "https://github.com/bugwatch/bugwatch/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["bugwatch"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/bugwatch",
+    "/tests",
+    "/README.md",
+    "/LICENSE",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-v --tb=short"
+
+[tool.mypy]
+python_version = "3.9"
+strict = true
+warn_return_any = true
+warn_unused_ignores = true
+disallow_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = [
+    "django.*",
+    "flask.*",
+    "fastapi.*",
+    "starlette.*",
+    "celery.*",
+]
+ignore_missing_imports = true
+
+[tool.ruff]
+target-version = "py39"
+line-length = 100
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "UP",  # pyupgrade
+]
+ignore = [
+    "E501",  # line too long (handled by formatter)
+    "B008",  # do not perform function calls in argument defaults
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["bugwatch"]
+
+[tool.coverage.run]
+source = ["bugwatch"]
+branch = true
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.:",
+]

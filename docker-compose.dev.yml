@@ -1,0 +1,66 @@
+# Development docker-compose - mounts source code for hot reloading
+version: "3.8"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: bugwatch
+      POSTGRES_PASSWORD: bugwatch_dev
+      POSTGRES_DB: bugwatch
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bugwatch"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  server:
+    image: rust:latest
+    working_dir: /app
+    command: >
+      bash -c "
+        apt-get update && apt-get install -y pkg-config libssl-dev curl &&
+        cargo build &&
+        cargo run
+      "
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./apps/server:/app
+      - cargo-cache:/usr/local/cargo/registry
+      - target-cache:/app/target
+    environment:
+      - SERVER_ADDR=0.0.0.0:3000
+      - DATABASE_URL=postgres://bugwatch:bugwatch_dev@postgres:5432/bugwatch
+      - JWT_SECRET=development-secret
+      - ENVIRONMENT=development
+      - RUST_LOG=debug
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  web:
+    image: node:20-alpine
+    working_dir: /app
+    command: sh -c "npm install && npm run dev --workspace=@bugwatch/web"
+    ports:
+      - "3001:3001"
+    volumes:
+      - .:/app
+      - node_modules:/app/node_modules
+      - web_node_modules:/app/apps/web/node_modules
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:3000
+    depends_on:
+      - server
+
+volumes:
+  postgres-data:
+  cargo-cache:
+  target-cache:
+  node_modules:
+  web_node_modules:

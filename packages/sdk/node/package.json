@@ -1,0 +1,54 @@
+{
+  "name": "@bugwatch/node",
+  "version": "0.1.0",
+  "description": "Bugwatch SDK for Node.js applications",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@bugwatch/core": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.3.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bugwatch/bugwatch.git",
+    "directory": "packages/sdk/node"
+  },
+  "license": "MIT",
+  "keywords": [
+    "bugwatch",
+    "error-tracking",
+    "monitoring",
+    "node",
+    "nodejs",
+    "sdk"
+  ]
+}

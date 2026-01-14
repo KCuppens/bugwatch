@@ -1,0 +1,65 @@
+[package]
+name = "bugwatch-server"
+version = "0.1.0"
+edition = "2021"
+authors = ["Bugwatch Team"]
+description = "Bugwatch API Server - AI-Powered Error Tracking"
+license = "MIT"
+repository = "https://github.com/KCuppens/bugwatch"
+
+[dependencies]
+# Web framework
+axum = { version = "0.7", features = ["macros"] }
+axum-extra = { version = "0.9", features = ["typed-header"] }
+tokio = { version = "1.43", features = ["full"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace", "request-id"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Database
+sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "uuid", "chrono", "migrate"] }
+
+# Authentication
+jsonwebtoken = "9.3"
+bcrypt = "0.16"
+sha2 = "0.10"
+
+# Utilities
+uuid = { version = "1.11", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "2.0"
+anyhow = "1.0"
+regex = "1.11"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Configuration
+dotenvy = "0.15"
+
+# Async utilities
+async-trait = "0.1"
+
+# Cryptography
+hex = "0.4"
+hmac = "0.12"
+
+# Rate limiting
+dashmap = "6"
+
+# HTTP client for external APIs
+reqwest = { version = "0.12", features = ["json"] }
+
+# Stripe payments
+async-stripe = { version = "0.39", features = ["runtime-tokio-hyper"] }
+
+# AWS SDK for email (SES)
+aws-config = { version = "1.5", features = ["behavior-version-latest"] }
+aws-sdk-sesv2 = "1.54"
+
+[dev-dependencies]
+tokio-test = "0.4"
