@@ -1,0 +1,18 @@
+[Unit]
+Description=Bugwatch Application
+Documentation=https://github.com/KCuppens/bugwatch
+After=docker.service nginx.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=PROJECT_ROOT
+ExecStart=/usr/bin/docker compose -f DEPLOY_DIR/docker-compose.prod.yml --env-file DEPLOY_DIR/.env.production up -d
+ExecStop=/usr/bin/docker compose -f DEPLOY_DIR/docker-compose.prod.yml down
+ExecReload=/usr/bin/docker compose -f DEPLOY_DIR/docker-compose.prod.yml --env-file DEPLOY_DIR/.env.production restart
+TimeoutStartSec=300
+TimeoutStopSec=60
+
+[Install]
+WantedBy=multi-user.target

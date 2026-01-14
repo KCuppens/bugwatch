@@ -4,7 +4,6 @@ import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import {
   Search,
-  Bell,
   HelpCircle,
   Moon,
   Sun,
@@ -44,10 +43,6 @@ export function Topbar() {
 
       {/* Actions */}
       <div className="flex items-center gap-1">
-        <button className="h-9 w-9 rounded-lg flex items-center justify-center hover:bg-white/10 transition-colors relative">
-          <Bell className="h-4 w-4 text-muted-foreground" />
-          <span className="absolute top-2 right-2 h-2 w-2 rounded-full bg-accent" />
-        </button>
         <button className="h-9 w-9 rounded-lg flex items-center justify-center hover:bg-white/10 transition-colors">
           <HelpCircle className="h-4 w-4 text-muted-foreground" />
         </button>

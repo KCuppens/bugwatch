@@ -775,10 +775,15 @@ export interface NotificationChannel {
   created_at: string;
 }
 
+export interface SlackMessageTemplate {
+  blocks: { block_type: string; enabled: boolean }[];
+  actions: { action_type: string; label: string; style: string }[];
+}
+
 export type ChannelConfig =
   | { recipients: string[] }
   | { url: string; secret?: string }
-  | { webhook_url: string; channel?: string };
+  | { webhook_url: string; channel?: string; message_template?: SlackMessageTemplate };
 
 export interface AlertLog {
   id: string;
