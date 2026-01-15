@@ -1,0 +1,13 @@
+#:schema node_modules/@opennextjs/cloudflare/wrangler-schema.json
+
+name = "bugwatch-web"
+main = ".open-next/worker.js"
+compatibility_date = "2024-12-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Cloudflare Pages assets configuration
+assets = { directory = ".open-next/assets", binding = "ASSETS" }
+
+[vars]
+# Set your production API URL in Cloudflare Dashboard environment variables
+# NEXT_PUBLIC_API_URL = "https://api.bugwatch.dev"
