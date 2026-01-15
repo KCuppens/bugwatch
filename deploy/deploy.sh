@@ -82,7 +82,7 @@ cmd_setup() {
     check_ubuntu
 
     # Create directories
-    mkdir -p "$LOG_DIR" "$BACKUP_DIR"
+    mkdir -p "$LOG_DIR" "$BACKUP_DIR" /var/www/html
     chmod 750 "$BACKUP_DIR"
 
     # Update system
@@ -233,11 +233,13 @@ configure_environment() {
     read -p "Stripe Secret Key (for billing): " STRIPE_SECRET_KEY
     read -p "Stripe Webhook Secret: " STRIPE_WEBHOOK_SECRET
 
-    # Determine API URL
+    # Determine API URL and APP_URL
     if [[ "$DOMAIN" == "localhost" ]]; then
         API_URL="http://localhost:3000"
+        APP_URL="http://localhost:3001"
     else
         API_URL="https://${DOMAIN}/api"
+        APP_URL="https://${DOMAIN}"
     fi
 
     # Write environment file
@@ -267,7 +269,8 @@ JWT_SECRET=${JWT_SECRET}
 JWT_ACCESS_EXPIRATION=900
 JWT_REFRESH_EXPIRATION=604800
 
-# Frontend
+# URLs
+APP_URL=${APP_URL}
 NEXT_PUBLIC_API_URL=${API_URL}
 
 # AI (optional)

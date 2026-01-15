@@ -37,7 +37,7 @@ check_service() {
         return 0
     else
         echo -e "  $name: ${RED}FAILED${NC} (HTTP $HTTP_CODE)"
-        ((ERRORS++))
+        ERRORS=$((ERRORS + 1))
         return 1
     fi
 }
@@ -58,7 +58,7 @@ check_container() {
         fi
     else
         echo -e "  $name: ${RED}NOT RUNNING${NC}"
-        ((ERRORS++))
+        ERRORS=$((ERRORS + 1))
         return 1
     fi
 }
@@ -68,14 +68,14 @@ echo "Time: $(date)"
 echo ""
 
 echo "Container Status:"
-check_container "bugwatch-postgres"
-check_container "bugwatch-server"
-check_container "bugwatch-web"
+check_container "bugwatch-postgres" || true
+check_container "bugwatch-server" || true
+check_container "bugwatch-web" || true
 echo ""
 
 echo "HTTP Endpoints:"
-check_service "API Health" "$API_URL/health"
-check_service "Web Frontend" "$WEB_URL"
+check_service "API Health" "$API_URL/health" || true
+check_service "Web Frontend" "$WEB_URL" || true
 echo ""
 
 echo "System Resources:"
@@ -92,7 +92,7 @@ if docker exec bugwatch-postgres pg_isready -U "${POSTGRES_USER:-bugwatch}" -q 2
     echo -e "  PostgreSQL: ${GREEN}CONNECTED${NC} ($CONN connections)"
 else
     echo -e "  PostgreSQL: ${RED}DISCONNECTED${NC}"
-    ((ERRORS++))
+    ERRORS=$((ERRORS + 1))
 fi
 echo ""
 
