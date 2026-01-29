@@ -28,6 +28,9 @@ pub enum AppError {
     #[error("Conflict: {0}")]
     Conflict(String),
 
+    #[error("Payment required: {0}")]
+    PaymentRequired(String),
+
     #[error("Rate limit exceeded")]
     RateLimitExceeded {
         retry_after_secs: u32,
@@ -67,6 +70,7 @@ impl IntoResponse for AppError {
             AppError::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, "unauthorized", msg.clone(), None),
             AppError::Forbidden(msg) => (StatusCode::FORBIDDEN, "forbidden", msg.clone(), None),
             AppError::Conflict(msg) => (StatusCode::CONFLICT, "conflict", msg.clone(), None),
+            AppError::PaymentRequired(msg) => (StatusCode::PAYMENT_REQUIRED, "payment_required", msg.clone(), None),
             AppError::RateLimitExceeded { retry_after_secs, limit, remaining } => (
                 StatusCode::TOO_MANY_REQUESTS,
                 "rate_limit_exceeded",

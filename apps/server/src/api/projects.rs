@@ -7,7 +7,8 @@ use serde::{Deserialize, Serialize};
 use super::{ApiResponse, PaginatedResponse, PaginationMeta, PaginationParams};
 use crate::{
     auth::AuthUser,
-    db::repositories::ProjectRepository,
+    billing::{Tier, get_tier_limits},
+    db::repositories::{OrganizationRepository, ProjectRepository},
     AppError, AppResult, AppState,
 };
 
@@ -87,6 +88,23 @@ pub async fn create(
 ) -> AppResult<Json<ApiResponse<ProjectResponse>>> {
     if req.name.trim().is_empty() {
         return Err(AppError::Validation("Project name cannot be empty".to_string()));
+    }
+
+    // Check project limit based on user's tier
+    let tier = match OrganizationRepository::find_by_user(&state.db, &auth_user.id).await? {
+        Some(org) => Tier::from_str(&org.tier),
+        None => Tier::Free,
+    };
+    let limits = get_tier_limits(tier);
+
+    if let Some(project_limit) = limits.project_limit {
+        let current_count = ProjectRepository::count_by_owner(&state.db, &auth_user.id).await?;
+        if current_count >= project_limit as i64 {
+            return Err(AppError::PaymentRequired(format!(
+                "Project limit reached ({}/{}). Upgrade your plan to create more projects.",
+                current_count, project_limit
+            )));
+        }
     }
 
     let slug = generate_slug(&req.name);
