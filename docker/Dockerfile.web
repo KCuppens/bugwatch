@@ -3,6 +3,10 @@ FROM node:20-alpine AS builder
 
 WORKDIR /app
 
+# Build argument for API URL (baked into frontend at build time)
+ARG NEXT_PUBLIC_API_URL=http://localhost:3000
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+
 # Copy package files
 COPY package.json package-lock.json* ./
 COPY apps/web/package.json ./apps/web/
@@ -14,6 +18,9 @@ RUN npm ci
 # Copy source code
 COPY apps/web ./apps/web
 COPY tsconfig.base.json ./
+
+# Create .env.production with the build arg so Next.js picks it up
+RUN echo "NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}" > ./apps/web/.env.production
 
 # Build the application
 RUN npm run build --workspace=@bugwatch/web
