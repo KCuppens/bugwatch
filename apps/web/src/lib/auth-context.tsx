@@ -8,7 +8,15 @@ import {
   useCallback,
   type ReactNode,
 } from "react";
-import { authApi, type User, ApiError } from "./api";
+import {
+  authApi,
+  type User,
+  ApiError,
+  saveTokens as apiSaveTokens,
+  clearTokens as apiClearTokens,
+  refreshTokens,
+  isTokenExpired,
+} from "./api";
 
 interface AuthContextType {
   user: User | null;
@@ -22,76 +30,91 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-const TOKEN_REFRESH_INTERVAL = 4 * 60 * 1000; // 4 minutes (tokens expire in 5)
+// Refresh 5 minutes before expiry (backend default is 1 hour = 3600s)
+// Refresh at 55 minutes to be safe
+const TOKEN_REFRESH_INTERVAL = 55 * 60 * 1000; // 55 minutes
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
   const clearTokens = useCallback(() => {
-    localStorage.removeItem("access_token");
-    localStorage.removeItem("refresh_token");
+    apiClearTokens();
     setUser(null);
   }, []);
 
   const saveTokens = useCallback((accessToken: string, refreshToken: string) => {
-    localStorage.setItem("access_token", accessToken);
-    localStorage.setItem("refresh_token", refreshToken);
+    apiSaveTokens(accessToken, refreshToken);
   }, []);
 
+  // Use the deduplicated refresh from api.ts
   const refreshAccessToken = useCallback(async () => {
-    const refreshToken = localStorage.getItem("refresh_token");
-    if (!refreshToken) return false;
-
-    try {
-      const response = await authApi.refresh(refreshToken);
-      saveTokens(response.data.access_token, response.data.refresh_token);
-      return true;
-    } catch (error) {
-      // Only clear tokens on actual auth failure (401)
-      // Network errors or server errors should not log the user out
-      if (error instanceof ApiError && error.status === 401) {
-        clearTokens();
+    const success = await refreshTokens();
+    if (!success) {
+      // If refresh failed due to invalid token, user state will be cleared
+      // by the clearTokens call in refreshTokens
+      const hasRefreshToken = localStorage.getItem("refresh_token");
+      if (!hasRefreshToken) {
+        setUser(null);
       }
-      return false;
     }
-  }, [saveTokens, clearTokens]);
+    return success;
+  }, []);
 
   const fetchCurrentUser = useCallback(async () => {
     try {
+      // The api.ts fetchWithAuth will automatically handle 401 retry
       const response = await authApi.me();
       setUser(response.data);
       return true;
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) {
-        // Try to refresh the token
-        const refreshed = await refreshAccessToken();
-        if (refreshed) {
-          try {
-            const response = await authApi.me();
-            setUser(response.data);
-            return true;
-          } catch (retryError) {
-            // Only clear tokens if retry also fails with 401
-            if (retryError instanceof ApiError && retryError.status === 401) {
-              clearTokens();
-            }
-          }
-        }
+        // Token refresh already attempted by fetchWithAuth and failed
+        clearTokens();
       }
       // For network errors or server errors, keep existing user state
-      // User stays "logged in" visually but API calls may fail temporarily
       return false;
     }
-  }, [refreshAccessToken, clearTokens]);
+  }, [clearTokens]);
 
   // Initialize auth state on mount
   useEffect(() => {
     const initAuth = async () => {
       const accessToken = localStorage.getItem("access_token");
-      if (accessToken) {
-        await fetchCurrentUser();
+      const refreshToken = localStorage.getItem("refresh_token");
+
+      if (!accessToken && !refreshToken) {
+        setIsLoading(false);
+        return;
       }
+
+      // If access token is expired but refresh token exists, try refresh first
+      if (!accessToken || isTokenExpired(accessToken)) {
+        if (refreshToken) {
+          // Try to refresh - if it fails due to network error, we'll still try
+          // to fetch the user (the API might come back online).
+          // If it fails due to 401, refreshTokens() already cleared tokens.
+          const refreshed = await refreshTokens();
+          if (!refreshed) {
+            // Check if tokens were cleared by refreshTokens (401 case)
+            const stillHasRefreshToken = localStorage.getItem("refresh_token");
+            if (!stillHasRefreshToken) {
+              // Token was invalid, already cleared
+              setIsLoading(false);
+              return;
+            }
+            // Network error - tokens still exist, try to proceed anyway
+            // The user might see a brief loading state while server starts
+          }
+        } else {
+          // No refresh token - clear any stale access token
+          apiClearTokens();
+          setIsLoading(false);
+          return;
+        }
+      }
+
+      await fetchCurrentUser();
       setIsLoading(false);
     };
 
@@ -108,6 +131,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     return () => clearInterval(interval);
   }, [user, refreshAccessToken]);
+
+  // Cross-tab synchronization via storage events
+  useEffect(() => {
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key === "access_token") {
+        if (!e.newValue) {
+          // Token removed in another tab - logout
+          setUser(null);
+        } else if (!user) {
+          // Token added in another tab - fetch user
+          fetchCurrentUser();
+        }
+      }
+    };
+
+    window.addEventListener("storage", handleStorageChange);
+    return () => window.removeEventListener("storage", handleStorageChange);
+  }, [user, fetchCurrentUser]);
 
   const login = useCallback(
     async (email: string, password: string) => {
