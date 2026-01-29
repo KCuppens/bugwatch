@@ -61,5 +61,8 @@ async-stripe = { version = "0.39", features = ["runtime-tokio-hyper"] }
 aws-config = { version = "1.5", features = ["behavior-version-latest"] }
 aws-sdk-sesv2 = "1.54"
 
+# BugWatch SDK for self-monitoring (dogfooding)
+bugwatch = { version = "0.1", features = ["async"] }
+
 [dev-dependencies]
 tokio-test = "0.4"
