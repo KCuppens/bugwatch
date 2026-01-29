@@ -13,13 +13,15 @@ COPY apps/web/package.json ./
 # Install dependencies from npm registry (includes @bugwatch/nextjs)
 RUN npm install
 
-# Copy source code
+# Copy source code and config files
 COPY apps/web/src ./src
 COPY apps/web/public ./public
 COPY apps/web/tsconfig.json ./
 COPY apps/web/tailwind.config.ts ./
 COPY apps/web/postcss.config.mjs ./
 COPY apps/web/next.config.ts ./
+COPY apps/web/next-env.d.ts ./
+COPY tsconfig.base.json /tsconfig.base.json
 
 # Create .env.production with the build arg so Next.js picks it up
 RUN echo "NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}" > .env.production
