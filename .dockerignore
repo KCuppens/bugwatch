@@ -1,0 +1,36 @@
+# Dependencies - installed fresh in container
+node_modules
+**/node_modules
+
+# Build outputs
+.next
+**/.next
+dist
+**/dist
+target
+**/target
+
+# Dev/IDE files
+.git
+.gitignore
+*.md
+.vscode
+.idea
+*.log
+
+# Docker files (prevent recursive copy)
+docker-compose*.yml
+Dockerfile*
+
+# Test/config files
+*.test.*
+*.spec.*
+coverage
+.env*.local
+**/.env*.local
+**/.env.local
+apps/web/.env.local
+
+# OS files
+.DS_Store
+Thumbs.db
