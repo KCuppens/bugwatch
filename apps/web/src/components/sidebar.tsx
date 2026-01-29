@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { ProjectSelector } from "@/components/project-selector";
 import { useTier, getTierDisplayName, getTierRateLimit } from "@/hooks/use-feature";
+import { usePaywall } from "@/lib/paywall-context";
 
 interface NavItem {
   label: string;
@@ -32,6 +33,7 @@ const navItems: NavItem[] = [
 export function Sidebar() {
   const pathname = usePathname();
   const { tier, isPro } = useTier();
+  const { openPaywall } = usePaywall();
 
   return (
     <aside className="fixed left-0 top-0 z-40 h-screen w-64 border-r border-white/10 bg-background/80 backdrop-blur-xl">
@@ -87,13 +89,16 @@ export function Sidebar() {
               {getTierRateLimit(tier).toLocaleString()} events/min
             </p>
             {!isPro && (
-              <Link
-                href="/dashboard/settings?tab=billing"
+              <button
+                onClick={() => {
+                  console.log('Upgrade to Pro clicked - opening paywall');
+                  openPaywall();
+                }}
                 className="mt-2 inline-flex items-center gap-1 text-xs text-accent hover:underline"
               >
                 <Sparkles className="h-3 w-3" />
                 Upgrade to Pro
-              </Link>
+              </button>
             )}
             {isPro && (
               <Link
