@@ -20,7 +20,6 @@ COPY apps/web/tsconfig.json ./
 COPY apps/web/tailwind.config.ts ./
 COPY apps/web/postcss.config.mjs ./
 COPY apps/web/next.config.ts ./
-COPY apps/web/components.json ./
 
 # Create .env.production with the build arg so Next.js picks it up
 RUN echo "NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}" > .env.production
