@@ -1,5 +1,5 @@
 # Build stage
-FROM rust:latest as builder
+FROM rust:latest AS builder
 
 WORKDIR /app
 
@@ -12,17 +12,20 @@ RUN apt-get update && apt-get install -y \
 # Copy Cargo files
 COPY apps/server/Cargo.toml apps/server/Cargo.lock* ./
 
+# Copy migrations early (needed for include_str! at compile time)
+COPY apps/server/migrations ./migrations
+
 # Create dummy src for dependency caching
 RUN mkdir src && echo "fn main() {}" > src/main.rs
 
-# Build dependencies only
-RUN cargo build --release && rm -rf src
+# Build dependencies only (limit parallelism for low-memory systems)
+RUN CARGO_BUILD_JOBS=1 cargo build --release && rm -rf src
 
 # Copy actual source code
 COPY apps/server/src ./src
 
 # Build the application
-RUN touch src/main.rs && cargo build --release
+RUN touch src/main.rs && CARGO_BUILD_JOBS=1 cargo build --release
 
 # Runtime stage
 FROM debian:bookworm-slim
