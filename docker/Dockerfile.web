@@ -7,22 +7,26 @@ WORKDIR /app
 ARG NEXT_PUBLIC_API_URL=http://localhost:3000
 ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 
-# Copy package files
-COPY package.json package-lock.json* ./
-COPY apps/web/package.json ./apps/web/
+# Copy web app package.json only (standalone, not as workspace)
+COPY apps/web/package.json ./
 
-# Install dependencies (fetches @bugwatch/* from npm registry)
-RUN npm ci --workspace=@bugwatch/web
+# Install dependencies from npm registry (includes @bugwatch/nextjs)
+RUN npm install
 
 # Copy source code
-COPY apps/web ./apps/web
-COPY tsconfig.base.json ./
+COPY apps/web/src ./src
+COPY apps/web/public ./public
+COPY apps/web/tsconfig.json ./
+COPY apps/web/tailwind.config.ts ./
+COPY apps/web/postcss.config.mjs ./
+COPY apps/web/next.config.ts ./
+COPY apps/web/components.json ./
 
 # Create .env.production with the build arg so Next.js picks it up
-RUN echo "NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}" > ./apps/web/.env.production
+RUN echo "NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}" > .env.production
 
 # Build the application
-RUN npm run build --workspace=@bugwatch/web
+RUN npm run build
 
 # Production stage
 FROM node:20-alpine AS runner
@@ -37,10 +41,10 @@ RUN apk add --no-cache wget && \
     addgroup --system --gid 1001 nodejs && \
     adduser --system --uid 1001 nextjs
 
-# Copy built assets
-COPY --from=builder /app/apps/web/.next/standalone ./
-COPY --from=builder /app/apps/web/.next/static ./apps/web/.next/static
-COPY --from=builder /app/apps/web/public ./apps/web/public
+# Copy built assets from standalone output
+COPY --from=builder /app/.next/standalone ./
+COPY --from=builder /app/.next/static ./.next/static
+COPY --from=builder /app/public ./public
 
 USER nextjs
 
@@ -49,4 +53,4 @@ EXPOSE 3001
 ENV PORT=3001
 ENV HOSTNAME="0.0.0.0"
 
-CMD ["node", "apps/web/server.js"]
+CMD ["node", "server.js"]
