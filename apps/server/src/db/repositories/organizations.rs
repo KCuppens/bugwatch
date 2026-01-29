@@ -330,18 +330,18 @@ impl OrganizationMemberRepository {
 
     /// Count members in an organization
     pub async fn count(pool: &DbPool, organization_id: &str) -> Result<i32> {
-        let row: (i32,) = sqlx::query_as(
+        let row: (i64,) = sqlx::query_as(
             "SELECT COUNT(*) FROM organization_members WHERE organization_id = $1",
         )
         .bind(organization_id)
         .fetch_one(pool)
         .await?;
-        Ok(row.0)
+        Ok(row.0 as i32)
     }
 
     /// Check if user is member of organization
     pub async fn is_member(pool: &DbPool, organization_id: &str, user_id: &str) -> Result<bool> {
-        let row: (i32,) = sqlx::query_as(
+        let row: (i64,) = sqlx::query_as(
             "SELECT COUNT(*) FROM organization_members WHERE organization_id = $1 AND user_id = $2",
         )
         .bind(organization_id)
@@ -496,7 +496,7 @@ impl BillingEventRepository {
 
     /// Check if an event has already been processed (idempotency)
     pub async fn exists_by_stripe_event(pool: &DbPool, stripe_event_id: &str) -> Result<bool> {
-        let row: (i32,) = sqlx::query_as(
+        let row: (i64,) = sqlx::query_as(
             "SELECT COUNT(*) FROM billing_events WHERE stripe_event_id = $1",
         )
         .bind(stripe_event_id)
