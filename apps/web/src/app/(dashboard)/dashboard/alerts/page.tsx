@@ -40,7 +40,7 @@ import {
   type AlertCondition,
 } from "@/lib/api";
 import { useFeature } from "@/hooks/use-feature";
-import { Crown } from "lucide-react";
+import { ProBadge, UpgradeLink } from "@/components/pro-badge";
 
 function formatRelativeTime(dateString: string): string {
   const date = new Date(dateString);
@@ -718,23 +718,13 @@ export default function AlertsPage() {
                     <SelectItem value="webhook" disabled={!canUseWebhooks}>
                       <div className="flex items-center gap-2">
                         <span>Webhook</span>
-                        {!canUseWebhooks && (
-                          <span className="flex items-center gap-1 text-xs text-amber-600">
-                            <Crown className="h-3 w-3" />
-                            Pro
-                          </span>
-                        )}
+                        {!canUseWebhooks && <ProBadge feature="webhooks" showLabel={false} />}
                       </div>
                     </SelectItem>
                     <SelectItem value="slack" disabled={!canUseWebhooks}>
                       <div className="flex items-center gap-2">
                         <span>Slack</span>
-                        {!canUseWebhooks && (
-                          <span className="flex items-center gap-1 text-xs text-amber-600">
-                            <Crown className="h-3 w-3" />
-                            Pro
-                          </span>
-                        )}
+                        {!canUseWebhooks && <ProBadge feature="slack" showLabel={false} />}
                       </div>
                     </SelectItem>
                   </SelectContent>
@@ -742,9 +732,7 @@ export default function AlertsPage() {
                 {!canUseWebhooks && (
                   <p className="text-xs text-muted-foreground">
                     Webhook and Slack channels require Pro plan.{" "}
-                    <a href="/dashboard/settings?tab=billing" className="text-primary hover:underline">
-                      Upgrade now
-                    </a>
+                    <UpgradeLink feature="webhooks">Upgrade now</UpgradeLink>
                   </p>
                 )}
               </div>

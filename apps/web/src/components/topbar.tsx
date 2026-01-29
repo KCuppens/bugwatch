@@ -13,6 +13,14 @@ import {
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useCommandPalette } from "@/components/command-palette";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 export function Topbar() {
   const router = useRouter();
@@ -55,8 +63,8 @@ export function Topbar() {
         </button>
 
         {/* User Menu */}
-        <div className="relative ml-2">
-          <div className="group">
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
             <button className="flex items-center gap-2 h-9 px-2 rounded-lg hover:bg-white/10 transition-colors">
               <div className="flex h-7 w-7 items-center justify-center rounded-full bg-accent text-xs font-medium text-accent-foreground">
                 {user?.name?.[0] || user?.email?.[0]?.toUpperCase() || "U"}
@@ -65,31 +73,28 @@ export function Topbar() {
                 {user?.name || user?.email?.split("@")[0]}
               </span>
             </button>
-            <div className="absolute right-0 top-full mt-1 hidden w-48 rounded-xl glass-card p-1.5 shadow-xl group-hover:block">
-              <div className="px-3 py-2 text-sm">
-                <p className="font-medium">{user?.name || "User"}</p>
-                <p className="text-xs text-muted-foreground">{user?.email}</p>
-              </div>
-              <div className="my-1 border-t border-white/10" />
-              <button className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-white/10 transition-colors">
-                <User className="h-4 w-4" />
-                Profile
-              </button>
-              <button className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-white/10 transition-colors">
-                <Settings className="h-4 w-4" />
-                Settings
-              </button>
-              <div className="my-1 border-t border-white/10" />
-              <button
-                onClick={handleLogout}
-                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-red-400 hover:bg-red-500/10 transition-colors"
-              >
-                <LogOut className="h-4 w-4" />
-                Logout
-              </button>
-            </div>
-          </div>
-        </div>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-48">
+            <DropdownMenuLabel>
+              <p className="font-medium">{user?.name || "User"}</p>
+              <p className="text-xs font-normal text-muted-foreground">{user?.email}</p>
+            </DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={() => router.push("/dashboard/settings?tab=profile")}>
+              <User className="mr-2 h-4 w-4" />
+              Profile
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => router.push("/dashboard/settings")}>
+              <Settings className="mr-2 h-4 w-4" />
+              Settings
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={handleLogout} className="text-red-400 focus:text-red-400 focus:bg-red-500/10">
+              <LogOut className="mr-2 h-4 w-4" />
+              Logout
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
     </header>
   );

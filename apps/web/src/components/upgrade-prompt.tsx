@@ -1,11 +1,11 @@
 'use client';
 
 import { useState } from 'react';
-import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Crown, Sparkles, X } from 'lucide-react';
-import { getTierDisplayName, type Tier } from '@/hooks/use-feature';
+import { getTierDisplayName, getFeatureTier, type Tier } from '@/hooks/use-feature';
+import { usePaywall } from '@/lib/paywall-context';
 
 interface UpgradePromptProps {
   feature: string;
@@ -25,7 +25,7 @@ export function UpgradePrompt({
   variant = 'card',
 }: UpgradePromptProps) {
   const [dismissed, setDismissed] = useState(false);
-  const router = useRouter();
+  const { openPaywall } = usePaywall();
 
   if (dismissed) return null;
 
@@ -33,7 +33,7 @@ export function UpgradePrompt({
     if (onUpgrade) {
       onUpgrade();
     } else {
-      router.push('/dashboard/settings?tab=billing');
+      openPaywall({ feature, targetTier: getFeatureTier(feature) });
     }
   };
 

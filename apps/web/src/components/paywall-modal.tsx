@@ -63,7 +63,7 @@ export function PaywallModal() {
         tier,
         1,
         isAnnual,
-        `${window.location.origin}/dashboard/settings?tab=billing&success=true`,
+        `${window.location.origin}/dashboard/settings?tab=billing&success=true&session_id={CHECKOUT_SESSION_ID}`,
         `${window.location.origin}/dashboard/settings?tab=billing&canceled=true`
       );
       window.location.href = response.checkout_url;

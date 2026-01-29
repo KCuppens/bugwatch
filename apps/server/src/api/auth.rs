@@ -292,7 +292,7 @@ pub struct OrganizationInfo {
     pub tier: String,
     pub seats: i32,
     pub subscription_status: String,
-    pub current_period_end: Option<String>,
+    pub current_period_end: Option<chrono::DateTime<chrono::Utc>>,
     pub cancel_at_period_end: bool,
 }
 

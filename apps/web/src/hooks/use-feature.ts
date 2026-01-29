@@ -17,6 +17,7 @@ const FEATURE_TIERS: Record<string, Tier> = {
   pagerduty: 'pro',
   opsgenie: 'pro',
   slack_advanced: 'pro',
+  slack: 'pro',
 
   // Team features
   session_replay: 'team',
@@ -31,6 +32,33 @@ const FEATURE_TIERS: Record<string, Tier> = {
   audit_logs: 'enterprise',
   custom_retention: 'enterprise',
 };
+
+/**
+ * Human-readable display names for features
+ */
+export const FEATURE_DISPLAY_NAMES: Record<string, string> = {
+  webhooks: 'Webhook Alerts',
+  pagerduty: 'PagerDuty Integration',
+  opsgenie: 'OpsGenie Integration',
+  slack_advanced: 'Advanced Slack Features',
+  slack: 'Slack Integration',
+  session_replay: 'Session Replay',
+  performance_monitoring: 'Performance Monitoring',
+  jira: 'Jira Integration',
+  linear: 'Linear Integration',
+  github: 'GitHub Integration',
+  team_members: 'Team Members',
+  sso: 'SSO/SAML',
+  audit_logs: 'Audit Logs',
+  custom_retention: 'Custom Retention',
+};
+
+/**
+ * Get human-readable display name for a feature
+ */
+export function getFeatureDisplayName(feature: string): string {
+  return FEATURE_DISPLAY_NAMES[feature] || feature;
+}
 
 /**
  * Check if a specific feature is available for the current user's tier

@@ -183,14 +183,14 @@ pub struct Organization {
     pub subscription_status: String,
     pub seats: i32,
     pub billing_interval: Option<String>,
-    pub current_period_start: Option<String>,
-    pub current_period_end: Option<String>,
+    pub current_period_start: Option<DateTime<Utc>>,
+    pub current_period_end: Option<DateTime<Utc>>,
     pub cancel_at_period_end: bool,
-    pub created_at: String,
-    pub updated_at: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
     // Payment failure tracking
-    pub payment_failed_at: Option<String>,
-    pub grace_period_ends: Option<String>,
+    pub payment_failed_at: Option<DateTime<Utc>>,
+    pub grace_period_ends: Option<DateTime<Utc>>,
     // Tax handling
     pub tax_id: Option<String>,
     pub tax_exempt: Option<bool>,
@@ -204,7 +204,7 @@ pub struct OrganizationMember {
     pub organization_id: String,
     pub user_id: String,
     pub role: String,
-    pub created_at: String,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
@@ -213,9 +213,9 @@ pub struct UsageRecord {
     pub organization_id: String,
     pub metric: String,
     pub count: i32,
-    pub period_start: String,
-    pub period_end: String,
-    pub created_at: String,
+    pub period_start: DateTime<Utc>,
+    pub period_end: DateTime<Utc>,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize)]
@@ -227,7 +227,7 @@ pub struct BillingEvent {
     pub amount_cents: Option<i32>,
     pub currency: Option<String>,
     pub metadata: Option<String>,
-    pub created_at: String,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize)]
@@ -238,7 +238,7 @@ pub struct CreditPurchase {
     pub amount_cents: i32,
     pub stripe_payment_intent_id: Option<String>,
     pub status: String,
-    pub created_at: String,
+    pub created_at: DateTime<Utc>,
 }
 
 // ============================================================================

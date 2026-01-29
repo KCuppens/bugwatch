@@ -136,6 +136,7 @@ pub fn router() -> Router<AppState> {
         // Subscription
         .route("/billing/subscription", get(billing::get_subscription))
         .route("/billing/checkout", post(billing::create_checkout))
+        .route("/billing/verify-checkout", post(billing::verify_checkout))
         .route("/billing/portal", post(billing::create_portal))
         .route("/billing/cancel", post(billing::cancel_subscription))
         // Plan changes

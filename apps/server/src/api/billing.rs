@@ -4,6 +4,7 @@ use axum::{
     Json,
 };
 use serde::{Deserialize, Serialize};
+use stripe;
 
 use crate::{
     auth::AuthUser,
@@ -36,8 +37,8 @@ pub struct SubscriptionResponse {
     pub seats: i32,
     pub subscription_status: String,
     pub billing_interval: Option<String>,
-    pub current_period_start: Option<String>,
-    pub current_period_end: Option<String>,
+    pub current_period_start: Option<chrono::DateTime<chrono::Utc>>,
+    pub current_period_end: Option<chrono::DateTime<chrono::Utc>>,
     pub cancel_at_period_end: bool,
     pub has_stripe: bool,
 }
@@ -65,8 +66,8 @@ pub struct CreditPurchaseResponse {
 #[derive(Serialize)]
 pub struct UsageResponse {
     pub usage: Vec<UsageRecord>,
-    pub period_start: String,
-    pub period_end: String,
+    pub period_start: chrono::DateTime<chrono::Utc>,
+    pub period_end: chrono::DateTime<chrono::Utc>,
 }
 
 #[derive(Serialize)]
@@ -437,10 +438,30 @@ pub async fn create_checkout(
         .as_ref()
         .ok_or((StatusCode::SERVICE_UNAVAILABLE, "Stripe not configured".to_string()))?;
 
-    let org = OrganizationRepository::find_by_user(&state.db, &user.id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
+    // Find or create organization for the user
+    let org = match OrganizationRepository::find_by_user(&state.db, &user.id).await {
+        Ok(Some(org)) => org,
+        Ok(None) => {
+            // Auto-create organization for user
+            let u = UserRepository::find_by_id(&state.db, &user.id)
+                .await
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+                .ok_or((StatusCode::NOT_FOUND, "User not found".to_string()))?;
+
+            let org_name = u.name.clone().unwrap_or_else(|| {
+                u.email.split('@').next().unwrap_or("My").to_string()
+            });
+            let slug = format!("{}-{}",
+                org_name.to_lowercase().chars().map(|c| if c.is_alphanumeric() { c } else { '-' }).collect::<String>(),
+                &uuid::Uuid::new_v4().to_string()[..8]
+            );
+
+            OrganizationRepository::create(&state.db, &user.id, &format!("{}'s Organization", org_name), &slug)
+                .await
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        }
+        Err(e) => return Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
+    };
 
     // Ensure organization has a Stripe customer
     let customer_id = match org.stripe_customer_id {
@@ -479,6 +500,201 @@ pub async fn create_checkout(
         .ok_or((StatusCode::INTERNAL_SERVER_ERROR, "No checkout URL".to_string()))?;
 
     Ok(Json(CheckoutResponse { checkout_url: url }))
+}
+
+// ============================================================================
+// Checkout Verification
+// ============================================================================
+
+#[derive(Deserialize)]
+pub struct VerifyCheckoutRequest {
+    pub session_id: String,
+}
+
+#[derive(Serialize)]
+pub struct VerifyCheckoutResponse {
+    pub success: bool,
+    pub subscription: Option<SubscriptionResponse>,
+    pub message: String,
+    pub already_processed: bool,
+}
+
+/// Verify a checkout session and update subscription immediately
+pub async fn verify_checkout(
+    user: AuthUser,
+    State(state): State<AppState>,
+    Json(req): Json<VerifyCheckoutRequest>,
+) -> Result<Json<VerifyCheckoutResponse>, (StatusCode, String)> {
+    let stripe = state
+        .stripe
+        .as_ref()
+        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "Stripe not configured".to_string()))?;
+
+    // Get user's organization
+    let org = OrganizationRepository::find_by_user(&state.db, &user.id)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
+
+    // Retrieve the checkout session from Stripe
+    let session = stripe
+        .retrieve_checkout_session(&req.session_id)
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid session: {}", e)))?;
+
+    // Verify the session belongs to this organization's customer
+    let session_customer_id = session.customer
+        .as_ref()
+        .map(|c| c.id().to_string())
+        .ok_or((StatusCode::BAD_REQUEST, "Session has no customer".to_string()))?;
+
+    if org.stripe_customer_id.as_ref() != Some(&session_customer_id) {
+        return Err((StatusCode::FORBIDDEN, "Session does not belong to your organization".to_string()));
+    }
+
+    // Check session status
+    let status = session.status.as_ref()
+        .map(|s| format!("{:?}", s))
+        .unwrap_or_else(|| "unknown".to_string());
+
+    match status.as_str() {
+        "Complete" => {
+            // Session completed successfully - extract subscription details
+            let subscription_id = session.subscription
+                .as_ref()
+                .map(|s| s.id().to_string())
+                .ok_or((StatusCode::BAD_REQUEST, "No subscription in completed session".to_string()))?;
+
+            // Check if we've already processed this subscription
+            if org.stripe_subscription_id.as_ref() == Some(&subscription_id) {
+                // Already processed - return current data
+                return Ok(Json(VerifyCheckoutResponse {
+                    success: true,
+                    subscription: Some(SubscriptionResponse {
+                        tier: org.tier,
+                        seats: org.seats,
+                        subscription_status: org.subscription_status,
+                        billing_interval: org.billing_interval,
+                        current_period_start: org.current_period_start,
+                        current_period_end: org.current_period_end,
+                        cancel_at_period_end: org.cancel_at_period_end,
+                        has_stripe: true,
+                    }),
+                    message: "Subscription already active".to_string(),
+                    already_processed: true,
+                }));
+            }
+
+            // Get the subscription details from Stripe
+            let stripe_subscription = stripe
+                .retrieve_subscription(&subscription_id)
+                .await
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to retrieve subscription: {}", e)))?;
+
+            // Extract tier from the subscription price ID or session metadata
+            let tier = stripe_subscription.items.data.first()
+                .and_then(|item| item.price.as_ref())
+                .and_then(|price| stripe.get_tier_from_price_id(&price.id.to_string()))
+                .or_else(|| extract_tier_from_session(&session))
+                .unwrap_or_else(|| "pro".to_string());
+
+            // Calculate seats from quantity
+            let seats = stripe_subscription.items.data.first()
+                .and_then(|item| item.quantity)
+                .unwrap_or(1) as i32;
+
+            // Determine billing interval
+            let billing_interval = stripe_subscription.items.data.first()
+                .and_then(|item| item.price.as_ref())
+                .and_then(|price| price.recurring.as_ref())
+                .map(|r| match r.interval {
+                    stripe::RecurringInterval::Year => "annual".to_string(),
+                    _ => "monthly".to_string(),
+                })
+                .unwrap_or_else(|| "monthly".to_string());
+
+            // Convert timestamps
+            let period_start = chrono::DateTime::from_timestamp(stripe_subscription.current_period_start, 0)
+                .map(|dt| dt.with_timezone(&chrono::Utc));
+            let period_end = chrono::DateTime::from_timestamp(stripe_subscription.current_period_end, 0)
+                .map(|dt| dt.with_timezone(&chrono::Utc));
+
+            // Update the organization with subscription details
+            OrganizationRepository::update_subscription(
+                &state.db,
+                &org.id,
+                &tier,
+                seats,
+                Some(&subscription_id),
+                "active",
+                Some(&billing_interval),
+                period_start.as_ref().map(|dt| dt.to_rfc3339()).as_deref(),
+                period_end.as_ref().map(|dt| dt.to_rfc3339()).as_deref(),
+                stripe_subscription.cancel_at_period_end,
+            )
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to update subscription: {}", e)))?;
+
+            tracing::info!(
+                "Verified checkout session {} for org {}: tier={}, seats={}, subscription={}",
+                req.session_id, org.id, tier, seats, subscription_id
+            );
+
+            Ok(Json(VerifyCheckoutResponse {
+                success: true,
+                subscription: Some(SubscriptionResponse {
+                    tier: tier.clone(),
+                    seats,
+                    subscription_status: "active".to_string(),
+                    billing_interval: Some(billing_interval),
+                    current_period_start: period_start,
+                    current_period_end: period_end,
+                    cancel_at_period_end: stripe_subscription.cancel_at_period_end,
+                    has_stripe: true,
+                }),
+                message: "Subscription activated successfully".to_string(),
+                already_processed: false,
+            }))
+        }
+        "Expired" => {
+            Ok(Json(VerifyCheckoutResponse {
+                success: false,
+                subscription: None,
+                message: "Checkout session has expired".to_string(),
+                already_processed: false,
+            }))
+        }
+        "Open" => {
+            Ok(Json(VerifyCheckoutResponse {
+                success: false,
+                subscription: None,
+                message: "Checkout is still in progress".to_string(),
+                already_processed: false,
+            }))
+        }
+        _ => {
+            Ok(Json(VerifyCheckoutResponse {
+                success: false,
+                subscription: None,
+                message: format!("Unknown session status: {}", status),
+                already_processed: false,
+            }))
+        }
+    }
+}
+
+/// Extract tier from checkout session based on price ID or metadata
+fn extract_tier_from_session(session: &stripe::CheckoutSession) -> Option<String> {
+    // Try to get from metadata first
+    if let Some(metadata) = &session.metadata {
+        if let Some(tier) = metadata.get("tier") {
+            return Some(tier.clone());
+        }
+    }
+
+    // Otherwise, we'll default to determining by price later in the webhook
+    // For now, return None and let the caller default to "pro"
+    None
 }
 
 /// Create a Stripe billing portal session
@@ -656,18 +872,17 @@ pub async fn get_usage(
     // Determine current period (from org or default to current month)
     let now = chrono::Utc::now();
     let (period_start, period_end) = match (&org.current_period_start, &org.current_period_end) {
-        (Some(start), Some(end)) => (start.clone(), end.clone()),
+        (Some(start), Some(end)) => (*start, *end),
         _ => {
-            // Default to current calendar month
-            let start = now.format("%Y-%m-01T00:00:00Z").to_string();
-            let end = (now + chrono::Duration::days(30))
-                .format("%Y-%m-%dT23:59:59Z")
-                .to_string();
+            // Default to current calendar month - use beginning of current month
+            use chrono::{Datelike, TimeZone};
+            let start = chrono::Utc.with_ymd_and_hms(now.year(), now.month(), 1, 0, 0, 0).unwrap();
+            let end = start + chrono::Duration::days(30);
             (start, end)
         }
     };
 
-    let usage = UsageRepository::list_current(&state.db, &org.id, &period_start)
+    let usage = UsageRepository::list_current(&state.db, &org.id, period_start)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -1211,8 +1426,8 @@ pub struct BillingDashboardResponse {
     pub monthly_cost_cents: i64,
     pub seats_used: i32,
     pub seats_total: i32,
-    pub billing_period_start: Option<String>,
-    pub billing_period_end: Option<String>,
+    pub billing_period_start: Option<chrono::DateTime<chrono::Utc>>,
+    pub billing_period_end: Option<chrono::DateTime<chrono::Utc>>,
     pub is_past_due: bool,
     pub cancel_at_period_end: bool,
 }
@@ -1233,8 +1448,8 @@ pub async fn get_billing_dashboard(
 
     // Calculate monthly cost based on tier and seats
     let monthly_cost_cents = match org.tier.as_str() {
-        "pro" => 1200 * org.seats as i64,
-        "team" => 2500 * org.seats as i64,
+        "pro" => 1200 * org.seats as i64,   // $12/seat/month
+        "team" => 2100 * org.seats as i64,  // $21/seat/month
         _ => 0,
     };
 

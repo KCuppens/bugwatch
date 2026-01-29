@@ -527,6 +527,35 @@ impl StripeClient {
         })
     }
 
+    /// Retrieve a checkout session by ID
+    pub async fn retrieve_checkout_session(&self, session_id: &str) -> Result<CheckoutSession> {
+        let id: stripe::CheckoutSessionId = session_id.parse()?;
+        let session = CheckoutSession::retrieve(&self.client, &id, &[]).await?;
+        Ok(session)
+    }
+
+    /// Retrieve a subscription by ID
+    pub async fn retrieve_subscription(&self, subscription_id: &str) -> Result<stripe::Subscription> {
+        let id: SubscriptionId = subscription_id.parse()?;
+        let subscription = stripe::Subscription::retrieve(&self.client, &id, &[]).await?;
+        Ok(subscription)
+    }
+
+    /// Determine tier from a price ID
+    pub fn get_tier_from_price_id(&self, price_id: &str) -> Option<String> {
+        if self.price_ids.pro_monthly.as_deref() == Some(price_id)
+            || self.price_ids.pro_annual.as_deref() == Some(price_id)
+        {
+            Some("pro".to_string())
+        } else if self.price_ids.team_monthly.as_deref() == Some(price_id)
+            || self.price_ids.team_annual.as_deref() == Some(price_id)
+        {
+            Some("team".to_string())
+        } else {
+            None
+        }
+    }
+
     /// Create checkout session with optional coupon
     pub async fn create_checkout_session_with_coupon(
         &self,

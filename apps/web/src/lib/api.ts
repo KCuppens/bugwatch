@@ -18,6 +18,105 @@ interface ApiErrorResponse {
   };
 }
 
+// ============================================================================
+// Token Management
+// ============================================================================
+
+// Singleton promise to prevent concurrent refresh attempts
+let refreshPromise: Promise<boolean> | null = null;
+
+/**
+ * Check if a JWT token is expired (with 30 second buffer)
+ */
+export function isTokenExpired(token: string): boolean {
+  try {
+    const parts = token.split('.');
+    const payloadPart = parts[1];
+    if (!payloadPart) return true;
+    const payload = JSON.parse(atob(payloadPart));
+    // Add 30 second buffer to avoid edge cases
+    return payload.exp * 1000 < Date.now() + 30000;
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Save tokens to localStorage
+ */
+export function saveTokens(accessToken: string, refreshToken: string): void {
+  if (typeof window === "undefined") return;
+  localStorage.setItem("access_token", accessToken);
+  localStorage.setItem("refresh_token", refreshToken);
+}
+
+/**
+ * Clear tokens from localStorage
+ */
+export function clearTokens(): void {
+  if (typeof window === "undefined") return;
+  localStorage.removeItem("access_token");
+  localStorage.removeItem("refresh_token");
+}
+
+/**
+ * Get the current access token if valid
+ */
+export function getAccessToken(): string | null {
+  if (typeof window === "undefined") return null;
+  const token = localStorage.getItem("access_token");
+  if (!token) return null;
+  // Return null if token is expired
+  if (isTokenExpired(token)) return null;
+  return token;
+}
+
+/**
+ * Refresh tokens with deduplication - prevents multiple concurrent refresh attempts
+ */
+export async function refreshTokens(): Promise<boolean> {
+  if (typeof window === "undefined") return false;
+
+  // If refresh already in progress, wait for it
+  if (refreshPromise) {
+    return refreshPromise;
+  }
+
+  refreshPromise = (async () => {
+    try {
+      const refreshToken = localStorage.getItem("refresh_token");
+      if (!refreshToken) return false;
+
+      const response = await fetch(`${API_BASE_URL}/api/v1/auth/refresh`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ refresh_token: refreshToken }),
+      });
+
+      if (!response.ok) {
+        // Only clear tokens on 401 (invalid/expired refresh token)
+        if (response.status === 401) {
+          clearTokens();
+        }
+        return false;
+      }
+
+      const data = await response.json();
+      saveTokens(data.data.access_token, data.data.refresh_token);
+      return true;
+    } catch {
+      // Network error - don't clear tokens, might be temporary
+      return false;
+    } finally {
+      refreshPromise = null;
+    }
+  })();
+
+  return refreshPromise;
+}
+
 async function handleResponse<T>(response: Response): Promise<T> {
   // Clone response to read text safely (can only read body once)
   const text = await response.text();
@@ -57,53 +156,72 @@ async function handleResponse<T>(response: Response): Promise<T> {
 
 function getAuthHeaders(): HeadersInit {
   if (typeof window === "undefined") return {};
-  const token = localStorage.getItem("access_token");
+  const token = getAccessToken(); // Uses the new function that checks expiry
   return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+/**
+ * Fetch with automatic 401 retry - attempts token refresh on 401 and retries once
+ */
+async function fetchWithAuth(
+  url: string,
+  options: RequestInit = {}
+): Promise<Response> {
+  const headers = {
+    "Content-Type": "application/json",
+    ...getAuthHeaders(),
+    ...(options.headers || {}),
+  };
+
+  let response = await fetch(url, { ...options, headers });
+
+  // If 401 and we have a refresh token, try to refresh and retry
+  if (response.status === 401) {
+    const hasRefreshToken = typeof window !== "undefined" && localStorage.getItem("refresh_token");
+    if (hasRefreshToken) {
+      const refreshed = await refreshTokens();
+      if (refreshed) {
+        // Retry with new token
+        const newHeaders = {
+          "Content-Type": "application/json",
+          ...getAuthHeaders(),
+          ...(options.headers || {}),
+        };
+        response = await fetch(url, { ...options, headers: newHeaders });
+      }
+    }
+  }
+
+  return response;
 }
 
 export const api = {
   async get<T>(endpoint: string): Promise<T> {
-    const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+    const response = await fetchWithAuth(`${API_BASE_URL}${endpoint}`, {
       method: "GET",
-      headers: {
-        "Content-Type": "application/json",
-        ...getAuthHeaders(),
-      },
     });
     return handleResponse<T>(response);
   },
 
   async post<T>(endpoint: string, data?: unknown): Promise<T> {
-    const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+    const response = await fetchWithAuth(`${API_BASE_URL}${endpoint}`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...getAuthHeaders(),
-      },
       body: data ? JSON.stringify(data) : undefined,
     });
     return handleResponse<T>(response);
   },
 
   async patch<T>(endpoint: string, data?: unknown): Promise<T> {
-    const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+    const response = await fetchWithAuth(`${API_BASE_URL}${endpoint}`, {
       method: "PATCH",
-      headers: {
-        "Content-Type": "application/json",
-        ...getAuthHeaders(),
-      },
       body: data ? JSON.stringify(data) : undefined,
     });
     return handleResponse<T>(response);
   },
 
   async delete<T>(endpoint: string): Promise<T> {
-    const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+    const response = await fetchWithAuth(`${API_BASE_URL}${endpoint}`, {
       method: "DELETE",
-      headers: {
-        "Content-Type": "application/json",
-        ...getAuthHeaders(),
-      },
     });
     return handleResponse<T>(response);
   },
@@ -134,8 +252,8 @@ export const authApi = {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${refreshToken}`,
       },
+      body: JSON.stringify({ refresh_token: refreshToken }),
     });
     return handleResponse<{ data: TokenPair }>(response);
   },
@@ -257,6 +375,13 @@ export interface ProrationPreview {
   new_amount_cents: number;
   proration_amount_cents: number;
   immediate_charge: boolean;
+}
+
+export interface VerifyCheckoutResponse {
+  success: boolean;
+  subscription: Subscription | null;
+  message: string;
+  already_processed: boolean;
 }
 
 export interface BillingDashboard {
@@ -941,6 +1066,12 @@ export const billingApi = {
       annual,
       success_url: successUrl,
       cancel_url: cancelUrl,
+    });
+  },
+
+  async verifyCheckout(sessionId: string) {
+    return api.post<VerifyCheckoutResponse>('/api/v1/billing/verify-checkout', {
+      session_id: sessionId,
     });
   },
 

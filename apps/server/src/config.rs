@@ -51,6 +51,19 @@ pub struct Config {
 
     /// Stripe price ID for Team annual subscription
     pub stripe_price_id_team_annual: Option<String>,
+
+    // =========================================================================
+    // BugWatch Self-Monitoring Configuration
+    // =========================================================================
+
+    /// BugWatch API key for self-monitoring
+    pub bugwatch_api_key: Option<String>,
+
+    /// BugWatch endpoint (defaults to https://api.bugwatch.io)
+    pub bugwatch_endpoint: Option<String>,
+
+    /// Enable BugWatch self-monitoring
+    pub bugwatch_enabled: bool,
 }
 
 impl Config {
@@ -83,6 +96,12 @@ impl Config {
             stripe_price_id_pro_annual: env::var("STRIPE_PRICE_ID_PRO_ANNUAL").ok(),
             stripe_price_id_team_monthly: env::var("STRIPE_PRICE_ID_TEAM_MONTHLY").ok(),
             stripe_price_id_team_annual: env::var("STRIPE_PRICE_ID_TEAM_ANNUAL").ok(),
+            // BugWatch self-monitoring config
+            bugwatch_api_key: env::var("BUGWATCH_API_KEY").ok(),
+            bugwatch_endpoint: env::var("BUGWATCH_ENDPOINT").ok(),
+            bugwatch_enabled: env::var("BUGWATCH_ENABLED")
+                .map(|v| v == "true" || v == "1")
+                .unwrap_or(false),
         })
     }
 
@@ -93,5 +112,10 @@ impl Config {
 
     pub fn is_production(&self) -> bool {
         self.environment == "production"
+    }
+
+    /// Check if BugWatch self-monitoring is enabled and configured
+    pub fn is_bugwatch_enabled(&self) -> bool {
+        self.bugwatch_enabled && self.bugwatch_api_key.is_some()
     }
 }

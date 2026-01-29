@@ -16,12 +16,11 @@ impl OrganizationRepository {
         slug: &str,
     ) -> Result<Organization> {
         let id = Uuid::new_v4().to_string();
-        let now = chrono::Utc::now().to_rfc3339();
 
         sqlx::query_as::<_, Organization>(
             r#"
             INSERT INTO organizations (id, name, slug, owner_id, created_at, updated_at)
-            VALUES ($1, $2, $3, $4, $5, $6)
+            VALUES ($1, $2, $3, $4, now(), now())
             RETURNING *
             "#,
         )
@@ -29,8 +28,6 @@ impl OrganizationRepository {
         .bind(name)
         .bind(slug)
         .bind(owner_id)
-        .bind(&now)
-        .bind(&now)
         .fetch_one(pool)
         .await
         .map_err(Into::into)
@@ -85,7 +82,7 @@ impl OrganizationRepository {
 
     /// Update organization name
     pub async fn update_name(pool: &DbPool, id: &str, name: &str) -> Result<Organization> {
-        let now = chrono::Utc::now().to_rfc3339();
+        let now = chrono::Utc::now();
         sqlx::query_as::<_, Organization>(
             "UPDATE organizations SET name = $1, updated_at = $2 WHERE id = $3 RETURNING *",
         )
@@ -110,7 +107,7 @@ impl OrganizationRepository {
         current_period_end: Option<&str>,
         cancel_at_period_end: bool,
     ) -> Result<Organization> {
-        let now = chrono::Utc::now().to_rfc3339();
+        let now = chrono::Utc::now();
         sqlx::query_as::<_, Organization>(
             r#"
             UPDATE organizations SET
@@ -148,7 +145,7 @@ impl OrganizationRepository {
         id: &str,
         stripe_customer_id: &str,
     ) -> Result<()> {
-        let now = chrono::Utc::now().to_rfc3339();
+        let now = chrono::Utc::now();
         sqlx::query(
             "UPDATE organizations SET stripe_customer_id = $1, updated_at = $2 WHERE id = $3",
         )
@@ -208,7 +205,7 @@ impl OrganizationRepository {
 
     /// Update seat count only
     pub async fn update_seats(pool: &DbPool, id: &str, seats: i32) -> Result<Organization> {
-        let now = chrono::Utc::now().to_rfc3339();
+        let now = chrono::Utc::now();
         sqlx::query_as::<_, Organization>(
             "UPDATE organizations SET seats = $1, updated_at = $2 WHERE id = $3 RETURNING *",
         )
@@ -228,7 +225,7 @@ impl OrganizationRepository {
         billing_country: Option<&str>,
         billing_address: Option<&str>,
     ) -> Result<Organization> {
-        let now = chrono::Utc::now().to_rfc3339();
+        let now = chrono::Utc::now();
         sqlx::query_as::<_, Organization>(
             r#"
             UPDATE organizations SET
@@ -257,7 +254,7 @@ impl OrganizationRepository {
         payment_failed_at: Option<&str>,
         grace_period_ends: Option<&str>,
     ) -> Result<Organization> {
-        let now = chrono::Utc::now().to_rfc3339();
+        let now = chrono::Utc::now();
         sqlx::query_as::<_, Organization>(
             r#"
             UPDATE organizations SET
@@ -289,7 +286,7 @@ impl OrganizationMemberRepository {
         role: &str,
     ) -> Result<OrganizationMember> {
         let id = Uuid::new_v4().to_string();
-        let now = chrono::Utc::now().to_rfc3339();
+        let now = chrono::Utc::now();
 
         sqlx::query_as::<_, OrganizationMember>(
             r#"
@@ -386,7 +383,7 @@ impl UsageRepository {
         amount: i32,
     ) -> Result<UsageRecord> {
         let id = Uuid::new_v4().to_string();
-        let now = chrono::Utc::now().to_rfc3339();
+        let now = chrono::Utc::now();
 
         // Try to update existing record, or insert new one
         sqlx::query_as::<_, UsageRecord>(
@@ -434,7 +431,7 @@ impl UsageRepository {
     pub async fn list_current(
         pool: &DbPool,
         organization_id: &str,
-        period_start: &str,
+        period_start: chrono::DateTime<chrono::Utc>,
     ) -> Result<Vec<UsageRecord>> {
         sqlx::query_as::<_, UsageRecord>(
             "SELECT * FROM usage_records WHERE organization_id = $1 AND period_start = $2",
@@ -475,7 +472,7 @@ impl BillingEventRepository {
         metadata: Option<&str>,
     ) -> Result<BillingEvent> {
         let id = Uuid::new_v4().to_string();
-        let now = chrono::Utc::now().to_rfc3339();
+        let now = chrono::Utc::now();
 
         sqlx::query_as::<_, BillingEvent>(
             r#"
@@ -536,7 +533,7 @@ impl CreditPurchaseRepository {
         amount_cents: i32,
     ) -> Result<CreditPurchase> {
         let id = Uuid::new_v4().to_string();
-        let now = chrono::Utc::now().to_rfc3339();
+        let now = chrono::Utc::now();
 
         sqlx::query_as::<_, CreditPurchase>(
             r#"

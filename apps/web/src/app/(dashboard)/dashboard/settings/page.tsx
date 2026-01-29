@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { Button } from "@/components/ui/button";
@@ -15,8 +15,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { User, Bell, CreditCard, Shield, CheckCircle, XCircle } from "lucide-react";
-import { billingApi, type Organization, type Subscription } from "@/lib/api";
-import { PlanCard, UsageStats, TeamMembers, CreditPurchase, Invoices, PaymentMethods, BillingDashboard, SeatManagement } from "@/components/billing";
+import { billingApi, type Organization, type Subscription, type VerifyCheckoutResponse } from "@/lib/api";
+import { PlanCard, PricingTable, UsageStats, TeamMembers, CreditPurchase, Invoices, PaymentMethods, BillingDashboard, SeatManagement } from "@/components/billing";
 import { useTier, type Tier } from "@/hooks/use-feature";
 
 type Tab = "profile" | "notifications" | "billing" | "security";
@@ -33,9 +33,16 @@ export default function SettingsPage() {
 
   const success = searchParams.get("success");
   const canceled = searchParams.get("canceled");
+  const sessionId = searchParams.get("session_id");
 
   const [name, setName] = useState(user?.name || "");
+  const [verifying, setVerifying] = useState(false);
+  const [verificationResult, setVerificationResult] = useState<VerifyCheckoutResponse | null>(null);
+  const [verificationError, setVerificationError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+
+  // Track if verification has been attempted to prevent duplicate calls
+  const verificationAttemptedRef = useRef(false);
 
   // Billing state
   const [billingLoading, setBillingLoading] = useState(true);
@@ -49,9 +56,10 @@ export default function SettingsPage() {
   const setActiveTab = (tab: Tab) => {
     const params = new URLSearchParams(searchParams.toString());
     params.set("tab", tab);
-    // Clear success/canceled params when switching tabs
+    // Clear success/canceled/session_id params when switching tabs
     params.delete("success");
     params.delete("canceled");
+    params.delete("session_id");
     router.push(`/dashboard/settings?${params.toString()}`);
   };
 
@@ -80,12 +88,64 @@ export default function SettingsPage() {
     fetchBillingData();
   }, [activeTab]);
 
-  // Refresh user data after successful checkout
+  // Verify checkout session and refresh user data after successful checkout
   useEffect(() => {
-    if (success === "true") {
-      refreshUser();
+    if (success !== "true") return;
+
+    // Prevent duplicate verification attempts
+    if (verificationAttemptedRef.current) return;
+    verificationAttemptedRef.current = true;
+
+    async function verifyAndRefresh() {
+      // If we have a session ID, verify it directly with Stripe
+      if (sessionId) {
+        setVerifying(true);
+        setVerificationError(null);
+        try {
+          const result = await billingApi.verifyCheckout(sessionId);
+          setVerificationResult(result);
+          if (result.success) {
+            // Verification successful - refresh user data
+            await refreshUser();
+            // Also refresh billing data
+            try {
+              const [orgResponse, subResponse] = await Promise.all([
+                billingApi.getOrganization(),
+                billingApi.getSubscription(),
+              ]);
+              setOrganization(orgResponse.organization);
+              setIsOwner(orgResponse.is_owner);
+              setSubscription(subResponse);
+              setMembersCount(orgResponse.members_count);
+            } catch {
+              // Billing refresh failed, but verification was successful
+            }
+          } else {
+            // Verification returned success: false - still fallback to refresh
+            setVerificationError(result.message);
+            await refreshUser();
+          }
+        } catch (error) {
+          console.error("Checkout verification failed:", error);
+          setVerificationError("Failed to verify checkout. Refreshing subscription data...");
+          // Fallback to regular refresh
+          await refreshUser();
+        } finally {
+          setVerifying(false);
+          // Clean up URL params after verification attempt
+          const params = new URLSearchParams(searchParams.toString());
+          params.delete("session_id");
+          // Keep success=true to show the message, but remove session_id to prevent re-verification
+          router.replace(`/dashboard/settings?${params.toString()}`, { scroll: false });
+        }
+      } else {
+        // No session ID - fallback to regular refresh (legacy behavior)
+        refreshUser();
+      }
     }
-  }, [success, refreshUser]);
+
+    verifyAndRefresh();
+  }, [success, sessionId, refreshUser, router, searchParams]);
 
   async function handleSave() {
     setIsSaving(true);
@@ -131,10 +191,26 @@ export default function SettingsPage() {
       </div>
 
       {/* Success/Canceled Messages */}
-      {success === "true" && (
+      {success === "true" && verifying && (
+        <div className="flex items-center gap-2 p-4 rounded-lg bg-blue-50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-800 text-blue-800 dark:text-blue-200">
+          <div className="h-5 w-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+          <span>Verifying your subscription...</span>
+        </div>
+      )}
+      {success === "true" && !verifying && !verificationError && (
         <div className="flex items-center gap-2 p-4 rounded-lg bg-green-50 dark:bg-green-950/20 border border-green-200 dark:border-green-800 text-green-800 dark:text-green-200">
           <CheckCircle className="h-5 w-5" />
-          <span>Your subscription has been updated successfully!</span>
+          <span>
+            {verificationResult?.already_processed
+              ? "Your subscription is already active!"
+              : verificationResult?.message || "Your subscription has been updated successfully!"}
+          </span>
+        </div>
+      )}
+      {verificationError && (
+        <div className="flex items-center gap-2 p-4 rounded-lg bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-200">
+          <XCircle className="h-5 w-5" />
+          <span>{verificationError}</span>
         </div>
       )}
       {canceled === "true" && (
@@ -224,24 +300,35 @@ export default function SettingsPage() {
                   <Skeleton className="h-6 w-32" />
                 </CardHeader>
                 <CardContent>
-                  <Skeleton className="h-24 w-full" />
+                  <Skeleton className="h-64 w-full" />
                 </CardContent>
               </Card>
             </>
           ) : (
             <>
-              {/* Billing Dashboard - Overview */}
+              {/* Billing Dashboard - Overview (Paid plans only) */}
               {subscription?.has_stripe && (
                 <BillingDashboard />
               )}
 
-              {/* Current Plan */}
-              <PlanCard
-                organization={organization}
-                subscription={subscription}
+              {/* Current Plan Summary (Paid plans only) */}
+              {subscription?.has_stripe && (
+                <PlanCard
+                  organization={organization}
+                  subscription={subscription}
+                  isOwner={isOwner}
+                  onRefresh={handleRefreshBilling}
+                />
+              )}
+
+              {/* Pricing Table - Always visible */}
+              <PricingTable
+                currentTier={(organization?.tier || "free") as Tier}
                 isOwner={isOwner}
-                onRefresh={handleRefreshBilling}
               />
+
+              {/* Usage Stats */}
+              <UsageStats tier={(organization?.tier || "free") as Tier} />
 
               {/* Seat Management (Paid plans only) */}
               {subscription?.has_stripe && isOwner && (tier === "pro" || tier === "team" || tier === "enterprise") && (
@@ -253,9 +340,6 @@ export default function SettingsPage() {
                   onUpdate={handleRefreshBilling}
                 />
               )}
-
-              {/* Usage Stats */}
-              <UsageStats tier={(organization?.tier || "free") as Tier} />
 
               {/* Team Members (Team+ only) */}
               {tier === "team" || tier === "enterprise" ? (

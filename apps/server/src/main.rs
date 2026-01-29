@@ -25,6 +25,9 @@ pub use error::{AppError, AppResult};
 pub use rate_limit::{RateLimiter, Tier};
 pub use services::{AiService, AlertingService, HealthCheckWorker, RetentionService};
 
+// BugWatch self-monitoring
+use bugwatch::{init as bugwatch_init, BugwatchClient, BugwatchOptions, install_panic_hook};
+
 /// Application state shared across handlers
 #[derive(Clone)]
 pub struct AppState {
@@ -34,6 +37,7 @@ pub struct AppState {
     pub ai_service: Option<AiService>,
     pub stripe: Option<billing::StripeClient>,
     pub alerting_service: Arc<AlertingService>,
+    pub bugwatch: Option<Arc<BugwatchClient>>,
 }
 
 #[tokio::main]
@@ -75,6 +79,36 @@ async fn main() -> Result<()> {
     let alerting_service = Arc::new(AlertingService::new(db.clone(), config.app_url.clone()).await);
     info!("Alerting service initialized");
 
+    // Initialize BugWatch self-monitoring (dogfooding)
+    // Uses bugwatch::init to set the global client for capture_message in error.rs
+    let bugwatch = if config.is_bugwatch_enabled() {
+        let api_key = config.bugwatch_api_key.as_ref().unwrap();
+        let mut options = BugwatchOptions::new(api_key)
+            .with_environment(&config.environment)
+            .with_debug(!config.is_production());
+
+        // Set custom endpoint if configured
+        if let Some(ref endpoint) = config.bugwatch_endpoint {
+            options = options.with_endpoint(endpoint);
+        }
+
+        // Use bugwatch::init to set the global client (required for capture_message in error.rs)
+        let client = bugwatch_init(options);
+
+        // Tag all events as self-monitoring to avoid alerting loops
+        client.set_tag("source", "bugwatch-self-monitoring");
+        client.set_tag("service", "bugwatch-server");
+
+        // Install panic hook to capture panics
+        install_panic_hook(client.clone());
+
+        info!("BugWatch self-monitoring enabled");
+        Some(client)
+    } else {
+        info!("BugWatch self-monitoring disabled (set BUGWATCH_ENABLED=true and BUGWATCH_API_KEY to enable)");
+        None
+    };
+
     // Create app state
     let state = AppState {
         db,
@@ -83,6 +117,7 @@ async fn main() -> Result<()> {
         ai_service,
         stripe,
         alerting_service: alerting_service.clone(),
+        bugwatch,
     };
 
     // Build application

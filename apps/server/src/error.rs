@@ -6,6 +6,9 @@ use axum::{
 use serde::Serialize;
 use thiserror::Error;
 
+// BugWatch self-monitoring: capture internal errors
+use bugwatch::{capture_message, Level};
+
 pub type AppResult<T> = Result<T, AppError>;
 
 #[derive(Error, Debug)]
@@ -72,6 +75,11 @@ impl IntoResponse for AppError {
             ),
             AppError::Internal(msg) => {
                 tracing::error!("Internal error: {}", msg);
+                // Capture to BugWatch for self-monitoring
+                capture_message(
+                    &format!("Internal error: {}", msg),
+                    Level::Error,
+                );
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "internal_error",
@@ -81,6 +89,11 @@ impl IntoResponse for AppError {
             }
             AppError::Database(e) => {
                 tracing::error!("Database error: {}", e);
+                // Capture to BugWatch for self-monitoring
+                capture_message(
+                    &format!("Database error: {}", e),
+                    Level::Error,
+                );
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "database_error",
@@ -93,6 +106,11 @@ impl IntoResponse for AppError {
             }
             AppError::Anyhow(e) => {
                 tracing::error!("Anyhow error: {}", e);
+                // Capture to BugWatch for self-monitoring
+                capture_message(
+                    &format!("Anyhow error: {}", e),
+                    Level::Error,
+                );
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "internal_error",
