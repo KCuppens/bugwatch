@@ -103,8 +103,8 @@ impl OrganizationRepository {
         stripe_subscription_id: Option<&str>,
         subscription_status: &str,
         billing_interval: Option<&str>,
-        current_period_start: Option<&str>,
-        current_period_end: Option<&str>,
+        current_period_start: Option<chrono::DateTime<chrono::Utc>>,
+        current_period_end: Option<chrono::DateTime<chrono::Utc>>,
         cancel_at_period_end: bool,
     ) -> Result<Organization> {
         let now = chrono::Utc::now();

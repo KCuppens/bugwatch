@@ -628,8 +628,8 @@ pub async fn verify_checkout(
                 Some(&subscription_id),
                 "active",
                 Some(&billing_interval),
-                period_start.as_ref().map(|dt| dt.to_rfc3339()).as_deref(),
-                period_end.as_ref().map(|dt| dt.to_rfc3339()).as_deref(),
+                period_start,
+                period_end,
                 stripe_subscription.cancel_at_period_end,
             )
             .await
@@ -957,6 +957,11 @@ pub async fn change_plan(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     // Update local database
+    let period_start = chrono::DateTime::from_timestamp(subscription.current_period_start, 0)
+        .map(|dt| dt.with_timezone(&chrono::Utc));
+    let period_end = chrono::DateTime::from_timestamp(subscription.current_period_end, 0)
+        .map(|dt| dt.with_timezone(&chrono::Utc));
+
     OrganizationRepository::update_subscription(
         &state.db,
         &org.id,
@@ -965,8 +970,8 @@ pub async fn change_plan(
         Some(&subscription.id.to_string()),
         "active",
         Some(if annual { "annual" } else { "monthly" }),
-        Some(&subscription.current_period_start.to_string()),
-        Some(&subscription.current_period_end.to_string()),
+        period_start,
+        period_end,
         subscription.cancel_at_period_end,
     )
     .await

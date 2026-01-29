@@ -160,9 +160,9 @@ async fn handle_checkout_completed(
 
             // Get period dates
             let period_start = chrono::DateTime::from_timestamp(subscription.current_period_start, 0)
-                .map(|dt| dt.to_rfc3339());
+                .map(|dt| dt.with_timezone(&chrono::Utc));
             let period_end = chrono::DateTime::from_timestamp(subscription.current_period_end, 0)
-                .map(|dt| dt.to_rfc3339());
+                .map(|dt| dt.with_timezone(&chrono::Utc));
 
             // Update organization with subscription details
             OrganizationRepository::update_subscription(
@@ -173,8 +173,8 @@ async fn handle_checkout_completed(
                 Some(sub_id),
                 "active",
                 interval.as_deref(),
-                period_start.as_deref(),
-                period_end.as_deref(),
+                period_start,
+                period_end,
                 false,
             )
             .await
@@ -285,11 +285,11 @@ async fn handle_subscription_updated(
         let period_start = subscription["current_period_start"]
             .as_i64()
             .and_then(|t| chrono::DateTime::from_timestamp(t, 0))
-            .map(|dt| dt.to_rfc3339());
+            .map(|dt| dt.with_timezone(&chrono::Utc));
         let period_end = subscription["current_period_end"]
             .as_i64()
             .and_then(|t| chrono::DateTime::from_timestamp(t, 0))
-            .map(|dt| dt.to_rfc3339());
+            .map(|dt| dt.with_timezone(&chrono::Utc));
 
         // Determine tier
         let tier = determine_tier_from_price_id(
@@ -305,8 +305,8 @@ async fn handle_subscription_updated(
             Some(subscription_id),
             status,
             None,
-            period_start.as_deref(),
-            period_end.as_deref(),
+            period_start,
+            period_end,
             cancel_at_period_end,
         )
         .await
