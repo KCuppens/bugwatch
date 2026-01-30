@@ -75,8 +75,8 @@ pub async fn list(
             user_name: user.as_ref().and_then(|u| u.name.clone()),
             user_email: user.map(|u| u.email).unwrap_or_default(),
             content: comment.content,
-            created_at: comment.created_at,
-            updated_at: comment.updated_at,
+            created_at: comment.created_at.to_rfc3339(),
+            updated_at: comment.updated_at.to_rfc3339(),
         });
     }
 
@@ -133,8 +133,8 @@ pub async fn create(
             user_name: user.as_ref().and_then(|u| u.name.clone()),
             user_email: user.map(|u| u.email).unwrap_or_default(),
             content: comment.content,
-            created_at: comment.created_at,
-            updated_at: comment.updated_at,
+            created_at: comment.created_at.to_rfc3339(),
+            updated_at: comment.updated_at.to_rfc3339(),
         },
     }))
 }
@@ -198,8 +198,8 @@ pub async fn update(
             user_name: user.as_ref().and_then(|u| u.name.clone()),
             user_email: user.map(|u| u.email).unwrap_or_default(),
             content: updated.content,
-            created_at: updated.created_at,
-            updated_at: updated.updated_at,
+            created_at: updated.created_at.to_rfc3339(),
+            updated_at: updated.updated_at.to_rfc3339(),
         },
     }))
 }

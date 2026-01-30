@@ -105,19 +105,10 @@ impl HealthCheckWorker {
     fn should_check(&self, monitor: &Monitor) -> bool {
         match &monitor.last_checked_at {
             None => true, // Never checked
-            Some(last_checked) => {
-                let last = chrono::DateTime::parse_from_rfc3339(last_checked)
-                    .map(|dt| dt.with_timezone(&chrono::Utc))
-                    .ok();
-
-                match last {
-                    None => true,
-                    Some(last_time) => {
-                        let now = chrono::Utc::now();
-                        let elapsed = now.signed_duration_since(last_time);
-                        elapsed.num_seconds() >= monitor.interval_seconds as i64
-                    }
-                }
+            Some(last_time) => {
+                let now = chrono::Utc::now();
+                let elapsed = now.signed_duration_since(*last_time);
+                elapsed.num_seconds() >= monitor.interval_seconds as i64
             }
         }
     }
