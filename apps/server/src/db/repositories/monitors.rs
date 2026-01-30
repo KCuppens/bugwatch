@@ -257,12 +257,13 @@ impl MonitorCheckRepository {
         hours: i32,
     ) -> Result<(i64, i64, Option<f64>)> {
         // Get total checks and up checks in the time window
+        // Use COALESCE to ensure SUM never returns NULL (which can't deserialize to i64)
         let stats: (i64, i64, Option<f64>) = sqlx::query_as(
             r#"
             SELECT
                 COUNT(*) as total,
-                SUM(CASE WHEN status = 'up' THEN 1 ELSE 0 END) as up_count,
-                AVG(response_time_ms) as avg_response
+                COALESCE(SUM(CASE WHEN status = 'up' THEN 1 ELSE 0 END), 0) as up_count,
+                AVG(response_time_ms::double precision) as avg_response
             FROM monitor_checks
             WHERE monitor_id = $1
             AND checked_at >= NOW() - INTERVAL '1 hour' * $2

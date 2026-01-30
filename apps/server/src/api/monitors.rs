@@ -3,6 +3,7 @@ use axum::{
     Json,
 };
 use serde::{Deserialize, Serialize};
+use tracing::warn;
 
 use crate::{
     api::{PaginatedResponse, PaginationMeta, PaginationParams},
@@ -159,7 +160,17 @@ pub async fn list(
                 let uptime = (up as f64 / total as f64) * 100.0;
                 (Some(uptime), avg)
             }
-            _ => (None, None),
+            Ok((total, _, _)) => {
+                // No checks in time window
+                if total == 0 {
+                    warn!("No monitor checks found for {} in last 24h", monitor.id);
+                }
+                (None, None)
+            }
+            Err(e) => {
+                warn!("Failed to get uptime stats for monitor {}: {}", monitor.id, e);
+                (None, None)
+            }
         };
 
         // Get last error if monitor is down
