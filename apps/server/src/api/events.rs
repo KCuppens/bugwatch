@@ -150,8 +150,11 @@ pub async fn ingest(
     headers: HeaderMap,
     Json(event): Json<ErrorEvent>,
 ) -> AppResult<(StatusCode, Json<IngestResponse>)> {
+    tracing::info!("Event ingest request received");
+
     // 1. Extract API key from Authorization header
     let api_key = extract_api_key(&headers)?;
+    tracing::info!("API key extracted successfully");
 
     // 2. Validate API key and get project
     let project = ProjectRepository::find_by_api_key(&state.db, &api_key)
@@ -175,7 +178,7 @@ pub async fn ingest(
         });
     }
 
-    tracing::debug!("Received event for project {}: {}", project.id, event.event_id);
+    tracing::info!("Processing event {} for project {} ({})", event.event_id, project.name, project.id);
 
     // 4. Check for duplicate event
     if EventRepository::find_by_event_id(&state.db, &event.event_id)
