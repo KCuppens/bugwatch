@@ -130,7 +130,7 @@ async fn check_monitor(
     monitor: &Monitor,
     alerting: &AlertingService,
 ) -> Result<()> {
-    let now = chrono::Utc::now().to_rfc3339();
+    let now = chrono::Utc::now();
     let start = Instant::now();
 
     // Parse headers
@@ -204,7 +204,7 @@ async fn check_monitor(
     .await?;
 
     // Update monitor status
-    MonitorRepository::update_status(pool, &monitor.id, &status, &now).await?;
+    MonitorRepository::update_status(pool, &monitor.id, &status, now).await?;
 
     // Handle incident tracking and alerting
     let previous_status = &monitor.current_status;

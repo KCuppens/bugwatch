@@ -1,5 +1,6 @@
 use crate::db::{models::{Monitor, MonitorCheck, MonitorIncident}, DbPool};
 use anyhow::Result;
+use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
 pub struct MonitorRepository;
@@ -18,7 +19,7 @@ impl MonitorRepository {
         body: Option<&str>,
     ) -> Result<Monitor> {
         let id = Uuid::new_v4().to_string();
-        let now = chrono::Utc::now().to_rfc3339();
+        let now = Utc::now();
 
         sqlx::query_as::<_, Monitor>(
             r#"
@@ -37,7 +38,7 @@ impl MonitorRepository {
         .bind(expected_status)
         .bind(headers)
         .bind(body)
-        .bind(&now)
+        .bind(now)
         .fetch_one(pool)
         .await
         .map_err(Into::into)
@@ -185,7 +186,7 @@ impl MonitorRepository {
         pool: &DbPool,
         id: &str,
         status: &str,
-        checked_at: &str,
+        checked_at: DateTime<Utc>,
     ) -> Result<()> {
         sqlx::query("UPDATE monitors SET current_status = $1, last_checked_at = $2 WHERE id = $3")
             .bind(status)
@@ -209,7 +210,7 @@ impl MonitorCheckRepository {
         error_message: Option<&str>,
     ) -> Result<MonitorCheck> {
         let id = Uuid::new_v4().to_string();
-        let now = chrono::Utc::now().to_rfc3339();
+        let now = Utc::now();
 
         sqlx::query_as::<_, MonitorCheck>(
             r#"
@@ -224,7 +225,7 @@ impl MonitorCheckRepository {
         .bind(response_time_ms)
         .bind(status_code)
         .bind(error_message)
-        .bind(&now)
+        .bind(now)
         .fetch_one(pool)
         .await
         .map_err(Into::into)
@@ -296,7 +297,7 @@ impl MonitorIncidentRepository {
         cause: Option<&str>,
     ) -> Result<MonitorIncident> {
         let id = Uuid::new_v4().to_string();
-        let now = chrono::Utc::now().to_rfc3339();
+        let now = Utc::now();
 
         sqlx::query_as::<_, MonitorIncident>(
             r#"
@@ -307,16 +308,16 @@ impl MonitorIncidentRepository {
         )
         .bind(&id)
         .bind(monitor_id)
-        .bind(&now)
+        .bind(now)
         .bind(cause)
-        .bind(&now)
+        .bind(now)
         .fetch_one(pool)
         .await
         .map_err(Into::into)
     }
 
     pub async fn resolve(pool: &DbPool, id: &str) -> Result<MonitorIncident> {
-        let now = chrono::Utc::now().to_rfc3339();
+        let now = Utc::now();
 
         sqlx::query_as::<_, MonitorIncident>(
             r#"
@@ -326,7 +327,7 @@ impl MonitorIncidentRepository {
             RETURNING *
             "#,
         )
-        .bind(&now)
+        .bind(now)
         .bind(id)
         .fetch_one(pool)
         .await

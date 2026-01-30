@@ -1,4 +1,5 @@
 use crate::db::DbPool;
+use chrono::Utc;
 use uuid::Uuid;
 
 use crate::db::models::IssueComment;
@@ -53,31 +54,25 @@ impl CommentRepository {
         content: &str,
     ) -> AppResult<IssueComment> {
         let id = Uuid::new_v4().to_string();
-        let now = chrono::Utc::now().to_rfc3339();
+        let now = Utc::now();
 
-        sqlx::query(
+        let comment = sqlx::query_as::<_, IssueComment>(
             r#"
             INSERT INTO issue_comments (id, issue_id, user_id, content, created_at, updated_at)
             VALUES ($1, $2, $3, $4, $5, $6)
+            RETURNING *
             "#,
         )
         .bind(&id)
         .bind(issue_id)
         .bind(user_id)
         .bind(content)
-        .bind(&now)
-        .bind(&now)
-        .execute(db)
+        .bind(now)
+        .bind(now)
+        .fetch_one(db)
         .await?;
 
-        Ok(IssueComment {
-            id,
-            issue_id: issue_id.to_string(),
-            user_id: user_id.to_string(),
-            content: content.to_string(),
-            created_at: now.clone(),
-            updated_at: now,
-        })
+        Ok(comment)
     }
 
     pub async fn update(
@@ -85,7 +80,7 @@ impl CommentRepository {
         id: &str,
         content: &str,
     ) -> AppResult<()> {
-        let now = chrono::Utc::now().to_rfc3339();
+        let now = Utc::now();
 
         sqlx::query(
             r#"
@@ -95,7 +90,7 @@ impl CommentRepository {
             "#,
         )
         .bind(content)
-        .bind(&now)
+        .bind(now)
         .bind(id)
         .execute(db)
         .await?;

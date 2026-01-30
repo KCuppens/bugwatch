@@ -77,8 +77,8 @@ pub struct AiFix {
     pub explanation: Option<String>,
     pub pr_url: Option<String>,
     pub credits_used: Option<f64>,
-    pub created_at: String,
-    pub completed_at: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub completed_at: Option<DateTime<Utc>>,
     pub feedback: Option<String>,
 }
 
@@ -95,8 +95,8 @@ pub struct Monitor {
     pub headers: String,
     pub body: Option<String>,
     pub is_active: bool,
-    pub created_at: String,
-    pub last_checked_at: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub last_checked_at: Option<DateTime<Utc>>,
     pub current_status: String,
 }
 
@@ -108,17 +108,17 @@ pub struct MonitorCheck {
     pub response_time_ms: Option<i32>,
     pub status_code: Option<i32>,
     pub error_message: Option<String>,
-    pub checked_at: String,
+    pub checked_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize)]
 pub struct MonitorIncident {
     pub id: String,
     pub monitor_id: String,
-    pub started_at: String,
-    pub resolved_at: Option<String>,
+    pub started_at: DateTime<Utc>,
+    pub resolved_at: Option<DateTime<Utc>>,
     pub cause: Option<String>,
-    pub created_at: String,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
@@ -163,8 +163,8 @@ pub struct IssueComment {
     pub issue_id: String,
     pub user_id: String,
     pub content: String,
-    pub created_at: String,
-    pub updated_at: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
 }
 
 // ============================================================================
