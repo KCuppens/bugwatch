@@ -803,6 +803,64 @@ export const aiFixApi = {
   },
 };
 
+// Cross-Project Types
+export interface IssueWithProject extends Issue {
+  project_name: string;
+  project_slug: string;
+  project_platform: string | null;
+}
+
+export interface ProjectStatsWithInfo {
+  project_id: string;
+  project_name: string;
+  project_slug: string;
+  project_platform: string | null;
+  unresolved_count: number;
+  total_events: number;
+  total_users: number;
+  critical_count: number;
+}
+
+export interface AggregateTotals {
+  unresolved: number;
+  events: number;
+  users: number;
+  critical: number;
+}
+
+export interface AcrossProjectsResponse {
+  data: IssueWithProject[];
+  pagination: {
+    page: number;
+    per_page: number;
+    total: number;
+    total_pages: number;
+  };
+}
+
+export interface ProjectStatsResponse {
+  data: ProjectStatsWithInfo[];
+  totals: AggregateTotals;
+}
+
+// Cross-Project Issues API
+export const overviewApi = {
+  async getIssuesAcrossProjects(params?: { status?: string; page?: number; limit?: number }) {
+    const searchParams = new URLSearchParams();
+    if (params?.status) searchParams.set("status", params.status);
+    if (params?.page) searchParams.set("page", String(params.page));
+    if (params?.limit) searchParams.set("limit", String(params.limit));
+    const query = searchParams.toString();
+    return api.get<AcrossProjectsResponse>(
+      `/api/v1/issues/across-projects${query ? `?${query}` : ""}`
+    );
+  },
+
+  async getStatsByProject() {
+    return api.get<ProjectStatsResponse>("/api/v1/issues/stats/by-project");
+  },
+};
+
 // Monitor types
 export interface Monitor {
   id: string;
@@ -824,6 +882,7 @@ export interface Monitor {
 export interface MonitorResponse extends Monitor {
   uptime_24h: number | null;
   avg_response_24h: number | null;
+  last_error: string | null;
 }
 
 export interface MonitorCheck {

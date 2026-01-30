@@ -64,6 +64,7 @@ pub struct MonitorResponse {
     pub monitor: Monitor,
     pub uptime_24h: Option<f64>,
     pub avg_response_24h: Option<f64>,
+    pub last_error: Option<String>,
 }
 
 /// Monitor detail response
@@ -125,6 +126,7 @@ pub async fn create(
         monitor,
         uptime_24h: None,
         avg_response_24h: None,
+        last_error: None,
     }))
 }
 
@@ -160,10 +162,21 @@ pub async fn list(
             _ => (None, None),
         };
 
+        // Get last error if monitor is down
+        let last_error = if monitor.current_status == "down" {
+            MonitorCheckRepository::get_last_error(&state.db, &monitor.id)
+                .await
+                .ok()
+                .flatten()
+        } else {
+            None
+        };
+
         monitor_responses.push(MonitorResponse {
             monitor,
             uptime_24h: uptime,
             avg_response_24h: avg_response,
+            last_error,
         });
     }
 
@@ -297,6 +310,7 @@ pub async fn update(
         monitor: updated,
         uptime_24h: None,
         avg_response_24h: None,
+        last_error: None,
     }))
 }
 

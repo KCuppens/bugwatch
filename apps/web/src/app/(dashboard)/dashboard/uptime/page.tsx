@@ -293,7 +293,7 @@ export default function UptimePage() {
                         <AlertCircle className="h-5 w-5 text-gray-500" />
                       )}
                     </div>
-                    <div>
+                    <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
                         <h3 className="font-medium">{monitor.name}</h3>
                         {!monitor.is_active && (
@@ -301,10 +301,20 @@ export default function UptimePage() {
                             Paused
                           </span>
                         )}
+                        {monitor.current_status === "down" && (
+                          <span className="text-xs bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300 px-2 py-0.5 rounded font-medium">
+                            DOWN
+                          </span>
+                        )}
                       </div>
-                      <p className="text-sm text-muted-foreground">
+                      <p className="text-sm text-muted-foreground truncate">
                         {monitor.method} {monitor.url}
                       </p>
+                      {monitor.current_status === "down" && monitor.last_error && (
+                        <p className="text-sm text-red-600 dark:text-red-400 mt-1 truncate">
+                          Error: {monitor.last_error}
+                        </p>
+                      )}
                     </div>
                   </div>
                   <div className="flex items-center gap-6">

@@ -286,6 +286,23 @@ impl MonitorCheckRepository {
 
         Ok(result.rows_affected())
     }
+
+    /// Get the last error message for a monitor (if any)
+    pub async fn get_last_error(pool: &DbPool, monitor_id: &str) -> Result<Option<String>> {
+        let result: Option<(Option<String>,)> = sqlx::query_as(
+            r#"
+            SELECT error_message FROM monitor_checks
+            WHERE monitor_id = $1 AND status = 'down' AND error_message IS NOT NULL
+            ORDER BY checked_at DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(monitor_id)
+        .fetch_optional(pool)
+        .await?;
+
+        Ok(result.and_then(|r| r.0))
+    }
 }
 
 pub struct MonitorIncidentRepository;
