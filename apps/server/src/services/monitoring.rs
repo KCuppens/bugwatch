@@ -203,9 +203,17 @@ async fn check_monitor(
     // Handle incident tracking and alerting
     let previous_status = &monitor.current_status;
 
+    // Log status changes for debugging
+    if status != *previous_status {
+        info!(
+            "Monitor '{}' status changed: {} -> {}",
+            monitor.name, previous_status, status
+        );
+    }
+
     if status == "down" && previous_status != "down" {
         // Start new incident
-        info!("Monitor {} is DOWN: {:?}", monitor.name, error_message);
+        info!("Monitor {} is DOWN, triggering alerts: {:?}", monitor.name, error_message);
         MonitorIncidentRepository::create(pool, &monitor.id, error_message.as_deref()).await?;
 
         // Trigger alert

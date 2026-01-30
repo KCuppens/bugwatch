@@ -108,12 +108,18 @@ impl AlertingService {
         monitor: &Monitor,
         error_message: Option<&str>,
     ) -> Result<()> {
+        info!("on_monitor_down triggered for monitor '{}' ({})", monitor.name, monitor.id);
+
         let project = match ProjectRepository::find_by_id(&self.pool, project_id).await? {
             Some(p) => p,
-            None => return Ok(()),
+            None => {
+                info!("Project {} not found, skipping alerts", project_id);
+                return Ok(());
+            }
         };
 
         let rules = AlertRuleRepository::list_active_by_project(&self.pool, project_id).await?;
+        info!("Found {} active alert rules for project {}", rules.len(), project_id);
 
         for rule in rules {
             let condition: AlertCondition = match serde_json::from_str(&rule.condition) {
@@ -133,6 +139,7 @@ impl AlertingService {
             };
 
             if matches {
+                info!("Alert rule '{}' matches monitor_down condition", rule.name);
                 let message = match error_message {
                     Some(e) => format!("{} is DOWN: {}", monitor.name, e),
                     None => format!("{} is DOWN", monitor.name),
@@ -153,6 +160,8 @@ impl AlertingService {
                 };
 
                 self.send_alert(&rule.id, &rule.actions, &payload).await;
+            } else {
+                info!("Alert rule '{}' does not match (condition type: {:?})", rule.name, condition);
             }
         }
 
@@ -212,16 +221,34 @@ impl AlertingService {
         let channel_ids: Vec<String> = match serde_json::from_str(actions_json) {
             Ok(ids) => ids,
             Err(e) => {
-                error!("Failed to parse channel IDs: {}", e);
+                error!("Failed to parse channel IDs from '{}': {}", actions_json, e);
                 return;
             }
         };
+
+        info!("Sending alert to {} channels: {:?}", channel_ids.len(), channel_ids);
+
+        if channel_ids.is_empty() {
+            info!("No channels configured for this alert rule");
+            return;
+        }
 
         for channel_id in channel_ids {
             let channel = match NotificationChannelRepository::find_by_id(&self.pool, &channel_id).await
             {
                 Ok(Some(c)) if c.is_active => c,
-                _ => continue,
+                Ok(Some(c)) => {
+                    info!("Channel '{}' is inactive, skipping", c.name);
+                    continue;
+                }
+                Ok(None) => {
+                    error!("Channel {} not found", channel_id);
+                    continue;
+                }
+                Err(e) => {
+                    error!("Failed to fetch channel {}: {}", channel_id, e);
+                    continue;
+                }
             };
 
             // Create log entry
