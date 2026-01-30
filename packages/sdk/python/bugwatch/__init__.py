@@ -234,7 +234,7 @@ def _atexit_handler():
 
 def init(
     api_key: Optional[str] = None,
-    endpoint: str = "https://api.bugwatch.io",
+    endpoint: str = "https://api.bugwatch.dev",
     environment: Optional[str] = None,
     release: Optional[str] = None,
     debug: bool = False,

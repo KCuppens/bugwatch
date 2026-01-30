@@ -111,7 +111,7 @@ class ErrorEvent:
 class BugwatchOptions:
     """Configuration options for the Bugwatch client."""
     api_key: str
-    endpoint: str = "https://api.bugwatch.io"
+    endpoint: str = "https://api.bugwatch.dev"
     environment: Optional[str] = None
     release: Optional[str] = None
     server_name: Optional[str] = None

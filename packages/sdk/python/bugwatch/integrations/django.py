@@ -78,7 +78,7 @@ class BugwatchMiddleware:
 
             client = init(
                 api_key=bugwatch_settings['api_key'],
-                endpoint=bugwatch_settings.get('endpoint', 'https://api.bugwatch.io'),
+                endpoint=bugwatch_settings.get('endpoint', 'https://api.bugwatch.dev'),
                 environment=bugwatch_settings.get('environment'),
                 release=bugwatch_settings.get('release'),
                 debug=bugwatch_settings.get('debug', False),

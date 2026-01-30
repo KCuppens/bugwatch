@@ -35,7 +35,7 @@ class BugwatchFastAPI:
         self,
         app: Any,
         api_key: str,
-        endpoint: str = "https://api.bugwatch.io",
+        endpoint: str = "https://api.bugwatch.dev",
         environment: Optional[str] = None,
         release: Optional[str] = None,
         debug: bool = False,

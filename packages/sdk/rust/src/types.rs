@@ -295,7 +295,7 @@ impl BugwatchOptions {
     pub fn new(api_key: impl Into<String>) -> Self {
         Self {
             api_key: api_key.into(),
-            endpoint: "https://api.bugwatch.io".to_string(),
+            endpoint: "https://api.bugwatch.dev".to_string(),
             environment: None,
             release: None,
             server_name: None,
