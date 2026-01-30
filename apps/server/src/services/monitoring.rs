@@ -38,6 +38,7 @@ impl HealthCheckWorker {
         let client = Client::builder()
             .timeout(Duration::from_secs(30))
             .user_agent("Bugwatch-Monitor/1.0")
+            .danger_accept_invalid_certs(false) // Keep security, but document option
             .build()
             .expect("Failed to create HTTP client");
 
@@ -175,9 +176,11 @@ async fn check_monitor(
             let error_msg = if e.is_timeout() {
                 "Request timed out".to_string()
             } else if e.is_connect() {
-                "Connection failed".to_string()
+                format!("Connection failed: {}", e.without_url())
+            } else if e.is_request() {
+                format!("Request error: {}", e.without_url())
             } else {
-                format!("Request failed: {}", e)
+                format!("Failed: {}", e.without_url())
             };
             ("down".to_string(), None, Some(error_msg))
         }
