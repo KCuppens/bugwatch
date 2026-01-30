@@ -14,7 +14,7 @@ impl AlertRuleRepository {
         actions: &str,
     ) -> Result<AlertRule> {
         let id = Uuid::new_v4().to_string();
-        let now = chrono::Utc::now().to_rfc3339();
+        let now = Utc::now();
 
         sqlx::query_as::<_, AlertRule>(
             r#"
@@ -28,7 +28,7 @@ impl AlertRuleRepository {
         .bind(name)
         .bind(condition)
         .bind(actions)
-        .bind(&now)
+        .bind(now)
         .fetch_one(pool)
         .await
         .map_err(Into::into)
@@ -124,7 +124,7 @@ impl NotificationChannelRepository {
         config: &str,
     ) -> Result<NotificationChannel> {
         let id = Uuid::new_v4().to_string();
-        let now = chrono::Utc::now().to_rfc3339();
+        let now = Utc::now();
 
         sqlx::query_as::<_, NotificationChannel>(
             r#"
@@ -138,7 +138,7 @@ impl NotificationChannelRepository {
         .bind(name)
         .bind(channel_type)
         .bind(config)
-        .bind(&now)
+        .bind(now)
         .fetch_one(pool)
         .await
         .map_err(Into::into)
@@ -217,7 +217,7 @@ impl AlertLogRepository {
         message: &str,
     ) -> Result<AlertLog> {
         let id = Uuid::new_v4().to_string();
-        let now = chrono::Utc::now().to_rfc3339();
+        let now = Utc::now();
 
         sqlx::query_as::<_, AlertLog>(
             r#"
@@ -232,16 +232,16 @@ impl AlertLogRepository {
         .bind(trigger_type)
         .bind(trigger_id)
         .bind(message)
-        .bind(&now)
+        .bind(now)
         .fetch_one(pool)
         .await
         .map_err(Into::into)
     }
 
     pub async fn mark_sent(pool: &DbPool, id: &str) -> Result<()> {
-        let now = chrono::Utc::now().to_rfc3339();
+        let now = Utc::now();
         sqlx::query("UPDATE alert_logs SET status = 'sent', sent_at = $1 WHERE id = $2")
-            .bind(&now)
+            .bind(now)
             .bind(id)
             .execute(pool)
             .await?;

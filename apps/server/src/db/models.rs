@@ -129,7 +129,7 @@ pub struct AlertRule {
     pub condition: String,  // JSON: { "type": "new_issue" | "issue_frequency" | "monitor_down", ... }
     pub actions: String,    // JSON: array of channel IDs
     pub is_active: bool,
-    pub created_at: String,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
@@ -140,7 +140,7 @@ pub struct NotificationChannel {
     pub channel_type: String,  // 'email', 'webhook', 'slack'
     pub config: String,        // JSON config
     pub is_active: bool,
-    pub created_at: String,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize)]
@@ -153,8 +153,8 @@ pub struct AlertLog {
     pub status: String,
     pub message: String,
     pub error_message: Option<String>,
-    pub created_at: String,
-    pub sent_at: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub sent_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]

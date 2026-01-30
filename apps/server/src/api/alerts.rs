@@ -80,7 +80,7 @@ impl TryFrom<AlertRule> for AlertRuleResponse {
             condition,
             channel_ids,
             is_active: rule.is_active,
-            created_at: rule.created_at,
+            created_at: rule.created_at.to_rfc3339(),
         })
     }
 }
@@ -292,7 +292,7 @@ impl From<NotificationChannel> for ChannelResponse {
             channel_type: channel.channel_type,
             config,
             is_active: channel.is_active,
-            created_at: channel.created_at,
+            created_at: channel.created_at.to_rfc3339(),
         }
     }
 }
