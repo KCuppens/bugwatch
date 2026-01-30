@@ -55,12 +55,22 @@ impl AlertingService {
 
     /// Trigger alerts for a new issue
     pub async fn on_new_issue(&self, project_id: &str, issue: &Issue) -> Result<()> {
+        info!("on_new_issue triggered for issue '{}' ({})", issue.title, issue.id);
+
         let project = match ProjectRepository::find_by_id(&self.pool, project_id).await? {
             Some(p) => p,
-            None => return Ok(()),
+            None => {
+                info!("Project {} not found, skipping alerts", project_id);
+                return Ok(());
+            }
         };
 
         let rules = AlertRuleRepository::list_active_by_project(&self.pool, project_id).await?;
+        info!("Found {} active alert rules for project {}", rules.len(), project_id);
+
+        if rules.is_empty() {
+            info!("No alert rules configured - create one in Dashboard > Alerts > Rules");
+        }
 
         for rule in rules {
             let condition: AlertCondition = match serde_json::from_str(&rule.condition) {
@@ -80,6 +90,7 @@ impl AlertingService {
             };
 
             if matches {
+                info!("Alert rule '{}' matches new_issue condition", rule.name);
                 let payload = AlertPayload {
                     title: format!("New {} in {}", issue.level, project.name),
                     message: issue.title.clone(),
@@ -95,6 +106,8 @@ impl AlertingService {
                 };
 
                 self.send_alert(&rule.id, &rule.actions, &payload).await;
+            } else {
+                info!("Alert rule '{}' does not match (condition: {:?})", rule.name, condition);
             }
         }
 
