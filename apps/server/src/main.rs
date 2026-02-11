@@ -2,7 +2,7 @@ use anyhow::Result;
 use axum::{routing::get, Router};
 use std::sync::Arc;
 use tokio::net::TcpListener;
-use axum::http::{header, Method};
+use axum::http::{header, HeaderValue, Method};
 use tower_http::{
     cors::{Any, CorsLayer},
     trace::TraceLayer,
@@ -188,6 +188,9 @@ fn create_app(state: AppState) -> Router {
             header::AUTHORIZATION,
             header::ACCEPT,
             header::ORIGIN,
+            HeaderValue::from_static("x-api-key"),
+            HeaderValue::from_static("x-bugwatch-sdk"),
+            HeaderValue::from_static("x-bugwatch-sdk-version"),
         ])
         .expose_headers(Any)
         .allow_credentials(false);
