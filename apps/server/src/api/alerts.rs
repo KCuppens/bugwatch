@@ -468,6 +468,101 @@ pub async fn list_alert_logs(
     Ok(Json(logs))
 }
 
+// ============ Cross-Project Alert Logs ============
+
+#[derive(Debug, Deserialize)]
+pub struct AcrossProjectsAlertLogsQuery {
+    #[serde(default = "default_across_limit")]
+    pub limit: u32,
+}
+
+fn default_across_limit() -> u32 {
+    10
+}
+
+#[derive(Debug, Serialize)]
+pub struct AlertLogWithProjectInfo {
+    pub id: String,
+    pub alert_rule_id: String,
+    pub rule_name: String,
+    pub project_id: String,
+    pub project_name: String,
+    pub trigger_type: String,
+    pub trigger_id: Option<String>,
+    pub status: String,
+    pub message: String,
+    pub error_message: Option<String>,
+    pub created_at: String,
+    pub sent_at: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AlertLogsAcrossProjectsResponse {
+    pub data: Vec<AlertLogWithProjectInfo>,
+}
+
+/// GET /api/v1/alerts/across-projects
+pub async fn list_alert_logs_across_projects(
+    State(state): State<AppState>,
+    auth_user: AuthUser,
+    Query(query): Query<AcrossProjectsAlertLogsQuery>,
+) -> AppResult<Json<AlertLogsAcrossProjectsResponse>> {
+    // Get all user's projects
+    let projects = ProjectRepository::find_by_owner(&state.db, &auth_user.id, 100, 0).await?;
+
+    if projects.is_empty() {
+        return Ok(Json(AlertLogsAcrossProjectsResponse { data: vec![] }));
+    }
+
+    let project_ids: Vec<String> = projects.iter().map(|p| p.id.clone()).collect();
+    let project_map: std::collections::HashMap<String, &crate::db::models::Project> =
+        projects.iter().map(|p| (p.id.clone(), p)).collect();
+
+    let limit = query.limit.min(100) as i64;
+
+    // Fetch alert logs across all projects
+    let logs = AlertLogRepository::list_across_projects(&state.db, &project_ids, limit)
+        .await
+        .map_err(|e| AppError::Internal(format!("Failed to list alert logs: {}", e)))?;
+
+    // Collect unique rule IDs and batch-fetch rule names
+    let rule_ids: Vec<String> = logs
+        .iter()
+        .map(|l| l.alert_rule_id.clone())
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+
+    let rule_map = AlertLogRepository::list_rule_names_for_ids(&state.db, &rule_ids)
+        .await
+        .unwrap_or_default();
+
+    // Enrich each log with project and rule info
+    let data: Vec<AlertLogWithProjectInfo> = logs
+        .into_iter()
+        .filter_map(|log| {
+            let (rule_name, project_id) = rule_map.get(&log.alert_rule_id)?;
+            let project = project_map.get(project_id)?;
+            Some(AlertLogWithProjectInfo {
+                id: log.id,
+                alert_rule_id: log.alert_rule_id,
+                rule_name: rule_name.clone(),
+                project_id: project_id.clone(),
+                project_name: project.name.clone(),
+                trigger_type: log.trigger_type,
+                trigger_id: log.trigger_id,
+                status: log.status,
+                message: log.message,
+                error_message: log.error_message,
+                created_at: log.created_at.to_rfc3339(),
+                sent_at: log.sent_at.map(|t| t.to_rfc3339()),
+            })
+        })
+        .collect();
+
+    Ok(Json(AlertLogsAcrossProjectsResponse { data }))
+}
+
 /// POST /api/v1/projects/:project_id/channels/:channel_id/test
 pub async fn test_channel(
     State(state): State<AppState>,

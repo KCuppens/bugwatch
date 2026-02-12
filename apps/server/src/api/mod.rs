@@ -10,6 +10,7 @@ pub mod billing;
 pub mod comments;
 pub mod events;
 pub mod issues;
+pub mod metrics;
 pub mod monitors;
 pub mod projects;
 pub mod webhooks;
@@ -24,6 +25,8 @@ pub fn router() -> Router<AppState> {
         .route("/auth/me", get(auth::me))
         // Event ingestion
         .route("/events", post(events::ingest))
+        // Server metrics ingestion (agent pushes here)
+        .route("/metrics", post(metrics::ingest_metrics))
         // Projects
         .route("/projects", get(projects::list).post(projects::create))
         .route(
@@ -38,6 +41,11 @@ pub fn router() -> Router<AppState> {
             post(projects::complete_onboarding),
         )
         .route("/projects/:id/verify", get(projects::verify_events))
+        // Cross-project routes (must come before project-specific routes)
+        .route("/issues/across-projects", get(issues::list_across_projects))
+        .route("/issues/stats/by-project", get(issues::get_stats_by_project))
+        .route("/alerts/across-projects", get(alerts::list_alert_logs_across_projects))
+        .route("/monitors/across-projects", get(monitors::list_across_projects))
         // Issues - specific routes MUST come before parameterized :issue_id route
         .route("/projects/:project_id/issues", get(issues::list))
         .route("/projects/:project_id/issues/_search", post(issues::search))
@@ -90,6 +98,23 @@ pub fn router() -> Router<AppState> {
         .route(
             "/projects/:project_id/monitors/:monitor_id/checks",
             get(monitors::list_checks),
+        )
+        // Server monitoring
+        .route(
+            "/projects/:project_id/servers",
+            get(metrics::list_servers),
+        )
+        .route(
+            "/projects/:project_id/servers/status",
+            get(metrics::servers_status),
+        )
+        .route(
+            "/projects/:project_id/servers/:server_id/metrics",
+            get(metrics::get_server_metrics),
+        )
+        .route(
+            "/projects/:project_id/servers/:server_id/metrics/latest",
+            get(metrics::get_latest_metrics),
         )
         // Alerts
         .route(

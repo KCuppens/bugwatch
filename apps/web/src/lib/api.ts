@@ -843,6 +843,41 @@ export interface ProjectStatsResponse {
   totals: AggregateTotals;
 }
 
+// Cross-project alert/monitor types
+export interface AlertLogWithProjectInfo {
+  id: string;
+  alert_rule_id: string;
+  rule_name: string;
+  project_id: string;
+  project_name: string;
+  trigger_type: string;
+  trigger_id: string | null;
+  status: string;
+  message: string;
+  error_message: string | null;
+  created_at: string;
+  sent_at: string | null;
+}
+
+export interface MonitorWithProjectInfo {
+  id: string;
+  project_id: string;
+  project_name: string;
+  name: string;
+  url: string;
+  current_status: string;
+  uptime_24h: number | null;
+  avg_response_24h: number | null;
+  last_error: string | null;
+  last_checked_at: string | null;
+}
+
+export interface MonitorsSummary {
+  total: number;
+  up: number;
+  down: number;
+}
+
 // Cross-Project Issues API
 export const overviewApi = {
   async getIssuesAcrossProjects(params?: { status?: string; page?: number; limit?: number }) {
@@ -858,6 +893,18 @@ export const overviewApi = {
 
   async getStatsByProject() {
     return api.get<ProjectStatsResponse>("/api/v1/issues/stats/by-project");
+  },
+
+  async getAlertLogsAcrossProjects(limit = 10) {
+    return api.get<{ data: AlertLogWithProjectInfo[] }>(
+      `/api/v1/alerts/across-projects?limit=${limit}`
+    );
+  },
+
+  async getMonitorsAcrossProjects() {
+    return api.get<{ data: MonitorWithProjectInfo[]; summary: MonitorsSummary }>(
+      `/api/v1/monitors/across-projects`
+    );
   },
 };
 
@@ -947,7 +994,11 @@ export type AlertCondition =
   | { type: "new_issue"; level?: string }
   | { type: "issue_frequency"; threshold: number; window_minutes: number }
   | { type: "monitor_down"; monitor_id?: string }
-  | { type: "monitor_recovery"; monitor_id?: string };
+  | { type: "monitor_recovery"; monitor_id?: string }
+  | { type: "server_cpu_high"; threshold_percent: number; server_id?: string }
+  | { type: "server_memory_high"; threshold_percent: number; server_id?: string }
+  | { type: "server_disk_high"; threshold_percent: number; mount?: string; server_id?: string }
+  | { type: "server_offline"; missing_minutes?: number; server_id?: string };
 
 export interface NotificationChannel {
   id: string;
@@ -1231,5 +1282,100 @@ export const billingApi = {
 
   async getUsageHistory() {
     return api.get<{ history: UsageHistoryRecord[] }>('/api/v1/billing/usage/history');
+  },
+};
+
+// ============================================================================
+// Server Monitoring Types
+// ============================================================================
+
+export interface ServerInfo {
+  id: string;
+  project_id: string;
+  server_id: string;
+  hostname: string;
+  os: string | null;
+  kernel: string | null;
+  first_seen: string;
+  last_seen: string;
+  is_active: boolean;
+}
+
+export interface ServerMetricData {
+  id: string;
+  recorded_at: string;
+  cpu_usage_percent: number | null;
+  load_avg_1: number | null;
+  load_avg_5: number | null;
+  load_avg_15: number | null;
+  mem_total_bytes: number | null;
+  mem_used_bytes: number | null;
+  mem_available_bytes: number | null;
+  mem_usage_percent: number | null;
+  swap_total_bytes: number | null;
+  swap_used_bytes: number | null;
+  net_rx_bytes_per_sec: number | null;
+  net_tx_bytes_per_sec: number | null;
+  uptime_seconds: number | null;
+  disks: DiskInfoData[] | null;
+  processes: ProcessInfoData[] | null;
+  docker: DockerInfoData[] | null;
+}
+
+export interface DiskInfoData {
+  mount: string;
+  filesystem: string | null;
+  total_bytes: number;
+  used_bytes: number;
+  available_bytes: number;
+  usage_percent: number;
+}
+
+export interface ProcessInfoData {
+  pid: number;
+  name: string;
+  cpu_percent: number;
+  mem_percent: number;
+  user: string | null;
+}
+
+export interface DockerInfoData {
+  name: string;
+  id: string;
+  status: string;
+  cpu_percent: number | null;
+  mem_usage: string | null;
+  mem_percent: number | null;
+}
+
+export interface ServerStatus {
+  has_agent: boolean;
+  server_count: number;
+}
+
+// Server Monitoring API
+export const serversApi = {
+  async listServers(projectId: string) {
+    return api.get<{ data: ServerInfo[] }>(
+      `/api/v1/projects/${projectId}/servers`
+    );
+  },
+
+  async hasAgent(projectId: string) {
+    return api.get<ServerStatus>(
+      `/api/v1/projects/${projectId}/servers/status`
+    );
+  },
+
+  async getMetrics(projectId: string, serverId: string, period: string = "1h") {
+    return api.get<{ data: ServerMetricData[] }>(
+      `/api/v1/projects/${projectId}/servers/${serverId}/metrics?period=${period}`
+    );
+  },
+
+  async getLatest(projectId: string, serverId: string) {
+    return api.get<{ data: ServerMetricData | null; server: ServerInfo }>(
+      `/api/v1/projects/${projectId}/servers/${serverId}/metrics/latest`
+    );
   },
 };

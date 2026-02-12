@@ -91,6 +91,33 @@ impl MonitorRepository {
         .map_err(Into::into)
     }
 
+    pub async fn list_active_across_projects(
+        pool: &DbPool,
+        project_ids: &[String],
+    ) -> Result<Vec<Monitor>> {
+        if project_ids.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let placeholders: Vec<String> = project_ids
+            .iter()
+            .enumerate()
+            .map(|(i, _)| format!("${}", i + 1))
+            .collect();
+
+        let query = format!(
+            "SELECT * FROM monitors WHERE project_id IN ({}) AND is_active = TRUE ORDER BY current_status ASC, name ASC",
+            placeholders.join(",")
+        );
+
+        let mut q = sqlx::query_as::<_, Monitor>(&query);
+        for pid in project_ids {
+            q = q.bind(pid);
+        }
+
+        q.fetch_all(pool).await.map_err(Into::into)
+    }
+
     pub async fn update(
         pool: &DbPool,
         id: &str,

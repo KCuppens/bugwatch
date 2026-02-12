@@ -1,6 +1,7 @@
 use crate::db::{models::{AlertRule, NotificationChannel, AlertLog, EmailRateLimit}, DbPool};
 use chrono::{DateTime, Utc};
 use anyhow::Result;
+use std::collections::HashMap;
 use uuid::Uuid;
 
 pub struct AlertRuleRepository;
@@ -292,6 +293,104 @@ impl AlertLogRepository {
         .fetch_all(pool)
         .await
         .map_err(Into::into)
+    }
+
+    /// Find a recent alert log for a rule+trigger pair (for cooldown)
+    pub async fn find_recent(
+        pool: &DbPool,
+        rule_id: &str,
+        trigger_id: Option<&str>,
+        cooldown_minutes: i32,
+    ) -> Result<Option<AlertLog>> {
+        let log = sqlx::query_as::<_, AlertLog>(
+            r#"
+            SELECT * FROM alert_logs
+            WHERE alert_rule_id = $1
+            AND ($2::TEXT IS NULL OR trigger_id = $2)
+            AND status = 'sent'
+            AND created_at > NOW() - INTERVAL '1 minute' * $3
+            ORDER BY created_at DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(rule_id)
+        .bind(trigger_id)
+        .bind(cooldown_minutes)
+        .fetch_optional(pool)
+        .await?;
+
+        Ok(log)
+    }
+
+    /// List alert logs across multiple projects
+    pub async fn list_across_projects(
+        pool: &DbPool,
+        project_ids: &[String],
+        limit: i64,
+    ) -> Result<Vec<AlertLog>> {
+        if project_ids.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let placeholders: Vec<String> = project_ids
+            .iter()
+            .enumerate()
+            .map(|(i, _)| format!("${}", i + 1))
+            .collect();
+
+        let query = format!(
+            r#"
+            SELECT al.* FROM alert_logs al
+            JOIN alert_rules ar ON al.alert_rule_id = ar.id
+            WHERE ar.project_id IN ({})
+            ORDER BY al.created_at DESC
+            LIMIT ${}
+            "#,
+            placeholders.join(","),
+            project_ids.len() + 1
+        );
+
+        let mut q = sqlx::query_as::<_, AlertLog>(&query);
+        for pid in project_ids {
+            q = q.bind(pid);
+        }
+        q = q.bind(limit);
+
+        q.fetch_all(pool).await.map_err(Into::into)
+    }
+
+    /// Get rule names and project IDs for a list of rule IDs
+    pub async fn list_rule_names_for_ids(
+        pool: &DbPool,
+        rule_ids: &[String],
+    ) -> Result<HashMap<String, (String, String)>> {
+        if rule_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let placeholders: Vec<String> = rule_ids
+            .iter()
+            .enumerate()
+            .map(|(i, _)| format!("${}", i + 1))
+            .collect();
+
+        let query = format!(
+            "SELECT id, name, project_id FROM alert_rules WHERE id IN ({})",
+            placeholders.join(",")
+        );
+
+        let mut q = sqlx::query_as::<_, (String, String, String)>(&query);
+        for rid in rule_ids {
+            q = q.bind(rid);
+        }
+
+        let rows = q.fetch_all(pool).await?;
+        let map = rows
+            .into_iter()
+            .map(|(id, name, project_id)| (id, (name, project_id)))
+            .collect();
+
+        Ok(map)
     }
 
     /// Cleanup old alert logs to prevent database bloat

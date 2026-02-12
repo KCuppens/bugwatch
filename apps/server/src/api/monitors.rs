@@ -79,6 +79,117 @@ pub struct MonitorDetailResponse {
     pub recent_incidents: Vec<MonitorIncident>,
 }
 
+/// Monitor with project info for cross-project view
+#[derive(Debug, Serialize)]
+pub struct MonitorWithProjectInfo {
+    pub id: String,
+    pub project_id: String,
+    pub project_name: String,
+    pub name: String,
+    pub url: String,
+    pub current_status: String,
+    pub uptime_24h: Option<f64>,
+    pub avg_response_24h: Option<f64>,
+    pub last_error: Option<String>,
+    pub last_checked_at: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MonitorsSummary {
+    pub total: u32,
+    pub up: u32,
+    pub down: u32,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MonitorsAcrossProjectsResponse {
+    pub data: Vec<MonitorWithProjectInfo>,
+    pub summary: MonitorsSummary,
+}
+
+/// GET /api/v1/monitors/across-projects
+pub async fn list_across_projects(
+    State(state): State<AppState>,
+    auth_user: AuthUser,
+) -> AppResult<Json<MonitorsAcrossProjectsResponse>> {
+    // Get all user's projects
+    let projects = ProjectRepository::find_by_owner(&state.db, &auth_user.id, 100, 0).await?;
+
+    if projects.is_empty() {
+        return Ok(Json(MonitorsAcrossProjectsResponse {
+            data: vec![],
+            summary: MonitorsSummary { total: 0, up: 0, down: 0 },
+        }));
+    }
+
+    let project_ids: Vec<String> = projects.iter().map(|p| p.id.clone()).collect();
+    let project_map: std::collections::HashMap<String, &crate::db::models::Project> =
+        projects.iter().map(|p| (p.id.clone(), p)).collect();
+
+    // Fetch active monitors across all projects
+    let monitors = MonitorRepository::list_active_across_projects(&state.db, &project_ids)
+        .await
+        .map_err(|e| AppError::Internal(format!("Failed to list monitors: {}", e)))?;
+
+    let mut up_count: u32 = 0;
+    let mut down_count: u32 = 0;
+    let mut monitor_responses = Vec::with_capacity(monitors.len());
+
+    for monitor in monitors {
+        // Count up/down
+        if monitor.current_status == "down" {
+            down_count += 1;
+        } else {
+            up_count += 1;
+        }
+
+        // Get uptime stats
+        let stats = MonitorCheckRepository::get_uptime_stats(&state.db, &monitor.id, 24).await;
+        let (uptime, avg_response) = match stats {
+            Ok((total, up, avg)) if total > 0 => {
+                let uptime = (up as f64 / total as f64) * 100.0;
+                (Some(uptime), avg)
+            }
+            _ => (None, None),
+        };
+
+        // Get last error if monitor is down
+        let last_error = if monitor.current_status == "down" {
+            MonitorCheckRepository::get_last_error(&state.db, &monitor.id)
+                .await
+                .ok()
+                .flatten()
+        } else {
+            None
+        };
+
+        let project_name = project_map
+            .get(&monitor.project_id)
+            .map(|p| p.name.clone())
+            .unwrap_or_default();
+
+        monitor_responses.push(MonitorWithProjectInfo {
+            id: monitor.id,
+            project_id: monitor.project_id,
+            project_name,
+            name: monitor.name,
+            url: monitor.url,
+            current_status: monitor.current_status,
+            uptime_24h: uptime,
+            avg_response_24h: avg_response,
+            last_error,
+            last_checked_at: monitor.last_checked_at.map(|t| t.to_rfc3339()),
+        });
+    }
+
+    let total = up_count + down_count;
+
+    Ok(Json(MonitorsAcrossProjectsResponse {
+        data: monitor_responses,
+        summary: MonitorsSummary { total, up: up_count, down: down_count },
+    }))
+}
+
 /// POST /api/v1/projects/:project_id/monitors
 pub async fn create(
     State(state): State<AppState>,
@@ -317,11 +428,30 @@ pub async fn update(
     .await
     .map_err(|e| AppError::Internal(format!("Failed to update monitor: {}", e)))?;
 
+    // Fetch stats so the response includes uptime data
+    let stats = MonitorCheckRepository::get_uptime_stats(&state.db, &monitor_id, 24).await;
+    let (uptime, avg_response) = match stats {
+        Ok((total, up, avg)) if total > 0 => {
+            let uptime = (up as f64 / total as f64) * 100.0;
+            (Some(uptime), avg)
+        }
+        _ => (None, None),
+    };
+
+    let last_error = if updated.current_status == "down" {
+        MonitorCheckRepository::get_last_error(&state.db, &updated.id)
+            .await
+            .ok()
+            .flatten()
+    } else {
+        None
+    };
+
     Ok(Json(MonitorResponse {
         monitor: updated,
-        uptime_24h: None,
-        avg_response_24h: None,
-        last_error: None,
+        uptime_24h: uptime,
+        avg_response_24h: avg_response,
+        last_error,
     }))
 }
 
