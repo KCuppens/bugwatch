@@ -222,63 +222,7 @@ def _extract_request_context(request: Any) -> Optional[RequestContext]:
         return None
 
 
-# Django Celery integration
-class CeleryIntegration:
-    """
-    Celery integration for Django.
-
-    Usage::
-
-        from bugwatch.integrations.django import CeleryIntegration
-
-        # In celery.py after creating the app
-        CeleryIntegration.setup(app)
-    """
-
-    @staticmethod
-    def setup(celery_app: Any) -> None:
-        """Set up Celery task error tracking."""
-        from celery.signals import task_failure, task_retry
-
-        @task_failure.connect
-        def handle_task_failure(
-            sender: Any = None,
-            task_id: str = None,
-            exception: Exception = None,
-            args: Any = None,
-            kwargs: Any = None,
-            traceback: Any = None,
-            einfo: Any = None,
-            **kw: Any
-        ) -> None:
-            client = get_client()
-            if client and exception:
-                client.capture_exception(
-                    exception,
-                    level=Level.ERROR,
-                    tags={
-                        "mechanism": "celery.task_failure",
-                        "celery.task_name": sender.name if sender else "unknown",
-                        "celery.task_id": task_id or "unknown",
-                    },
-                    extra={
-                        "celery.args": args,
-                        "celery.kwargs": kwargs,
-                    },
-                )
-
-        @task_retry.connect
-        def handle_task_retry(
-            sender: Any = None,
-            reason: Any = None,
-            request: Any = None,
-            **kw: Any
-        ) -> None:
-            client = get_client()
-            if client:
-                client.add_breadcrumb(
-                    category="celery",
-                    message=f"Task {sender.name if sender else 'unknown'} retrying",
-                    level=Level.WARNING,
-                    data={"reason": str(reason) if reason else None},
-                )
+# Backwards compatibility - import CeleryIntegration from standalone module
+# This allows existing Django users to continue using:
+#   from bugwatch.integrations.django import CeleryIntegration
+from .celery import CeleryIntegration

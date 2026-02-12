@@ -9,7 +9,7 @@ use super::{ApiResponse, PaginatedResponse, PaginationMeta, PaginationParams};
 use crate::{
     auth::AuthUser,
     db::repositories::{
-        issues::{Facets, SearchFilters},
+        issues::{Facets, ProjectStats, SearchFilters},
         EventRepository, IssueRepository, ProjectRepository,
     },
     AppError, AppResult, AppState,
@@ -995,4 +995,231 @@ fn parse_flexible_timestamp(timestamp: &str) -> Option<chrono::DateTime<chrono::
     }
 
     None
+}
+
+// ============================================================================
+// Cross-Project Endpoints
+// ============================================================================
+
+#[derive(Debug, Deserialize)]
+pub struct AcrossProjectsParams {
+    #[serde(default = "default_status")]
+    pub status: String,
+    #[serde(default = "default_page")]
+    pub page: u32,
+    #[serde(default = "default_limit")]
+    pub limit: u32,
+}
+
+fn default_status() -> String {
+    "unresolved".to_string()
+}
+
+fn default_page() -> u32 {
+    1
+}
+
+fn default_limit() -> u32 {
+    50
+}
+
+#[derive(Debug, Serialize)]
+pub struct AcrossProjectsResponse {
+    pub data: Vec<IssueWithProject>,
+    pub pagination: PaginationMeta,
+}
+
+#[derive(Debug, Serialize)]
+pub struct IssueWithProject {
+    pub id: String,
+    pub project_id: String,
+    pub project_name: String,
+    pub project_slug: String,
+    pub project_platform: Option<String>,
+    pub fingerprint: String,
+    pub title: String,
+    pub status: String,
+    pub level: String,
+    pub first_seen: String,
+    pub last_seen: String,
+    pub count: i64,
+    pub user_count: i64,
+}
+
+/// GET /api/v1/issues/across-projects
+/// Fetch issues across all user's projects
+pub async fn list_across_projects(
+    State(state): State<AppState>,
+    auth_user: AuthUser,
+    Query(params): Query<AcrossProjectsParams>,
+) -> AppResult<Json<AcrossProjectsResponse>> {
+    // Get all user's projects
+    let projects = ProjectRepository::find_by_owner(&state.db, &auth_user.id, 100, 0).await?;
+
+    if projects.is_empty() {
+        return Ok(Json(AcrossProjectsResponse {
+            data: vec![],
+            pagination: PaginationMeta {
+                page: params.page,
+                per_page: params.limit,
+                total: 0,
+                total_pages: 0,
+            },
+        }));
+    }
+
+    let project_ids: Vec<String> = projects.iter().map(|p| p.id.clone()).collect();
+    let project_map: HashMap<String, &crate::db::models::Project> =
+        projects.iter().map(|p| (p.id.clone(), p)).collect();
+
+    let page = params.page.max(1);
+    let limit = params.limit.min(100).max(1);
+    let offset = ((page - 1) * limit) as i64;
+
+    let status_filter = if params.status == "all" {
+        None
+    } else {
+        Some(params.status.as_str())
+    };
+
+    // Get issues across all projects
+    let issues = IssueRepository::find_across_projects(
+        &state.db,
+        &project_ids,
+        status_filter,
+        limit as i64,
+        offset,
+    )
+    .await?;
+
+    let total = IssueRepository::count_across_projects(&state.db, &project_ids, status_filter).await?;
+    let total_pages = ((total as f64) / (limit as f64)).ceil() as u32;
+
+    // Enrich issues with project info
+    let data: Vec<IssueWithProject> = issues
+        .into_iter()
+        .filter_map(|issue| {
+            let project = project_map.get(&issue.project_id)?;
+            Some(IssueWithProject {
+                id: issue.id,
+                project_id: issue.project_id,
+                project_name: project.name.clone(),
+                project_slug: project.slug.clone(),
+                project_platform: project.platform.clone(),
+                fingerprint: issue.fingerprint,
+                title: issue.title,
+                status: issue.status,
+                level: issue.level,
+                first_seen: issue.first_seen.to_rfc3339(),
+                last_seen: issue.last_seen.to_rfc3339(),
+                count: issue.count,
+                user_count: issue.user_count,
+            })
+        })
+        .collect();
+
+    Ok(Json(AcrossProjectsResponse {
+        data,
+        pagination: PaginationMeta {
+            page,
+            per_page: limit,
+            total: total as u32,
+            total_pages,
+        },
+    }))
+}
+
+#[derive(Debug, Serialize)]
+pub struct ProjectStatsResponse {
+    pub data: Vec<ProjectStatsWithInfo>,
+    pub totals: AggregateTotals,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ProjectStatsWithInfo {
+    pub project_id: String,
+    pub project_name: String,
+    pub project_slug: String,
+    pub project_platform: Option<String>,
+    pub unresolved_count: i64,
+    pub total_events: i64,
+    pub total_users: i64,
+    pub critical_count: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AggregateTotals {
+    pub unresolved: i64,
+    pub events: i64,
+    pub users: i64,
+    pub critical: i64,
+}
+
+/// GET /api/v1/issues/stats/by-project
+/// Get aggregated statistics grouped by project
+pub async fn get_stats_by_project(
+    State(state): State<AppState>,
+    auth_user: AuthUser,
+) -> AppResult<Json<ProjectStatsResponse>> {
+    // Get all user's projects
+    let projects = ProjectRepository::find_by_owner(&state.db, &auth_user.id, 100, 0).await?;
+
+    if projects.is_empty() {
+        return Ok(Json(ProjectStatsResponse {
+            data: vec![],
+            totals: AggregateTotals {
+                unresolved: 0,
+                events: 0,
+                users: 0,
+                critical: 0,
+            },
+        }));
+    }
+
+    let project_ids: Vec<String> = projects.iter().map(|p| p.id.clone()).collect();
+    let project_map: HashMap<String, &crate::db::models::Project> =
+        projects.iter().map(|p| (p.id.clone(), p)).collect();
+
+    // Get stats for all projects
+    let stats = IssueRepository::get_stats_by_project(&state.db, &project_ids).await?;
+    let stats_map: HashMap<String, &ProjectStats> =
+        stats.iter().map(|s| (s.project_id.clone(), s)).collect();
+
+    // Calculate totals
+    let mut totals = AggregateTotals {
+        unresolved: 0,
+        events: 0,
+        users: 0,
+        critical: 0,
+    };
+
+    // Build response with project info (include projects without issues)
+    let data: Vec<ProjectStatsWithInfo> = projects
+        .iter()
+        .map(|project| {
+            let stats = stats_map.get(&project.id);
+            let unresolved_count = stats.map(|s| s.unresolved_count).unwrap_or(0);
+            let total_events = stats.map(|s| s.total_events).unwrap_or(0);
+            let total_users = stats.map(|s| s.total_users).unwrap_or(0);
+            let critical_count = stats.map(|s| s.critical_count).unwrap_or(0);
+
+            totals.unresolved += unresolved_count;
+            totals.events += total_events;
+            totals.users += total_users;
+            totals.critical += critical_count;
+
+            ProjectStatsWithInfo {
+                project_id: project.id.clone(),
+                project_name: project.name.clone(),
+                project_slug: project.slug.clone(),
+                project_platform: project.platform.clone(),
+                unresolved_count,
+                total_events,
+                total_users,
+                critical_count,
+            }
+        })
+        .collect();
+
+    Ok(Json(ProjectStatsResponse { data, totals }))
 }

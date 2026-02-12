@@ -242,6 +242,7 @@ pub async fn ingest(
 
     // 9. Evaluate alert rules (async, non-blocking)
     if is_new {
+        tracing::info!("New issue created - triggering alert evaluation for issue {}", issue.id);
         let alerting = state.alerting_service.clone();
         let project_id = project.id.clone();
         let issue_clone = issue.clone();
@@ -251,6 +252,8 @@ pub async fn ingest(
                 tracing::error!("Failed to trigger new issue alert: {}", e);
             }
         });
+    } else {
+        tracing::info!("Issue {} already exists (fingerprint match) - no alert triggered", issue.id);
     }
 
     Ok((
@@ -263,7 +266,7 @@ pub async fn ingest(
 }
 
 /// Extract API key from Authorization header
-fn extract_api_key(headers: &HeaderMap) -> AppResult<String> {
+pub fn extract_api_key(headers: &HeaderMap) -> AppResult<String> {
     let auth_header = headers
         .get("Authorization")
         .ok_or_else(|| AppError::Unauthorized("Missing Authorization header".to_string()))?

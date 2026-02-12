@@ -34,6 +34,14 @@ const DEFAULT_OPTIONS: RegisterOptions = {
 let registered = false;
 
 /**
+ * Reset the SDK registration state.
+ * Use this for testing or to allow re-registration.
+ */
+export function reset(): void {
+  registered = false;
+}
+
+/**
  * Register Bugwatch in Next.js instrumentation.ts
  *
  * Call this in your project's instrumentation.ts file

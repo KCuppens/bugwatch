@@ -184,6 +184,8 @@ pub struct RequestContext {
     pub query_string: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub data: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_ip: Option<String>,
 }
 
 /// Runtime environment information.

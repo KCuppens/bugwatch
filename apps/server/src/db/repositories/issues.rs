@@ -434,3 +434,153 @@ pub struct Facets {
     pub level: std::collections::HashMap<String, u32>,
     pub status: std::collections::HashMap<String, u32>,
 }
+
+/// Statistics for a single project
+#[derive(Debug, serde::Serialize)]
+pub struct ProjectStats {
+    pub project_id: String,
+    pub unresolved_count: i64,
+    pub total_events: i64,
+    pub total_users: i64,
+    pub critical_count: i64,
+}
+
+impl IssueRepository {
+    /// Find issues across multiple projects
+    pub async fn find_across_projects(
+        pool: &DbPool,
+        project_ids: &[String],
+        status: Option<&str>,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<Issue>> {
+        if project_ids.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let mut param_idx = 1;
+        let placeholders: Vec<String> = project_ids
+            .iter()
+            .enumerate()
+            .map(|(i, _)| format!("${}", param_idx + i))
+            .collect();
+        param_idx += project_ids.len();
+
+        let mut query = format!(
+            "SELECT * FROM issues WHERE project_id IN ({})",
+            placeholders.join(",")
+        );
+
+        if let Some(s) = status {
+            query.push_str(&format!(" AND status = ${}", param_idx));
+            param_idx += 1;
+        }
+
+        query.push_str(&format!(
+            " ORDER BY last_seen DESC LIMIT ${} OFFSET ${}",
+            param_idx,
+            param_idx + 1
+        ));
+
+        let mut q = sqlx::query_as::<_, Issue>(&query);
+        for pid in project_ids {
+            q = q.bind(pid);
+        }
+        if let Some(s) = status {
+            q = q.bind(s);
+        }
+        q = q.bind(limit).bind(offset);
+
+        q.fetch_all(pool).await.map_err(Into::into)
+    }
+
+    /// Count issues across multiple projects
+    pub async fn count_across_projects(
+        pool: &DbPool,
+        project_ids: &[String],
+        status: Option<&str>,
+    ) -> Result<i64> {
+        if project_ids.is_empty() {
+            return Ok(0);
+        }
+
+        let mut param_idx = 1;
+        let placeholders: Vec<String> = project_ids
+            .iter()
+            .enumerate()
+            .map(|(i, _)| format!("${}", param_idx + i))
+            .collect();
+        param_idx += project_ids.len();
+
+        let mut query = format!(
+            "SELECT COUNT(*) FROM issues WHERE project_id IN ({})",
+            placeholders.join(",")
+        );
+
+        if let Some(s) = status {
+            query.push_str(&format!(" AND status = ${}", param_idx));
+        }
+
+        let mut q = sqlx::query_as::<_, (i64,)>(&query);
+        for pid in project_ids {
+            q = q.bind(pid);
+        }
+        if let Some(s) = status {
+            q = q.bind(s);
+        }
+
+        let (count,) = q.fetch_one(pool).await?;
+        Ok(count)
+    }
+
+    /// Get statistics grouped by project
+    pub async fn get_stats_by_project(
+        pool: &DbPool,
+        project_ids: &[String],
+    ) -> Result<Vec<ProjectStats>> {
+        if project_ids.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let placeholders: Vec<String> = project_ids
+            .iter()
+            .enumerate()
+            .map(|(i, _)| format!("${}", i + 1))
+            .collect();
+
+        let query = format!(
+            r#"
+            SELECT
+                project_id,
+                COUNT(*) FILTER (WHERE status = 'unresolved') as unresolved_count,
+                COALESCE(SUM(count), 0) as total_events,
+                COALESCE(SUM(user_count), 0) as total_users,
+                COUNT(*) FILTER (WHERE status = 'unresolved' AND (level = 'fatal' OR level = 'error')) as critical_count
+            FROM issues
+            WHERE project_id IN ({})
+            GROUP BY project_id
+            "#,
+            placeholders.join(",")
+        );
+
+        let mut q = sqlx::query_as::<_, (String, i64, i64, i64, i64)>(&query);
+        for pid in project_ids {
+            q = q.bind(pid);
+        }
+
+        let rows = q.fetch_all(pool).await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|(project_id, unresolved_count, total_events, total_users, critical_count)| {
+                ProjectStats {
+                    project_id,
+                    unresolved_count,
+                    total_events,
+                    total_users,
+                    critical_count,
+                }
+            })
+            .collect())
+    }
+}

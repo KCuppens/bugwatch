@@ -81,13 +81,18 @@
 
 pub mod backtrace;
 pub mod client;
+pub mod env;
 pub mod fingerprint;
 pub mod panic_hook;
 pub mod transport;
 pub mod types;
 
+#[cfg(any(feature = "actix", feature = "axum"))]
+pub mod integrations;
+
 // Re-export main types
 pub use client::BugwatchClient;
+pub use env::{get_env_options, EnvError};
 pub use fingerprint::{fingerprint_from_exception, generate_fingerprint};
 pub use panic_hook::{install_panic_hook, install_panic_hook_with_abort, PanicGuard};
 pub use transport::{ConsoleTransport, HttpTransport, NoopTransport, Transport, TransportError};
@@ -120,6 +125,34 @@ pub fn init(options: BugwatchOptions) -> Arc<BugwatchClient> {
     let client = Arc::new(BugwatchClient::new(options));
     *GLOBAL_CLIENT.write() = Some(client.clone());
     client
+}
+
+/// Initialize the global Bugwatch client from environment variables.
+///
+/// Reads configuration from the following environment variables:
+/// - `BUGWATCH_API_KEY` - API key (required)
+/// - `BUGWATCH_ENVIRONMENT` - Environment tag
+/// - `BUGWATCH_RELEASE` - Release version
+/// - `BUGWATCH_DEBUG` - Enable debug mode ("true")
+/// - `BUGWATCH_ENDPOINT` - Custom API endpoint
+///
+/// # Errors
+///
+/// Returns `EnvError::MissingApiKey` if `BUGWATCH_API_KEY` is not set.
+///
+/// # Example
+///
+/// ```no_run
+/// use bugwatch::{init_from_env, capture_message, Level};
+///
+/// // Requires BUGWATCH_API_KEY environment variable to be set
+/// init_from_env().expect("BUGWATCH_API_KEY not set");
+///
+/// capture_message("Hello from Bugwatch!", Level::Info);
+/// ```
+pub fn init_from_env() -> Result<Arc<BugwatchClient>, EnvError> {
+    let options = get_env_options()?;
+    Ok(init(options))
 }
 
 /// Get the global Bugwatch client.
@@ -172,6 +205,42 @@ pub fn set_tag(key: impl Into<String>, value: impl Into<String>) {
 pub fn set_extra(key: impl Into<String>, value: impl Into<serde_json::Value>) {
     if let Some(client) = get_client() {
         client.set_extra(key, value);
+    }
+}
+
+/// Flush any pending events using the global client.
+///
+/// This ensures all queued events are sent before the method returns.
+/// Call this before process exit to ensure no events are lost.
+///
+/// # Errors
+///
+/// Returns an error if the transport fails to flush, or if the SDK is not initialized.
+pub fn flush() -> Result<(), TransportError> {
+    if let Some(client) = get_client() {
+        client.flush()
+    } else {
+        tracing::warn!("[Bugwatch] SDK not initialized. Call init() first.");
+        Ok(())
+    }
+}
+
+/// Close the global client and release any resources.
+///
+/// This flushes any pending events and closes the transport.
+/// After calling this method, the client should not be used again.
+///
+/// # Errors
+///
+/// Returns an error if the transport fails to close.
+pub fn close() -> Result<(), TransportError> {
+    if let Some(client) = get_client() {
+        let result = client.close();
+        *GLOBAL_CLIENT.write() = None;
+        result
+    } else {
+        tracing::warn!("[Bugwatch] SDK not initialized. Call init() first.");
+        Ok(())
     }
 }
 

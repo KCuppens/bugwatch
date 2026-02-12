@@ -1,7 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { useSearchParams } from "next/navigation";
+import { useState, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -32,13 +31,12 @@ import {
 } from "lucide-react";
 import {
   alertsApi,
-  projectsApi,
   type AlertRule,
   type NotificationChannel,
   type AlertLog,
-  type Project,
   type AlertCondition,
 } from "@/lib/api";
+import { useProject } from "@/lib/project-context";
 import { useFeature } from "@/hooks/use-feature";
 import { ProBadge, UpgradeLink } from "@/components/pro-badge";
 
@@ -46,6 +44,7 @@ function formatRelativeTime(dateString: string): string {
   const date = new Date(dateString);
   const now = new Date();
   const diffMs = now.getTime() - date.getTime();
+  if (diffMs < 0) return "just now";
   const diffMins = Math.floor(diffMs / 60000);
   const diffHours = Math.floor(diffMs / 3600000);
 
@@ -71,20 +70,25 @@ function getConditionDescription(condition: AlertCondition): string {
       return condition.monitor_id
         ? "Specific monitor recovery"
         : "Any monitor recovery";
+    case "server_cpu_high":
+      return `CPU > ${condition.threshold_percent}%`;
+    case "server_memory_high":
+      return `Memory > ${condition.threshold_percent}%`;
+    case "server_disk_high":
+      return `Disk > ${condition.threshold_percent}%${condition.mount ? ` (${condition.mount})` : ""}`;
+    case "server_offline":
+      return `Server offline > ${condition.missing_minutes || 5} min`;
     default:
       return "Unknown condition";
   }
 }
 
 export default function AlertsPage() {
-  const searchParams = useSearchParams();
-  const projectId = searchParams.get("project");
+  const { selectedProject } = useProject();
 
   // Feature gates
   const canUseWebhooks = useFeature("webhooks");
 
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [selectedProject, setSelectedProject] = useState<string | null>(projectId);
   const [activeTab, setActiveTab] = useState<"rules" | "channels" | "logs">("rules");
 
   const [rules, setRules] = useState<AlertRule[]>([]);
@@ -102,6 +106,9 @@ export default function AlertsPage() {
     conditionType: "new_issue" as AlertCondition["type"],
     level: "",
     channelIds: [] as string[],
+    threshold: 90,
+    mount: "",
+    missingMinutes: 5,
   });
   const [newChannel, setNewChannel] = useState({
     name: "",
@@ -123,52 +130,36 @@ export default function AlertsPage() {
   });
   const [isCreating, setIsCreating] = useState(false);
 
-  // Fetch projects
-  useEffect(() => {
-    async function fetchProjects() {
-      try {
-        const response = await projectsApi.list();
-        setProjects(response.data);
-        const firstProject = response.data[0];
-        if (!selectedProject && firstProject) {
-          setSelectedProject(firstProject.id);
-        }
-      } catch (err) {
-        console.error("Failed to fetch projects:", err);
-      }
+  const fetchData = useCallback(async () => {
+    if (!selectedProject) {
+      setRules([]);
+      setChannels([]);
+      setLogs([]);
+      setIsLoading(false);
+      return;
     }
-    fetchProjects();
+
+    setIsLoading(true);
+    try {
+      const [rulesRes, channelsRes, logsRes] = await Promise.all([
+        alertsApi.listRules(selectedProject.id),
+        alertsApi.listChannels(selectedProject.id),
+        alertsApi.listLogs(selectedProject.id),
+      ]);
+      setRules(rulesRes);
+      setChannels(channelsRes);
+      setLogs(logsRes);
+    } catch (err) {
+      console.error("Failed to fetch alerts data:", err);
+    } finally {
+      setIsLoading(false);
+    }
   }, [selectedProject]);
 
-  // Fetch data when project changes
+  // Fetch data when selected project changes
   useEffect(() => {
-    async function fetchData() {
-      if (!selectedProject) {
-        setRules([]);
-        setChannels([]);
-        setLogs([]);
-        setIsLoading(false);
-        return;
-      }
-
-      setIsLoading(true);
-      try {
-        const [rulesRes, channelsRes, logsRes] = await Promise.all([
-          alertsApi.listRules(selectedProject),
-          alertsApi.listChannels(selectedProject),
-          alertsApi.listLogs(selectedProject),
-        ]);
-        setRules(rulesRes);
-        setChannels(channelsRes);
-        setLogs(logsRes);
-      } catch (err) {
-        console.error("Failed to fetch alerts data:", err);
-      } finally {
-        setIsLoading(false);
-      }
-    }
     fetchData();
-  }, [selectedProject]);
+  }, [fetchData]);
 
   async function handleCreateRule() {
     if (!selectedProject || !newRule.name || newRule.channelIds.length === 0) return;
@@ -186,18 +177,30 @@ export default function AlertsPage() {
         case "monitor_recovery":
           condition = { type: "monitor_recovery" };
           break;
+        case "server_cpu_high":
+          condition = { type: "server_cpu_high", threshold_percent: newRule.threshold };
+          break;
+        case "server_memory_high":
+          condition = { type: "server_memory_high", threshold_percent: newRule.threshold };
+          break;
+        case "server_disk_high":
+          condition = { type: "server_disk_high", threshold_percent: newRule.threshold, mount: newRule.mount || undefined };
+          break;
+        case "server_offline":
+          condition = { type: "server_offline", missing_minutes: newRule.missingMinutes };
+          break;
         default:
           condition = { type: "new_issue" };
       }
 
-      const response = await alertsApi.createRule(selectedProject, {
+      const response = await alertsApi.createRule(selectedProject.id, {
         name: newRule.name,
         condition,
         channel_ids: newRule.channelIds,
       });
       setRules([response, ...rules]);
       setShowCreateRule(false);
-      setNewRule({ name: "", conditionType: "new_issue", level: "", channelIds: [] });
+      setNewRule({ name: "", conditionType: "new_issue", level: "", channelIds: [], threshold: 90, mount: "", missingMinutes: 5 });
     } catch (err) {
       console.error("Failed to create rule:", err);
     } finally {
@@ -226,7 +229,7 @@ export default function AlertsPage() {
           break;
       }
 
-      const response = await alertsApi.createChannel(selectedProject, {
+      const response = await alertsApi.createChannel(selectedProject.id, {
         name: newChannel.name,
         channel_type: newChannel.type,
         config,
@@ -244,7 +247,7 @@ export default function AlertsPage() {
   async function handleToggleRule(rule: AlertRule) {
     if (!selectedProject) return;
     try {
-      const response = await alertsApi.updateRule(selectedProject, rule.id, {
+      const response = await alertsApi.updateRule(selectedProject.id, rule.id, {
         is_active: !rule.is_active,
       });
       setRules(rules.map((r) => (r.id === rule.id ? response : r)));
@@ -256,7 +259,7 @@ export default function AlertsPage() {
   async function handleDeleteRule(ruleId: string) {
     if (!selectedProject) return;
     try {
-      await alertsApi.deleteRule(selectedProject, ruleId);
+      await alertsApi.deleteRule(selectedProject.id, ruleId);
       setRules(rules.filter((r) => r.id !== ruleId));
     } catch (err) {
       console.error("Failed to delete rule:", err);
@@ -266,7 +269,7 @@ export default function AlertsPage() {
   async function handleToggleChannel(channel: NotificationChannel) {
     if (!selectedProject) return;
     try {
-      const response = await alertsApi.updateChannel(selectedProject, channel.id, {
+      const response = await alertsApi.updateChannel(selectedProject.id, channel.id, {
         is_active: !channel.is_active,
       });
       setChannels(channels.map((c) => (c.id === channel.id ? response : c)));
@@ -278,7 +281,7 @@ export default function AlertsPage() {
   async function handleDeleteChannel(channelId: string) {
     if (!selectedProject) return;
     try {
-      await alertsApi.deleteChannel(selectedProject, channelId);
+      await alertsApi.deleteChannel(selectedProject.id, channelId);
       setChannels(channels.filter((c) => c.id !== channelId));
     } catch (err) {
       console.error("Failed to delete channel:", err);
@@ -288,7 +291,7 @@ export default function AlertsPage() {
   async function handleTestChannel(channelId: string) {
     if (!selectedProject) return;
     try {
-      await alertsApi.testChannel(selectedProject, channelId);
+      await alertsApi.testChannel(selectedProject.id, channelId);
       alert("Test notification sent!");
     } catch (err) {
       console.error("Failed to test channel:", err);
@@ -318,25 +321,6 @@ export default function AlertsPage() {
           <p className="text-muted-foreground">
             Configure alert rules and notification channels
           </p>
-        </div>
-        <div className="flex items-center gap-4">
-          {projects.length > 0 && (
-            <Select
-              value={selectedProject || undefined}
-              onValueChange={setSelectedProject}
-            >
-              <SelectTrigger className="w-[200px]">
-                <SelectValue placeholder="Select project" />
-              </SelectTrigger>
-              <SelectContent>
-                {projects.map((project) => (
-                  <SelectItem key={project.id} value={project.id}>
-                    {project.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          )}
         </div>
       </div>
 
@@ -627,9 +611,46 @@ export default function AlertsPage() {
                     <SelectItem value="new_issue">New Issue</SelectItem>
                     <SelectItem value="monitor_down">Monitor Down</SelectItem>
                     <SelectItem value="monitor_recovery">Monitor Recovery</SelectItem>
+                    <SelectItem value="server_cpu_high">Server CPU High</SelectItem>
+                    <SelectItem value="server_memory_high">Server Memory High</SelectItem>
+                    <SelectItem value="server_disk_high">Server Disk High</SelectItem>
+                    <SelectItem value="server_offline">Server Offline</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
+              {(newRule.conditionType === "server_cpu_high" || newRule.conditionType === "server_memory_high" || newRule.conditionType === "server_disk_high") && (
+                <div className="space-y-2">
+                  <Label>Threshold (%)</Label>
+                  <Input
+                    type="number"
+                    min={1}
+                    max={100}
+                    value={newRule.threshold}
+                    onChange={(e) => setNewRule({ ...newRule, threshold: Number(e.target.value) })}
+                  />
+                </div>
+              )}
+              {newRule.conditionType === "server_disk_high" && (
+                <div className="space-y-2">
+                  <Label>Mount Point (optional)</Label>
+                  <Input
+                    placeholder="/ (leave empty for any)"
+                    value={newRule.mount}
+                    onChange={(e) => setNewRule({ ...newRule, mount: e.target.value })}
+                  />
+                </div>
+              )}
+              {newRule.conditionType === "server_offline" && (
+                <div className="space-y-2">
+                  <Label>Missing Duration (minutes)</Label>
+                  <Input
+                    type="number"
+                    min={1}
+                    value={newRule.missingMinutes}
+                    onChange={(e) => setNewRule({ ...newRule, missingMinutes: Number(e.target.value) })}
+                  />
+                </div>
+              )}
               {newRule.conditionType === "new_issue" && (
                 <div className="space-y-2">
                   <Label>Issue Level (optional)</Label>
@@ -783,10 +804,10 @@ export default function AlertsPage() {
                           className="flex items-center justify-between p-2 rounded border bg-card"
                         >
                           <span className="text-sm capitalize">
-                            {block.block_type === "header" && "📌 Header (Title with severity)"}
-                            {block.block_type === "message" && "📝 Message (Error details)"}
-                            {block.block_type === "context" && "ℹ️ Context (Project, severity, time)"}
-                            {block.block_type === "stats" && "📊 Stats (Event count, users)"}
+                            {block.block_type === "header" && "Header (Title with severity)"}
+                            {block.block_type === "message" && "Message (Error details)"}
+                            {block.block_type === "context" && "Context (Project, severity, time)"}
+                            {block.block_type === "stats" && "Stats (Event count, users)"}
                           </span>
                           <button
                             type="button"
@@ -844,7 +865,7 @@ export default function AlertsPage() {
                             : "bg-card border-muted-foreground/20"
                         }`}
                       >
-                        🔗 View Issue
+                        View Issue
                       </button>
                       <button
                         type="button"
@@ -875,7 +896,7 @@ export default function AlertsPage() {
                             : "bg-card border-muted-foreground/20"
                         }`}
                       >
-                        ✓ Resolve
+                        Resolve
                       </button>
                       <button
                         type="button"
@@ -906,7 +927,7 @@ export default function AlertsPage() {
                             : "bg-card border-muted-foreground/20"
                         }`}
                       >
-                        🔕 Mute
+                        Mute
                       </button>
                     </div>
                   </div>

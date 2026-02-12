@@ -20,6 +20,22 @@ pub enum TransportError {
 pub trait Transport: Send + Sync {
     /// Send an event to Bugwatch.
     fn send(&self, event: &ErrorEvent) -> Result<(), TransportError>;
+
+    /// Flush any pending events.
+    ///
+    /// This ensures all queued events are sent before the method returns.
+    /// The default implementation does nothing (for transports that send synchronously).
+    fn flush(&self) -> Result<(), TransportError> {
+        Ok(())
+    }
+
+    /// Close the transport and release any resources.
+    ///
+    /// After calling this method, the transport should not be used again.
+    /// The default implementation calls flush().
+    fn close(&self) -> Result<(), TransportError> {
+        self.flush()
+    }
 }
 
 /// HTTP transport for sending events.
@@ -34,19 +50,26 @@ pub struct HttpTransport {
 
 impl HttpTransport {
     /// Create a new HTTP transport.
-    pub fn new(options: &BugwatchOptions) -> Self {
-        Self {
+    ///
+    /// # Errors
+    ///
+    /// Returns `TransportError::Request` if the HTTP client cannot be created.
+    pub fn new(options: &BugwatchOptions) -> Result<Self, TransportError> {
+        #[cfg(feature = "blocking")]
+        let blocking_client = Some(
+            reqwest::blocking::Client::builder()
+                .timeout(Duration::from_secs(10))
+                .build()
+                .map_err(|e| TransportError::Request(format!("Failed to create HTTP client: {}", e)))?,
+        );
+
+        Ok(Self {
             endpoint: format!("{}/api/v1/events", options.endpoint.trim_end_matches('/')),
             api_key: options.api_key.clone(),
             debug: options.debug,
             #[cfg(feature = "blocking")]
-            blocking_client: Some(
-                reqwest::blocking::Client::builder()
-                    .timeout(Duration::from_secs(10))
-                    .build()
-                    .expect("Failed to create HTTP client"),
-            ),
-        }
+            blocking_client,
+        })
     }
 
     /// Send an event synchronously (blocking).

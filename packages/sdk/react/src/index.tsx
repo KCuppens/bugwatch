@@ -4,12 +4,14 @@ import React, {
   useContext,
   useEffect,
   useCallback,
+  useMemo,
   type ReactNode,
   type ErrorInfo,
 } from "react";
 import {
   init as coreInit,
   getClient,
+  getEnvConfig,
   captureException as coreCaptureException,
   captureMessage as coreCaptureMessage,
   addBreadcrumb as coreAddBreadcrumb,
@@ -96,8 +98,15 @@ export function useCaptureMessage(): (
  * Props for BugwatchProvider
  */
 interface BugwatchProviderProps {
-  /** SDK configuration options */
-  options: ReactOptions;
+  /**
+   * SDK configuration options.
+   * Optional - if not provided, reads from environment variables:
+   * - `BUGWATCH_API_KEY` - API key (required unless passed explicitly)
+   * - `BUGWATCH_ENVIRONMENT` - Environment tag
+   * - `BUGWATCH_RELEASE` - Release version
+   * - `BUGWATCH_DEBUG` - Enable debug mode ('true')
+   */
+  options?: ReactOptions;
   /** Child components */
   children: ReactNode;
   /** Optional fallback UI for error boundary */
@@ -109,6 +118,19 @@ interface BugwatchProviderProps {
 /**
  * Bugwatch Provider component
  * Initializes the SDK and provides context to child components
+ *
+ * @example
+ * ```tsx
+ * // With BUGWATCH_API_KEY env var set
+ * <BugwatchProvider>
+ *   <App />
+ * </BugwatchProvider>
+ *
+ * // With explicit options
+ * <BugwatchProvider options={{ apiKey: "bw_live_xxxxx" }}>
+ *   <App />
+ * </BugwatchProvider>
+ * ```
  */
 export function BugwatchProvider({
   options,
@@ -117,8 +139,27 @@ export function BugwatchProvider({
   onError,
 }: BugwatchProviderProps): JSX.Element {
   useEffect(() => {
-    const mergedOptions = { ...DEFAULT_REACT_OPTIONS, ...options };
-    coreInit(mergedOptions);
+    // Merge env config with explicit options (explicit takes precedence)
+    const envConfig = getEnvConfig();
+    const mergedOptions = { ...DEFAULT_REACT_OPTIONS, ...envConfig, ...options };
+
+    // Skip initialization if no API key is available
+    if (!mergedOptions.apiKey) {
+      if (process.env.NODE_ENV === 'development') {
+        console.warn('[Bugwatch] No API key provided. Set BUGWATCH_API_KEY env var or pass options.apiKey');
+      }
+      return;
+    }
+
+    // Wrap initialization in try-catch for graceful degradation
+    try {
+      coreInit(mergedOptions);
+    } catch (err) {
+      if (process.env.NODE_ENV === 'development') {
+        console.error('[Bugwatch] Initialization failed:', err);
+      }
+      return;
+    }
 
     // Add React-specific tags
     const client = getClient();
@@ -126,22 +167,77 @@ export function BugwatchProvider({
       client.setTag("framework", "react");
     }
 
+    // Store original handlers for cleanup
+    let originalOnError: typeof window.onerror | null = null;
+    let originalConsoleError: typeof console.error | null = null;
+    let unhandledRejectionHandler: ((event: PromiseRejectionEvent) => void) | null = null;
+
     // Set up global error handlers
     if (typeof window !== "undefined") {
       if (mergedOptions.captureGlobalErrors) {
-        setupGlobalErrorHandler();
+        originalOnError = window.onerror;
+        window.onerror = (message, source, lineno, colno, error) => {
+          if (error) {
+            coreCaptureException(error, {
+              tags: { mechanism: "window.onerror" },
+            });
+          }
+          if (originalOnError) {
+            return originalOnError(message, source, lineno, colno, error);
+          }
+          return false;
+        };
       }
+
       if (mergedOptions.captureUnhandledRejections) {
-        setupUnhandledRejectionHandler();
+        unhandledRejectionHandler = (event: PromiseRejectionEvent) => {
+          const error =
+            event.reason instanceof Error
+              ? event.reason
+              : new Error(String(event.reason));
+          coreCaptureException(error, {
+            tags: { mechanism: "unhandledrejection" },
+          });
+        };
+        window.addEventListener("unhandledrejection", unhandledRejectionHandler);
       }
+
       if (mergedOptions.captureConsoleBreadcrumbs) {
-        setupConsoleBreadcrumbs();
+        originalConsoleError = console.error;
+        console.error = (...args: unknown[]) => {
+          coreAddBreadcrumb({
+            category: "console",
+            message: args.map(String).join(" "),
+            level: "error",
+          });
+          originalConsoleError!(...args);
+        };
       }
     }
 
     if (mergedOptions.debug) {
       console.log("[Bugwatch] React SDK initialized");
     }
+
+    // Cleanup function to prevent memory leaks
+    return () => {
+      if (typeof window !== "undefined") {
+        // Restore original window.onerror
+        if (originalOnError !== null && mergedOptions.captureGlobalErrors) {
+          window.onerror = originalOnError;
+        }
+
+        // Remove unhandled rejection listener
+        if (unhandledRejectionHandler && mergedOptions.captureUnhandledRejections) {
+          window.removeEventListener("unhandledrejection", unhandledRejectionHandler);
+        }
+
+        // Restore original console.error
+        if (originalConsoleError !== null && mergedOptions.captureConsoleBreadcrumbs) {
+          console.error = originalConsoleError;
+        }
+      }
+    };
   }, [options]);
 
   const captureException = useCallback(
@@ -177,15 +273,19 @@ export function BugwatchProvider({
     coreSetExtra(key, value);
   }, []);
 
-  const contextValue: BugwatchContextValue = {
-    client: getClient(),
-    captureException,
-    captureMessage,
-    addBreadcrumb,
-    setUser,
-    setTag,
-    setExtra,
-  };
+  // Memoize context value to prevent unnecessary re-renders
+  const contextValue = useMemo<BugwatchContextValue>(
+    () => ({
+      client: getClient(),
+      captureException,
+      captureMessage,
+      addBreadcrumb,
+      setUser,
+      setTag,
+      setExtra,
+    }),
+    [captureException, captureMessage, addBreadcrumb, setUser, setTag, setExtra]
+  );
 
   return (
     <BugwatchContext.Provider value={contextValue}>
@@ -291,51 +391,6 @@ export function withBugwatchErrorBoundary<P extends object>(
   })`;
 
   return WithErrorBoundary;
-}
-
-// Global error handler setup
-function setupGlobalErrorHandler(): void {
-  const originalOnError = window.onerror;
-
-  window.onerror = (message, source, lineno, colno, error) => {
-    if (error) {
-      coreCaptureException(error, {
-        tags: { mechanism: "window.onerror" },
-      });
-    }
-
-    if (originalOnError) {
-      return originalOnError(message, source, lineno, colno, error);
-    }
-
-    return false;
-  };
-}
-
-function setupUnhandledRejectionHandler(): void {
-  window.addEventListener("unhandledrejection", (event) => {
-    const error =
-      event.reason instanceof Error
-        ? event.reason
-        : new Error(String(event.reason));
-
-    coreCaptureException(error, {
-      tags: { mechanism: "unhandledrejection" },
-    });
-  });
-}
-
-function setupConsoleBreadcrumbs(): void {
-  const originalError = console.error;
-
-  console.error = (...args: unknown[]) => {
-    coreAddBreadcrumb({
-      category: "console",
-      message: args.map(String).join(" "),
-      level: "error",
-    });
-    originalError(...args);
-  };
 }
 
 // Re-export core functions for convenience

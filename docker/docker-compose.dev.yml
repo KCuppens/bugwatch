@@ -1,0 +1,29 @@
+# Development compose - uses volume mounts for hot reloading
+# Usage: docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+
+services:
+  server:
+    # Use pre-built image in dev, or build locally
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.server
+
+  web:
+    # Override to use dev server with hot reloading
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.web.dev
+    stdin_open: true
+    tty: true
+    volumes:
+      # Mount source code for hot reloading
+      - ../apps/web/src:/app/apps/web/src
+      - ../apps/web/public:/app/apps/web/public:ro
+    environment:
+      - NODE_ENV=development
+      - NEXT_PUBLIC_API_URL=http://localhost:3000
+      - WATCHPACK_POLLING=true
+      - CHOKIDAR_USEPOLLING=true
+    depends_on:
+      server:
+        condition: service_started

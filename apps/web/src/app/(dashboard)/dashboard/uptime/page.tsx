@@ -1,7 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { useSearchParams } from "next/navigation";
+import { useState, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -31,16 +30,16 @@ import {
 } from "lucide-react";
 import {
   monitorsApi,
-  projectsApi,
   type MonitorResponse,
-  type Project,
 } from "@/lib/api";
+import { useProject } from "@/lib/project-context";
 
 function formatRelativeTime(dateString: string | null): string {
   if (!dateString) return "Never";
   const date = new Date(dateString);
   const now = new Date();
   const diffMs = now.getTime() - date.getTime();
+  if (diffMs < 0) return "just now";
   const diffSecs = Math.floor(diffMs / 1000);
   const diffMins = Math.floor(diffMs / 60000);
   const diffHours = Math.floor(diffMs / 3600000);
@@ -52,12 +51,9 @@ function formatRelativeTime(dateString: string | null): string {
 }
 
 export default function UptimePage() {
-  const searchParams = useSearchParams();
-  const projectId = searchParams.get("project");
+  const { selectedProject } = useProject();
 
   const [monitors, setMonitors] = useState<MonitorResponse[]>([]);
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [selectedProject, setSelectedProject] = useState<string | null>(projectId);
   const [isLoading, setIsLoading] = useState(true);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
@@ -70,52 +66,43 @@ export default function UptimePage() {
     interval_seconds: 60,
   });
 
-  // Fetch projects on mount
-  useEffect(() => {
-    async function fetchProjects() {
-      try {
-        const response = await projectsApi.list();
-        setProjects(response.data);
-        const firstProject = response.data[0];
-        if (!selectedProject && firstProject) {
-          setSelectedProject(firstProject.id);
-        }
-      } catch (err) {
-        console.error("Failed to fetch projects:", err);
-      }
+  const fetchMonitors = useCallback(async () => {
+    if (!selectedProject) {
+      setMonitors([]);
+      setIsLoading(false);
+      return;
     }
-    fetchProjects();
+
+    setIsLoading(true);
+    try {
+      const response = await monitorsApi.list(selectedProject.id);
+      setMonitors(response.data);
+    } catch (err) {
+      console.error("Failed to fetch monitors:", err);
+      setMonitors([]);
+    } finally {
+      setIsLoading(false);
+    }
   }, [selectedProject]);
 
-  // Fetch monitors when project changes
+  // Fetch monitors when selected project changes
   useEffect(() => {
-    async function fetchMonitors() {
-      if (!selectedProject) {
-        setMonitors([]);
-        setIsLoading(false);
-        return;
-      }
-
-      setIsLoading(true);
-      try {
-        const response = await monitorsApi.list(selectedProject);
-        setMonitors(response.data);
-      } catch (err) {
-        console.error("Failed to fetch monitors:", err);
-        setMonitors([]);
-      } finally {
-        setIsLoading(false);
-      }
-    }
     fetchMonitors();
-  }, [selectedProject]);
+  }, [fetchMonitors]);
+
+  // Auto-refresh every 30s
+  useEffect(() => {
+    if (!selectedProject) return;
+    const interval = setInterval(fetchMonitors, 30000);
+    return () => clearInterval(interval);
+  }, [selectedProject, fetchMonitors]);
 
   async function handleCreateMonitor() {
     if (!selectedProject || !newMonitor.name || !newMonitor.url) return;
 
     setIsCreating(true);
     try {
-      const response = await monitorsApi.create(selectedProject, {
+      const response = await monitorsApi.create(selectedProject.id, {
         name: newMonitor.name,
         url: newMonitor.url,
         method: newMonitor.method,
@@ -135,7 +122,7 @@ export default function UptimePage() {
     if (!selectedProject) return;
 
     try {
-      const response = await monitorsApi.update(selectedProject, monitor.id, {
+      const response = await monitorsApi.update(selectedProject.id, monitor.id, {
         is_active: !monitor.is_active,
       });
       setMonitors(monitors.map((m) => (m.id === monitor.id ? response : m)));
@@ -148,7 +135,7 @@ export default function UptimePage() {
     if (!selectedProject) return;
 
     try {
-      await monitorsApi.delete(selectedProject, monitorId);
+      await monitorsApi.delete(selectedProject.id, monitorId);
       setMonitors(monitors.filter((m) => m.id !== monitorId));
     } catch (err) {
       console.error("Failed to delete monitor:", err);
@@ -158,11 +145,13 @@ export default function UptimePage() {
   // Calculate stats
   const activeMonitors = monitors.filter((m) => m.is_active).length;
   const upMonitors = monitors.filter((m) => m.current_status === "up").length;
-  const avgUptime = monitors.length > 0
-    ? monitors.reduce((sum, m) => sum + (m.uptime_24h || 0), 0) / monitors.length
+  const monitorsWithUptime = monitors.filter((m) => m.uptime_24h !== null && m.uptime_24h !== undefined);
+  const avgUptime = monitorsWithUptime.length > 0
+    ? monitorsWithUptime.reduce((sum, m) => sum + m.uptime_24h!, 0) / monitorsWithUptime.length
     : null;
-  const avgResponse = monitors.length > 0
-    ? monitors.reduce((sum, m) => sum + (m.avg_response_24h || 0), 0) / monitors.length
+  const monitorsWithResponse = monitors.filter((m) => m.avg_response_24h !== null && m.avg_response_24h !== undefined);
+  const avgResponse = monitorsWithResponse.length > 0
+    ? monitorsWithResponse.reduce((sum, m) => sum + m.avg_response_24h!, 0) / monitorsWithResponse.length
     : null;
 
   return (
@@ -175,29 +164,10 @@ export default function UptimePage() {
             Monitor your endpoints and get alerted when they go down
           </p>
         </div>
-        <div className="flex items-center gap-4">
-          {projects.length > 0 && (
-            <Select
-              value={selectedProject || undefined}
-              onValueChange={setSelectedProject}
-            >
-              <SelectTrigger className="w-[200px]">
-                <SelectValue placeholder="Select project" />
-              </SelectTrigger>
-              <SelectContent>
-                {projects.map((project) => (
-                  <SelectItem key={project.id} value={project.id}>
-                    {project.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          )}
-          <Button variant="success" onClick={() => setShowCreateModal(true)} disabled={!selectedProject}>
-            <Plus className="mr-2 h-4 w-4" />
-            Add Monitor
-          </Button>
-        </div>
+        <Button variant="success" onClick={() => setShowCreateModal(true)} disabled={!selectedProject}>
+          <Plus className="mr-2 h-4 w-4" />
+          Add Monitor
+        </Button>
       </div>
 
       {/* Stats */}
@@ -259,7 +229,7 @@ export default function UptimePage() {
             <p className="mt-2 max-w-md text-center text-muted-foreground">
               {selectedProject
                 ? "Add your first uptime monitor to start tracking the availability of your websites and APIs."
-                : "Select a project to view and create monitors."}
+                : "Select a project from the sidebar to view and create monitors."}
             </p>
             {selectedProject && (
               <Button className="mt-6" onClick={() => setShowCreateModal(true)}>

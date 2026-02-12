@@ -11,6 +11,8 @@ import {
   Bell,
   Crown,
   Sparkles,
+  LayoutGrid,
+  Server,
 } from "lucide-react";
 import { ProjectSelector } from "@/components/project-selector";
 import { useTier, getTierDisplayName, getTierRateLimit } from "@/hooks/use-feature";
@@ -23,8 +25,10 @@ interface NavItem {
 }
 
 const navItems: NavItem[] = [
+  { label: "Overview", href: "/overview", icon: <LayoutGrid className="h-4 w-4" /> },
   { label: "Issues", href: "/dashboard", icon: <Bug className="h-4 w-4" /> },
   { label: "Uptime", href: "/dashboard/uptime", icon: <Activity className="h-4 w-4" /> },
+  { label: "Server", href: "/dashboard/server", icon: <Server className="h-4 w-4" /> },
   { label: "Alerts", href: "/dashboard/alerts", icon: <Bell className="h-4 w-4" /> },
   { label: "Projects", href: "/dashboard/projects", icon: <FolderOpen className="h-4 w-4" /> },
   { label: "Settings", href: "/dashboard/settings", icon: <Settings className="h-4 w-4" /> },

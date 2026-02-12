@@ -8,6 +8,7 @@ import {
   getClient,
   type BugwatchOptions,
 } from "@bugwatch/core";
+import { getEnvConfig } from "./config";
 
 /**
  * Client-side Bugwatch options
@@ -35,6 +36,9 @@ const DEFAULT_CLIENT_OPTIONS: Partial<ClientOptions> = {
 
 let isClientInitialized = false;
 
+// Store cleanup functions for teardown
+let clientCleanupFunctions: (() => void)[] = [];
+
 /**
  * Initialize Bugwatch on the client side
  */
@@ -49,8 +53,15 @@ export function initClient(options: ClientOptions): void {
 
   const mergedOptions = { ...DEFAULT_CLIENT_OPTIONS, ...options };
 
-  // Initialize core SDK
-  coreInit(mergedOptions);
+  // Initialize core SDK with error handling
+  try {
+    coreInit(mergedOptions);
+  } catch (err) {
+    if (process.env.NODE_ENV === 'development') {
+      console.error('[Bugwatch] Client initialization failed:', err);
+    }
+    return;
+  }
 
   // Add browser info
   const client = getClient();
@@ -61,27 +72,32 @@ export function initClient(options: ClientOptions): void {
 
   // Set up global error handler
   if (mergedOptions.captureGlobalErrors) {
-    setupGlobalErrorHandler();
+    const cleanup = setupGlobalErrorHandler();
+    if (cleanup) clientCleanupFunctions.push(cleanup);
   }
 
   // Set up unhandled rejection handler
   if (mergedOptions.captureUnhandledRejections) {
-    setupUnhandledRejectionHandler();
+    const cleanup = setupUnhandledRejectionHandler();
+    if (cleanup) clientCleanupFunctions.push(cleanup);
   }
 
   // Set up console breadcrumbs
   if (mergedOptions.captureConsoleBreadcrumbs) {
-    setupConsoleBreadcrumbs();
+    const cleanup = setupConsoleBreadcrumbs();
+    if (cleanup) clientCleanupFunctions.push(cleanup);
   }
 
   // Set up click breadcrumbs
   if (mergedOptions.captureClickBreadcrumbs) {
-    setupClickBreadcrumbs();
+    const cleanup = setupClickBreadcrumbs();
+    if (cleanup) clientCleanupFunctions.push(cleanup);
   }
 
   // Set up navigation breadcrumbs
   if (mergedOptions.captureNavigationBreadcrumbs) {
-    setupNavigationBreadcrumbs();
+    const cleanup = setupNavigationBreadcrumbs();
+    if (cleanup) clientCleanupFunctions.push(cleanup);
   }
 
   isClientInitialized = true;
@@ -92,9 +108,26 @@ export function initClient(options: ClientOptions): void {
 }
 
 /**
- * Set up window.onerror handler
+ * Close the client SDK and clean up all resources.
+ * This restores original handlers and removes event listeners.
  */
-function setupGlobalErrorHandler(): void {
+export function closeClient(): void {
+  for (const cleanup of clientCleanupFunctions) {
+    try {
+      cleanup();
+    } catch {
+      // Ignore cleanup errors
+    }
+  }
+  clientCleanupFunctions = [];
+  isClientInitialized = false;
+}
+
+/**
+ * Set up window.onerror handler
+ * Returns cleanup function to restore original handler
+ */
+function setupGlobalErrorHandler(): () => void {
   const originalOnError = window.onerror;
 
   window.onerror = (message, source, lineno, colno, error) => {
@@ -110,13 +143,18 @@ function setupGlobalErrorHandler(): void {
 
     return false;
   };
+
+  return () => {
+    window.onerror = originalOnError;
+  };
 }
 
 /**
  * Set up unhandled rejection handler
+ * Returns cleanup function to remove listener
  */
-function setupUnhandledRejectionHandler(): void {
-  window.addEventListener("unhandledrejection", (event) => {
+function setupUnhandledRejectionHandler(): () => void {
+  const handler = (event: PromiseRejectionEvent) => {
     const error =
       event.reason instanceof Error
         ? event.reason
@@ -125,13 +163,20 @@ function setupUnhandledRejectionHandler(): void {
     captureException(error, {
       tags: { mechanism: "onunhandledrejection" },
     });
-  });
+  };
+
+  window.addEventListener("unhandledrejection", handler);
+
+  return () => {
+    window.removeEventListener("unhandledrejection", handler);
+  };
 }
 
 /**
  * Set up console breadcrumbs
+ * Returns cleanup function to restore original console methods
  */
-function setupConsoleBreadcrumbs(): void {
+function setupConsoleBreadcrumbs(): () => void {
   const originalConsole = {
     log: console.log,
     info: console.info,
@@ -159,39 +204,51 @@ function setupConsoleBreadcrumbs(): void {
   wrap("info", "info");
   wrap("warn", "warning");
   wrap("error", "error");
+
+  return () => {
+    console.log = originalConsole.log;
+    console.info = originalConsole.info;
+    console.warn = originalConsole.warn;
+    console.error = originalConsole.error;
+    console.debug = originalConsole.debug;
+  };
 }
 
 /**
  * Set up click breadcrumbs
+ * Returns cleanup function to remove listener
  */
-function setupClickBreadcrumbs(): void {
-  document.addEventListener(
-    "click",
-    (event) => {
-      const target = event.target as HTMLElement;
-      if (!target) return;
+function setupClickBreadcrumbs(): () => void {
+  const handler = (event: MouseEvent) => {
+    const target = event.target as HTMLElement;
+    if (!target) return;
 
-      const tagName = target.tagName?.toLowerCase();
-      const id = target.id ? `#${target.id}` : "";
-      const className = target.className
-        ? `.${String(target.className).split(" ").join(".")}`
-        : "";
-      const text = target.textContent?.slice(0, 50) || "";
+    const tagName = target.tagName?.toLowerCase();
+    const id = target.id ? `#${target.id}` : "";
+    const className = target.className
+      ? `.${String(target.className).split(" ").join(".")}`
+      : "";
+    const text = target.textContent?.slice(0, 50) || "";
 
-      addBreadcrumb({
-        category: "ui.click",
-        message: `${tagName}${id}${className}${text ? ` "${text}"` : ""}`,
-        level: "info",
-      });
-    },
-    { capture: true }
-  );
+    addBreadcrumb({
+      category: "ui.click",
+      message: `${tagName}${id}${className}${text ? ` "${text}"` : ""}`,
+      level: "info",
+    });
+  };
+
+  document.addEventListener("click", handler, { capture: true });
+
+  return () => {
+    document.removeEventListener("click", handler, { capture: true });
+  };
 }
 
 /**
  * Set up navigation breadcrumbs
+ * Returns cleanup function to restore original history methods
  */
-function setupNavigationBreadcrumbs(): void {
+function setupNavigationBreadcrumbs(): () => void {
   // Track initial page load
   addBreadcrumb({
     category: "navigation",
@@ -200,7 +257,7 @@ function setupNavigationBreadcrumbs(): void {
     data: { from: document.referrer || undefined },
   });
 
-  // Track history changes
+  // Store original methods for restoration
   const originalPushState = history.pushState;
   const originalReplaceState = history.replaceState;
 
@@ -225,13 +282,22 @@ function setupNavigationBreadcrumbs(): void {
   };
 
   // Track popstate (back/forward)
-  window.addEventListener("popstate", () => {
+  const popstateHandler = () => {
     addBreadcrumb({
       category: "navigation",
       message: window.location.href,
       level: "info",
     });
-  });
+  };
+
+  window.addEventListener("popstate", popstateHandler);
+
+  // Return cleanup function
+  return () => {
+    history.pushState = originalPushState;
+    history.replaceState = originalReplaceState;
+    window.removeEventListener("popstate", popstateHandler);
+  };
 }
 
 /**
@@ -305,10 +371,29 @@ export class BugwatchErrorBoundary extends Component<
 }
 
 /**
- * Provider component that initializes Bugwatch on the client
+ * Provider component that initializes Bugwatch on the client.
+ *
+ * Options are optional - if not provided, reads from environment variables:
+ * - `NEXT_PUBLIC_BUGWATCH_API_KEY` - API key
+ * - `NEXT_PUBLIC_BUGWATCH_ENVIRONMENT` - Environment tag
+ * - `NEXT_PUBLIC_BUGWATCH_RELEASE` - Release version
+ * - `NEXT_PUBLIC_BUGWATCH_DEBUG` - Enable debug mode ('true')
+ *
+ * @example
+ * ```tsx
+ * // With NEXT_PUBLIC_BUGWATCH_API_KEY env var set
+ * <BugwatchProvider>
+ *   <App />
+ * </BugwatchProvider>
+ *
+ * // With explicit options
+ * <BugwatchProvider options={{ apiKey: "bw_live_xxxxx" }}>
+ *   <App />
+ * </BugwatchProvider>
+ * ```
  */
 interface BugwatchProviderProps {
-  options: ClientOptions;
+  options?: ClientOptions;
   children: ReactNode;
 }
 
@@ -317,7 +402,19 @@ export function BugwatchProvider({
   children,
 }: BugwatchProviderProps): JSX.Element {
   useEffect(() => {
-    initClient(options);
+    // Merge env config with explicit options (explicit takes precedence)
+    const envConfig = getEnvConfig();
+    const mergedOptions = { ...DEFAULT_CLIENT_OPTIONS, ...envConfig, ...options } as ClientOptions;
+
+    // Skip initialization if no API key is available
+    if (!mergedOptions.apiKey) {
+      if (process.env.NODE_ENV === 'development') {
+        console.warn('[Bugwatch] No API key provided. Set NEXT_PUBLIC_BUGWATCH_API_KEY env var or pass options.apiKey');
+      }
+      return;
+    }
+
+    initClient(mergedOptions);
   }, [options]);
 
   return <BugwatchErrorBoundary>{children}</BugwatchErrorBoundary>;

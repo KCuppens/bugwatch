@@ -41,9 +41,24 @@ impl BugwatchClient {
     ///         .with_release("1.0.0")
     /// );
     /// ```
+    /// Create a new Bugwatch client.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the HTTP transport cannot be created. Use `try_new()` for
+    /// a fallible alternative.
     pub fn new(options: BugwatchOptions) -> Self {
-        let transport = Box::new(HttpTransport::new(&options));
-        Self::with_transport(options, transport)
+        Self::try_new(options).expect("Failed to create Bugwatch client")
+    }
+
+    /// Try to create a new Bugwatch client.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the HTTP transport cannot be created.
+    pub fn try_new(options: BugwatchOptions) -> Result<Self, crate::transport::TransportError> {
+        let transport = Box::new(HttpTransport::new(&options)?);
+        Ok(Self::with_transport(options, transport))
     }
 
     /// Create a new client with a custom transport.
@@ -366,6 +381,30 @@ impl BugwatchClient {
         // For now, we delegate to the sync version
         self.capture_message_with_options(message, level, tags, extra)
     }
+
+    /// Flush any pending events to Bugwatch.
+    ///
+    /// This ensures all queued events are sent before the method returns.
+    /// Call this before process exit to ensure no events are lost.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the transport fails to flush.
+    pub fn flush(&self) -> Result<(), crate::transport::TransportError> {
+        self.transport.flush()
+    }
+
+    /// Close the client and release any resources.
+    ///
+    /// This flushes any pending events and closes the transport.
+    /// After calling this method, the client should not be used again.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the transport fails to close.
+    pub fn close(&self) -> Result<(), crate::transport::TransportError> {
+        self.transport.close()
+    }
 }
 
 fn rustc_version() -> String {
@@ -374,8 +413,12 @@ fn rustc_version() -> String {
         .to_string()
 }
 
-// Add rand dependency for sampling
+// Simple PRNG for sampling (no external dependency)
 mod rand {
+    use std::hash::{Hash, Hasher};
+    use std::collections::hash_map::DefaultHasher;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
     pub fn random<T>() -> T
     where
         T: RandomValue,
@@ -389,13 +432,21 @@ mod rand {
 
     impl RandomValue for f64 {
         fn random() -> Self {
-            // Simple PRNG using system time as seed
-            use std::time::{SystemTime, UNIX_EPOCH};
+            // Get seed from system time, with fallback to thread-based hash
             let seed = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos();
-            // Simple xorshift
+                .map(|d| d.as_nanos())
+                .unwrap_or_else(|_| {
+                    // Fallback: use thread ID and a static counter for entropy
+                    let mut hasher = DefaultHasher::new();
+                    std::thread::current().id().hash(&mut hasher);
+                    // Mix in some additional entropy from stack address
+                    let stack_var = 0u8;
+                    (&stack_var as *const u8).hash(&mut hasher);
+                    hasher.finish() as u128
+                });
+
+            // Simple xorshift PRNG
             let mut x = seed as u64;
             x ^= x << 13;
             x ^= x >> 7;

@@ -2,7 +2,7 @@ use anyhow::Result;
 use axum::{routing::get, Router};
 use std::sync::Arc;
 use tokio::net::TcpListener;
-use axum::http::{header, HeaderValue, Method};
+use axum::http::{header, HeaderName, HeaderValue, Method};
 use tower_http::{
     cors::{Any, CorsLayer},
     trace::TraceLayer,
@@ -146,6 +146,32 @@ async fn main() -> Result<()> {
     });
     info!("Data retention service started (runs daily)");
 
+    // Start server offline detection task (runs every 60 seconds)
+    let offline_db = state.db.clone();
+    let offline_alerting = alerting_service.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+        loop {
+            interval.tick().await;
+            // Mark servers inactive if no metrics for 5 minutes
+            let threshold = chrono::Utc::now() - chrono::Duration::minutes(5);
+            match crate::db::repositories::ServerRepository::mark_inactive(&offline_db, threshold).await {
+                Ok(newly_offline) => {
+                    for server in &newly_offline {
+                        tracing::info!("Server {} ({}) marked offline", server.hostname, server.id);
+                        if let Err(e) = offline_alerting.on_server_offline(server).await {
+                            tracing::error!("Failed to send server offline alert: {}", e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("Server offline check failed: {}", e);
+                }
+            }
+        }
+    });
+    info!("Server offline detection started (runs every 60s)");
+
     // Start rate limiter cleanup task (runs hourly)
     let rate_limiter = state.rate_limiter.clone();
     tokio::spawn(async move {
@@ -188,9 +214,10 @@ fn create_app(state: AppState) -> Router {
             header::AUTHORIZATION,
             header::ACCEPT,
             header::ORIGIN,
-            HeaderValue::from_static("x-api-key"),
-            HeaderValue::from_static("x-bugwatch-sdk"),
-            HeaderValue::from_static("x-bugwatch-sdk-version"),
+            HeaderName::from_static("x-api-key"),
+            HeaderName::from_static("x-bugwatch-sdk"),
+            HeaderName::from_static("x-bugwatch-sdk-version"),
+            HeaderName::from_static("x-bugwatch-agent"),
         ])
         .expose_headers(Any)
         .allow_credentials(false);

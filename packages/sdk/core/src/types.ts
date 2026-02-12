@@ -140,6 +140,16 @@ export interface ErrorEvent {
  */
 export interface Transport {
   send(event: ErrorEvent): Promise<void>;
+  /**
+   * Flush any pending events.
+   * Ensures all queued events are sent before the promise resolves.
+   */
+  flush?(): Promise<void>;
+  /**
+   * Close the transport and release any resources.
+   * After calling this method, the transport should not be used again.
+   */
+  close?(): Promise<void>;
 }
 
 /**
@@ -161,4 +171,14 @@ export interface BugwatchClient {
   setTag(key: string, value: string): void;
   setExtra(key: string, value: unknown): void;
   getOptions(): BugwatchOptions;
+  /**
+   * Flush any pending events.
+   * Call this before process exit to ensure no events are lost.
+   */
+  flush(): Promise<void>;
+  /**
+   * Close the client and release any resources.
+   * This flushes any pending events and closes the transport.
+   */
+  close(): Promise<void>;
 }

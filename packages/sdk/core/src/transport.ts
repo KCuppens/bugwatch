@@ -28,7 +28,7 @@ export class HttpTransport implements Transport {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "X-API-Key": this.apiKey,
+          "Authorization": `Bearer ${this.apiKey}`,
           "X-Bugwatch-SDK": event.sdk?.name || "bugwatch-core",
           "X-Bugwatch-SDK-Version": event.sdk?.version || "0.1.0",
         },
@@ -158,5 +158,13 @@ export class BatchTransport implements Transport {
       clearInterval(this.timer);
       this.timer = null;
     }
+  }
+
+  /**
+   * Close the transport, flushing any remaining events and stopping the timer.
+   */
+  async close(): Promise<void> {
+    await this.flush();
+    this.destroy();
   }
 }

@@ -242,6 +242,46 @@ pub struct CreditPurchase {
 }
 
 // ============================================================================
+// Server Monitoring
+// ============================================================================
+
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct Server {
+    pub id: String,
+    pub project_id: String,
+    pub server_id: String,
+    pub hostname: String,
+    pub os: Option<String>,
+    pub kernel: Option<String>,
+    pub first_seen: DateTime<Utc>,
+    pub last_seen: DateTime<Utc>,
+    pub is_active: bool,
+}
+
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct ServerMetric {
+    pub id: String,
+    pub server_db_id: String,
+    pub cpu_usage_percent: Option<f64>,
+    pub load_avg_1: Option<f64>,
+    pub load_avg_5: Option<f64>,
+    pub load_avg_15: Option<f64>,
+    pub mem_total_bytes: Option<i64>,
+    pub mem_used_bytes: Option<i64>,
+    pub mem_available_bytes: Option<i64>,
+    pub mem_usage_percent: Option<f64>,
+    pub swap_total_bytes: Option<i64>,
+    pub swap_used_bytes: Option<i64>,
+    pub net_rx_bytes_per_sec: Option<i64>,
+    pub net_tx_bytes_per_sec: Option<i64>,
+    pub uptime_seconds: Option<i64>,
+    pub disks_json: Option<String>,
+    pub processes_json: Option<String>,
+    pub docker_json: Option<String>,
+    pub recorded_at: DateTime<Utc>,
+}
+
+// ============================================================================
 // Email Rate Limiting
 // ============================================================================
 

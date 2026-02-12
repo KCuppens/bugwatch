@@ -3,9 +3,10 @@ use serde::Deserialize;
 use tracing::{error, info};
 
 use crate::db::{
-    models::{Issue, Monitor, NotificationChannel},
+    models::{Issue, Monitor, NotificationChannel, ServerMetric},
     repositories::{
         AlertLogRepository, AlertRuleRepository, NotificationChannelRepository, ProjectRepository,
+        ServerRepository,
     },
     DbPool,
 };
@@ -42,6 +43,37 @@ pub enum AlertCondition {
         #[serde(default)]
         monitor_id: Option<String>,
     },
+    #[serde(rename = "server_cpu_high")]
+    ServerCpuHigh {
+        threshold_percent: f64,
+        #[serde(default)]
+        server_id: Option<String>,
+    },
+    #[serde(rename = "server_memory_high")]
+    ServerMemoryHigh {
+        threshold_percent: f64,
+        #[serde(default)]
+        server_id: Option<String>,
+    },
+    #[serde(rename = "server_disk_high")]
+    ServerDiskHigh {
+        threshold_percent: f64,
+        #[serde(default)]
+        mount: Option<String>,
+        #[serde(default)]
+        server_id: Option<String>,
+    },
+    #[serde(rename = "server_offline")]
+    ServerOffline {
+        #[serde(default = "default_missing_minutes")]
+        missing_minutes: u32,
+        #[serde(default)]
+        server_id: Option<String>,
+    },
+}
+
+fn default_missing_minutes() -> u32 {
+    5
 }
 
 impl AlertingService {
@@ -218,6 +250,220 @@ impl AlertingService {
                     url: Some(format!(
                         "{}/dashboard/uptime?project={}",
                         self.app_url, project_id
+                    )),
+                    timestamp: chrono::Utc::now().to_rfc3339(),
+                };
+
+                self.send_alert(&rule.id, &rule.actions, &payload).await;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Trigger alerts for server metric thresholds
+    pub async fn on_metrics_threshold(
+        &self,
+        project_id: &str,
+        server_db_id: &str,
+        metric: &ServerMetric,
+    ) -> Result<()> {
+        let project = match ProjectRepository::find_by_id(&self.pool, project_id).await? {
+            Some(p) => p,
+            None => return Ok(()),
+        };
+
+        let server = match ServerRepository::find_by_id(&self.pool, server_db_id).await? {
+            Some(s) => s,
+            None => return Ok(()),
+        };
+
+        let rules = AlertRuleRepository::list_active_by_project(&self.pool, project_id).await?;
+
+        for rule in rules {
+            let condition: AlertCondition = match serde_json::from_str(&rule.condition) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+
+            let (matches, alert_msg) = match &condition {
+                AlertCondition::ServerCpuHigh {
+                    threshold_percent,
+                    server_id,
+                } => {
+                    let applies = server_id.is_none()
+                        || server_id.as_deref() == Some(server_db_id);
+                    if applies {
+                        if let Some(cpu) = metric.cpu_usage_percent {
+                            if cpu >= *threshold_percent {
+                                (
+                                    true,
+                                    format!(
+                                        "CPU at {:.1}% on {} (threshold: {:.0}%)",
+                                        cpu, server.hostname, threshold_percent
+                                    ),
+                                )
+                            } else {
+                                (false, String::new())
+                            }
+                        } else {
+                            (false, String::new())
+                        }
+                    } else {
+                        (false, String::new())
+                    }
+                }
+                AlertCondition::ServerMemoryHigh {
+                    threshold_percent,
+                    server_id,
+                } => {
+                    let applies = server_id.is_none()
+                        || server_id.as_deref() == Some(server_db_id);
+                    if applies {
+                        if let Some(mem) = metric.mem_usage_percent {
+                            if mem >= *threshold_percent {
+                                (
+                                    true,
+                                    format!(
+                                        "Memory at {:.1}% on {} (threshold: {:.0}%)",
+                                        mem, server.hostname, threshold_percent
+                                    ),
+                                )
+                            } else {
+                                (false, String::new())
+                            }
+                        } else {
+                            (false, String::new())
+                        }
+                    } else {
+                        (false, String::new())
+                    }
+                }
+                AlertCondition::ServerDiskHigh {
+                    threshold_percent,
+                    mount,
+                    server_id,
+                } => {
+                    let applies = server_id.is_none()
+                        || server_id.as_deref() == Some(server_db_id);
+                    if applies {
+                        if let Some(ref disks_str) = metric.disks_json {
+                            let disks: Vec<serde_json::Value> =
+                                serde_json::from_str(disks_str).unwrap_or_default();
+                            let mut triggered = false;
+                            let mut msg = String::new();
+                            for disk in &disks {
+                                let disk_mount = disk["mount"].as_str().unwrap_or("");
+                                let usage = disk["usage_percent"].as_f64().unwrap_or(0.0);
+                                let mount_matches = mount.is_none()
+                                    || mount.as_deref() == Some(disk_mount);
+                                if mount_matches && usage >= *threshold_percent {
+                                    triggered = true;
+                                    msg = format!(
+                                        "Disk {} at {:.1}% on {} (threshold: {:.0}%)",
+                                        disk_mount, usage, server.hostname, threshold_percent
+                                    );
+                                    break;
+                                }
+                            }
+                            (triggered, msg)
+                        } else {
+                            (false, String::new())
+                        }
+                    } else {
+                        (false, String::new())
+                    }
+                }
+                _ => (false, String::new()),
+            };
+
+            if matches {
+                // Cooldown: check if we've already fired this rule+server within 15 minutes
+                let recent_log = AlertLogRepository::find_recent(
+                    &self.pool,
+                    &rule.id,
+                    Some(server_db_id),
+                    15,
+                )
+                .await;
+
+                if let Ok(Some(_)) = recent_log {
+                    // Already fired recently, skip
+                    continue;
+                }
+
+                let payload = AlertPayload {
+                    title: format!("Server Alert: {}", server.hostname),
+                    message: alert_msg,
+                    severity: "warning".to_string(),
+                    project_name: project.name.clone(),
+                    trigger_type: "server_metric".to_string(),
+                    trigger_id: Some(server_db_id.to_string()),
+                    url: Some(format!(
+                        "{}/dashboard/server?project={}",
+                        self.app_url, project_id
+                    )),
+                    timestamp: chrono::Utc::now().to_rfc3339(),
+                };
+
+                self.send_alert(&rule.id, &rule.actions, &payload).await;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Trigger alerts for servers that have gone offline
+    pub async fn on_server_offline(&self, server: &crate::db::models::Server) -> Result<()> {
+        let project = match ProjectRepository::find_by_id(&self.pool, &server.project_id).await? {
+            Some(p) => p,
+            None => return Ok(()),
+        };
+
+        let rules =
+            AlertRuleRepository::list_active_by_project(&self.pool, &server.project_id).await?;
+
+        for rule in rules {
+            let condition: AlertCondition = match serde_json::from_str(&rule.condition) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+
+            let matches = match &condition {
+                AlertCondition::ServerOffline { server_id, .. } => {
+                    server_id.is_none() || server_id.as_deref() == Some(&server.id)
+                }
+                _ => false,
+            };
+
+            if matches {
+                // Cooldown check
+                let recent_log = AlertLogRepository::find_recent(
+                    &self.pool,
+                    &rule.id,
+                    Some(&server.id),
+                    15,
+                )
+                .await;
+
+                if let Ok(Some(_)) = recent_log {
+                    continue;
+                }
+
+                let payload = AlertPayload {
+                    title: format!("Server Offline: {}", server.hostname),
+                    message: format!(
+                        "{} has not reported metrics since {}",
+                        server.hostname,
+                        server.last_seen.format("%Y-%m-%d %H:%M:%S UTC")
+                    ),
+                    severity: "error".to_string(),
+                    project_name: project.name.clone(),
+                    trigger_type: "server_offline".to_string(),
+                    trigger_id: Some(server.id.clone()),
+                    url: Some(format!(
+                        "{}/dashboard/server?project={}",
+                        self.app_url, &server.project_id
                     )),
                     timestamp: chrono::Utc::now().to_rfc3339(),
                 };

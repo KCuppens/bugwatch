@@ -11,6 +11,59 @@ import type {
 import { HttpTransport, NoopTransport } from "./transport";
 import { parseStackTrace, extractErrorInfo } from "./stacktrace";
 import { fingerprintFromException } from "./fingerprint";
+import { getMergedContext } from "./context";
+
+/**
+ * Ring buffer for efficient breadcrumb storage.
+ * Avoids array shifting/slicing on every breadcrumb addition.
+ */
+class RingBuffer<T> {
+  private buffer: (T | undefined)[];
+  private head = 0;
+  private count = 0;
+
+  constructor(private maxSize: number) {
+    this.buffer = new Array(maxSize);
+  }
+
+  push(item: T): void {
+    this.buffer[this.head] = item;
+    this.head = (this.head + 1) % this.maxSize;
+    if (this.count < this.maxSize) {
+      this.count++;
+    }
+  }
+
+  toArray(): T[] {
+    if (this.count === 0) {
+      return [];
+    }
+
+    const result: T[] = [];
+    // Start from the oldest item
+    const start = this.count < this.maxSize ? 0 : this.head;
+
+    for (let i = 0; i < this.count; i++) {
+      const index = (start + i) % this.maxSize;
+      const item = this.buffer[index];
+      if (item !== undefined) {
+        result.push(item);
+      }
+    }
+
+    return result;
+  }
+
+  clear(): void {
+    this.buffer = new Array(this.maxSize);
+    this.head = 0;
+    this.count = 0;
+  }
+
+  get length(): number {
+    return this.count;
+  }
+}
 
 const SDK_NAME = "@bugwatch/core";
 const SDK_VERSION = "0.1.0";
@@ -41,7 +94,7 @@ const DEFAULT_OPTIONS: Partial<BugwatchOptions> = {
 export class Bugwatch implements BugwatchClient {
   private options: BugwatchOptions;
   private transport: Transport;
-  private breadcrumbs: Breadcrumb[] = [];
+  private breadcrumbs: RingBuffer<Breadcrumb>;
   private tags: Record<string, string> = {};
   private extra: Record<string, unknown> = {};
   private user: UserContext | null = null;
@@ -51,6 +104,7 @@ export class Bugwatch implements BugwatchClient {
   constructor(options: BugwatchOptions) {
     this.options = { ...DEFAULT_OPTIONS, ...options };
     this.transport = this.createTransport();
+    this.breadcrumbs = new RingBuffer<Breadcrumb>(this.options.maxBreadcrumbs || 100);
 
     // Apply initial tags
     if (options.tags) {
@@ -112,10 +166,19 @@ export class Bugwatch implements BugwatchClient {
 
     const event = this.createEventFromError(error, context);
 
-    // Run beforeSend hook
-    const processedEvent = this.options.beforeSend
-      ? this.options.beforeSend(event)
-      : event;
+    // Run beforeSend hook with error handling
+    let processedEvent: import("./types").ErrorEvent | null = event;
+    if (this.options.beforeSend) {
+      try {
+        processedEvent = this.options.beforeSend(event);
+      } catch (err) {
+        if (this.options.debug) {
+          console.error("[Bugwatch] beforeSend threw an error:", err);
+        }
+        // Continue with original event if beforeSend throws
+        processedEvent = event;
+      }
+    }
 
     if (!processedEvent) {
       if (this.options.debug) {
@@ -148,10 +211,19 @@ export class Bugwatch implements BugwatchClient {
       level,
     });
 
-    // Run beforeSend hook
-    const processedEvent = this.options.beforeSend
-      ? this.options.beforeSend(event)
-      : event;
+    // Run beforeSend hook with error handling
+    let processedEvent: import("./types").ErrorEvent | null = event;
+    if (this.options.beforeSend) {
+      try {
+        processedEvent = this.options.beforeSend(event);
+      } catch (err) {
+        if (this.options.debug) {
+          console.error("[Bugwatch] beforeSend threw an error:", err);
+        }
+        // Continue with original event if beforeSend throws
+        processedEvent = event;
+      }
+    }
 
     if (!processedEvent) {
       return "";
@@ -173,13 +245,8 @@ export class Bugwatch implements BugwatchClient {
       timestamp: new Date().toISOString(),
     };
 
+    // Ring buffer automatically handles max size
     this.breadcrumbs.push(crumb);
-
-    // Limit breadcrumbs
-    const max = this.options.maxBreadcrumbs || 100;
-    if (this.breadcrumbs.length > max) {
-      this.breadcrumbs = this.breadcrumbs.slice(-max);
-    }
   }
 
   /**
@@ -207,7 +274,7 @@ export class Bugwatch implements BugwatchClient {
    * Clear breadcrumbs
    */
   clearBreadcrumbs(): void {
-    this.breadcrumbs = [];
+    this.breadcrumbs.clear();
   }
 
   /**
@@ -238,6 +305,15 @@ export class Bugwatch implements BugwatchClient {
    * Create a base event
    */
   private createEvent(partial: Partial<ErrorEvent>): ErrorEvent {
+    // Get merged context from request scope (if available) and global scope
+    // Request context takes precedence over global context
+    const mergedContext = getMergedContext(
+      this.user,
+      this.tags,
+      this.extra,
+      this.breadcrumbs.toArray()
+    );
+
     const event: ErrorEvent = {
       event_id: generateEventId(),
       timestamp: new Date().toISOString(),
@@ -246,9 +322,9 @@ export class Bugwatch implements BugwatchClient {
       message: partial.message || "",
       environment: this.options.environment,
       release: this.options.release,
-      tags: { ...this.tags, ...partial.tags },
-      extra: { ...this.extra, ...partial.extra },
-      breadcrumbs: [...this.breadcrumbs],
+      tags: { ...mergedContext.tags, ...partial.tags },
+      extra: { ...mergedContext.extra, ...partial.extra },
+      breadcrumbs: mergedContext.breadcrumbs,
       sdk: {
         name: SDK_NAME,
         version: SDK_VERSION,
@@ -256,9 +332,9 @@ export class Bugwatch implements BugwatchClient {
       ...partial,
     };
 
-    // Add user context
-    if (this.user || partial.user) {
-      event.user = { ...this.user, ...partial.user };
+    // Add user context (merged context user + partial user)
+    if (mergedContext.user || partial.user) {
+      event.user = { ...mergedContext.user, ...partial.user };
     }
 
     // Generate fingerprint if exception exists
@@ -309,6 +385,30 @@ export class Bugwatch implements BugwatchClient {
       return "edge";
     }
     return "javascript";
+  }
+
+  /**
+   * Flush any pending events.
+   * Call this before process exit to ensure no events are lost.
+   */
+  async flush(): Promise<void> {
+    if (this.transport.flush) {
+      await this.transport.flush();
+    }
+  }
+
+  /**
+   * Close the client and release any resources.
+   * This flushes any pending events and closes the transport.
+   * After calling this method, the client should not be used again.
+   */
+  async close(): Promise<void> {
+    if (this.transport.close) {
+      await this.transport.close();
+    } else {
+      await this.flush();
+    }
+    this.initialized = false;
   }
 }
 

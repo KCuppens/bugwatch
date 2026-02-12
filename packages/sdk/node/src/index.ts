@@ -1,6 +1,7 @@
 import {
   init as coreInit,
   getClient,
+  getEnvConfig,
   type BugwatchOptions,
   type BugwatchClient,
   type Integration,
@@ -32,6 +33,48 @@ const DEFAULT_NODE_OPTIONS: Partial<NodeOptions> = {
 
 let uncaughtExceptionHandler: ((err: Error) => void) | null = null;
 let unhandledRejectionHandler: ((reason: unknown) => void) | null = null;
+
+// Track cleanup functions for proper teardown
+let cleanupFunctions: (() => void)[] = [];
+let exitHandler: (() => void) | null = null;
+let sigintHandler: (() => void) | null = null;
+let sigtermHandler: (() => void) | null = null;
+
+/**
+ * Set up the Bugwatch SDK for Node.js with minimal configuration.
+ *
+ * Reads configuration from environment variables:
+ * - `BUGWATCH_API_KEY` - API key (required unless passed explicitly)
+ * - `BUGWATCH_ENVIRONMENT` - Environment tag
+ * - `BUGWATCH_RELEASE` - Release version
+ * - `BUGWATCH_DEBUG` - Enable debug mode ('true')
+ *
+ * @param options - Optional configuration to override env vars
+ * @returns The initialized Bugwatch client
+ *
+ * @example
+ * ```typescript
+ * // With BUGWATCH_API_KEY env var set
+ * setup();
+ *
+ * // With explicit options
+ * setup({ environment: "production" });
+ *
+ * // Full explicit configuration
+ * setup({ apiKey: "bw_live_xxxxx", environment: "staging" });
+ * ```
+ */
+export function setup(options?: Partial<NodeOptions>): BugwatchClient {
+  // If already initialized, return existing client
+  const existing = getClient();
+  if (existing) return existing;
+
+  // Merge env config with explicit options (explicit takes precedence)
+  const envConfig = getEnvConfig();
+  const mergedOptions = { ...DEFAULT_NODE_OPTIONS, ...envConfig, ...options };
+
+  return init(mergedOptions as NodeOptions);
+}
 
 /**
  * Initialize the Bugwatch SDK for Node.js
@@ -100,6 +143,14 @@ function setupUncaughtExceptionHandler(
   };
 
   process.on("uncaughtException", uncaughtExceptionHandler);
+
+  // Track for cleanup
+  cleanupFunctions.push(() => {
+    if (uncaughtExceptionHandler) {
+      process.removeListener("uncaughtException", uncaughtExceptionHandler);
+      uncaughtExceptionHandler = null;
+    }
+  });
 }
 
 /**
@@ -127,24 +178,63 @@ function setupUnhandledRejectionHandler(client: BugwatchClient): void {
   };
 
   process.on("unhandledRejection", unhandledRejectionHandler);
+
+  // Track for cleanup
+  cleanupFunctions.push(() => {
+    if (unhandledRejectionHandler) {
+      process.removeListener("unhandledRejection", unhandledRejectionHandler);
+      unhandledRejectionHandler = null;
+    }
+  });
 }
 
 /**
  * Set up process exit handler for cleanup
  */
 function setupExitHandler(): void {
-  const cleanup = () => {
-    // Could flush any pending events here
+  // Remove existing handlers if any
+  if (exitHandler) {
+    process.removeListener("exit", exitHandler);
+  }
+  if (sigintHandler) {
+    process.removeListener("SIGINT", sigintHandler);
+  }
+  if (sigtermHandler) {
+    process.removeListener("SIGTERM", sigtermHandler);
+  }
+
+  exitHandler = () => {
+    // Flush any pending events on exit
   };
 
-  process.on("exit", cleanup);
-  process.on("SIGINT", () => {
-    cleanup();
+  sigintHandler = () => {
+    exitHandler?.();
     process.exit(0);
-  });
-  process.on("SIGTERM", () => {
-    cleanup();
+  };
+
+  sigtermHandler = () => {
+    exitHandler?.();
     process.exit(0);
+  };
+
+  process.on("exit", exitHandler);
+  process.on("SIGINT", sigintHandler);
+  process.on("SIGTERM", sigtermHandler);
+
+  // Track for cleanup
+  cleanupFunctions.push(() => {
+    if (exitHandler) {
+      process.removeListener("exit", exitHandler);
+      exitHandler = null;
+    }
+    if (sigintHandler) {
+      process.removeListener("SIGINT", sigintHandler);
+      sigintHandler = null;
+    }
+    if (sigtermHandler) {
+      process.removeListener("SIGTERM", sigtermHandler);
+      sigtermHandler = null;
+    }
   });
 }
 
@@ -243,12 +333,21 @@ function sanitizeHeaders(
 }
 
 /**
- * Node.js console integration for breadcrumbs
+ * Node.js console integration for breadcrumbs.
+ * Stores original console methods for cleanup.
  */
+let originalConsoleMethods: {
+  log: typeof console.log;
+  info: typeof console.info;
+  warn: typeof console.warn;
+  error: typeof console.error;
+} | null = null;
+
 export const ConsoleIntegration: Integration = {
   name: "Console",
   setup(client: BugwatchClient) {
-    const originalConsole = {
+    // Store originals for cleanup
+    originalConsoleMethods = {
       log: console.log,
       info: console.info,
       warn: console.warn,
@@ -261,7 +360,7 @@ export const ConsoleIntegration: Integration = {
         message: args.map(String).join(" "),
         level: "debug",
       });
-      originalConsole.log(...args);
+      originalConsoleMethods!.log(...args);
     };
 
     console.info = (...args: unknown[]) => {
@@ -270,7 +369,7 @@ export const ConsoleIntegration: Integration = {
         message: args.map(String).join(" "),
         level: "info",
       });
-      originalConsole.info(...args);
+      originalConsoleMethods!.info(...args);
     };
 
     console.warn = (...args: unknown[]) => {
@@ -279,7 +378,7 @@ export const ConsoleIntegration: Integration = {
         message: args.map(String).join(" "),
         level: "warning",
       });
-      originalConsole.warn(...args);
+      originalConsoleMethods!.warn(...args);
     };
 
     console.error = (...args: unknown[]) => {
@@ -288,7 +387,46 @@ export const ConsoleIntegration: Integration = {
         message: args.map(String).join(" "),
         level: "error",
       });
-      originalConsole.error(...args);
+      originalConsoleMethods!.error(...args);
     };
+
+    // Track for cleanup
+    cleanupFunctions.push(() => {
+      if (originalConsoleMethods) {
+        console.log = originalConsoleMethods.log;
+        console.info = originalConsoleMethods.info;
+        console.warn = originalConsoleMethods.warn;
+        console.error = originalConsoleMethods.error;
+        originalConsoleMethods = null;
+      }
+    });
   },
 };
+
+/**
+ * Close the Bugwatch Node.js SDK and clean up all resources.
+ *
+ * This function:
+ * 1. Flushes any pending events
+ * 2. Removes all event handlers (uncaughtException, unhandledRejection)
+ * 3. Restores original console methods if ConsoleIntegration was used
+ * 4. Removes process exit handlers
+ *
+ * Call this before process exit if you need to ensure clean shutdown.
+ */
+export async function close(): Promise<void> {
+  const client = getClient();
+  if (client) {
+    await client.close();
+  }
+
+  // Run all cleanup functions
+  for (const cleanup of cleanupFunctions) {
+    try {
+      cleanup();
+    } catch {
+      // Ignore cleanup errors
+    }
+  }
+  cleanupFunctions = [];
+}

@@ -1,5 +1,6 @@
 //! Error fingerprinting for grouping similar errors.
 
+use once_cell::sync::Lazy;
 use regex::Regex;
 use sha2::{Digest, Sha256};
 
@@ -73,28 +74,35 @@ pub fn fingerprint_from_exception(exception: &ExceptionInfo) -> String {
     )
 }
 
+// Static regex patterns for message normalization
+static RE_NUMBERS: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"\d+").expect("RE_NUMBERS: invalid regex pattern (this is a bug)")
+});
+static RE_HEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"0x[0-9a-fA-F]+").expect("RE_HEX: invalid regex pattern (this is a bug)")
+});
+static RE_UUID: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+        .expect("RE_UUID: invalid regex pattern (this is a bug)")
+});
+static RE_PATH_UNIX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(/[\w\-./]+)+").expect("RE_PATH_UNIX: invalid regex pattern (this is a bug)")
+});
+static RE_PATH_WIN: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(\\[\w\-.\\ ]+)+").expect("RE_PATH_WIN: invalid regex pattern (this is a bug)")
+});
+static RE_QUOTED_DOUBLE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#""[^"]*""#).expect("RE_QUOTED_DOUBLE: invalid regex pattern (this is a bug)")
+});
+static RE_QUOTED_SINGLE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"'[^']*'").expect("RE_QUOTED_SINGLE: invalid regex pattern (this is a bug)")
+});
+static RE_ADDR: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"at 0x[0-9a-fA-F]+").expect("RE_ADDR: invalid regex pattern (this is a bug)")
+});
+
 /// Normalize an error message by removing variable parts.
 fn normalize_message(message: &str) -> String {
-    lazy_static::lazy_static! {
-        // Numbers
-        static ref RE_NUMBERS: Regex = Regex::new(r"\d+").unwrap();
-        // Hex values
-        static ref RE_HEX: Regex = Regex::new(r"0x[0-9a-fA-F]+").unwrap();
-        // UUIDs
-        static ref RE_UUID: Regex = Regex::new(
-            r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
-        ).unwrap();
-        // File paths (Unix)
-        static ref RE_PATH_UNIX: Regex = Regex::new(r"(/[\w\-./]+)+").unwrap();
-        // File paths (Windows)
-        static ref RE_PATH_WIN: Regex = Regex::new(r"(\\[\w\-.\\ ]+)+").unwrap();
-        // Double-quoted strings
-        static ref RE_QUOTED_DOUBLE: Regex = Regex::new(r#""[^"]*""#).unwrap();
-        // Single-quoted strings
-        static ref RE_QUOTED_SINGLE: Regex = Regex::new(r"'[^']*'").unwrap();
-        // Memory addresses
-        static ref RE_ADDR: Regex = Regex::new(r"at 0x[0-9a-fA-F]+").unwrap();
-    }
 
     let mut normalized = message.to_string();
 

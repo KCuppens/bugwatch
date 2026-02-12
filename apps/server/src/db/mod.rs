@@ -54,6 +54,7 @@ async fn run_migrations(pool: &PgPool) -> Result<()> {
         ("008_email_rate_limits", include_str!("../../migrations/008_email_rate_limits_pg.sql")),
         ("009_payment_failure_tracking", include_str!("../../migrations/009_payment_failure_tracking_pg.sql")),
         ("010_tax_handling", include_str!("../../migrations/010_tax_handling_pg.sql")),
+        ("011_server_metrics", include_str!("../../migrations/011_server_metrics_pg.sql")),
     ];
 
     for (name, sql) in migrations {

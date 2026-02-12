@@ -401,7 +401,14 @@ impl NotificationService {
 
     /// Send Slack notification
     async fn send_slack(&self, channel: &NotificationChannel, payload: &AlertPayload) -> Result<()> {
-        let config: SlackConfig = serde_json::from_str(&channel.config)?;
+        info!("Attempting to send Slack notification to channel '{}'", channel.name);
+        let config: SlackConfig = serde_json::from_str(&channel.config)
+            .map_err(|e| {
+                error!("Failed to parse Slack config: {}", e);
+                anyhow!("Invalid Slack config: {}", e)
+            })?;
+
+        info!("Slack webhook URL configured: {}...", &config.webhook_url.chars().take(50).collect::<String>());
 
         // Get template (use default if not configured)
         let template = config.message_template.unwrap_or_default();
@@ -433,11 +440,10 @@ impl NotificationService {
             match block_config.block_type {
                 SlackBlockType::Header => {
                     blocks.push(serde_json::json!({
-                        "type": "header",
+                        "type": "section",
                         "text": {
-                            "type": "plain_text",
-                            "text": format!("{} {}", emoji, payload.title),
-                            "emoji": true
+                            "type": "mrkdwn",
+                            "text": format!("{} *{}*", emoji, payload.title)
                         }
                     }));
                 }
@@ -542,13 +548,16 @@ impl NotificationService {
             }
         }
 
-        let slack_payload = serde_json::json!({
-            "channel": config.channel,
+        let mut slack_payload = serde_json::json!({
             "attachments": [{
                 "color": color,
                 "blocks": blocks
             }]
         });
+
+        if let Some(channel) = &config.channel {
+            slack_payload["channel"] = serde_json::json!(channel);
+        }
 
         let response = self
             .client
@@ -557,13 +566,14 @@ impl NotificationService {
             .send()
             .await?;
 
-        if !response.status().is_success() {
-            let status = response.status();
+        let status = response.status();
+        if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
+            error!("Slack webhook failed with status {}: {}", status, body);
             return Err(anyhow!("Slack webhook failed: {} - {}", status, body));
         }
 
-        info!("Slack notification sent");
+        info!("Slack notification sent successfully to channel '{}'", channel.name);
         Ok(())
     }
 }

@@ -55,6 +55,7 @@ __version__ = "0.1.0"
 __all__ = [
     # Main functions
     "init",
+    "init_from_env",
     "capture_exception",
     "capture_message",
     "add_breadcrumb",
@@ -89,7 +90,10 @@ __all__ = [
     "fingerprint_from_exception",
 ]
 
-# Global client instance
+# Thread lock for thread-safe global state access
+_lock = threading.Lock()
+
+# Global client instance (protected by _lock)
 _client: Optional[BugwatchClient] = None
 
 # Original hooks (saved to restore and chain)
@@ -232,6 +236,37 @@ def _atexit_handler():
 # Public API
 # =============================================================================
 
+def _validate_api_key(key: Optional[str]) -> str:
+    """
+    Validate the API key format.
+
+    Args:
+        key: The API key to validate
+
+    Returns:
+        The validated API key
+
+    Raises:
+        ValueError: If the API key is not provided
+    """
+    if not key:
+        raise ValueError(
+            "Bugwatch: API key required. "
+            "Set BUGWATCH_API_KEY environment variable or pass api_key parameter."
+        )
+
+    # Warn if key doesn't follow expected format
+    if not key.startswith("bw_"):
+        import warnings
+        warnings.warn(
+            f"Bugwatch: API key should start with 'bw_'. Got key starting with '{key[:3] if len(key) >= 3 else key}'",
+            UserWarning,
+            stacklevel=3,
+        )
+
+    return key
+
+
 def init(
     api_key: Optional[str] = None,
     endpoint: str = "https://api.bugwatch.dev",
@@ -289,11 +324,8 @@ def init(
     if api_key is None:
         api_key = os.environ.get("BUGWATCH_API_KEY")
 
-    if api_key is None:
-        raise ValueError(
-            "api_key is required. Either pass it explicitly or set the "
-            "BUGWATCH_API_KEY environment variable."
-        )
+    # Validate and check API key format
+    api_key = _validate_api_key(api_key)
 
     # Read optional config from environment
     if environment is None:
@@ -311,33 +343,70 @@ def init(
         **kwargs,
     )
 
-    _client = BugwatchClient(options)
+    # Thread-safe initialization
+    with _lock:
+        _client = BugwatchClient(options)
 
-    # Install exception hooks
-    if not _hooks_installed:
-        if install_excepthook:
-            _install_excepthook()
+        # Install exception hooks
+        if not _hooks_installed:
+            if install_excepthook:
+                _install_excepthook()
+                if debug:
+                    print("[Bugwatch] Installed sys.excepthook")
+
+            if install_threading_hook:
+                _install_threading_hook()
+                if debug and sys.version_info >= (3, 8):
+                    print("[Bugwatch] Installed threading.excepthook")
+
+            if install_asyncio_hook:
+                _install_asyncio_hook()
+                if debug:
+                    print("[Bugwatch] Installed asyncio exception handler")
+
+            # Register atexit handler
+            atexit.register(_atexit_handler)
             if debug:
-                print("[Bugwatch] Installed sys.excepthook")
+                print("[Bugwatch] Registered atexit handler")
 
-        if install_threading_hook:
-            _install_threading_hook()
-            if debug and sys.version_info >= (3, 8):
-                print("[Bugwatch] Installed threading.excepthook")
+            _hooks_installed = True
 
-        if install_asyncio_hook:
-            _install_asyncio_hook()
-            if debug:
-                print("[Bugwatch] Installed asyncio exception handler")
+        return _client
 
-        # Register atexit handler
-        atexit.register(_atexit_handler)
-        if debug:
-            print("[Bugwatch] Registered atexit handler")
 
-        _hooks_installed = True
+def init_from_env() -> BugwatchClient:
+    """
+    Initialize Bugwatch from environment variables.
 
-    return _client
+    This is a convenience function that reads all configuration from
+    environment variables:
+    - BUGWATCH_API_KEY - API key (required)
+    - BUGWATCH_ENVIRONMENT - Environment name
+    - BUGWATCH_RELEASE - Release version
+    - BUGWATCH_DEBUG - Enable debug mode ('true')
+
+    Returns:
+        The initialized client
+
+    Raises:
+        ValueError: If BUGWATCH_API_KEY is not set
+
+    Example::
+
+        import bugwatch
+
+        # Set environment variables before running:
+        # export BUGWATCH_API_KEY=bw_live_xxxxx
+        # export BUGWATCH_ENVIRONMENT=production
+
+        bugwatch.init_from_env()
+    """
+    return init(
+        api_key=os.environ.get("BUGWATCH_API_KEY"),
+        environment=os.environ.get("BUGWATCH_ENVIRONMENT"),
+        release=os.environ.get("BUGWATCH_RELEASE"),
+        debug=os.environ.get("BUGWATCH_DEBUG", "").lower() == "true",
+    )
 
 
 def get_client() -> Optional[BugwatchClient]:
@@ -363,7 +432,8 @@ def close():
 
     flush()
     _uninstall_hooks()
-    _client = None
+    with _lock:
+        _client = None
 
 
 def capture_exception(

@@ -4,8 +4,12 @@ from .django import bugwatch_error_handler as django_error_handler
 from .flask import BugwatchFlask, init_flask
 from .fastapi import BugwatchFastAPI, init_fastapi
 from .logging import BugwatchHandler, setup_logging
+from .celery import CeleryIntegration, init_celery
 
 __all__ = [
+    # Celery
+    "CeleryIntegration",
+    "init_celery",
     # Django
     "DjangoBugwatchMiddleware",
     "django_error_handler",
