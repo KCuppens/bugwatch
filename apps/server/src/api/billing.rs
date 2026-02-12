@@ -876,7 +876,9 @@ pub async fn get_usage(
         _ => {
             // Default to current calendar month - use beginning of current month
             use chrono::{Datelike, TimeZone};
-            let start = chrono::Utc.with_ymd_and_hms(now.year(), now.month(), 1, 0, 0, 0).unwrap();
+            let start = chrono::Utc.with_ymd_and_hms(now.year(), now.month(), 1, 0, 0, 0)
+                .single()
+                .unwrap_or(now);
             let end = start + chrono::Duration::days(30);
             (start, end)
         }

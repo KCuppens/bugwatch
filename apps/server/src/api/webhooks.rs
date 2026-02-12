@@ -140,7 +140,7 @@ async fn handle_checkout_completed(
         if let Some(stripe) = &state.stripe {
             let subscription = stripe::Subscription::retrieve(
                 &stripe::Client::new(state.config.stripe_secret_key.clone().unwrap_or_default()),
-                &sub_id.parse().unwrap(),
+                &sub_id.parse().map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Invalid subscription ID: {}", e)))?,
                 &[],
             )
             .await

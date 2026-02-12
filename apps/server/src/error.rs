@@ -136,18 +136,15 @@ impl IntoResponse for AppError {
         // Add rate limit headers if this is a rate limit error
         if let Some((retry_after, limit, remaining)) = rate_limit_info {
             let headers = response.headers_mut();
-            headers.insert(
-                header::RETRY_AFTER,
-                retry_after.to_string().parse().unwrap(),
-            );
-            headers.insert(
-                "X-RateLimit-Limit",
-                limit.to_string().parse().unwrap(),
-            );
-            headers.insert(
-                "X-RateLimit-Remaining",
-                remaining.to_string().parse().unwrap(),
-            );
+            if let Ok(val) = retry_after.to_string().parse() {
+                headers.insert(header::RETRY_AFTER, val);
+            }
+            if let Ok(val) = limit.to_string().parse() {
+                headers.insert("X-RateLimit-Limit", val);
+            }
+            if let Ok(val) = remaining.to_string().parse() {
+                headers.insert("X-RateLimit-Remaining", val);
+            }
         }
 
         response

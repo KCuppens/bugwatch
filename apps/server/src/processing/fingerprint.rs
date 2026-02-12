@@ -1,7 +1,14 @@
+use std::sync::LazyLock;
 use regex::Regex;
 use sha2::{Digest, Sha256};
 
 use crate::api::events::{ExceptionInfo, StackFrame};
+
+static RE_SINGLE_QUOTE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"'[^']*'").unwrap());
+static RE_DOUBLE_QUOTE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#""[^"]*""#).unwrap());
+static RE_UUID: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}").unwrap());
+static RE_IP: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}").unwrap());
+static RE_NUMBER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\b\d+\b").unwrap());
 
 /// Generate a fingerprint for error grouping.
 /// Groups identical errors together even with different data values.
@@ -47,24 +54,19 @@ fn normalize_message(message: &str) -> String {
     let mut result = message.to_string();
 
     // Replace single-quoted strings
-    let single_quote_re = Regex::new(r"'[^']*'").unwrap();
-    result = single_quote_re.replace_all(&result, "'*'").to_string();
+    result = RE_SINGLE_QUOTE.replace_all(&result, "'*'").to_string();
 
     // Replace double-quoted strings
-    let double_quote_re = Regex::new(r#""[^"]*""#).unwrap();
-    result = double_quote_re.replace_all(&result, "\"*\"").to_string();
+    result = RE_DOUBLE_QUOTE.replace_all(&result, "\"*\"").to_string();
 
     // Replace UUIDs
-    let uuid_re = Regex::new(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}").unwrap();
-    result = uuid_re.replace_all(&result, "*").to_string();
+    result = RE_UUID.replace_all(&result, "*").to_string();
 
     // Replace IP addresses
-    let ip_re = Regex::new(r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}").unwrap();
-    result = ip_re.replace_all(&result, "*").to_string();
+    result = RE_IP.replace_all(&result, "*").to_string();
 
     // Replace numbers (but not in function/file names context)
-    let number_re = Regex::new(r"\b\d+\b").unwrap();
-    result = number_re.replace_all(&result, "*").to_string();
+    result = RE_NUMBER.replace_all(&result, "*").to_string();
 
     result
 }
