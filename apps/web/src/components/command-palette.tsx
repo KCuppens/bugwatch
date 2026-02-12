@@ -17,17 +17,13 @@ import {
   User,
   Home,
   Check,
+  Keyboard,
+  Bell,
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useAuth } from "@/lib/auth-context";
 import { useProject } from "@/lib/project-context";
-
-// Mock recent issues - will be replaced with real data
-const recentIssues = [
-  { id: "1", title: "TypeError: Cannot read property 'map' of undefined", level: "error" },
-  { id: "2", title: "ReferenceError: process is not defined", level: "fatal" },
-  { id: "3", title: "Warning: Each child in a list should have a unique key", level: "warning" },
-];
+import { overviewApi, type IssueWithProject } from "@/lib/api";
 
 // Context for controlling command palette from anywhere
 interface CommandPaletteContextValue {
@@ -80,11 +76,33 @@ function CommandPaletteContent({ open, setOpen }: CommandPaletteContentProps) {
   const { setTheme } = useTheme();
   const { projects, selectedProject, selectProject } = useProject();
   const [search, setSearch] = useState("");
+  const [recentIssues, setRecentIssues] = useState<IssueWithProject[]>([]);
+
+  // Fetch real issues when palette opens
+  useEffect(() => {
+    if (!open) return;
+    overviewApi.getIssuesAcrossProjects({ limit: 5 })
+      .then((res) => setRecentIssues(res.data))
+      .catch(() => {});
+  }, [open]);
+
+  // Close on Escape key
+  useEffect(() => {
+    if (!open) return;
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setOpen(false);
+      }
+    };
+    document.addEventListener("keydown", handleEscape);
+    return () => document.removeEventListener("keydown", handleEscape);
+  }, [open, setOpen]);
 
   const runCommand = useCallback((command: () => void) => {
     setOpen(false);
     command();
-  }, []);
+  }, [setOpen]);
 
   if (!open) return null;
 
@@ -143,6 +161,23 @@ function CommandPaletteContent({ open, setOpen }: CommandPaletteContentProps) {
                 <Settings className="h-4 w-4" />
                 Open Settings
               </Command.Item>
+              <Command.Item
+                onSelect={() => runCommand(() => router.push("/dashboard/alerts"))}
+                className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-sm aria-selected:bg-accent"
+              >
+                <Bell className="h-4 w-4" />
+                View Alert Rules
+              </Command.Item>
+              <Command.Item
+                onSelect={() => runCommand(() => {
+                  // Dispatch keyboard event to trigger shortcuts dialog
+                  document.dispatchEvent(new KeyboardEvent("keydown", { key: "?" }));
+                })}
+                className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-sm aria-selected:bg-accent"
+              >
+                <Keyboard className="h-4 w-4" />
+                Keyboard Shortcuts
+              </Command.Item>
             </Command.Group>
 
             {/* Switch Project */}
@@ -166,22 +201,27 @@ function CommandPaletteContent({ open, setOpen }: CommandPaletteContentProps) {
             )}
 
             {/* Recent Issues */}
-            <Command.Group heading="Recent Issues" className="pb-2">
-              {recentIssues.map((issue) => (
-                <Command.Item
-                  key={issue.id}
-                  onSelect={() => runCommand(() => router.push(`/dashboard/issues/${issue.id}`))}
-                  className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-sm aria-selected:bg-accent"
-                >
-                  <Bug className={`h-4 w-4 ${
-                    issue.level === "fatal" ? "text-red-500" :
-                    issue.level === "error" ? "text-orange-500" :
-                    "text-yellow-500"
-                  }`} />
-                  <span className="truncate">{issue.title}</span>
-                </Command.Item>
-              ))}
-            </Command.Group>
+            {recentIssues.length > 0 && (
+              <Command.Group heading="Recent Issues" className="pb-2">
+                {recentIssues.map((issue) => (
+                  <Command.Item
+                    key={issue.id}
+                    value={`issue-${issue.title}-${issue.project_name}`}
+                    onSelect={() => runCommand(() => router.push(`/dashboard/issues/${issue.id}`))}
+                    className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-sm aria-selected:bg-accent"
+                  >
+                    <Bug className={`h-4 w-4 ${
+                      issue.level === "fatal" ? "text-red-500" :
+                      issue.level === "error" ? "text-orange-500" :
+                      issue.level === "warning" ? "text-yellow-500" :
+                      "text-muted-foreground"
+                    }`} />
+                    <span className="truncate flex-1">{issue.title}</span>
+                    <span className="text-xs text-muted-foreground shrink-0">{issue.project_name}</span>
+                  </Command.Item>
+                ))}
+              </Command.Group>
+            )}
 
             {/* Create */}
             <Command.Group heading="Create" className="pb-2">

@@ -167,7 +167,6 @@ function MonitorDetail({
         const data = await monitorsApi.get(projectId, monitorId);
         if (!cancelled) setDetail(data);
       } catch (err) {
-        console.error("Failed to fetch monitor detail:", err);
         if (!cancelled) toast.error("Failed to load monitor details");
       } finally {
         if (!cancelled) setIsLoading(false);
@@ -376,7 +375,6 @@ export default function UptimePage() {
       const response = await monitorsApi.list(selectedProject.id);
       setMonitors(response.data);
     } catch (err) {
-      console.error("Failed to fetch monitors:", err);
       toast.error("Failed to fetch monitors");
       setMonitors([]);
     } finally {
@@ -412,7 +410,6 @@ export default function UptimePage() {
       setNewMonitor({ name: "", url: "", method: "GET", interval_seconds: 60 });
       toast.success("Monitor created successfully");
     } catch (err) {
-      console.error("Failed to create monitor:", err);
       toast.error("Failed to create monitor");
     } finally {
       setIsCreating(false);
@@ -433,7 +430,6 @@ export default function UptimePage() {
           : `Monitor "${monitor.name}" paused`
       );
     } catch (err) {
-      console.error("Failed to toggle monitor:", err);
       toast.error("Failed to update monitor status");
     }
   }
@@ -457,7 +453,6 @@ export default function UptimePage() {
       setDeleteConfirmOpen(false);
       setMonitorToDelete(null);
     } catch (err) {
-      console.error("Failed to delete monitor:", err);
       toast.error("Failed to delete monitor");
     } finally {
       setIsDeleting(false);
@@ -693,7 +688,10 @@ export default function UptimePage() {
       )}
 
       {/* Create Monitor Dialog */}
-      <Dialog open={showCreateModal} onOpenChange={setShowCreateModal}>
+      <Dialog open={showCreateModal} onOpenChange={(open) => {
+        setShowCreateModal(open);
+        if (!open) setNewMonitor({ name: "", url: "", method: "GET", interval_seconds: 60 });
+      }}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Create Monitor</DialogTitle>

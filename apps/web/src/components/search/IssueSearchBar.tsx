@@ -14,6 +14,7 @@ interface IssueSearchBarProps {
   onResultsChange?: (results: Issue[]) => void;
   onFacetsChange?: (facets: Facets | null) => void;
   onLoadingChange?: (isLoading: boolean) => void;
+  onQueryChange?: (query: string) => void;
   className?: string;
   sortBy?: string;
   onSortChange?: (sort: string) => void;
@@ -24,6 +25,7 @@ export function IssueSearchBar({
   onResultsChange,
   onFacetsChange,
   onLoadingChange,
+  onQueryChange,
   className,
   sortBy = "recent",
   onSortChange,
@@ -75,6 +77,10 @@ export function IssueSearchBar({
   useEffect(() => {
     onLoadingChange?.(isLoading);
   }, [isLoading, onLoadingChange]);
+
+  useEffect(() => {
+    onQueryChange?.(query);
+  }, [query, onQueryChange]);
 
   // Global keyboard shortcut for focusing search
   useEffect(() => {

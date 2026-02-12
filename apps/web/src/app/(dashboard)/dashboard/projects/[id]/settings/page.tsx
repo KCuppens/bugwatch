@@ -32,6 +32,7 @@ import {
   getFrameworkConfig,
 } from "@/lib/sdk-config";
 import { CodeBlock, InstallCommand } from "@/components/onboarding/CodeBlock";
+import { toast } from "sonner";
 
 export default function ProjectSettingsPage() {
   const params = useParams();
@@ -60,8 +61,8 @@ export default function ProjectSettingsPage() {
         setProject(response.data);
         setName(response.data.name);
       } catch (err) {
-        console.error("Failed to fetch project:", err);
         setError(err instanceof Error ? err.message : "Failed to load project");
+        toast.error("Failed to load project");
       } finally {
         setIsLoading(false);
       }
@@ -87,8 +88,9 @@ export default function ProjectSettingsPage() {
     try {
       const response = await projectsApi.rotateApiKey(projectId);
       setProject(response.data);
+      toast.success("API key rotated");
     } catch (err) {
-      console.error("Failed to rotate API key:", err);
+      toast.error("Failed to rotate API key");
     } finally {
       setIsRotating(false);
     }
@@ -101,8 +103,9 @@ export default function ProjectSettingsPage() {
     try {
       const response = await projectsApi.update(projectId, { name: name.trim() });
       setProject(response.data);
+      toast.success("Project updated");
     } catch (err) {
-      console.error("Failed to update project:", err);
+      toast.error("Failed to update project");
     } finally {
       setIsSaving(false);
     }
@@ -114,9 +117,10 @@ export default function ProjectSettingsPage() {
     setIsDeleting(true);
     try {
       await projectsApi.delete(projectId);
+      toast.success("Project deleted");
       router.push("/dashboard/projects");
     } catch (err) {
-      console.error("Failed to delete project:", err);
+      toast.error("Failed to delete project");
       setIsDeleting(false);
     }
   }

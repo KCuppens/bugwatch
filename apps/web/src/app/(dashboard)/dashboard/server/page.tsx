@@ -262,10 +262,14 @@ export default function ServerPage() {
                   size="sm"
                   className="h-7 text-xs"
                   onClick={() => {
-                    navigator.clipboard.writeText(`curl -sSL https://install.bugwatch.dev | bash -s -- --api-key ${apiKey}`);
-                    setCopiedInstall(true);
-                    toast.success("Install command copied");
-                    setTimeout(() => setCopiedInstall(false), 2000);
+                    try {
+                      navigator.clipboard.writeText(`curl -sSL https://install.bugwatch.dev | bash -s -- --api-key ${apiKey}`);
+                      setCopiedInstall(true);
+                      toast.success("Install command copied");
+                      setTimeout(() => setCopiedInstall(false), 2000);
+                    } catch {
+                      toast.error("Failed to copy — clipboard not available");
+                    }
                   }}
                 >
                   {copiedInstall ? <Check className="h-3 w-3 mr-1 text-green-500" /> : <Copy className="h-3 w-3 mr-1" />}
@@ -382,6 +386,11 @@ export default function ServerPage() {
             <p className="text-xs text-muted-foreground mt-1">
               {formatBytes(latest?.mem_used_bytes ?? null)} / {formatBytes(latest?.mem_total_bytes ?? null)}
             </p>
+            <div className="mt-2 flex items-center gap-0.5 h-1.5 rounded-full overflow-hidden bg-white/5">
+              <div className="h-full bg-green-500/60" style={{ width: "70%" }} />
+              <div className="h-full bg-yellow-500/60" style={{ width: "20%" }} />
+              <div className="h-full bg-red-500/60" style={{ width: "10%" }} />
+            </div>
           </CardContent>
         </Card>
 
@@ -403,6 +412,11 @@ export default function ServerPage() {
             <p className="text-xs text-muted-foreground mt-1">
               {latest?.disks?.[0] && `${formatBytes(latest.disks[0].used_bytes)} / ${formatBytes(latest.disks[0].total_bytes)}`}
             </p>
+            <div className="mt-2 flex items-center gap-0.5 h-1.5 rounded-full overflow-hidden bg-white/5">
+              <div className="h-full bg-green-500/60" style={{ width: "70%" }} />
+              <div className="h-full bg-yellow-500/60" style={{ width: "20%" }} />
+              <div className="h-full bg-red-500/60" style={{ width: "10%" }} />
+            </div>
           </CardContent>
         </Card>
 
@@ -421,6 +435,11 @@ export default function ServerPage() {
               {latest?.load_avg_5 != null && `5m: ${latest?.load_avg_5?.toFixed(2)}`}
               {latest?.load_avg_15 != null && ` · 15m: ${latest?.load_avg_15?.toFixed(2)}`}
             </p>
+            <div className="mt-2 flex items-center gap-0.5 h-1.5 rounded-full overflow-hidden bg-white/5">
+              <div className="h-full bg-green-500/60" style={{ width: "50%" }} />
+              <div className="h-full bg-yellow-500/60" style={{ width: "30%" }} />
+              <div className="h-full bg-red-500/60" style={{ width: "20%" }} />
+            </div>
           </CardContent>
         </Card>
       </div>

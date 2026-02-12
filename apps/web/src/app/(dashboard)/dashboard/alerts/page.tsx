@@ -268,7 +268,6 @@ export default function AlertsPage() {
       setChannels(channelsRes);
       setLogs(logsRes);
     } catch (err) {
-      console.error("Failed to fetch alerts data:", err);
       toast.error("Failed to load alerts data");
     } finally {
       setIsLoading(false);
@@ -326,7 +325,6 @@ export default function AlertsPage() {
       setRuleForm(defaultRuleForm);
       setEditingRule(null);
     } catch (err) {
-      console.error("Failed to save rule:", err);
       toast.error(editingRule ? "Failed to update alert rule" : "Failed to create alert rule");
     } finally {
       setIsSaving(false);
@@ -372,7 +370,6 @@ export default function AlertsPage() {
       setChannelForm(defaultChannelForm);
       setEditingChannel(null);
     } catch (err) {
-      console.error("Failed to save channel:", err);
       toast.error(editingChannel ? "Failed to update channel" : "Failed to create channel");
     } finally {
       setIsSaving(false);
@@ -388,7 +385,6 @@ export default function AlertsPage() {
       setRules(rules.map((r) => (r.id === rule.id ? response : r)));
       toast.success(response.is_active ? "Alert rule enabled" : "Alert rule paused");
     } catch (err) {
-      console.error("Failed to toggle rule:", err);
       toast.error("Failed to toggle alert rule");
     }
   }
@@ -402,7 +398,6 @@ export default function AlertsPage() {
       toast.success("Alert rule deleted");
       setDeleteRuleTarget(null);
     } catch (err) {
-      console.error("Failed to delete rule:", err);
       toast.error("Failed to delete alert rule");
     } finally {
       setIsDeleting(false);
@@ -418,7 +413,6 @@ export default function AlertsPage() {
       setChannels(channels.map((c) => (c.id === channel.id ? response : c)));
       toast.success(response.is_active ? "Channel enabled" : "Channel disabled");
     } catch (err) {
-      console.error("Failed to toggle channel:", err);
       toast.error("Failed to toggle channel");
     }
   }
@@ -432,7 +426,6 @@ export default function AlertsPage() {
       toast.success("Notification channel deleted");
       setDeleteChannelTarget(null);
     } catch (err) {
-      console.error("Failed to delete channel:", err);
       toast.error("Failed to delete channel");
     } finally {
       setIsDeleting(false);
@@ -445,7 +438,6 @@ export default function AlertsPage() {
       await alertsApi.testChannel(selectedProject.id, channelId);
       toast.success("Test notification sent!");
     } catch (err) {
-      console.error("Failed to test channel:", err);
       toast.error("Failed to send test notification");
     }
   }
@@ -844,7 +836,7 @@ export default function AlertsPage() {
                           setRuleForm({ ...ruleForm, channelIds: ruleForm.channelIds.filter((id) => id !== channel.id) });
                         }
                       }}
-                      className="rounded"
+                      className="h-4 w-4 rounded border-border text-primary focus:ring-primary focus:ring-offset-background"
                     />
                     <span className="text-sm">{channel.name}</span>
                     <span className="text-xs text-muted-foreground capitalize">({channel.channel_type})</span>
@@ -1105,7 +1097,7 @@ export default function AlertsPage() {
             </Button>
             <Button
               onClick={handleSaveChannel}
-              disabled={isSaving || !channelForm.name}
+              disabled={isSaving || !channelForm.name || (channelForm.type === "email" && !channelForm.emails.trim()) || (channelForm.type === "webhook" && !channelForm.webhookUrl.trim()) || (channelForm.type === "slack" && !channelForm.slackUrl.trim())}
             >
               {isSaving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               {editingChannel ? "Save Changes" : "Add Channel"}

@@ -179,7 +179,7 @@ export default function IssueDetailPage() {
         const response = await issuesApi.get(projectId, issueId);
         setIssue(response.data);
       } catch (err) {
-        console.error("Failed to fetch issue:", err);
+        toast.error("Failed to load issue details");
         setIssue(mockIssue);
         setError(null);
       } finally {
@@ -422,6 +422,7 @@ export default function IssueDetailPage() {
       const response = await issuesApi.createComment(projectId, issueId, newComment.trim());
       setComments([response.data, ...comments]);
       setNewComment("");
+      if (commentRef.current) commentRef.current.style.height = "auto";
       toast.success("Comment added");
     } catch {
       toast.error("Failed to add comment");
@@ -471,6 +472,7 @@ export default function IssueDetailPage() {
 
   const stacktrace = issue.exception?.stacktrace || [];
   const firstInAppIndex = stacktrace.findIndex(f => f.in_app);
+  const aiFixInsertIndex = firstInAppIndex >= 0 ? firstInAppIndex : 0;
 
   return (
     <div className="space-y-4">
@@ -595,7 +597,7 @@ export default function IssueDetailPage() {
                   <div key={index}>
                     <StackFrame frame={frame} index={index} isExpanded={expandedFrames.has(index)} onToggle={() => toggleFrame(index)} />
                     {/* Inline AI Fix - show below first in-app frame */}
-                    {showAiFix && index === firstInAppIndex && (
+                    {showAiFix && index === aiFixInsertIndex && (
                       <div className="ml-4 mt-2 mb-2 rounded-lg border border-primary/20 bg-primary/5 p-4 animate-fade-in-up">
                         <div className="flex items-center justify-between mb-3">
                           <div className="flex items-center gap-2">
@@ -1003,7 +1005,7 @@ export default function IssueDetailPage() {
                   rows={1}
                   className="flex-1 min-h-[32px] max-h-[120px] rounded-md border bg-background px-3 py-1.5 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-ring"
                   onKeyDown={(e) => {
-                    if ((e.key === "Enter" && (e.metaKey || e.ctrlKey)) || (e.key === "Enter" && !e.shiftKey)) {
+                    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
                       e.preventDefault();
                       handleSubmitComment();
                     }

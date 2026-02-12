@@ -7,6 +7,7 @@ import { CommandPaletteProvider } from "@/components/command-palette";
 import { ProjectProvider } from "@/lib/project-context";
 import { PaywallProvider } from "@/lib/paywall-context";
 import { PaywallModal } from "@/components/paywall-modal";
+import { KeyboardShortcutsDialog } from "@/components/keyboard-shortcuts-dialog";
 
 export default function DashboardLayout({
   children,
@@ -26,6 +27,7 @@ export default function DashboardLayout({
               </main>
             </div>
             <PaywallModal />
+            <KeyboardShortcutsDialog />
           </CommandPaletteProvider>
         </PaywallProvider>
       </ProjectProvider>

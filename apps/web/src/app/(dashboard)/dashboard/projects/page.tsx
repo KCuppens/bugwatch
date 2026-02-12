@@ -79,7 +79,6 @@ export default function ProjectsPage() {
           setProjectStats(statsMap);
         }
       } catch (err) {
-        console.error("Failed to fetch projects:", err);
         setError(err instanceof Error ? err.message : "Failed to load projects");
         toast.error("Failed to load projects", {
           description: err instanceof Error ? err.message : "Please try again",
@@ -93,10 +92,14 @@ export default function ProjectsPage() {
   }, []);
 
   function copyApiKey(id: string, apiKey: string) {
-    navigator.clipboard.writeText(apiKey);
-    setCopiedId(id);
-    toast.success("API key copied");
-    setTimeout(() => setCopiedId(null), 2000);
+    try {
+      navigator.clipboard.writeText(apiKey);
+      setCopiedId(id);
+      toast.success("API key copied");
+      setTimeout(() => setCopiedId(null), 2000);
+    } catch {
+      toast.error("Failed to copy — clipboard not available");
+    }
   }
 
   function getProjectBadge(project: Project) {

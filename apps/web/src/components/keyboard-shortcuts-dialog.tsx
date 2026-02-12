@@ -10,7 +10,7 @@ import {
 
 interface ShortcutGroup {
   title: string;
-  shortcuts: { keys: string[]; description: string }[];
+  shortcuts: { keys: string[]; description: string; sequential?: boolean }[];
 }
 
 const shortcutGroups: ShortcutGroup[] = [
@@ -41,10 +41,10 @@ const shortcutGroups: ShortcutGroup[] = [
   {
     title: "Navigation",
     shortcuts: [
-      { keys: ["G", "D"], description: "Go to dashboard" },
-      { keys: ["G", "P"], description: "Go to projects" },
-      { keys: ["G", "U"], description: "Go to uptime" },
-      { keys: ["G", "S"], description: "Go to settings" },
+      { keys: ["G", "D"], description: "Go to dashboard", sequential: true },
+      { keys: ["G", "P"], description: "Go to projects", sequential: true },
+      { keys: ["G", "U"], description: "Go to uptime", sequential: true },
+      { keys: ["G", "S"], description: "Go to settings", sequential: true },
     ],
   },
 ];
@@ -101,7 +101,9 @@ export function KeyboardShortcutsDialog() {
                         {shortcut.keys.map((key, i) => (
                           <span key={i}>
                             {i > 0 && (
-                              <span className="text-xs text-muted-foreground mx-0.5">+</span>
+                              <span className="text-xs text-muted-foreground mx-0.5">
+                                {shortcut.sequential ? "then" : "+"}
+                              </span>
                             )}
                             <kbd className="inline-flex items-center justify-center min-w-[24px] h-6 rounded border bg-muted px-1.5 text-xs font-mono">
                               {key}

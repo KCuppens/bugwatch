@@ -113,14 +113,13 @@ export default function DashboardPage() {
   const [isLive, setIsLive] = useState(true);
   const [activeFilter, setActiveFilter] = useState<string | null>(null);
   const [newIssueIds, setNewIssueIds] = useState<Set<string>>(new Set());
-  const searchInputRef = useRef<HTMLInputElement>(null);
   const previousIssueIdsRef = useRef<Set<string>>(new Set());
 
   // Saved searches
   const { savedSearches, saveSearch, deleteSearch } = useSavedSearches(selectedProject?.id);
   const [showSaveSearch, setShowSaveSearch] = useState(false);
   const [saveSearchName, setSaveSearchName] = useState("");
-  const [currentSearchQuery] = useState("");
+  const [currentSearchQuery, setCurrentSearchQuery] = useState("");
 
   // Use search results if available, otherwise use all issues
   const displayIssues = useMemo(() => {
@@ -162,6 +161,15 @@ export default function DashboardPage() {
     };
   }, [displayIssues]);
 
+  // Memoize sparkline data to avoid regeneration on every render (Math.random inside)
+  const sparklineCache = useMemo(() => {
+    const cache = new Map<string, number[]>();
+    for (const issue of displayIssues) {
+      cache.set(issue.id, generateSparklineData(issue.count, issue.first_seen));
+    }
+    return cache;
+  }, [displayIssues]);
+
   // Store issue order in sessionStorage for prev/next navigation
   useEffect(() => {
     if (displayIssues.length > 0 && selectedProject) {
@@ -184,7 +192,9 @@ export default function DashboardPage() {
       if (issue) toggleIssueSelection(issue.id);
     },
     onFocusSearch: () => {
-      searchInputRef.current?.focus();
+      // IssueSearchBar handles "/" focus internally
+      const searchInput = document.querySelector<HTMLInputElement>('[data-search-input]');
+      searchInput?.focus();
     },
     isEnabled: !showSaveSearch,
   });
@@ -198,6 +208,9 @@ export default function DashboardPage() {
   }, []);
   const handleSearchLoading = useCallback((loading: boolean) => {
     setIsSearching(loading);
+  }, []);
+  const handleQueryChange = useCallback((query: string) => {
+    setCurrentSearchQuery(query);
   }, []);
 
   // Fetch issues
@@ -215,7 +228,6 @@ export default function DashboardPage() {
         setIssues(issuesResponse.data);
         previousIssueIdsRef.current = new Set(issuesResponse.data.map(i => i.id));
       } catch (err) {
-        console.error("Failed to fetch issues:", err);
         setError("Failed to load issues");
         toast.error("Failed to load issues", {
           description: err instanceof Error ? err.message : "Please try again",
@@ -497,6 +509,7 @@ export default function DashboardPage() {
         onResultsChange={handleSearchResults}
         onFacetsChange={handleFacetsChange}
         onLoadingChange={handleSearchLoading}
+        onQueryChange={handleQueryChange}
         sortBy={sortBy}
         onSortChange={(sort) => setSortBy(sort as SortOption)}
       />
@@ -512,10 +525,20 @@ export default function DashboardPage() {
                 if (activeFilter === filter.id) {
                   setActiveFilter(null);
                   setSearchResults(null);
+                  setSortBy("recent");
                 } else {
                   setActiveFilter(filter.id);
-                  // Apply the filter via sort for trending
-                  if (filter.id === "trending") setSortBy("trending");
+                  if (filter.id === "trending") {
+                    setSortBy("trending");
+                  } else if (filter.id === "critical") {
+                    // Filter to fatal + error level issues
+                    setSearchResults(issues.filter(i => i.level === "fatal" || i.level === "error"));
+                  } else if (filter.id === "new-today") {
+                    // Filter to issues first seen today
+                    const today = new Date();
+                    today.setHours(0, 0, 0, 0);
+                    setSearchResults(issues.filter(i => new Date(i.first_seen) >= today));
+                  }
                 }
               }}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap border transition-all ${
@@ -537,7 +560,23 @@ export default function DashboardPage() {
         {savedSearches.map((search) => (
           <button
             key={search.id}
-            onClick={() => setActiveFilter(search.id)}
+            onClick={() => {
+              if (activeFilter === search.id) {
+                setActiveFilter(null);
+                setSearchResults(null);
+              } else {
+                setActiveFilter(search.id);
+                // Apply saved search query as a text filter
+                if (search.query) {
+                  const q = search.query.toLowerCase();
+                  setSearchResults(issues.filter(i =>
+                    i.title.toLowerCase().includes(q) ||
+                    i.fingerprint.toLowerCase().includes(q) ||
+                    (i.level && i.level.toLowerCase().includes(q))
+                  ));
+                }
+              }
+            }}
             className={`group flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap border transition-all ${
               activeFilter === search.id
                 ? "bg-primary text-primary-foreground border-primary"
@@ -656,7 +695,7 @@ export default function DashboardPage() {
               const isSelected = selectedIssues.has(issue.id);
               const isNew = newIssueIds.has(issue.id);
               const isRecent = (Date.now() - new Date(issue.last_seen).getTime()) < 1000 * 60 * 5;
-              const sparkData = generateSparklineData(issue.count, issue.first_seen);
+              const sparkData = sparklineCache.get(issue.id) || [];
               const isSevere = issue.level === "fatal" || issue.level === "error";
 
               return (

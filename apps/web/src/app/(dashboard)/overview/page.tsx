@@ -38,6 +38,7 @@ import {
   type MonitorsSummary,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { toast } from "sonner";
 
 const levelConfig = {
   fatal: {
@@ -217,7 +218,6 @@ export default function OverviewPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
-  const [isInitialLoad, setIsInitialLoad] = useState(true);
   const [hoveredIssue, setHoveredIssue] = useState<string | null>(null);
   const [resolvingIssue, setResolvingIssue] = useState<string | null>(null);
 
@@ -266,11 +266,10 @@ export default function OverviewPage() {
       setMonitors(monitorsRes.data);
       setMonitorsSummary(monitorsRes.summary);
     } catch (err) {
-      console.error("Failed to fetch overview data:", err);
       setError(err instanceof Error ? err.message : "Failed to load overview data");
+      toast.error("Failed to load overview data");
     } finally {
       setIsLoading(false);
-      setIsInitialLoad(false);
     }
   }, []);
 
@@ -303,7 +302,7 @@ export default function OverviewPage() {
           )
         );
       } catch (err) {
-        console.error("Failed to resolve issue:", err);
+        toast.error("Failed to resolve issue");
         fetchData();
       } finally {
         setResolvingIssue(null);
@@ -312,7 +311,7 @@ export default function OverviewPage() {
     [fetchData]
   );
 
-  if (error && isInitialLoad) {
+  if (error && stats.length === 0) {
     return (
       <div className="flex items-center justify-center min-h-[600px]">
         <div className="text-center max-w-md">
@@ -330,7 +329,7 @@ export default function OverviewPage() {
     );
   }
 
-  if (!isLoading && stats.length === 0) {
+  if (!isLoading && !error && stats.length === 0) {
     return (
       <div className="flex items-center justify-center min-h-[600px]">
         <div className="text-center max-w-md">
