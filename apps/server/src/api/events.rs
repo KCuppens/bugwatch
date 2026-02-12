@@ -11,6 +11,10 @@ use crate::{
     AppError, AppResult, AppState,
 };
 
+fn default_environment() -> String {
+    "production".to_string()
+}
+
 /// Error event payload from SDK
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ErrorEvent {
@@ -31,6 +35,7 @@ pub struct ErrorEvent {
     pub exception: Option<ExceptionInfo>,
 
     /// Environment (production, staging, development)
+    #[serde(default = "default_environment")]
     pub environment: String,
 
     /// Release version
@@ -55,9 +60,11 @@ pub struct ErrorEvent {
     pub breadcrumbs: Option<Vec<Breadcrumb>>,
 
     /// SDK metadata
-    pub sdk: SdkInfo,
+    #[serde(default)]
+    pub sdk: Option<SdkInfo>,
 
     /// Platform
+    #[serde(default)]
     pub platform: String,
 
     /// Runtime info
@@ -84,9 +91,13 @@ pub struct ExceptionInfo {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct StackFrame {
+    #[serde(default)]
     pub filename: String,
+    #[serde(default)]
     pub function: String,
+    #[serde(default)]
     pub lineno: u32,
+    #[serde(default)]
     pub colno: u32,
     pub abs_path: Option<String>,
     pub context_line: Option<String>,
@@ -97,7 +108,9 @@ pub struct StackFrame {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct RequestContext {
+    #[serde(default)]
     pub url: String,
+    #[serde(default)]
     pub method: String,
     pub headers: Option<std::collections::HashMap<String, String>>,
     pub query_string: Option<String>,
@@ -114,13 +127,16 @@ pub struct UserContext {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Breadcrumb {
+    #[serde(default)]
     pub timestamp: String,
-    #[serde(rename = "type")]
+    #[serde(rename = "type", default)]
     pub breadcrumb_type: String,
+    #[serde(default)]
     pub category: String,
     pub message: Option<String>,
     pub data: Option<serde_json::Value>,
-    pub level: EventLevel,
+    #[serde(default)]
+    pub level: Option<EventLevel>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
