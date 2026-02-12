@@ -23,8 +23,6 @@ import {
   Server,
   Terminal,
   Clock,
-  ArrowDownToLine,
-  ArrowUpFromLine,
   Container,
 } from "lucide-react";
 import {
