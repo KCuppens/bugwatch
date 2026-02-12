@@ -7,6 +7,7 @@ import {
   CardContent,
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   Select,
   SelectContent,
@@ -19,12 +20,17 @@ import {
   MemoryStick,
   HardDrive,
   Activity,
-  Loader2,
   Server,
   Terminal,
   Clock,
   Container,
+  Copy,
+  Check,
+  Search,
+  ChevronUp,
+  ChevronDown,
 } from "lucide-react";
+import { toast } from "sonner";
 import {
   serversApi,
   projectsApi,
@@ -94,6 +100,10 @@ export default function ServerPage() {
   const [serverInfo, setServerInfo] = useState<ServerInfo | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [hasAgent, setHasAgent] = useState<boolean | null>(null);
+  const [copiedInstall, setCopiedInstall] = useState(false);
+  const [processSort, setProcessSort] = useState<{ field: "cpu" | "mem" | "name"; dir: "asc" | "desc" }>({ field: "cpu", dir: "desc" });
+  const [processFilter, setProcessFilter] = useState("");
+  const [showAllProcesses, setShowAllProcesses] = useState(false);
 
   // Fetch projects
   useEffect(() => {
@@ -105,7 +115,7 @@ export default function ServerPage() {
           setSelectedProject(response.data[0].id);
         }
       } catch (err) {
-        console.error("Failed to fetch projects:", err);
+        toast.error("Failed to fetch projects");
       }
     }
     fetchProjects();
@@ -123,17 +133,14 @@ export default function ServerPage() {
         if (status.has_agent) {
           const response = await serversApi.listServers(selectedProject!);
           setServers(response.data);
-          if (response.data.length > 0) {
-            setSelectedServer(response.data[0].id);
-          } else {
-            setSelectedServer(null);
-          }
+          const firstServer = response.data[0];
+          setSelectedServer(firstServer ? firstServer.id : null);
         } else {
           setServers([]);
           setSelectedServer(null);
         }
       } catch (err) {
-        console.error("Failed to fetch servers:", err);
+        toast.error("Failed to load servers");
         setHasAgent(false);
       } finally {
         setIsLoading(false);
@@ -154,7 +161,7 @@ export default function ServerPage() {
       setLatest(latestRes.data);
       setServerInfo(latestRes.server);
     } catch (err) {
-      console.error("Failed to fetch metrics:", err);
+      toast.error("Failed to load metrics");
     }
   }, [selectedProject, selectedServer, period]);
 
@@ -175,8 +182,35 @@ export default function ServerPage() {
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center h-[60vh]">
-        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+      <div className="space-y-6 animate-fade-in-up">
+        <div className="flex items-center justify-between">
+          <div className="space-y-2">
+            <Skeleton className="h-8 w-48" />
+            <Skeleton className="h-4 w-64" />
+          </div>
+          <Skeleton className="h-9 w-32 rounded-md" />
+        </div>
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <Card key={i} className="border">
+              <CardContent className="p-4 space-y-2">
+                <Skeleton className="h-4 w-16" />
+                <Skeleton className="h-8 w-20" />
+                <Skeleton className="h-3 w-28" />
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <Card key={i}>
+              <CardContent className="p-4">
+                <Skeleton className="h-4 w-24 mb-4" />
+                <Skeleton className="h-48 w-full rounded" />
+              </CardContent>
+            </Card>
+          ))}
+        </div>
       </div>
     );
   }
@@ -217,10 +251,26 @@ export default function ServerPage() {
                 Run this one-liner on your server to start monitoring CPU, memory, disk, and network metrics.
               </p>
             </div>
-            <div className="bg-black/40 rounded-lg p-4 max-w-2xl mx-auto text-left">
-              <div className="flex items-center gap-2 mb-2">
-                <Terminal className="h-4 w-4 text-muted-foreground" />
-                <span className="text-xs text-muted-foreground">Install command</span>
+            <div className="bg-black/40 rounded-lg p-4 max-w-2xl mx-auto text-left relative group">
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  <Terminal className="h-4 w-4 text-muted-foreground" />
+                  <span className="text-xs text-muted-foreground">Install command</span>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 text-xs"
+                  onClick={() => {
+                    navigator.clipboard.writeText(`curl -sSL https://install.bugwatch.dev | bash -s -- --api-key ${apiKey}`);
+                    setCopiedInstall(true);
+                    toast.success("Install command copied");
+                    setTimeout(() => setCopiedInstall(false), 2000);
+                  }}
+                >
+                  {copiedInstall ? <Check className="h-3 w-3 mr-1 text-green-500" /> : <Copy className="h-3 w-3 mr-1" />}
+                  {copiedInstall ? "Copied" : "Copy"}
+                </Button>
               </div>
               <code className="text-sm text-green-400 break-all">
                 curl -sSL https://install.bugwatch.dev | bash -s -- --api-key {apiKey}
@@ -309,6 +359,12 @@ export default function ServerPage() {
                 ? `${latest.cpu_usage_percent.toFixed(1)}%`
                 : "N/A"}
             </p>
+            {/* Threshold legend */}
+            <div className="mt-2 flex items-center gap-0.5 h-1.5 rounded-full overflow-hidden bg-white/5">
+              <div className="h-full bg-green-500/60" style={{ width: "70%" }} />
+              <div className="h-full bg-yellow-500/60" style={{ width: "20%" }} />
+              <div className="h-full bg-red-500/60" style={{ width: "10%" }} />
+            </div>
           </CardContent>
         </Card>
 
@@ -362,8 +418,8 @@ export default function ServerPage() {
                 : "N/A"}
             </p>
             <p className="text-xs text-muted-foreground mt-1">
-              {latest?.load_avg_5 !== null && `5m: ${latest.load_avg_5?.toFixed(2)}`}
-              {latest?.load_avg_15 !== null && ` · 15m: ${latest.load_avg_15?.toFixed(2)}`}
+              {latest?.load_avg_5 != null && `5m: ${latest?.load_avg_5?.toFixed(2)}`}
+              {latest?.load_avg_15 != null && ` · 15m: ${latest?.load_avg_15?.toFixed(2)}`}
             </p>
           </CardContent>
         </Card>
@@ -545,38 +601,95 @@ export default function ServerPage() {
         </Card>
       )}
 
-      {/* Process Table */}
-      {latest?.processes && latest.processes.length > 0 && (
-        <Card className="border-white/10 bg-white/[0.02]">
-          <CardContent className="p-4">
-            <h3 className="text-sm font-medium mb-3">Top Processes by CPU</h3>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-muted-foreground text-left border-b border-white/10">
-                    <th className="pb-2 font-medium">PID</th>
-                    <th className="pb-2 font-medium">Name</th>
-                    <th className="pb-2 font-medium">User</th>
-                    <th className="pb-2 font-medium">CPU %</th>
-                    <th className="pb-2 font-medium">MEM %</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {latest.processes.slice(0, 5).map((proc, i) => (
-                    <tr key={i} className="border-b border-white/5">
-                      <td className="py-2 font-mono text-xs">{proc.pid}</td>
-                      <td className="py-2">{proc.name}</td>
-                      <td className="py-2 text-muted-foreground">{proc.user || "—"}</td>
-                      <td className="py-2">{proc.cpu_percent.toFixed(1)}%</td>
-                      <td className="py-2">{proc.mem_percent.toFixed(1)}%</td>
+      {/* Process Table - Sortable & Filterable */}
+      {latest?.processes && latest.processes.length > 0 && (() => {
+        const filtered = latest.processes.filter(p =>
+          !processFilter || p.name.toLowerCase().includes(processFilter.toLowerCase())
+        );
+        const sorted = [...filtered].sort((a, b) => {
+          const dir = processSort.dir === "asc" ? 1 : -1;
+          if (processSort.field === "cpu") return (a.cpu_percent - b.cpu_percent) * dir;
+          if (processSort.field === "mem") return (a.mem_percent - b.mem_percent) * dir;
+          return a.name.localeCompare(b.name) * dir;
+        });
+        const displayed = showAllProcesses ? sorted : sorted.slice(0, 10);
+
+        const SortIcon = ({ field }: { field: typeof processSort.field }) => {
+          if (processSort.field !== field) return null;
+          return processSort.dir === "desc" ? <ChevronDown className="h-3 w-3 inline ml-0.5" /> : <ChevronUp className="h-3 w-3 inline ml-0.5" />;
+        };
+
+        const toggleSort = (field: typeof processSort.field) => {
+          setProcessSort(prev => ({
+            field,
+            dir: prev.field === field && prev.dir === "desc" ? "asc" : "desc",
+          }));
+        };
+
+        return (
+          <Card className="border-white/10 bg-white/[0.02]">
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-sm font-medium">Processes ({filtered.length})</h3>
+                <div className="flex items-center gap-2">
+                  <div className="relative">
+                    <Search className="h-3.5 w-3.5 absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                    <input
+                      type="text"
+                      placeholder="Filter..."
+                      value={processFilter}
+                      onChange={(e) => setProcessFilter(e.target.value)}
+                      className="h-7 pl-7 pr-2 text-xs rounded-md border bg-background w-36"
+                    />
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 text-xs"
+                    onClick={() => setShowAllProcesses(!showAllProcesses)}
+                  >
+                    {showAllProcesses ? "Show top 10" : `Show all ${filtered.length}`}
+                  </Button>
+                </div>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-muted-foreground text-left border-b border-white/10">
+                      <th className="pb-2 font-medium">PID</th>
+                      <th className="pb-2 font-medium cursor-pointer hover:text-foreground" onClick={() => toggleSort("name")}>
+                        Name <SortIcon field="name" />
+                      </th>
+                      <th className="pb-2 font-medium">User</th>
+                      <th className="pb-2 font-medium cursor-pointer hover:text-foreground" onClick={() => toggleSort("cpu")}>
+                        CPU % <SortIcon field="cpu" />
+                      </th>
+                      <th className="pb-2 font-medium cursor-pointer hover:text-foreground" onClick={() => toggleSort("mem")}>
+                        MEM % <SortIcon field="mem" />
+                      </th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </CardContent>
-        </Card>
-      )}
+                  </thead>
+                  <tbody>
+                    {displayed.map((proc, i) => (
+                      <tr key={i} className="border-b border-white/5 hover:bg-white/5 transition-colors">
+                        <td className="py-2 font-mono text-xs">{proc.pid}</td>
+                        <td className="py-2">{proc.name}</td>
+                        <td className="py-2 text-muted-foreground">{proc.user || "—"}</td>
+                        <td className="py-2">
+                          <span className={getStatusColor(proc.cpu_percent)}>{proc.cpu_percent.toFixed(1)}%</span>
+                        </td>
+                        <td className="py-2">
+                          <span className={getStatusColor(proc.mem_percent)}>{proc.mem_percent.toFixed(1)}%</span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </CardContent>
+          </Card>
+        );
+      })()}
 
       {/* Docker Table */}
       {latest?.docker && latest.docker.length > 0 && (

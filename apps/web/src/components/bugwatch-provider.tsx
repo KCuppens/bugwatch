@@ -36,7 +36,7 @@ export function BugwatchProvider({ children }: { children: React.ReactNode }) {
         debug: process.env.NODE_ENV === "development",
       }}
     >
-      {children}
+      {children as Parameters<typeof SdkBugwatchProvider>[0]["children"]}
     </SdkBugwatchProvider>
   );
 }

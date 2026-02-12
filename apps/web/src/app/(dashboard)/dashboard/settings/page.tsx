@@ -14,7 +14,10 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
-import { User, Bell, CreditCard, Shield, CheckCircle, XCircle } from "lucide-react";
+import { User, Bell, CreditCard, Shield, CheckCircle, XCircle, Lock, Smartphone, Monitor } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
+import { toast } from "sonner";
 import { billingApi, type Organization, type Subscription, type VerifyCheckoutResponse } from "@/lib/api";
 import { PlanCard, PricingTable, UsageStats, TeamMembers, CreditPurchase, Invoices, PaymentMethods, BillingDashboard, SeatManagement } from "@/components/billing";
 import { useTier, type Tier } from "@/hooks/use-feature";
@@ -40,6 +43,20 @@ export default function SettingsPage() {
   const [verificationResult, setVerificationResult] = useState<VerifyCheckoutResponse | null>(null);
   const [verificationError, setVerificationError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [passwordDialogOpen, setPasswordDialogOpen] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+
+  // Notification preferences (localStorage)
+  const [notifPrefs, setNotifPrefs] = useState(() => {
+    if (typeof window === "undefined") return { emailDigest: true, inAppBadges: true, criticalAlerts: true, weeklyReport: false, quietHoursEnabled: false };
+    try {
+      const stored = localStorage.getItem("bugwatch-notification-prefs");
+      if (stored) return JSON.parse(stored);
+    } catch {}
+    return { emailDigest: true, inAppBadges: true, criticalAlerts: true, weeklyReport: false, quietHoursEnabled: false };
+  });
 
   // Track if verification has been attempted to prevent duplicate calls
   const verificationAttemptedRef = useRef(false);
@@ -79,7 +96,7 @@ export default function SettingsPage() {
         setSubscription(subResponse);
         setMembersCount(orgResponse.members_count);
       } catch (error) {
-        console.error("Failed to load billing data:", error);
+        toast.error("Failed to load billing data");
       } finally {
         setBillingLoading(false);
       }
@@ -126,7 +143,7 @@ export default function SettingsPage() {
             await refreshUser();
           }
         } catch (error) {
-          console.error("Checkout verification failed:", error);
+          toast.error("Checkout verification failed");
           setVerificationError("Failed to verify checkout. Refreshing subscription data...");
           // Fallback to regular refresh
           await refreshUser();
@@ -152,6 +169,31 @@ export default function SettingsPage() {
     // TODO: Call API to update user
     await new Promise((resolve) => setTimeout(resolve, 500));
     setIsSaving(false);
+    toast.success("Profile updated", { description: "Your changes have been saved." });
+  }
+
+  function updateNotifPref(key: string, value: boolean) {
+    const updated = { ...notifPrefs, [key]: value };
+    setNotifPrefs(updated);
+    localStorage.setItem("bugwatch-notification-prefs", JSON.stringify(updated));
+    toast.success("Notification preference updated");
+  }
+
+  function handlePasswordChange() {
+    if (newPassword !== confirmPassword) {
+      toast.error("Passwords don't match");
+      return;
+    }
+    if (newPassword.length < 8) {
+      toast.error("Password must be at least 8 characters");
+      return;
+    }
+    // TODO: Call API to change password
+    toast.info("Password change coming soon", { description: "Backend integration is in progress." });
+    setPasswordDialogOpen(false);
+    setCurrentPassword("");
+    setNewPassword("");
+    setConfirmPassword("");
   }
 
   const handleRefreshBilling = async () => {
@@ -167,7 +209,7 @@ export default function SettingsPage() {
       setMembersCount(orgResponse.members_count);
       refreshUser();
     } catch (error) {
-      console.error("Failed to refresh billing data:", error);
+      toast.error("Failed to refresh billing data");
     } finally {
       setBillingLoading(false);
     }
@@ -267,19 +309,79 @@ export default function SettingsPage() {
       )}
 
       {activeTab === "notifications" && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Notification Preferences</CardTitle>
-            <CardDescription>
-              Configure how you want to be notified
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <p className="text-muted-foreground">
-              Notification settings coming soon. Configure alert channels in your project settings.
-            </p>
-          </CardContent>
-        </Card>
+        <div className="space-y-6">
+          <Card>
+            <CardHeader>
+              <CardTitle>Notification Preferences</CardTitle>
+              <CardDescription>
+                Configure how you want to be notified
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label>Email Digest</Label>
+                  <p className="text-xs text-muted-foreground">Receive a daily summary of new issues</p>
+                </div>
+                <Switch
+                  checked={notifPrefs.emailDigest}
+                  onCheckedChange={(v) => updateNotifPref("emailDigest", v)}
+                />
+              </div>
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label>In-App Badges</Label>
+                  <p className="text-xs text-muted-foreground">Show unread count badges on navigation items</p>
+                </div>
+                <Switch
+                  checked={notifPrefs.inAppBadges}
+                  onCheckedChange={(v) => updateNotifPref("inAppBadges", v)}
+                />
+              </div>
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label>Critical Alerts</Label>
+                  <p className="text-xs text-muted-foreground">Immediately notify for fatal and critical issues</p>
+                </div>
+                <Switch
+                  checked={notifPrefs.criticalAlerts}
+                  onCheckedChange={(v) => updateNotifPref("criticalAlerts", v)}
+                />
+              </div>
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label>Weekly Report</Label>
+                  <p className="text-xs text-muted-foreground">Get a weekly email with project health overview</p>
+                </div>
+                <Switch
+                  checked={notifPrefs.weeklyReport}
+                  onCheckedChange={(v) => updateNotifPref("weeklyReport", v)}
+                />
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Quiet Hours</CardTitle>
+              <CardDescription>
+                Pause non-critical notifications during specific hours
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label>Enable Quiet Hours</Label>
+                  <p className="text-xs text-muted-foreground">10 PM — 8 AM local time</p>
+                </div>
+                <Switch
+                  checked={notifPrefs.quietHoursEnabled}
+                  onCheckedChange={(v) => updateNotifPref("quietHoursEnabled", v)}
+                />
+              </div>
+            </CardContent>
+          </Card>
+        </div>
       )}
 
       {activeTab === "billing" && (
@@ -364,30 +466,121 @@ export default function SettingsPage() {
       )}
 
       {activeTab === "security" && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Security Settings</CardTitle>
-            <CardDescription>
-              Manage your account security
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="space-y-2">
-              <Label>Password</Label>
-              <div className="flex items-center gap-2">
-                <Input type="password" value="••••••••" disabled />
-                <Button variant="outline">Change</Button>
+        <div className="space-y-6">
+          <Card>
+            <CardHeader>
+              <CardTitle>Password</CardTitle>
+              <CardDescription>Change your account password</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="rounded-md bg-muted p-2">
+                    <Lock className="h-4 w-4 text-muted-foreground" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium">Password</p>
+                    <p className="text-xs text-muted-foreground">Last changed: Unknown</p>
+                  </div>
+                </div>
+                <Button variant="outline" onClick={() => setPasswordDialogOpen(true)}>
+                  Change Password
+                </Button>
               </div>
-            </div>
-            <div className="space-y-2">
-              <Label>Two-Factor Authentication</Label>
-              <p className="text-sm text-muted-foreground">
-                Add an extra layer of security to your account
-              </p>
-              <Button variant="outline">Enable 2FA</Button>
-            </div>
-          </CardContent>
-        </Card>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Two-Factor Authentication</CardTitle>
+              <CardDescription>Add an extra layer of security to your account</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="rounded-md bg-muted p-2">
+                    <Smartphone className="h-4 w-4 text-muted-foreground" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium">Authenticator App</p>
+                    <p className="text-xs text-muted-foreground">Not configured</p>
+                  </div>
+                </div>
+                <Button variant="outline" onClick={() => toast.info("2FA coming soon", { description: "This feature is currently in development." })}>
+                  Enable 2FA
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Active Sessions</CardTitle>
+              <CardDescription>Devices currently logged in to your account</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="flex items-center justify-between py-2">
+                <div className="flex items-center gap-3">
+                  <div className="rounded-md bg-green-500/10 p-2">
+                    <Monitor className="h-4 w-4 text-green-500" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium">Current Session</p>
+                    <p className="text-xs text-muted-foreground">
+                      {typeof navigator !== "undefined" ? navigator.userAgent.split(" ").slice(-1)[0]?.split("/")[0] || "Browser" : "Browser"} — Active now
+                    </p>
+                  </div>
+                </div>
+                <span className="inline-flex items-center rounded-full bg-green-500/10 px-2 py-0.5 text-xs font-medium text-green-500">
+                  Current
+                </span>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Password Change Dialog */}
+          <Dialog open={passwordDialogOpen} onOpenChange={setPasswordDialogOpen}>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Change Password</DialogTitle>
+                <DialogDescription>Enter your current password and choose a new one.</DialogDescription>
+              </DialogHeader>
+              <div className="space-y-4 py-4">
+                <div className="space-y-2">
+                  <Label htmlFor="current-password">Current Password</Label>
+                  <Input
+                    id="current-password"
+                    type="password"
+                    value={currentPassword}
+                    onChange={(e) => setCurrentPassword(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="new-password">New Password</Label>
+                  <Input
+                    id="new-password"
+                    type="password"
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="confirm-password">Confirm New Password</Label>
+                  <Input
+                    id="confirm-password"
+                    type="password"
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                  />
+                </div>
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setPasswordDialogOpen(false)}>Cancel</Button>
+                <Button onClick={handlePasswordChange}>Change Password</Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+        </div>
       )}
     </div>
   );

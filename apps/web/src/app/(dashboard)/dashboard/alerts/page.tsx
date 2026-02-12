@@ -15,6 +15,18 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import { Skeleton } from "@/components/ui/skeleton";
+import { ConfirmDialog } from "@/components/confirm-dialog";
+import { toast } from "sonner";
 import {
   Bell,
   Plus,
@@ -28,6 +40,7 @@ import {
   CheckCircle,
   XCircle,
   Clock,
+  Pencil,
 } from "lucide-react";
 import {
   alertsApi,
@@ -58,29 +71,51 @@ function getConditionDescription(condition: AlertCondition): string {
   switch (condition.type) {
     case "new_issue":
       return condition.level
-        ? `New ${condition.level} issues`
-        : "All new issues";
+        ? `Alert when a new ${condition.level}-level issue is detected`
+        : "Alert when a new issue is detected";
     case "issue_frequency":
-      return `${condition.threshold}+ issues in ${condition.window_minutes} min`;
+      return `Alert when issues exceed ${condition.threshold} in ${condition.window_minutes} minutes`;
     case "monitor_down":
       return condition.monitor_id
-        ? "Specific monitor down"
-        : "Any monitor down";
+        ? "Alert when a specific uptime monitor goes down"
+        : "Alert when any uptime monitor goes down";
     case "monitor_recovery":
       return condition.monitor_id
-        ? "Specific monitor recovery"
-        : "Any monitor recovery";
+        ? "Alert when a specific monitor recovers"
+        : "Alert when any monitor recovers";
     case "server_cpu_high":
-      return `CPU > ${condition.threshold_percent}%`;
+      return `Alert when CPU usage exceeds ${condition.threshold_percent}%`;
     case "server_memory_high":
-      return `Memory > ${condition.threshold_percent}%`;
+      return `Alert when memory usage exceeds ${condition.threshold_percent}%`;
     case "server_disk_high":
-      return `Disk > ${condition.threshold_percent}%${condition.mount ? ` (${condition.mount})` : ""}`;
+      return `Alert when disk usage exceeds ${condition.threshold_percent}%${condition.mount ? ` on ${condition.mount}` : ""}`;
     case "server_offline":
-      return `Server offline > ${condition.missing_minutes || 5} min`;
+      return `Alert when a server is offline for more than ${condition.missing_minutes || 5} minutes`;
     default:
       return "Unknown condition";
   }
+}
+
+function SkeletonCard() {
+  return (
+    <Card>
+      <CardContent className="p-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <Skeleton className="h-8 w-8 rounded-full" />
+            <div className="space-y-2">
+              <Skeleton className="h-4 w-40" />
+              <Skeleton className="h-3 w-56" />
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <Skeleton className="h-8 w-8 rounded" />
+            <Skeleton className="h-8 w-8 rounded" />
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
 }
 
 export default function AlertsPage() {
@@ -89,19 +124,26 @@ export default function AlertsPage() {
   // Feature gates
   const canUseWebhooks = useFeature("webhooks");
 
-  const [activeTab, setActiveTab] = useState<"rules" | "channels" | "logs">("rules");
-
   const [rules, setRules] = useState<AlertRule[]>([]);
   const [channels, setChannels] = useState<NotificationChannel[]>([]);
   const [logs, setLogs] = useState<AlertLog[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
-  // Modal states
-  const [showCreateRule, setShowCreateRule] = useState(false);
-  const [showCreateChannel, setShowCreateChannel] = useState(false);
+  // Dialog states for rules
+  const [showRuleDialog, setShowRuleDialog] = useState(false);
+  const [editingRule, setEditingRule] = useState<AlertRule | null>(null);
+
+  // Dialog states for channels
+  const [showChannelDialog, setShowChannelDialog] = useState(false);
+  const [editingChannel, setEditingChannel] = useState<NotificationChannel | null>(null);
+
+  // Confirm delete dialog states
+  const [deleteRuleTarget, setDeleteRuleTarget] = useState<AlertRule | null>(null);
+  const [deleteChannelTarget, setDeleteChannelTarget] = useState<NotificationChannel | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   // Form states
-  const [newRule, setNewRule] = useState({
+  const defaultRuleForm = {
     name: "",
     conditionType: "new_issue" as AlertCondition["type"],
     level: "",
@@ -109,14 +151,17 @@ export default function AlertsPage() {
     threshold: 90,
     mount: "",
     missingMinutes: 5,
-  });
-  const [newChannel, setNewChannel] = useState({
+  };
+  const defaultChannelForm = {
     name: "",
     type: "email" as "email" | "webhook" | "slack",
     emails: "",
     webhookUrl: "",
     slackUrl: "",
-  });
+  };
+
+  const [ruleForm, setRuleForm] = useState(defaultRuleForm);
+  const [channelForm, setChannelForm] = useState(defaultChannelForm);
   const [slackTemplate, setSlackTemplate] = useState({
     blocks: [
       { block_type: "header", enabled: true },
@@ -128,7 +173,80 @@ export default function AlertsPage() {
       { action_type: "view_issue", label: "View in Bugwatch", style: "primary" },
     ],
   });
-  const [isCreating, setIsCreating] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+
+  // Open create rule dialog
+  function openCreateRule() {
+    setEditingRule(null);
+    setRuleForm(defaultRuleForm);
+    setShowRuleDialog(true);
+  }
+
+  // Open edit rule dialog
+  function openEditRule(rule: AlertRule) {
+    setEditingRule(rule);
+    const cond = rule.condition;
+    setRuleForm({
+      name: rule.name,
+      conditionType: cond.type,
+      level: cond.type === "new_issue" ? (cond.level || "") : "",
+      channelIds: [...rule.channel_ids],
+      threshold:
+        cond.type === "server_cpu_high" || cond.type === "server_memory_high" || cond.type === "server_disk_high"
+          ? cond.threshold_percent
+          : 90,
+      mount: cond.type === "server_disk_high" ? (cond.mount || "") : "",
+      missingMinutes: cond.type === "server_offline" ? (cond.missing_minutes || 5) : 5,
+    });
+    setShowRuleDialog(true);
+  }
+
+  // Open create channel dialog
+  function openCreateChannel() {
+    setEditingChannel(null);
+    setChannelForm(defaultChannelForm);
+    setSlackTemplate({
+      blocks: [
+        { block_type: "header", enabled: true },
+        { block_type: "message", enabled: true },
+        { block_type: "context", enabled: true },
+        { block_type: "stats", enabled: false },
+      ],
+      actions: [
+        { action_type: "view_issue", label: "View in Bugwatch", style: "primary" },
+      ],
+    });
+    setShowChannelDialog(true);
+  }
+
+  // Open edit channel dialog
+  function openEditChannel(channel: NotificationChannel) {
+    setEditingChannel(channel);
+    const cfg = channel.config;
+    let emails = "";
+    let webhookUrl = "";
+    let slackUrl = "";
+
+    if (channel.channel_type === "email" && "recipients" in cfg) {
+      emails = cfg.recipients.join(", ");
+    } else if (channel.channel_type === "webhook" && "url" in cfg) {
+      webhookUrl = cfg.url;
+    } else if (channel.channel_type === "slack" && "webhook_url" in cfg) {
+      slackUrl = cfg.webhook_url;
+      if (cfg.message_template) {
+        setSlackTemplate(cfg.message_template);
+      }
+    }
+
+    setChannelForm({
+      name: channel.name,
+      type: channel.channel_type,
+      emails,
+      webhookUrl,
+      slackUrl,
+    });
+    setShowChannelDialog(true);
+  }
 
   const fetchData = useCallback(async () => {
     if (!selectedProject) {
@@ -151,6 +269,7 @@ export default function AlertsPage() {
       setLogs(logsRes);
     } catch (err) {
       console.error("Failed to fetch alerts data:", err);
+      toast.error("Failed to load alerts data");
     } finally {
       setIsLoading(false);
     }
@@ -161,86 +280,102 @@ export default function AlertsPage() {
     fetchData();
   }, [fetchData]);
 
-  async function handleCreateRule() {
-    if (!selectedProject || !newRule.name || newRule.channelIds.length === 0) return;
-
-    setIsCreating(true);
-    try {
-      let condition: AlertCondition;
-      switch (newRule.conditionType) {
-        case "new_issue":
-          condition = { type: "new_issue", level: newRule.level || undefined };
-          break;
-        case "monitor_down":
-          condition = { type: "monitor_down" };
-          break;
-        case "monitor_recovery":
-          condition = { type: "monitor_recovery" };
-          break;
-        case "server_cpu_high":
-          condition = { type: "server_cpu_high", threshold_percent: newRule.threshold };
-          break;
-        case "server_memory_high":
-          condition = { type: "server_memory_high", threshold_percent: newRule.threshold };
-          break;
-        case "server_disk_high":
-          condition = { type: "server_disk_high", threshold_percent: newRule.threshold, mount: newRule.mount || undefined };
-          break;
-        case "server_offline":
-          condition = { type: "server_offline", missing_minutes: newRule.missingMinutes };
-          break;
-        default:
-          condition = { type: "new_issue" };
-      }
-
-      const response = await alertsApi.createRule(selectedProject.id, {
-        name: newRule.name,
-        condition,
-        channel_ids: newRule.channelIds,
-      });
-      setRules([response, ...rules]);
-      setShowCreateRule(false);
-      setNewRule({ name: "", conditionType: "new_issue", level: "", channelIds: [], threshold: 90, mount: "", missingMinutes: 5 });
-    } catch (err) {
-      console.error("Failed to create rule:", err);
-    } finally {
-      setIsCreating(false);
+  function buildCondition(): AlertCondition {
+    switch (ruleForm.conditionType) {
+      case "new_issue":
+        return { type: "new_issue", level: ruleForm.level || undefined };
+      case "monitor_down":
+        return { type: "monitor_down" };
+      case "monitor_recovery":
+        return { type: "monitor_recovery" };
+      case "server_cpu_high":
+        return { type: "server_cpu_high", threshold_percent: ruleForm.threshold };
+      case "server_memory_high":
+        return { type: "server_memory_high", threshold_percent: ruleForm.threshold };
+      case "server_disk_high":
+        return { type: "server_disk_high", threshold_percent: ruleForm.threshold, mount: ruleForm.mount || undefined };
+      case "server_offline":
+        return { type: "server_offline", missing_minutes: ruleForm.missingMinutes };
+      default:
+        return { type: "new_issue" };
     }
   }
 
-  async function handleCreateChannel() {
-    if (!selectedProject || !newChannel.name) return;
+  async function handleSaveRule() {
+    if (!selectedProject || !ruleForm.name || ruleForm.channelIds.length === 0) return;
 
-    setIsCreating(true);
+    setIsSaving(true);
     try {
-      let config;
-      switch (newChannel.type) {
-        case "email":
-          config = { recipients: newChannel.emails.split(",").map((e) => e.trim()) };
-          break;
-        case "webhook":
-          config = { url: newChannel.webhookUrl };
-          break;
-        case "slack":
-          config = {
-            webhook_url: newChannel.slackUrl,
-            message_template: slackTemplate,
-          };
-          break;
-      }
+      const condition = buildCondition();
+      const payload = {
+        name: ruleForm.name,
+        condition,
+        channel_ids: ruleForm.channelIds,
+      };
 
-      const response = await alertsApi.createChannel(selectedProject.id, {
-        name: newChannel.name,
-        channel_type: newChannel.type,
-        config,
-      });
-      setChannels([response, ...channels]);
-      setShowCreateChannel(false);
-      setNewChannel({ name: "", type: "email", emails: "", webhookUrl: "", slackUrl: "" });
+      if (editingRule) {
+        const response = await alertsApi.updateRule(selectedProject.id, editingRule.id, payload);
+        setRules(rules.map((r) => (r.id === editingRule.id ? response : r)));
+        toast.success("Alert rule updated successfully");
+      } else {
+        const response = await alertsApi.createRule(selectedProject.id, payload);
+        setRules([response, ...rules]);
+        toast.success("Alert rule created successfully");
+      }
+      setShowRuleDialog(false);
+      setRuleForm(defaultRuleForm);
+      setEditingRule(null);
     } catch (err) {
-      console.error("Failed to create channel:", err);
+      console.error("Failed to save rule:", err);
+      toast.error(editingRule ? "Failed to update alert rule" : "Failed to create alert rule");
     } finally {
-      setIsCreating(false);
+      setIsSaving(false);
+    }
+  }
+
+  function buildChannelConfig() {
+    switch (channelForm.type) {
+      case "email":
+        return { recipients: channelForm.emails.split(",").map((e) => e.trim()) };
+      case "webhook":
+        return { url: channelForm.webhookUrl };
+      case "slack":
+        return {
+          webhook_url: channelForm.slackUrl,
+          message_template: slackTemplate,
+        };
+    }
+  }
+
+  async function handleSaveChannel() {
+    if (!selectedProject || !channelForm.name) return;
+
+    setIsSaving(true);
+    try {
+      const config = buildChannelConfig();
+      const payload = {
+        name: channelForm.name,
+        channel_type: channelForm.type,
+        config,
+      };
+
+      if (editingChannel) {
+        const response = await alertsApi.updateChannel(selectedProject.id, editingChannel.id, payload);
+        setChannels(channels.map((c) => (c.id === editingChannel.id ? response : c)));
+        toast.success("Notification channel updated successfully");
+      } else {
+        const response = await alertsApi.createChannel(selectedProject.id, payload);
+        setChannels([response, ...channels]);
+        toast.success("Notification channel created successfully");
+      }
+      setShowChannelDialog(false);
+      setChannelForm(defaultChannelForm);
+      setEditingChannel(null);
+    } catch (err) {
+      console.error("Failed to save channel:", err);
+      toast.error(editingChannel ? "Failed to update channel" : "Failed to create channel");
+    } finally {
+      setIsSaving(false);
     }
   }
 
@@ -251,18 +386,26 @@ export default function AlertsPage() {
         is_active: !rule.is_active,
       });
       setRules(rules.map((r) => (r.id === rule.id ? response : r)));
+      toast.success(response.is_active ? "Alert rule enabled" : "Alert rule paused");
     } catch (err) {
       console.error("Failed to toggle rule:", err);
+      toast.error("Failed to toggle alert rule");
     }
   }
 
-  async function handleDeleteRule(ruleId: string) {
-    if (!selectedProject) return;
+  async function handleDeleteRule() {
+    if (!selectedProject || !deleteRuleTarget) return;
+    setIsDeleting(true);
     try {
-      await alertsApi.deleteRule(selectedProject.id, ruleId);
-      setRules(rules.filter((r) => r.id !== ruleId));
+      await alertsApi.deleteRule(selectedProject.id, deleteRuleTarget.id);
+      setRules(rules.filter((r) => r.id !== deleteRuleTarget.id));
+      toast.success("Alert rule deleted");
+      setDeleteRuleTarget(null);
     } catch (err) {
       console.error("Failed to delete rule:", err);
+      toast.error("Failed to delete alert rule");
+    } finally {
+      setIsDeleting(false);
     }
   }
 
@@ -273,18 +416,26 @@ export default function AlertsPage() {
         is_active: !channel.is_active,
       });
       setChannels(channels.map((c) => (c.id === channel.id ? response : c)));
+      toast.success(response.is_active ? "Channel enabled" : "Channel disabled");
     } catch (err) {
       console.error("Failed to toggle channel:", err);
+      toast.error("Failed to toggle channel");
     }
   }
 
-  async function handleDeleteChannel(channelId: string) {
-    if (!selectedProject) return;
+  async function handleDeleteChannel() {
+    if (!selectedProject || !deleteChannelTarget) return;
+    setIsDeleting(true);
     try {
-      await alertsApi.deleteChannel(selectedProject.id, channelId);
-      setChannels(channels.filter((c) => c.id !== channelId));
+      await alertsApi.deleteChannel(selectedProject.id, deleteChannelTarget.id);
+      setChannels(channels.filter((c) => c.id !== deleteChannelTarget.id));
+      toast.success("Notification channel deleted");
+      setDeleteChannelTarget(null);
     } catch (err) {
       console.error("Failed to delete channel:", err);
+      toast.error("Failed to delete channel");
+    } finally {
+      setIsDeleting(false);
     }
   }
 
@@ -292,10 +443,10 @@ export default function AlertsPage() {
     if (!selectedProject) return;
     try {
       await alertsApi.testChannel(selectedProject.id, channelId);
-      alert("Test notification sent!");
+      toast.success("Test notification sent!");
     } catch (err) {
       console.error("Failed to test channel:", err);
-      alert("Failed to send test notification");
+      toast.error("Failed to send test notification");
     }
   }
 
@@ -325,630 +476,667 @@ export default function AlertsPage() {
       </div>
 
       {/* Tabs */}
-      <div className="border-b">
-        <div className="flex gap-4">
-          {(["rules", "channels", "logs"] as const).map((tab) => (
-            <button
-              key={tab}
-              onClick={() => setActiveTab(tab)}
-              className={`border-b-2 px-1 pb-3 text-sm font-medium transition-colors ${
-                activeTab === tab
-                  ? "border-bug text-foreground"
-                  : "border-transparent text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              {tab === "rules"
-                ? "Alert Rules"
-                : tab === "channels"
-                ? "Channels"
-                : "Activity Log"}
-            </button>
-          ))}
-        </div>
-      </div>
+      <Tabs defaultValue="rules">
+        <TabsList>
+          <TabsTrigger value="rules">Alert Rules</TabsTrigger>
+          <TabsTrigger value="channels">Channels</TabsTrigger>
+          <TabsTrigger value="logs">Activity Log</TabsTrigger>
+        </TabsList>
 
-      {isLoading ? (
-        <div className="flex items-center justify-center py-12">
-          <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-        </div>
-      ) : (
-        <>
-          {/* Alert Rules Tab */}
-          {activeTab === "rules" && (
-            <div className="space-y-4">
-              <div className="flex justify-end">
-                <Button variant="success" onClick={() => setShowCreateRule(true)} disabled={!selectedProject || channels.length === 0}>
-                  <Plus className="mr-2 h-4 w-4" />
-                  Create Alert Rule
-                </Button>
-              </div>
-
-              {channels.length === 0 && (
-                <Card>
-                  <CardContent className="py-8 text-center text-muted-foreground">
-                    Create a notification channel first before creating alert rules.
-                  </CardContent>
-                </Card>
-              )}
-
-              {rules.length === 0 && channels.length > 0 ? (
-                <Card>
-                  <CardContent className="flex flex-col items-center justify-center py-16">
-                    <div className="rounded-full bg-muted p-4">
-                      <Bell className="h-8 w-8 text-muted-foreground" />
-                    </div>
-                    <h3 className="mt-4 text-lg font-medium">No alert rules</h3>
-                    <p className="mt-2 text-center text-muted-foreground">
-                      Create alert rules to get notified about issues and monitor events.
-                    </p>
-                  </CardContent>
-                </Card>
-              ) : (
-                rules.map((rule) => (
-                  <Card key={rule.id}>
-                    <CardContent className="p-4">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-4">
-                          <div className={`rounded-full p-2 ${rule.is_active ? "bg-bug/10" : "bg-gray-100 dark:bg-gray-800"}`}>
-                            <Bell className={`h-4 w-4 ${rule.is_active ? "text-bug" : "text-gray-500"}`} />
-                          </div>
-                          <div>
-                            <div className="flex items-center gap-2">
-                              <h3 className="font-medium">{rule.name}</h3>
-                              {!rule.is_active && (
-                                <span className="text-xs bg-yellow-100 text-yellow-700 dark:bg-yellow-950 dark:text-yellow-300 px-2 py-0.5 rounded">
-                                  Paused
-                                </span>
-                              )}
-                            </div>
-                            <p className="text-sm text-muted-foreground">
-                              {getConditionDescription(rule.condition)}
-                            </p>
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm text-muted-foreground">
-                            {rule.channel_ids.length} channel{rule.channel_ids.length !== 1 ? "s" : ""}
-                          </span>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => handleToggleRule(rule)}
-                          >
-                            <Power className={`h-4 w-4 ${rule.is_active ? "text-bug" : ""}`} />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => handleDeleteRule(rule.id)}
-                          >
-                            <Trash2 className="h-4 w-4 text-destructive" />
-                          </Button>
-                        </div>
-                      </div>
-                    </CardContent>
-                  </Card>
-                ))
-              )}
-            </div>
-          )}
-
-          {/* Channels Tab */}
-          {activeTab === "channels" && (
-            <div className="space-y-4">
-              <div className="flex justify-end">
-                <Button variant="success" onClick={() => setShowCreateChannel(true)} disabled={!selectedProject}>
-                  <Plus className="mr-2 h-4 w-4" />
-                  Add Channel
-                </Button>
-              </div>
-
-              {channels.length === 0 ? (
-                <Card>
-                  <CardContent className="flex flex-col items-center justify-center py-16">
-                    <div className="rounded-full bg-muted p-4">
-                      <Mail className="h-8 w-8 text-muted-foreground" />
-                    </div>
-                    <h3 className="mt-4 text-lg font-medium">No notification channels</h3>
-                    <p className="mt-2 text-center text-muted-foreground">
-                      Add email, webhook, or Slack channels to receive alerts.
-                    </p>
-                  </CardContent>
-                </Card>
-              ) : (
-                channels.map((channel) => (
-                  <Card key={channel.id}>
-                    <CardContent className="p-4">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-4">
-                          <div className={`rounded-full p-2 ${channel.is_active ? "bg-primary/10" : "bg-gray-100 dark:bg-gray-800"}`}>
-                            {getChannelIcon(channel.channel_type)}
-                          </div>
-                          <div>
-                            <div className="flex items-center gap-2">
-                              <h3 className="font-medium">{channel.name}</h3>
-                              <span className="text-xs bg-muted px-2 py-0.5 rounded capitalize">
-                                {channel.channel_type}
-                              </span>
-                              {!channel.is_active && (
-                                <span className="text-xs bg-yellow-100 text-yellow-700 dark:bg-yellow-950 dark:text-yellow-300 px-2 py-0.5 rounded">
-                                  Disabled
-                                </span>
-                              )}
-                            </div>
-                            <p className="text-sm text-muted-foreground">
-                              Created {formatRelativeTime(channel.created_at)}
-                            </p>
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => handleTestChannel(channel.id)}
-                          >
-                            <Send className="mr-2 h-3 w-3" />
-                            Test
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => handleToggleChannel(channel)}
-                          >
-                            <Power className={`h-4 w-4 ${channel.is_active ? "text-bug" : ""}`} />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => handleDeleteChannel(channel.id)}
-                          >
-                            <Trash2 className="h-4 w-4 text-destructive" />
-                          </Button>
-                        </div>
-                      </div>
-                    </CardContent>
-                  </Card>
-                ))
-              )}
-            </div>
-          )}
-
-          {/* Logs Tab */}
-          {activeTab === "logs" && (
-            <div className="space-y-4">
-              {logs.length === 0 ? (
-                <Card>
-                  <CardContent className="flex flex-col items-center justify-center py-16">
-                    <div className="rounded-full bg-muted p-4">
-                      <Clock className="h-8 w-8 text-muted-foreground" />
-                    </div>
-                    <h3 className="mt-4 text-lg font-medium">No alert activity</h3>
-                    <p className="mt-2 text-center text-muted-foreground">
-                      Alert notifications will appear here when they are triggered.
-                    </p>
-                  </CardContent>
-                </Card>
-              ) : (
-                logs.map((log) => (
-                  <Card key={log.id}>
-                    <CardContent className="p-4">
-                      <div className="flex items-center gap-4">
-                        <div className={`rounded-full p-2 ${
-                          log.status === "sent"
-                            ? "bg-bug/10"
-                            : log.status === "failed"
-                            ? "bg-red-100 dark:bg-red-950"
-                            : "bg-yellow-100 dark:bg-yellow-950"
-                        }`}>
-                          {log.status === "sent" ? (
-                            <CheckCircle className="h-4 w-4 text-bug" />
-                          ) : log.status === "failed" ? (
-                            <XCircle className="h-4 w-4 text-red-500" />
-                          ) : (
-                            <Clock className="h-4 w-4 text-yellow-500" />
-                          )}
-                        </div>
-                        <div className="flex-1">
-                          <p className="text-sm">{log.message}</p>
-                          <div className="flex items-center gap-2 mt-1">
-                            <span className="text-xs text-muted-foreground capitalize">
-                              {log.trigger_type}
-                            </span>
-                            <span className="text-xs text-muted-foreground">
-                              {formatRelativeTime(log.created_at)}
-                            </span>
-                            {log.error_message && (
-                              <span className="text-xs text-destructive">
-                                {log.error_message}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                        <span className={`text-xs px-2 py-1 rounded ${
-                          log.status === "sent"
-                            ? "bg-bug text-bug-foreground"
-                            : log.status === "failed"
-                            ? "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300"
-                            : "bg-yellow-100 text-yellow-700 dark:bg-yellow-950 dark:text-yellow-300"
-                        }`}>
-                          {log.status}
-                        </span>
-                      </div>
-                    </CardContent>
-                  </Card>
-                ))
-              )}
-            </div>
-          )}
-        </>
-      )}
-
-      {/* Create Rule Modal */}
-      {showCreateRule && (
-        <div className="fixed inset-0 z-50 bg-background/80 backdrop-blur-sm">
-          <div className="fixed left-[50%] top-[50%] z-50 w-full max-w-md translate-x-[-50%] translate-y-[-50%] border bg-background shadow-lg sm:rounded-lg p-6">
-            <h2 className="text-lg font-semibold mb-4">Create Alert Rule</h2>
-            <div className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="ruleName">Name</Label>
-                <Input
-                  id="ruleName"
-                  placeholder="New errors alert"
-                  value={newRule.name}
-                  onChange={(e) => setNewRule({ ...newRule, name: e.target.value })}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label>Condition</Label>
-                <Select
-                  value={newRule.conditionType}
-                  onValueChange={(v) => setNewRule({ ...newRule, conditionType: v as AlertCondition["type"] })}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="new_issue">New Issue</SelectItem>
-                    <SelectItem value="monitor_down">Monitor Down</SelectItem>
-                    <SelectItem value="monitor_recovery">Monitor Recovery</SelectItem>
-                    <SelectItem value="server_cpu_high">Server CPU High</SelectItem>
-                    <SelectItem value="server_memory_high">Server Memory High</SelectItem>
-                    <SelectItem value="server_disk_high">Server Disk High</SelectItem>
-                    <SelectItem value="server_offline">Server Offline</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              {(newRule.conditionType === "server_cpu_high" || newRule.conditionType === "server_memory_high" || newRule.conditionType === "server_disk_high") && (
-                <div className="space-y-2">
-                  <Label>Threshold (%)</Label>
-                  <Input
-                    type="number"
-                    min={1}
-                    max={100}
-                    value={newRule.threshold}
-                    onChange={(e) => setNewRule({ ...newRule, threshold: Number(e.target.value) })}
-                  />
-                </div>
-              )}
-              {newRule.conditionType === "server_disk_high" && (
-                <div className="space-y-2">
-                  <Label>Mount Point (optional)</Label>
-                  <Input
-                    placeholder="/ (leave empty for any)"
-                    value={newRule.mount}
-                    onChange={(e) => setNewRule({ ...newRule, mount: e.target.value })}
-                  />
-                </div>
-              )}
-              {newRule.conditionType === "server_offline" && (
-                <div className="space-y-2">
-                  <Label>Missing Duration (minutes)</Label>
-                  <Input
-                    type="number"
-                    min={1}
-                    value={newRule.missingMinutes}
-                    onChange={(e) => setNewRule({ ...newRule, missingMinutes: Number(e.target.value) })}
-                  />
-                </div>
-              )}
-              {newRule.conditionType === "new_issue" && (
-                <div className="space-y-2">
-                  <Label>Issue Level (optional)</Label>
-                  <Select
-                    value={newRule.level || "all"}
-                    onValueChange={(v) => setNewRule({ ...newRule, level: v === "all" ? "" : v })}
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">All levels</SelectItem>
-                      <SelectItem value="error">Error only</SelectItem>
-                      <SelectItem value="fatal">Fatal only</SelectItem>
-                      <SelectItem value="warning">Warning only</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              )}
-              <div className="space-y-2">
-                <Label>Notification Channels</Label>
-                <div className="space-y-2">
-                  {channels.map((channel) => (
-                    <label key={channel.id} className="flex items-center gap-2">
-                      <input
-                        type="checkbox"
-                        checked={newRule.channelIds.includes(channel.id)}
-                        onChange={(e) => {
-                          if (e.target.checked) {
-                            setNewRule({ ...newRule, channelIds: [...newRule.channelIds, channel.id] });
-                          } else {
-                            setNewRule({ ...newRule, channelIds: newRule.channelIds.filter((id) => id !== channel.id) });
-                          }
-                        }}
-                        className="rounded"
-                      />
-                      <span className="text-sm">{channel.name}</span>
-                      <span className="text-xs text-muted-foreground capitalize">({channel.channel_type})</span>
-                    </label>
-                  ))}
-                </div>
-              </div>
-            </div>
-            <div className="flex justify-end gap-2 mt-6">
-              <Button variant="outline" onClick={() => setShowCreateRule(false)}>
-                Cancel
-              </Button>
-              <Button
-                onClick={handleCreateRule}
-                disabled={isCreating || !newRule.name || newRule.channelIds.length === 0}
-              >
-                {isCreating && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                Create Rule
-              </Button>
-            </div>
+        {isLoading ? (
+          <div className="mt-4 space-y-4">
+            <SkeletonCard />
+            <SkeletonCard />
+            <SkeletonCard />
           </div>
-        </div>
-      )}
+        ) : (
+          <>
+            {/* Alert Rules Tab */}
+            <TabsContent value="rules">
+              <div className="space-y-4">
+                <div className="flex justify-end">
+                  <Button variant="success" onClick={openCreateRule} disabled={!selectedProject || channels.length === 0}>
+                    <Plus className="mr-2 h-4 w-4" />
+                    Create Alert Rule
+                  </Button>
+                </div>
 
-      {/* Create Channel Modal */}
-      {showCreateChannel && (
-        <div className="fixed inset-0 z-50 bg-background/80 backdrop-blur-sm">
-          <div className="fixed left-[50%] top-[50%] z-50 w-full max-w-md translate-x-[-50%] translate-y-[-50%] border bg-background shadow-lg sm:rounded-lg p-6">
-            <h2 className="text-lg font-semibold mb-4">Add Notification Channel</h2>
-            <div className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="channelName">Name</Label>
-                <Input
-                  id="channelName"
-                  placeholder="Team email"
-                  value={newChannel.name}
-                  onChange={(e) => setNewChannel({ ...newChannel, name: e.target.value })}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label>Type</Label>
-                <Select
-                  value={newChannel.type}
-                  onValueChange={(v) => setNewChannel({ ...newChannel, type: v as "email" | "webhook" | "slack" })}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="email">Email</SelectItem>
-                    <SelectItem value="webhook" disabled={!canUseWebhooks}>
-                      <div className="flex items-center gap-2">
-                        <span>Webhook</span>
-                        {!canUseWebhooks && <ProBadge feature="webhooks" showLabel={false} />}
+                {channels.length === 0 && (
+                  <Card>
+                    <CardContent className="py-8 text-center text-muted-foreground">
+                      Create a notification channel first before creating alert rules.
+                    </CardContent>
+                  </Card>
+                )}
+
+                {rules.length === 0 && channels.length > 0 ? (
+                  <Card>
+                    <CardContent className="flex flex-col items-center justify-center py-16">
+                      <div className="rounded-full bg-muted p-4">
+                        <Bell className="h-8 w-8 text-muted-foreground" />
                       </div>
-                    </SelectItem>
-                    <SelectItem value="slack" disabled={!canUseWebhooks}>
-                      <div className="flex items-center gap-2">
-                        <span>Slack</span>
-                        {!canUseWebhooks && <ProBadge feature="slack" showLabel={false} />}
-                      </div>
-                    </SelectItem>
-                  </SelectContent>
-                </Select>
-                {!canUseWebhooks && (
-                  <p className="text-xs text-muted-foreground">
-                    Webhook and Slack channels require Pro plan.{" "}
-                    <UpgradeLink feature="webhooks">Upgrade now</UpgradeLink>
-                  </p>
+                      <h3 className="mt-4 text-lg font-medium">No alert rules</h3>
+                      <p className="mt-2 text-center text-muted-foreground">
+                        Create alert rules to get notified about issues and monitor events.
+                      </p>
+                    </CardContent>
+                  </Card>
+                ) : (
+                  rules.map((rule) => (
+                    <Card key={rule.id}>
+                      <CardContent className="p-4">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-4">
+                            <div className={`rounded-full p-2 ${rule.is_active ? "bg-bug/10" : "bg-gray-100 dark:bg-gray-800"}`}>
+                              <Bell className={`h-4 w-4 ${rule.is_active ? "text-bug" : "text-gray-500"}`} />
+                            </div>
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <h3 className="font-medium">{rule.name}</h3>
+                                {!rule.is_active && (
+                                  <span className="text-xs bg-yellow-100 text-yellow-700 dark:bg-yellow-950 dark:text-yellow-300 px-2 py-0.5 rounded">
+                                    Paused
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-sm text-muted-foreground">
+                                {getConditionDescription(rule.condition)}
+                              </p>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm text-muted-foreground">
+                              {rule.channel_ids.length} channel{rule.channel_ids.length !== 1 ? "s" : ""}
+                            </span>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => openEditRule(rule)}
+                            >
+                              <Pencil className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => handleToggleRule(rule)}
+                            >
+                              <Power className={`h-4 w-4 ${rule.is_active ? "text-bug" : ""}`} />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => setDeleteRuleTarget(rule)}
+                            >
+                              <Trash2 className="h-4 w-4 text-destructive" />
+                            </Button>
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ))
                 )}
               </div>
-              {newChannel.type === "email" && (
-                <div className="space-y-2">
-                  <Label htmlFor="emails">Recipients (comma-separated)</Label>
-                  <Input
-                    id="emails"
-                    placeholder="team@example.com, alerts@example.com"
-                    value={newChannel.emails}
-                    onChange={(e) => setNewChannel({ ...newChannel, emails: e.target.value })}
-                  />
-                </div>
-              )}
-              {newChannel.type === "webhook" && (
-                <div className="space-y-2">
-                  <Label htmlFor="webhookUrl">Webhook URL</Label>
-                  <Input
-                    id="webhookUrl"
-                    placeholder="https://api.example.com/webhook"
-                    value={newChannel.webhookUrl}
-                    onChange={(e) => setNewChannel({ ...newChannel, webhookUrl: e.target.value })}
-                  />
-                </div>
-              )}
-              {newChannel.type === "slack" && (
-                <div className="space-y-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="slackUrl">Slack Webhook URL</Label>
-                    <Input
-                      id="slackUrl"
-                      placeholder="https://hooks.slack.com/services/..."
-                      value={newChannel.slackUrl}
-                      onChange={(e) => setNewChannel({ ...newChannel, slackUrl: e.target.value })}
-                    />
-                  </div>
+            </TabsContent>
 
-                  {/* Message Template Builder */}
-                  <div className="space-y-3 pt-3 border-t">
-                    <Label>Message Blocks</Label>
-                    <p className="text-xs text-muted-foreground">
-                      Customize which blocks appear in your Slack notifications.
-                    </p>
-                    <div className="space-y-2">
-                      {slackTemplate.blocks.map((block, index) => (
-                        <div
-                          key={block.block_type}
-                          className="flex items-center justify-between p-2 rounded border bg-card"
-                        >
-                          <span className="text-sm capitalize">
-                            {block.block_type === "header" && "Header (Title with severity)"}
-                            {block.block_type === "message" && "Message (Error details)"}
-                            {block.block_type === "context" && "Context (Project, severity, time)"}
-                            {block.block_type === "stats" && "Stats (Event count, users)"}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const newBlocks = [...slackTemplate.blocks];
-                              newBlocks[index] = { ...block, enabled: !block.enabled };
-                              setSlackTemplate({ ...slackTemplate, blocks: newBlocks });
-                            }}
-                            className={`px-2 py-1 text-xs rounded ${
-                              block.enabled
-                                ? "bg-primary text-primary-foreground"
-                                : "bg-muted text-muted-foreground"
-                            }`}
-                          >
-                            {block.enabled ? "On" : "Off"}
-                          </button>
+            {/* Channels Tab */}
+            <TabsContent value="channels">
+              <div className="space-y-4">
+                <div className="flex justify-end">
+                  <Button variant="success" onClick={openCreateChannel} disabled={!selectedProject}>
+                    <Plus className="mr-2 h-4 w-4" />
+                    Add Channel
+                  </Button>
+                </div>
+
+                {channels.length === 0 ? (
+                  <Card>
+                    <CardContent className="flex flex-col items-center justify-center py-16">
+                      <div className="rounded-full bg-muted p-4">
+                        <Mail className="h-8 w-8 text-muted-foreground" />
+                      </div>
+                      <h3 className="mt-4 text-lg font-medium">No notification channels</h3>
+                      <p className="mt-2 text-center text-muted-foreground">
+                        Add email, webhook, or Slack channels to receive alerts.
+                      </p>
+                    </CardContent>
+                  </Card>
+                ) : (
+                  channels.map((channel) => (
+                    <Card key={channel.id}>
+                      <CardContent className="p-4">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-4">
+                            <div className={`rounded-full p-2 ${channel.is_active ? "bg-primary/10" : "bg-gray-100 dark:bg-gray-800"}`}>
+                              {getChannelIcon(channel.channel_type)}
+                            </div>
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <h3 className="font-medium">{channel.name}</h3>
+                                <span className="text-xs bg-muted px-2 py-0.5 rounded capitalize">
+                                  {channel.channel_type}
+                                </span>
+                                {!channel.is_active && (
+                                  <span className="text-xs bg-yellow-100 text-yellow-700 dark:bg-yellow-950 dark:text-yellow-300 px-2 py-0.5 rounded">
+                                    Disabled
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-sm text-muted-foreground">
+                                Created {formatRelativeTime(channel.created_at)}
+                              </p>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handleTestChannel(channel.id)}
+                            >
+                              <Send className="mr-2 h-3 w-3" />
+                              Test
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => openEditChannel(channel)}
+                            >
+                              <Pencil className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => handleToggleChannel(channel)}
+                            >
+                              <Power className={`h-4 w-4 ${channel.is_active ? "text-bug" : ""}`} />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => setDeleteChannelTarget(channel)}
+                            >
+                              <Trash2 className="h-4 w-4 text-destructive" />
+                            </Button>
+                          </div>
                         </div>
-                      ))}
-                    </div>
-                  </div>
+                      </CardContent>
+                    </Card>
+                  ))
+                )}
+              </div>
+            </TabsContent>
 
-                  {/* Action Buttons */}
-                  <div className="space-y-3 pt-3 border-t">
-                    <Label>Action Buttons</Label>
-                    <p className="text-xs text-muted-foreground">
-                      Add quick action buttons to your Slack messages.
-                    </p>
-                    <div className="flex flex-wrap gap-2">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const hasViewIssue = slackTemplate.actions.some(
-                            (a) => a.action_type === "view_issue"
-                          );
-                          if (hasViewIssue) {
-                            setSlackTemplate({
-                              ...slackTemplate,
-                              actions: slackTemplate.actions.filter(
-                                (a) => a.action_type !== "view_issue"
-                              ),
-                            });
-                          } else {
-                            setSlackTemplate({
-                              ...slackTemplate,
-                              actions: [
-                                ...slackTemplate.actions,
-                                { action_type: "view_issue", label: "View Issue", style: "primary" },
-                              ],
-                            });
-                          }
-                        }}
-                        className={`px-3 py-1.5 text-xs rounded border ${
-                          slackTemplate.actions.some((a) => a.action_type === "view_issue")
-                            ? "bg-primary text-primary-foreground border-primary"
-                            : "bg-card border-muted-foreground/20"
-                        }`}
-                      >
-                        View Issue
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const hasResolve = slackTemplate.actions.some(
-                            (a) => a.action_type === "resolve"
-                          );
-                          if (hasResolve) {
-                            setSlackTemplate({
-                              ...slackTemplate,
-                              actions: slackTemplate.actions.filter(
-                                (a) => a.action_type !== "resolve"
-                              ),
-                            });
-                          } else {
-                            setSlackTemplate({
-                              ...slackTemplate,
-                              actions: [
-                                ...slackTemplate.actions,
-                                { action_type: "resolve", label: "Resolve", style: "default" },
-                              ],
-                            });
-                          }
-                        }}
-                        className={`px-3 py-1.5 text-xs rounded border ${
-                          slackTemplate.actions.some((a) => a.action_type === "resolve")
-                            ? "bg-green-600 text-white border-green-600"
-                            : "bg-card border-muted-foreground/20"
-                        }`}
-                      >
-                        Resolve
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const hasMute = slackTemplate.actions.some(
-                            (a) => a.action_type === "mute"
-                          );
-                          if (hasMute) {
-                            setSlackTemplate({
-                              ...slackTemplate,
-                              actions: slackTemplate.actions.filter(
-                                (a) => a.action_type !== "mute"
-                              ),
-                            });
-                          } else {
-                            setSlackTemplate({
-                              ...slackTemplate,
-                              actions: [
-                                ...slackTemplate.actions,
-                                { action_type: "mute", label: "Mute", style: "default" },
-                              ],
-                            });
-                          }
-                        }}
-                        className={`px-3 py-1.5 text-xs rounded border ${
-                          slackTemplate.actions.some((a) => a.action_type === "mute")
-                            ? "bg-orange-600 text-white border-orange-600"
-                            : "bg-card border-muted-foreground/20"
-                        }`}
-                      >
-                        Mute
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              )}
+            {/* Logs Tab */}
+            <TabsContent value="logs">
+              <div className="space-y-4">
+                {logs.length === 0 ? (
+                  <Card>
+                    <CardContent className="flex flex-col items-center justify-center py-16">
+                      <div className="rounded-full bg-muted p-4">
+                        <Clock className="h-8 w-8 text-muted-foreground" />
+                      </div>
+                      <h3 className="mt-4 text-lg font-medium">No alert activity</h3>
+                      <p className="mt-2 text-center text-muted-foreground">
+                        Alert notifications will appear here when they are triggered.
+                      </p>
+                    </CardContent>
+                  </Card>
+                ) : (
+                  logs.map((log) => (
+                    <Card key={log.id}>
+                      <CardContent className="p-4">
+                        <div className="flex items-center gap-4">
+                          <div className={`rounded-full p-2 ${
+                            log.status === "sent"
+                              ? "bg-bug/10"
+                              : log.status === "failed"
+                              ? "bg-red-100 dark:bg-red-950"
+                              : "bg-yellow-100 dark:bg-yellow-950"
+                          }`}>
+                            {log.status === "sent" ? (
+                              <CheckCircle className="h-4 w-4 text-bug" />
+                            ) : log.status === "failed" ? (
+                              <XCircle className="h-4 w-4 text-red-500" />
+                            ) : (
+                              <Clock className="h-4 w-4 text-yellow-500" />
+                            )}
+                          </div>
+                          <div className="flex-1">
+                            <p className="text-sm">{log.message}</p>
+                            <div className="flex items-center gap-2 mt-1">
+                              <span className="text-xs text-muted-foreground capitalize">
+                                {log.trigger_type}
+                              </span>
+                              <span className="text-xs text-muted-foreground">
+                                {formatRelativeTime(log.created_at)}
+                              </span>
+                              {log.error_message && (
+                                <span className="text-xs text-destructive">
+                                  {log.error_message}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          <span className={`text-xs px-2 py-1 rounded ${
+                            log.status === "sent"
+                              ? "bg-bug text-bug-foreground"
+                              : log.status === "failed"
+                              ? "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300"
+                              : "bg-yellow-100 text-yellow-700 dark:bg-yellow-950 dark:text-yellow-300"
+                          }`}>
+                            {log.status}
+                          </span>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ))
+                )}
+              </div>
+            </TabsContent>
+          </>
+        )}
+      </Tabs>
+
+      {/* Rule Dialog (Create / Edit) */}
+      <Dialog open={showRuleDialog} onOpenChange={(open) => { if (!open) { setShowRuleDialog(false); setEditingRule(null); } }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>{editingRule ? "Edit Alert Rule" : "Create Alert Rule"}</DialogTitle>
+            <DialogDescription>
+              {editingRule
+                ? "Update the alert rule configuration below."
+                : "Configure a new alert rule to get notified about events."}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="ruleName">Name</Label>
+              <Input
+                id="ruleName"
+                placeholder="New errors alert"
+                value={ruleForm.name}
+                onChange={(e) => setRuleForm({ ...ruleForm, name: e.target.value })}
+              />
             </div>
-            <div className="flex justify-end gap-2 mt-6">
-              <Button variant="outline" onClick={() => setShowCreateChannel(false)}>
-                Cancel
-              </Button>
-              <Button
-                onClick={handleCreateChannel}
-                disabled={isCreating || !newChannel.name}
+            <div className="space-y-2">
+              <Label>Condition</Label>
+              <Select
+                value={ruleForm.conditionType}
+                onValueChange={(v) => setRuleForm({ ...ruleForm, conditionType: v as AlertCondition["type"] })}
               >
-                {isCreating && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                Add Channel
-              </Button>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="new_issue">New Issue</SelectItem>
+                  <SelectItem value="monitor_down">Monitor Down</SelectItem>
+                  <SelectItem value="monitor_recovery">Monitor Recovery</SelectItem>
+                  <SelectItem value="server_cpu_high">Server CPU High</SelectItem>
+                  <SelectItem value="server_memory_high">Server Memory High</SelectItem>
+                  <SelectItem value="server_disk_high">Server Disk High</SelectItem>
+                  <SelectItem value="server_offline">Server Offline</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            {(ruleForm.conditionType === "server_cpu_high" || ruleForm.conditionType === "server_memory_high" || ruleForm.conditionType === "server_disk_high") && (
+              <div className="space-y-2">
+                <Label>Threshold (%)</Label>
+                <Input
+                  type="number"
+                  min={1}
+                  max={100}
+                  value={ruleForm.threshold}
+                  onChange={(e) => setRuleForm({ ...ruleForm, threshold: Number(e.target.value) })}
+                />
+              </div>
+            )}
+            {ruleForm.conditionType === "server_disk_high" && (
+              <div className="space-y-2">
+                <Label>Mount Point (optional)</Label>
+                <Input
+                  placeholder="/ (leave empty for any)"
+                  value={ruleForm.mount}
+                  onChange={(e) => setRuleForm({ ...ruleForm, mount: e.target.value })}
+                />
+              </div>
+            )}
+            {ruleForm.conditionType === "server_offline" && (
+              <div className="space-y-2">
+                <Label>Missing Duration (minutes)</Label>
+                <Input
+                  type="number"
+                  min={1}
+                  value={ruleForm.missingMinutes}
+                  onChange={(e) => setRuleForm({ ...ruleForm, missingMinutes: Number(e.target.value) })}
+                />
+              </div>
+            )}
+            {ruleForm.conditionType === "new_issue" && (
+              <div className="space-y-2">
+                <Label>Issue Level (optional)</Label>
+                <Select
+                  value={ruleForm.level || "all"}
+                  onValueChange={(v) => setRuleForm({ ...ruleForm, level: v === "all" ? "" : v })}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All levels</SelectItem>
+                    <SelectItem value="error">Error only</SelectItem>
+                    <SelectItem value="fatal">Fatal only</SelectItem>
+                    <SelectItem value="warning">Warning only</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+            <div className="space-y-2">
+              <Label>Notification Channels</Label>
+              <div className="space-y-2">
+                {channels.map((channel) => (
+                  <label key={channel.id} className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={ruleForm.channelIds.includes(channel.id)}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setRuleForm({ ...ruleForm, channelIds: [...ruleForm.channelIds, channel.id] });
+                        } else {
+                          setRuleForm({ ...ruleForm, channelIds: ruleForm.channelIds.filter((id) => id !== channel.id) });
+                        }
+                      }}
+                      className="rounded"
+                    />
+                    <span className="text-sm">{channel.name}</span>
+                    <span className="text-xs text-muted-foreground capitalize">({channel.channel_type})</span>
+                  </label>
+                ))}
+              </div>
             </div>
           </div>
-        </div>
-      )}
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button variant="outline" onClick={() => { setShowRuleDialog(false); setEditingRule(null); }}>
+              Cancel
+            </Button>
+            <Button
+              onClick={handleSaveRule}
+              disabled={isSaving || !ruleForm.name || ruleForm.channelIds.length === 0}
+            >
+              {isSaving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              {editingRule ? "Save Changes" : "Create Rule"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Channel Dialog (Create / Edit) */}
+      <Dialog open={showChannelDialog} onOpenChange={(open) => { if (!open) { setShowChannelDialog(false); setEditingChannel(null); } }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>{editingChannel ? "Edit Notification Channel" : "Add Notification Channel"}</DialogTitle>
+            <DialogDescription>
+              {editingChannel
+                ? "Update the notification channel configuration below."
+                : "Add a new notification channel to receive alerts."}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="channelName">Name</Label>
+              <Input
+                id="channelName"
+                placeholder="Team email"
+                value={channelForm.name}
+                onChange={(e) => setChannelForm({ ...channelForm, name: e.target.value })}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Type</Label>
+              <Select
+                value={channelForm.type}
+                onValueChange={(v) => setChannelForm({ ...channelForm, type: v as "email" | "webhook" | "slack" })}
+                disabled={!!editingChannel}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="email">Email</SelectItem>
+                  <SelectItem value="webhook" disabled={!canUseWebhooks}>
+                    <div className="flex items-center gap-2">
+                      <span>Webhook</span>
+                      {!canUseWebhooks && <ProBadge feature="webhooks" showLabel={false} />}
+                    </div>
+                  </SelectItem>
+                  <SelectItem value="slack" disabled={!canUseWebhooks}>
+                    <div className="flex items-center gap-2">
+                      <span>Slack</span>
+                      {!canUseWebhooks && <ProBadge feature="slack" showLabel={false} />}
+                    </div>
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+              {!canUseWebhooks && (
+                <p className="text-xs text-muted-foreground">
+                  Webhook and Slack channels require Pro plan.{" "}
+                  <UpgradeLink feature="webhooks">Upgrade now</UpgradeLink>
+                </p>
+              )}
+            </div>
+            {channelForm.type === "email" && (
+              <div className="space-y-2">
+                <Label htmlFor="emails">Recipients (comma-separated)</Label>
+                <Input
+                  id="emails"
+                  placeholder="team@example.com, alerts@example.com"
+                  value={channelForm.emails}
+                  onChange={(e) => setChannelForm({ ...channelForm, emails: e.target.value })}
+                />
+              </div>
+            )}
+            {channelForm.type === "webhook" && (
+              <div className="space-y-2">
+                <Label htmlFor="webhookUrl">Webhook URL</Label>
+                <Input
+                  id="webhookUrl"
+                  placeholder="https://api.example.com/webhook"
+                  value={channelForm.webhookUrl}
+                  onChange={(e) => setChannelForm({ ...channelForm, webhookUrl: e.target.value })}
+                />
+              </div>
+            )}
+            {channelForm.type === "slack" && (
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="slackUrl">Slack Webhook URL</Label>
+                  <Input
+                    id="slackUrl"
+                    placeholder="https://hooks.slack.com/services/..."
+                    value={channelForm.slackUrl}
+                    onChange={(e) => setChannelForm({ ...channelForm, slackUrl: e.target.value })}
+                  />
+                </div>
+
+                {/* Message Template Builder */}
+                <div className="space-y-3 pt-3 border-t">
+                  <Label>Message Blocks</Label>
+                  <p className="text-xs text-muted-foreground">
+                    Customize which blocks appear in your Slack notifications.
+                  </p>
+                  <div className="space-y-2">
+                    {slackTemplate.blocks.map((block, index) => (
+                      <div
+                        key={block.block_type}
+                        className="flex items-center justify-between p-2 rounded border bg-card"
+                      >
+                        <span className="text-sm capitalize">
+                          {block.block_type === "header" && "Header (Title with severity)"}
+                          {block.block_type === "message" && "Message (Error details)"}
+                          {block.block_type === "context" && "Context (Project, severity, time)"}
+                          {block.block_type === "stats" && "Stats (Event count, users)"}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const newBlocks = [...slackTemplate.blocks];
+                            newBlocks[index] = { ...block, enabled: !block.enabled };
+                            setSlackTemplate({ ...slackTemplate, blocks: newBlocks });
+                          }}
+                          className={`px-2 py-1 text-xs rounded ${
+                            block.enabled
+                              ? "bg-primary text-primary-foreground"
+                              : "bg-muted text-muted-foreground"
+                          }`}
+                        >
+                          {block.enabled ? "On" : "Off"}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Action Buttons */}
+                <div className="space-y-3 pt-3 border-t">
+                  <Label>Action Buttons</Label>
+                  <p className="text-xs text-muted-foreground">
+                    Add quick action buttons to your Slack messages.
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const hasViewIssue = slackTemplate.actions.some(
+                          (a) => a.action_type === "view_issue"
+                        );
+                        if (hasViewIssue) {
+                          setSlackTemplate({
+                            ...slackTemplate,
+                            actions: slackTemplate.actions.filter(
+                              (a) => a.action_type !== "view_issue"
+                            ),
+                          });
+                        } else {
+                          setSlackTemplate({
+                            ...slackTemplate,
+                            actions: [
+                              ...slackTemplate.actions,
+                              { action_type: "view_issue", label: "View Issue", style: "primary" },
+                            ],
+                          });
+                        }
+                      }}
+                      className={`px-3 py-1.5 text-xs rounded border ${
+                        slackTemplate.actions.some((a) => a.action_type === "view_issue")
+                          ? "bg-primary text-primary-foreground border-primary"
+                          : "bg-card border-muted-foreground/20"
+                      }`}
+                    >
+                      View Issue
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const hasResolve = slackTemplate.actions.some(
+                          (a) => a.action_type === "resolve"
+                        );
+                        if (hasResolve) {
+                          setSlackTemplate({
+                            ...slackTemplate,
+                            actions: slackTemplate.actions.filter(
+                              (a) => a.action_type !== "resolve"
+                            ),
+                          });
+                        } else {
+                          setSlackTemplate({
+                            ...slackTemplate,
+                            actions: [
+                              ...slackTemplate.actions,
+                              { action_type: "resolve", label: "Resolve", style: "default" },
+                            ],
+                          });
+                        }
+                      }}
+                      className={`px-3 py-1.5 text-xs rounded border ${
+                        slackTemplate.actions.some((a) => a.action_type === "resolve")
+                          ? "bg-green-600 text-white border-green-600"
+                          : "bg-card border-muted-foreground/20"
+                      }`}
+                    >
+                      Resolve
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const hasMute = slackTemplate.actions.some(
+                          (a) => a.action_type === "mute"
+                        );
+                        if (hasMute) {
+                          setSlackTemplate({
+                            ...slackTemplate,
+                            actions: slackTemplate.actions.filter(
+                              (a) => a.action_type !== "mute"
+                            ),
+                          });
+                        } else {
+                          setSlackTemplate({
+                            ...slackTemplate,
+                            actions: [
+                              ...slackTemplate.actions,
+                              { action_type: "mute", label: "Mute", style: "default" },
+                            ],
+                          });
+                        }
+                      }}
+                      className={`px-3 py-1.5 text-xs rounded border ${
+                        slackTemplate.actions.some((a) => a.action_type === "mute")
+                          ? "bg-orange-600 text-white border-orange-600"
+                          : "bg-card border-muted-foreground/20"
+                      }`}
+                    >
+                      Mute
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button variant="outline" onClick={() => { setShowChannelDialog(false); setEditingChannel(null); }}>
+              Cancel
+            </Button>
+            <Button
+              onClick={handleSaveChannel}
+              disabled={isSaving || !channelForm.name}
+            >
+              {isSaving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              {editingChannel ? "Save Changes" : "Add Channel"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Confirm Delete Rule Dialog */}
+      <ConfirmDialog
+        open={!!deleteRuleTarget}
+        onOpenChange={(open) => { if (!open) setDeleteRuleTarget(null); }}
+        title="Delete Alert Rule"
+        description={`Are you sure you want to delete "${deleteRuleTarget?.name}"? This action cannot be undone.`}
+        confirmLabel="Delete Rule"
+        variant="destructive"
+        onConfirm={handleDeleteRule}
+        loading={isDeleting}
+      />
+
+      {/* Confirm Delete Channel Dialog */}
+      <ConfirmDialog
+        open={!!deleteChannelTarget}
+        onOpenChange={(open) => { if (!open) setDeleteChannelTarget(null); }}
+        title="Delete Notification Channel"
+        description={`Are you sure you want to delete "${deleteChannelTarget?.name}"? Any alert rules using this channel will no longer send notifications through it.`}
+        confirmLabel="Delete Channel"
+        variant="destructive"
+        onConfirm={handleDeleteChannel}
+        loading={isDeleting}
+      />
     </div>
   );
 }

@@ -10,6 +10,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   FolderOpen,
   Plus,
@@ -18,12 +19,15 @@ import {
   Clock,
   Copy,
   Check,
-  Loader2,
   AlertCircle,
   ArrowRight,
+  Flame,
+  Users,
+  Activity,
 } from "lucide-react";
-import { projectsApi, type Project, type Platform, type Framework } from "@/lib/api";
+import { projectsApi, overviewApi, type Project, type Platform, type Framework, type ProjectStatsWithInfo } from "@/lib/api";
 import { getPlatformConfig, getFrameworkConfig } from "@/lib/sdk-config";
+import { toast } from "sonner";
 
 function formatRelativeTime(dateString: string): string {
   const date = new Date(dateString);
@@ -40,11 +44,19 @@ function formatRelativeTime(dateString: string): string {
   return date.toLocaleDateString();
 }
 
+function getHealthColor(stats: ProjectStatsWithInfo | undefined): { dot: string; label: string } {
+  if (!stats) return { dot: "bg-gray-400", label: "No data" };
+  if (stats.critical_count > 0) return { dot: "bg-red-500", label: "Critical" };
+  if (stats.unresolved_count > 5) return { dot: "bg-yellow-500", label: "Needs attention" };
+  return { dot: "bg-green-500", label: "Healthy" };
+}
+
 export default function ProjectsPage() {
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [projectStats, setProjectStats] = useState<Map<string, ProjectStatsWithInfo>>(new Map());
 
   useEffect(() => {
     async function fetchProjects() {
@@ -52,11 +64,26 @@ export default function ProjectsPage() {
       setError(null);
 
       try {
-        const response = await projectsApi.list();
-        setProjects(response.data);
+        const [projectsRes, statsRes] = await Promise.all([
+          projectsApi.list(),
+          overviewApi.getStatsByProject().catch(() => null),
+        ]);
+        setProjects(projectsRes.data);
+
+        // Build stats map
+        if (statsRes?.data) {
+          const statsMap = new Map<string, ProjectStatsWithInfo>();
+          for (const stat of statsRes.data) {
+            statsMap.set(stat.project_id, stat);
+          }
+          setProjectStats(statsMap);
+        }
       } catch (err) {
         console.error("Failed to fetch projects:", err);
         setError(err instanceof Error ? err.message : "Failed to load projects");
+        toast.error("Failed to load projects", {
+          description: err instanceof Error ? err.message : "Please try again",
+        });
       } finally {
         setIsLoading(false);
       }
@@ -68,6 +95,7 @@ export default function ProjectsPage() {
   function copyApiKey(id: string, apiKey: string) {
     navigator.clipboard.writeText(apiKey);
     setCopiedId(id);
+    toast.success("API key copied");
     setTimeout(() => setCopiedId(null), 2000);
   }
 
@@ -87,15 +115,49 @@ export default function ProjectsPage() {
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center min-h-[400px]">
-        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+      <div className="space-y-6 animate-fade-in-up">
+        <div className="flex items-center justify-between">
+          <div className="space-y-2">
+            <Skeleton className="h-8 w-32" />
+            <Skeleton className="h-4 w-56" />
+          </div>
+          <Skeleton className="h-10 w-32 rounded-md" />
+        </div>
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <Card key={i}>
+              <CardHeader className="pb-2">
+                <div className="flex items-start justify-between">
+                  <div className="flex items-center gap-2">
+                    <Skeleton className="h-10 w-10 rounded-md" />
+                    <div className="space-y-1.5">
+                      <Skeleton className="h-5 w-28" />
+                      <Skeleton className="h-3 w-20" />
+                    </div>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="flex gap-4">
+                  <Skeleton className="h-4 w-16" />
+                  <Skeleton className="h-4 w-20" />
+                </div>
+                <Skeleton className="h-8 w-full rounded-md" />
+                <div className="flex gap-2">
+                  <Skeleton className="h-8 flex-1 rounded-md" />
+                  <Skeleton className="h-8 w-20 rounded-md" />
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
       </div>
     );
   }
 
   if (error) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-[400px] space-y-4">
+      <div className="flex flex-col items-center justify-center min-h-[400px] space-y-4 animate-fade-in-up">
         <AlertCircle className="h-12 w-12 text-destructive" />
         <h2 className="text-lg font-medium">Failed to load projects</h2>
         <p className="text-muted-foreground">{error}</p>
@@ -128,17 +190,23 @@ export default function ProjectsPage() {
           const badge = getProjectBadge(project);
           const needsOnboarding =
             !project.onboarding_completed_at && project.platform;
+          const stats = projectStats.get(project.id);
+          const health = getHealthColor(stats);
 
           return (
             <Card key={project.id} className="relative">
               <CardHeader className="pb-2">
                 <div className="flex items-start justify-between">
                   <div className="flex items-center gap-2">
-                    <div className="rounded-md bg-primary/10 p-2">
+                    <div className="rounded-md bg-primary/10 p-2 relative">
                       <FolderOpen className="h-4 w-4 text-primary" />
                     </div>
                     <div>
-                      <CardTitle className="text-base">{project.name}</CardTitle>
+                      <div className="flex items-center gap-2">
+                        <CardTitle className="text-base">{project.name}</CardTitle>
+                        {/* Health indicator dot */}
+                        <span className={`h-2 w-2 rounded-full ${health.dot}`} title={health.label} />
+                      </div>
                       <CardDescription className="text-xs">
                         {project.slug}
                       </CardDescription>
@@ -177,16 +245,36 @@ export default function ProjectsPage() {
                   </Link>
                 )}
 
-                {/* Stats */}
+                {/* Real Stats */}
                 <div className="flex items-center gap-4 text-sm">
                   <div className="flex items-center gap-1 text-muted-foreground">
                     <Bug className="h-3 w-3" />
-                    <span>0 issues</span>
+                    <span>{stats?.unresolved_count ?? 0} issues</span>
                   </div>
-                  <div className="flex items-center gap-1 text-muted-foreground">
-                    <Clock className="h-3 w-3" />
-                    <span>{formatRelativeTime(project.created_at)}</span>
-                  </div>
+                  {stats && stats.critical_count > 0 && (
+                    <div className="flex items-center gap-1 text-red-500">
+                      <Flame className="h-3 w-3" />
+                      <span>{stats.critical_count} critical</span>
+                    </div>
+                  )}
+                  {stats && stats.total_events > 0 && (
+                    <div className="flex items-center gap-1 text-muted-foreground">
+                      <Activity className="h-3 w-3" />
+                      <span>{stats.total_events.toLocaleString()}</span>
+                    </div>
+                  )}
+                  {stats && stats.total_users > 0 && (
+                    <div className="flex items-center gap-1 text-muted-foreground">
+                      <Users className="h-3 w-3" />
+                      <span>{stats.total_users}</span>
+                    </div>
+                  )}
+                  {!stats && (
+                    <div className="flex items-center gap-1 text-muted-foreground">
+                      <Clock className="h-3 w-3" />
+                      <span>{formatRelativeTime(project.created_at)}</span>
+                    </div>
+                  )}
                 </div>
 
                 {/* API Key */}
