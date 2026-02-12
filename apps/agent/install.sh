@@ -229,7 +229,7 @@ echo "  Agent: $AGENT_SCRIPT"
 
 echo "[4/5] Setting up scheduled execution..."
 
-if command -v systemctl &>/dev/null && systemctl is-system-running &>/dev/null 2>&1; then
+if command -v systemctl &>/dev/null && systemctl --version &>/dev/null 2>&1; then
     # systemd service
     cat > /etc/systemd/system/bugwatch-agent.service <<EOF
 [Unit]
@@ -263,7 +263,7 @@ EOF
 else
     # Cron fallback
     CRON_ENTRY="* * * * * ${AGENT_SCRIPT} >/dev/null 2>&1"
-    (crontab -l 2>/dev/null | grep -v "bugwatch"; echo "$CRON_ENTRY") | crontab -
+    ( (crontab -l 2>/dev/null || true) | grep -v "bugwatch" || true; echo "$CRON_ENTRY") | crontab -
     echo "  Cron job installed (every minute)"
 fi
 
