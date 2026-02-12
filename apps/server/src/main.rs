@@ -1,8 +1,9 @@
 use anyhow::Result;
 use axum::{routing::get, Router};
+use axum::response::{IntoResponse, Response};
 use std::sync::Arc;
 use tokio::net::TcpListener;
-use axum::http::{header, HeaderName, HeaderValue, Method};
+use axum::http::{header, HeaderName, HeaderValue, Method, StatusCode};
 use tower_http::{
     cors::{Any, CorsLayer},
     trace::TraceLayer,
@@ -224,6 +225,10 @@ fn create_app(state: AppState) -> Router {
 
     Router::new()
         .route("/health", get(health_check))
+        // Agent install scripts (served for install.bugwatch.dev)
+        .route("/install.sh", get(serve_install_script))
+        .route("/agent/install.sh", get(serve_install_script))
+        .route("/agent/agent.sh", get(serve_agent_script))
         .nest("/api/v1", api::router())
         .with_state(state)
         .layer(TraceLayer::new_for_http())
@@ -232,6 +237,22 @@ fn create_app(state: AppState) -> Router {
 
 async fn health_check() -> &'static str {
     "OK"
+}
+
+async fn serve_install_script() -> Response {
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+        include_str!("../../../apps/agent/install.sh"),
+    ).into_response()
+}
+
+async fn serve_agent_script() -> Response {
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+        include_str!("../../../apps/agent/agent.sh"),
+    ).into_response()
 }
 
 async fn shutdown_signal() {

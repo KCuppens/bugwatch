@@ -15,6 +15,9 @@ COPY apps/server/Cargo.toml apps/server/Cargo.lock* ./
 # Copy migrations early (needed for include_str! at compile time)
 COPY apps/server/migrations ./migrations
 
+# Copy agent scripts (needed for include_str! at compile time)
+COPY apps/agent /apps/agent
+
 # Create dummy src for dependency caching
 RUN mkdir src && echo "fn main() {}" > src/main.rs
 
