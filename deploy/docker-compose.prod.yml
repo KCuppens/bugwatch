@@ -56,6 +56,9 @@ services:
       - FROM_EMAIL=${FROM_EMAIL:-}
       - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID:-}
       - GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET:-}
+      - BUGWATCH_ENABLED=${BUGWATCH_ENABLED:-false}
+      - BUGWATCH_API_KEY=${BUGWATCH_API_KEY:-}
+      - BUGWATCH_ENDPOINT=${BUGWATCH_ENDPOINT:-}
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:3000/health", "-o", "/dev/null"]
       interval: 30s

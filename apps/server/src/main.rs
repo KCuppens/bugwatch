@@ -6,8 +6,9 @@ use tokio::net::TcpListener;
 use axum::http::{header, HeaderName, HeaderValue, Method, StatusCode};
 use tower_http::{
     cors::{Any, CorsLayer},
-    trace::TraceLayer,
+    trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer},
 };
+use tracing::Level;
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -231,7 +232,11 @@ fn create_app(state: AppState) -> Router {
         .route("/agent/agent.sh", get(serve_agent_script))
         .nest("/api/v1", api::router())
         .with_state(state)
-        .layer(TraceLayer::new_for_http())
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(DefaultMakeSpan::new().level(Level::INFO))
+                .on_response(DefaultOnResponse::new().level(Level::INFO)),
+        )
         .layer(cors)
 }
 
