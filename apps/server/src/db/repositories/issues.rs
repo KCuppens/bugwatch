@@ -553,8 +553,8 @@ impl IssueRepository {
             SELECT
                 project_id,
                 COUNT(*) FILTER (WHERE status = 'unresolved') as unresolved_count,
-                COALESCE(SUM(count), 0) as total_events,
-                COALESCE(SUM(user_count), 0) as total_users,
+                COALESCE(SUM(count)::BIGINT, 0) as total_events,
+                COALESCE(SUM(user_count)::BIGINT, 0) as total_users,
                 COUNT(*) FILTER (WHERE status = 'unresolved' AND (level = 'fatal' OR level = 'error')) as critical_count
             FROM issues
             WHERE project_id IN ({})

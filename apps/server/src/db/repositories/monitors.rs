@@ -289,7 +289,7 @@ impl MonitorCheckRepository {
             r#"
             SELECT
                 COUNT(*) as total,
-                COALESCE(SUM(CASE WHEN status = 'up' THEN 1 ELSE 0 END), 0) as up_count,
+                COALESCE(SUM(CASE WHEN status = 'up' THEN 1 ELSE 0 END)::BIGINT, 0) as up_count,
                 AVG(response_time_ms::double precision) as avg_response
             FROM monitor_checks
             WHERE monitor_id = $1
