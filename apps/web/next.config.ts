@@ -5,6 +5,11 @@ const nextConfig: NextConfig = {
   reactStrictMode: true,
   transpilePackages: ["@bugwatch/shared", "@bugwatch/nextjs", "@bugwatch/core", "@bugwatch/node"],
   output: "standalone",
+  logging: {
+    fetches: {
+      fullUrl: true,
+    },
+  },
 };
 
 export default withBugwatch({
