@@ -3,9 +3,11 @@ FROM node:20-alpine AS builder
 
 WORKDIR /app
 
-# Build argument for API URL (baked into frontend at build time)
+# Build arguments baked into frontend at build time
 ARG NEXT_PUBLIC_API_URL=http://localhost:3000
+ARG NEXT_PUBLIC_BUGWATCH_API_KEY
 ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+ENV NEXT_PUBLIC_BUGWATCH_API_KEY=$NEXT_PUBLIC_BUGWATCH_API_KEY
 
 # Copy web app package.json only (standalone, not as workspace)
 COPY apps/web/package.json ./
@@ -23,8 +25,9 @@ COPY apps/web/next.config.ts ./
 COPY apps/web/next-env.d.ts ./
 COPY tsconfig.base.json /tsconfig.base.json
 
-# Create .env.production with the build arg so Next.js picks it up
-RUN echo "NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}" > .env.production
+# Create .env.production with build args so Next.js picks them up
+RUN echo "NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}" > .env.production && \
+    if [ -n "$NEXT_PUBLIC_BUGWATCH_API_KEY" ]; then echo "NEXT_PUBLIC_BUGWATCH_API_KEY=${NEXT_PUBLIC_BUGWATCH_API_KEY}" >> .env.production; fi
 
 # Build the application
 RUN npm run build

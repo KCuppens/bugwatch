@@ -51,6 +51,7 @@ services:
       args:
         # NEXT_PUBLIC_ vars must be set at build time for Next.js
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:3000}
+        NEXT_PUBLIC_BUGWATCH_API_KEY: ${NEXT_PUBLIC_BUGWATCH_API_KEY:-}
     ports:
       - "3001:3001"
     environment:
