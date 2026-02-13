@@ -360,6 +360,32 @@ function setupFetchInstrumentation(options: ClientOptions): () => void {
 
       // Capture 4xx/5xx responses as errors (exclude 401/403 — expected auth flow)
       if (response.status >= 400 && response.status !== 401 && response.status !== 403) {
+        // Clone response to read body without consuming the original
+        let responseBody = '';
+        try {
+          responseBody = await response.clone().text();
+          if (responseBody.length > 2000) {
+            responseBody = responseBody.substring(0, 2000) + '...(truncated)';
+          }
+        } catch {
+          // Ignore body read errors
+        }
+
+        // Capture request body if present
+        let requestBody = '';
+        if (init?.body) {
+          try {
+            requestBody = typeof init.body === 'string'
+              ? init.body
+              : JSON.stringify(init.body);
+            if (requestBody.length > 2000) {
+              requestBody = requestBody.substring(0, 2000) + '...(truncated)';
+            }
+          } catch {
+            // Ignore serialization errors
+          }
+        }
+
         const error = new Error(`HTTP ${response.status}: ${method.toUpperCase()} ${url}`);
         error.name = "HttpError";
         captureException(error, {
@@ -369,6 +395,11 @@ function setupFetchInstrumentation(options: ClientOptions): () => void {
             "http.method": method.toUpperCase(),
             "http.status_code": String(response.status),
             "http.url": url,
+          },
+          extra: {
+            request_body: requestBody || undefined,
+            response_body: responseBody || undefined,
+            duration_ms: duration,
           },
         });
       }

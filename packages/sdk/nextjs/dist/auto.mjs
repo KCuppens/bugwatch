@@ -420,6 +420,24 @@ function setupFetchInstrumentation(options) {
         }
       });
       if (response.status >= 400 && response.status !== 401 && response.status !== 403) {
+        let responseBody = "";
+        try {
+          responseBody = await response.clone().text();
+          if (responseBody.length > 2e3) {
+            responseBody = responseBody.substring(0, 2e3) + "...(truncated)";
+          }
+        } catch {
+        }
+        let requestBody = "";
+        if (init2?.body) {
+          try {
+            requestBody = typeof init2.body === "string" ? init2.body : JSON.stringify(init2.body);
+            if (requestBody.length > 2e3) {
+              requestBody = requestBody.substring(0, 2e3) + "...(truncated)";
+            }
+          } catch {
+          }
+        }
         const error = new Error(`HTTP ${response.status}: ${method.toUpperCase()} ${url}`);
         error.name = "HttpError";
         captureException(error, {
@@ -429,6 +447,11 @@ function setupFetchInstrumentation(options) {
             "http.method": method.toUpperCase(),
             "http.status_code": String(response.status),
             "http.url": url
+          },
+          extra: {
+            request_body: requestBody || void 0,
+            response_body: responseBody || void 0,
+            duration_ms: duration
           }
         });
       }

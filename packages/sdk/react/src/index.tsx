@@ -41,12 +41,15 @@ export interface ReactOptions extends BugwatchOptions {
   captureUnhandledRejections?: boolean;
   /** Capture console.error as breadcrumbs */
   captureConsoleBreadcrumbs?: boolean;
+  /** Capture HTTP 4xx/5xx errors from fetch requests */
+  captureHttpErrors?: boolean;
 }
 
 const DEFAULT_REACT_OPTIONS: Partial<ReactOptions> = {
   captureGlobalErrors: true,
   captureUnhandledRejections: true,
   captureConsoleBreadcrumbs: true,
+  captureHttpErrors: true,
 };
 
 /**
@@ -95,6 +98,141 @@ export function useCaptureMessage(): (
 ) => string {
   const { captureMessage } = useBugwatch();
   return captureMessage;
+}
+
+/**
+ * Set up fetch instrumentation to automatically:
+ * - Add HTTP breadcrumbs for all fetch requests
+ * - Capture failed responses (4xx/5xx) as exceptions
+ * - Capture network errors as exceptions
+ * Returns cleanup function to restore original fetch
+ */
+function setupFetchInstrumentation(options: { endpoint?: string }): () => void {
+  const originalFetch = window.fetch;
+  const sdkEndpoint = options.endpoint || "https://api.bugwatch.dev";
+  const sdkEventUrl = `${sdkEndpoint}/api/v1/events`;
+
+  window.fetch = async function (input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+    const url = typeof input === "string"
+      ? input
+      : input instanceof URL
+        ? input.href
+        : input.url;
+    const method = init?.method || "GET";
+
+    // Skip instrumenting our own SDK event requests to avoid infinite loops
+    if (url.startsWith(sdkEventUrl)) {
+      return originalFetch.call(window, input, init);
+    }
+
+    const startTime = Date.now();
+
+    try {
+      const response = await originalFetch.call(window, input, init);
+      const duration = Date.now() - startTime;
+
+      // Add breadcrumb for every request
+      coreAddBreadcrumb({
+        category: "http",
+        message: `${method.toUpperCase()} ${url}`,
+        level: response.ok ? "info" : "warning",
+        data: {
+          method: method.toUpperCase(),
+          url,
+          status_code: response.status,
+          duration_ms: duration,
+        },
+      });
+
+      // Capture 4xx/5xx responses as errors (exclude 401/403 — expected auth flow)
+      if (response.status >= 400 && response.status !== 401 && response.status !== 403) {
+        // Clone response to read body without consuming the original
+        let responseBody = '';
+        try {
+          responseBody = await response.clone().text();
+          if (responseBody.length > 2000) {
+            responseBody = responseBody.substring(0, 2000) + '...(truncated)';
+          }
+        } catch {
+          // Ignore body read errors
+        }
+
+        // Capture request body if present
+        let requestBody = '';
+        if (init?.body) {
+          try {
+            requestBody = typeof init.body === 'string'
+              ? init.body
+              : JSON.stringify(init.body);
+            if (requestBody.length > 2000) {
+              requestBody = requestBody.substring(0, 2000) + '...(truncated)';
+            }
+          } catch {
+            // Ignore serialization errors
+          }
+        }
+
+        const error = new Error(`HTTP ${response.status}: ${method.toUpperCase()} ${url}`);
+        error.name = "HttpError";
+        coreCaptureException(error, {
+          level: response.status >= 500 ? "error" : "warning",
+          tags: {
+            mechanism: "fetch",
+            "http.method": method.toUpperCase(),
+            "http.status_code": String(response.status),
+            "http.url": url,
+          },
+          extra: {
+            request_body: requestBody || undefined,
+            response_body: responseBody || undefined,
+            duration_ms: duration,
+          },
+        });
+      }
+
+      return response;
+    } catch (error) {
+      const duration = Date.now() - startTime;
+
+      // Network error (DNS failure, CORS, connection refused, etc.)
+      coreAddBreadcrumb({
+        category: "http",
+        message: `${method.toUpperCase()} ${url} (network error)`,
+        level: "error",
+        data: {
+          method: method.toUpperCase(),
+          url,
+          duration_ms: duration,
+          error: error instanceof Error ? error.message : String(error),
+        },
+      });
+
+      const networkError = error instanceof Error
+        ? error
+        : new Error(String(error));
+      networkError.name = networkError.name || "NetworkError";
+
+      coreCaptureException(networkError, {
+        level: "error",
+        tags: {
+          mechanism: "fetch",
+          "http.method": method.toUpperCase(),
+          "http.url": url,
+        },
+      });
+
+      // Mark as already captured so unhandledrejection handler skips it
+      if (error instanceof Error) {
+        (error as any).__bugwatch_captured = true;
+      }
+
+      throw error; // Re-throw so the caller still gets the error
+    }
+  };
+
+  return () => {
+    window.fetch = originalFetch;
+  };
 }
 
 /**
@@ -185,6 +323,7 @@ export function BugwatchProvider({
     let originalOnError: typeof window.onerror | null = null;
     let originalConsoleError: typeof console.error | null = null;
     let unhandledRejectionHandler: ((event: PromiseRejectionEvent) => void) | null = null;
+    let cleanupFetchInstrumentation: (() => void) | null = null;
 
     // Set up global error handlers
     if (typeof window !== "undefined") {
@@ -227,6 +366,10 @@ export function BugwatchProvider({
           originalConsoleError!(...args);
         };
       }
+
+      if (mergedOptions.captureHttpErrors) {
+        cleanupFetchInstrumentation = setupFetchInstrumentation(mergedOptions);
+      }
     }
 
     if (mergedOptions.debug) {
@@ -249,6 +392,11 @@ export function BugwatchProvider({
         // Restore original console.error
         if (originalConsoleError !== null && mergedOptions.captureConsoleBreadcrumbs) {
           console.error = originalConsoleError;
+        }
+
+        // Restore original fetch
+        if (cleanupFetchInstrumentation) {
+          cleanupFetchInstrumentation();
         }
       }
     };
