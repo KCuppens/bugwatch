@@ -75,8 +75,8 @@ export function withBugwatch(
   bugwatchOptions: NextjsOptions
 ): (nextConfig?: NextConfig) => NextConfig {
   return (nextConfig: NextConfig = {}) => {
-    // Initialize on server
-    if (typeof window === "undefined") {
+    // Initialize on server (skip if no API key, e.g. during Docker build)
+    if (typeof window === "undefined" && bugwatchOptions.apiKey) {
       init(bugwatchOptions);
     }
 
