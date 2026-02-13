@@ -29,7 +29,7 @@ import sys
 import threading
 from typing import Any, Callable, Dict, Optional
 
-from .client import BugwatchClient
+from .client import BugwatchClient, request_scope
 from .fingerprint import fingerprint_from_exception, generate_fingerprint
 from .transport import (
     AsyncHttpTransport,
@@ -51,7 +51,7 @@ from .types import (
     UserContext,
 )
 
-__version__ = "0.1.0"
+__version__ = "0.2.1"
 __all__ = [
     # Main functions
     "init",
@@ -66,6 +66,7 @@ __all__ = [
     "get_client",
     "flush",
     "close",
+    "request_scope",
     # Client
     "BugwatchClient",
     # Types
@@ -190,18 +191,38 @@ def _install_threading_hook():
 
 
 def _install_asyncio_hook():
-    """Install asyncio exception handler."""
+    """Install asyncio exception handler.
+
+    If an event loop is already running, installs the handler immediately.
+    Otherwise, patches asyncio.set_event_loop to install the handler
+    when a loop becomes available.
+    """
     global _original_asyncio_handler
 
-    try:
-        loop = asyncio.get_running_loop()
+    def _do_install(loop):
+        global _original_asyncio_handler
         handler = loop.get_exception_handler()
         if handler is not _bugwatch_asyncio_handler:
             _original_asyncio_handler = handler
             loop.set_exception_handler(_bugwatch_asyncio_handler)
+
+    try:
+        loop = asyncio.get_running_loop()
+        _do_install(loop)
     except RuntimeError:
-        # No running loop - that's okay, will work when loop starts
-        pass
+        # No running loop yet — patch the event loop policy so we install
+        # the handler when a loop is created and run.
+        _original_run = asyncio.events.BaseDefaultEventLoopPolicy.set_event_loop
+
+        def _patched_set_event_loop(self, loop):
+            _original_run(self, loop)
+            if loop is not None:
+                try:
+                    _do_install(loop)
+                except Exception:
+                    pass
+
+        asyncio.events.BaseDefaultEventLoopPolicy.set_event_loop = _patched_set_event_loop
 
 
 def _uninstall_hooks():
@@ -222,12 +243,20 @@ def _uninstall_hooks():
 # =============================================================================
 
 def _atexit_handler():
-    """Flush pending events and cleanup on shutdown."""
+    """Flush pending events and cleanup on shutdown with a timeout."""
     if _client is not None:
         try:
-            # Give transport a chance to flush
-            if hasattr(_client.transport, 'flush'):
-                _client.transport.flush()
+            # Use a thread-based timeout that works on all platforms
+            def _flush():
+                try:
+                    if hasattr(_client.transport, 'flush'):
+                        _client.transport.flush()
+                except Exception:
+                    pass
+
+            flush_thread = threading.Thread(target=_flush, daemon=True)
+            flush_thread.start()
+            flush_thread.join(timeout=5.0)  # 5 second max
         except Exception:
             pass
 
@@ -345,6 +374,10 @@ def init(
 
     # Thread-safe initialization
     with _lock:
+        # Prevent re-initialization if another thread already initialized
+        if _client is not None:
+            return _client
+
         _client = BugwatchClient(options)
 
         # Install exception hooks
@@ -364,7 +397,7 @@ def init(
                 if debug:
                     print("[Bugwatch] Installed asyncio exception handler")
 
-            # Register atexit handler
+            # Register atexit handler (only once)
             atexit.register(_atexit_handler)
             if debug:
                 print("[Bugwatch] Registered atexit handler")

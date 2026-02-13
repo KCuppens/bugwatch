@@ -17,7 +17,7 @@ const faqs = [
   {
     question: "Can I migrate from Sentry?",
     answer:
-      "Yes! Our SDK is designed to be a drop-in replacement. In most cases, you just need to swap the import and update your DSN. We're also working on a migration tool that imports your existing project settings and alert rules.",
+      "Yes! Our SDK is designed to be a drop-in replacement. In most cases, you just need to swap the import and update your API key. We're also working on a migration tool that imports your existing project settings and alert rules.",
   },
   {
     question: "Is the self-hosted version full-featured?",

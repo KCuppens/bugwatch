@@ -52,19 +52,19 @@ export async function doctorCommand(): Promise<void> {
     });
   }
 
-  // Check 3: Is DSN set in environment?
-  const hasDsn = await checkEnvVariable("NEXT_PUBLIC_BUGWATCH_DSN");
-  if (hasDsn) {
+  // Check 3: Is API key set in environment?
+  const hasApiKey = await checkEnvVariable("NEXT_PUBLIC_BUGWATCH_API_KEY");
+  if (hasApiKey) {
     results.push({
       name: "Environment Variable",
       status: "pass",
-      message: "NEXT_PUBLIC_BUGWATCH_DSN is set",
+      message: "NEXT_PUBLIC_BUGWATCH_API_KEY is set",
     });
   } else {
     results.push({
       name: "Environment Variable",
       status: "fail",
-      message: "NEXT_PUBLIC_BUGWATCH_DSN not found in .env.local",
+      message: "NEXT_PUBLIC_BUGWATCH_API_KEY not found in .env.local",
     });
   }
 

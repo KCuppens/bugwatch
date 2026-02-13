@@ -14,7 +14,7 @@ import {
 } from "../utils/files";
 
 export interface InitOptions {
-  dsn?: string;
+  apiKey?: string;
   skipPrompts?: boolean;
   dryRun?: boolean;
 }
@@ -56,25 +56,25 @@ export async function initCommand(options: InitOptions): Promise<void> {
   const pm = await detectPackageManager(process.cwd());
   console.log(chalk.dim(`  Using ${pm} as package manager\n`));
 
-  // Step 3: Get DSN
-  let dsn = options.dsn || process.env.BUGWATCH_DSN;
+  // Step 3: Get API key
+  let apiKey = options.apiKey || process.env.BUGWATCH_API_KEY;
 
-  if (!dsn && !options.skipPrompts) {
+  if (!apiKey && !options.skipPrompts) {
     try {
-      const response = await prompt<{ dsn: string }>({
+      const response = await prompt<{ apiKey: string }>({
         type: "input",
-        name: "dsn",
-        message: "Enter your Bugwatch DSN:",
+        name: "apiKey",
+        message: "Enter your Bugwatch API key:",
         hint: "Find this in your Bugwatch dashboard under Project Settings",
         validate: (value: string) => {
-          if (!value) return "DSN is required";
-          if (!value.includes("@") || !value.startsWith("http")) {
-            return "Invalid DSN format. Expected: https://<key>@<host>/<project>";
+          if (!value) return "API key is required";
+          if (!value.startsWith("bw_")) {
+            return "Invalid API key format. Expected format: bw_live_...";
           }
           return true;
         },
       });
-      dsn = response.dsn;
+      apiKey = response.apiKey;
     } catch {
       // User cancelled
       console.log(chalk.yellow("\nSetup cancelled.\n"));
@@ -82,10 +82,10 @@ export async function initCommand(options: InitOptions): Promise<void> {
     }
   }
 
-  if (!dsn) {
+  if (!apiKey) {
     console.log(
       chalk.red(
-        "\nError: DSN is required. Provide via --dsn flag or BUGWATCH_DSN env var.\n"
+        "\nError: API key is required. Provide via --api-key flag or BUGWATCH_API_KEY env var.\n"
       )
     );
     process.exit(1);
@@ -96,7 +96,7 @@ export async function initCommand(options: InitOptions): Promise<void> {
     console.log(
       chalk.cyan("\n  Dry run - the following changes would be made:\n")
     );
-    showPlannedChanges(project, dsn);
+    showPlannedChanges(project);
     return;
   }
 
@@ -146,8 +146,8 @@ export async function initCommand(options: InitOptions): Promise<void> {
   // Step 8: Update .env.local
   const envSpinner = ora("Updating .env.local...").start();
   try {
-    await updateEnvFile(dsn, process.cwd());
-    envSpinner.succeed("Updated .env.local with NEXT_PUBLIC_BUGWATCH_DSN");
+    await updateEnvFile(apiKey, process.cwd());
+    envSpinner.succeed("Updated .env.local with NEXT_PUBLIC_BUGWATCH_API_KEY");
   } catch (error) {
     envSpinner.fail("Failed to update .env.local");
     console.log(chalk.red(`\n${error}\n`));
@@ -168,7 +168,7 @@ export async function initCommand(options: InitOptions): Promise<void> {
 /**
  * Show planned changes for dry run
  */
-function showPlannedChanges(project: ProjectInfo, dsn: string): void {
+function showPlannedChanges(project: ProjectInfo): void {
   console.log(chalk.white("  Files to create/modify:\n"));
 
   // Instrumentation file
@@ -197,7 +197,7 @@ function showPlannedChanges(project: ProjectInfo, dsn: string): void {
     console.log(chalk.green(`  + ${pagesPrefix}/_error.${reactExt}`));
   }
 
-  console.log(chalk.green("  + .env.local (NEXT_PUBLIC_BUGWATCH_DSN)"));
+  console.log(chalk.green("  + .env.local (NEXT_PUBLIC_BUGWATCH_API_KEY)"));
 
   console.log(chalk.white("\n  Package to install:\n"));
   console.log(chalk.green("  + @bugwatch/nextjs"));

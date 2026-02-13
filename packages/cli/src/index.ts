@@ -12,7 +12,7 @@ program
 program
   .command("init")
   .description("Initialize Bugwatch in your Next.js project")
-  .option("--dsn <dsn>", "Bugwatch DSN (or set BUGWATCH_DSN env var)")
+  .option("--api-key <key>", "Bugwatch API key (or set BUGWATCH_API_KEY env var)")
   .option("--skip-prompts", "Use defaults without prompting")
   .option("--dry-run", "Show what would be done without making changes")
   .action(initCommand);

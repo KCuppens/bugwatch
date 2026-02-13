@@ -24,6 +24,8 @@ export interface ClientOptions extends BugwatchOptions {
   captureClickBreadcrumbs?: boolean;
   /** Capture navigation as breadcrumbs */
   captureNavigationBreadcrumbs?: boolean;
+  /** Capture failed HTTP requests (4xx/5xx) as errors and all requests as breadcrumbs */
+  captureHttpErrors?: boolean;
 }
 
 const DEFAULT_CLIENT_OPTIONS: Partial<ClientOptions> = {
@@ -32,6 +34,7 @@ const DEFAULT_CLIENT_OPTIONS: Partial<ClientOptions> = {
   captureConsoleBreadcrumbs: true,
   captureClickBreadcrumbs: true,
   captureNavigationBreadcrumbs: true,
+  captureHttpErrors: true,
 };
 
 let isClientInitialized = false;
@@ -100,6 +103,12 @@ export function initClient(options: ClientOptions): void {
     if (cleanup) clientCleanupFunctions.push(cleanup);
   }
 
+  // Set up fetch instrumentation (HTTP breadcrumbs + error capture)
+  if (mergedOptions.captureHttpErrors) {
+    const cleanup = setupFetchInstrumentation(mergedOptions);
+    if (cleanup) clientCleanupFunctions.push(cleanup);
+  }
+
   isClientInitialized = true;
 
   if (mergedOptions.debug) {
@@ -131,7 +140,7 @@ function setupGlobalErrorHandler(): () => void {
   const originalOnError = window.onerror;
 
   window.onerror = (message, source, lineno, colno, error) => {
-    if (error) {
+    if (error && !(error as any).__bugwatch_captured) {
       captureException(error, {
         tags: { mechanism: "onerror" },
       });
@@ -155,6 +164,11 @@ function setupGlobalErrorHandler(): () => void {
  */
 function setupUnhandledRejectionHandler(): () => void {
   const handler = (event: PromiseRejectionEvent) => {
+    // Skip if already captured by fetch instrumentation
+    if (event.reason && (event.reason as any).__bugwatch_captured) {
+      return;
+    }
+
     const error =
       event.reason instanceof Error
         ? event.reason
@@ -297,6 +311,109 @@ function setupNavigationBreadcrumbs(): () => void {
     history.pushState = originalPushState;
     history.replaceState = originalReplaceState;
     window.removeEventListener("popstate", popstateHandler);
+  };
+}
+
+/**
+ * Set up fetch instrumentation to automatically:
+ * - Add HTTP breadcrumbs for all fetch requests
+ * - Capture failed responses (4xx/5xx) as exceptions
+ * - Capture network errors as exceptions
+ * Returns cleanup function to restore original fetch
+ */
+function setupFetchInstrumentation(options: ClientOptions): () => void {
+  const originalFetch = window.fetch;
+  const sdkEndpoint = options.endpoint || "https://api.bugwatch.dev";
+
+  window.fetch = async function (input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+    const url = typeof input === "string"
+      ? input
+      : input instanceof URL
+        ? input.href
+        : input.url;
+    const method = init?.method || "GET";
+
+    // Skip instrumenting our own SDK requests to avoid infinite loops
+    if (url.startsWith(sdkEndpoint)) {
+      return originalFetch.call(window, input, init);
+    }
+
+    const startTime = Date.now();
+
+    try {
+      const response = await originalFetch.call(window, input, init);
+      const duration = Date.now() - startTime;
+
+      // Add breadcrumb for every request
+      addBreadcrumb({
+        category: "http",
+        message: `${method.toUpperCase()} ${url}`,
+        level: response.ok ? "info" : "warning",
+        data: {
+          method: method.toUpperCase(),
+          url,
+          status_code: response.status,
+          duration_ms: duration,
+        },
+      });
+
+      // Capture 4xx/5xx responses as errors (exclude 401/403 — expected auth flow)
+      if (response.status >= 400 && response.status !== 401 && response.status !== 403) {
+        const error = new Error(`HTTP ${response.status}: ${method.toUpperCase()} ${url}`);
+        error.name = "HttpError";
+        captureException(error, {
+          level: response.status >= 500 ? "error" : "warning",
+          tags: {
+            mechanism: "fetch",
+            "http.method": method.toUpperCase(),
+            "http.status_code": String(response.status),
+            "http.url": url,
+          },
+        });
+      }
+
+      return response;
+    } catch (error) {
+      const duration = Date.now() - startTime;
+
+      // Network error (DNS failure, CORS, connection refused, etc.)
+      addBreadcrumb({
+        category: "http",
+        message: `${method.toUpperCase()} ${url} (network error)`,
+        level: "error",
+        data: {
+          method: method.toUpperCase(),
+          url,
+          duration_ms: duration,
+          error: error instanceof Error ? error.message : String(error),
+        },
+      });
+
+      const networkError = error instanceof Error
+        ? error
+        : new Error(String(error));
+      networkError.name = networkError.name || "NetworkError";
+
+      captureException(networkError, {
+        level: "error",
+        tags: {
+          mechanism: "fetch",
+          "http.method": method.toUpperCase(),
+          "http.url": url,
+        },
+      });
+
+      // Mark as already captured so unhandledrejection handler skips it
+      if (error instanceof Error) {
+        (error as any).__bugwatch_captured = true;
+      }
+
+      throw error; // Re-throw so the caller still gets the error
+    }
+  };
+
+  return () => {
+    window.fetch = originalFetch;
   };
 }
 

@@ -134,11 +134,19 @@ function setupUncaughtExceptionHandler(
       console.error("[Bugwatch] Captured uncaught exception:", err);
     }
 
-    // Give time for event to be sent
+    // Flush pending events then exit
     if (options.exitOnUncaughtException) {
-      setTimeout(() => {
+      const timeout = options.shutdownTimeout || 2000;
+
+      // Race: flush vs timeout — whichever finishes first
+      const flushPromise = client.flush().catch(() => {
+        // Ignore flush errors during shutdown
+      });
+      const timeoutPromise = new Promise<void>((resolve) => setTimeout(resolve, timeout));
+
+      Promise.race([flushPromise, timeoutPromise]).then(() => {
         process.exit(1);
-      }, options.shutdownTimeout || 2000);
+      });
     }
   };
 
@@ -175,6 +183,11 @@ function setupUnhandledRejectionHandler(client: BugwatchClient): void {
     if (client.getOptions().debug) {
       console.error("[Bugwatch] Captured unhandled rejection:", reason);
     }
+
+    // Best-effort flush — don't block, but try to send the event
+    client.flush().catch(() => {
+      // Ignore flush errors
+    });
   };
 
   process.on("unhandledRejection", unhandledRejectionHandler);
@@ -204,17 +217,30 @@ function setupExitHandler(): void {
   }
 
   exitHandler = () => {
-    // Flush any pending events on exit
+    // 'exit' event is synchronous — can't flush here.
+    // Flushing is handled by SIGINT/SIGTERM handlers instead.
   };
 
   sigintHandler = () => {
-    exitHandler?.();
-    process.exit(0);
+    const client = getClient();
+    if (client) {
+      client.flush().catch(() => {}).finally(() => {
+        process.exit(0);
+      });
+    } else {
+      process.exit(0);
+    }
   };
 
   sigtermHandler = () => {
-    exitHandler?.();
-    process.exit(0);
+    const client = getClient();
+    if (client) {
+      client.flush().catch(() => {}).finally(() => {
+        process.exit(0);
+      });
+    } else {
+      process.exit(0);
+    }
   };
 
   process.on("exit", exitHandler);

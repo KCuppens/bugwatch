@@ -11,13 +11,15 @@
  * }
  */
 
-import { parseDsn, getDsnFromEnv, type DsnComponents } from "./config";
+import { getEnvConfig } from "./config";
 
 export interface RegisterOptions {
   /** Override the runtime detection */
   runtime?: "nodejs" | "edge";
-  /** Override the DSN from environment */
-  dsn?: string;
+  /** API key (overrides environment variable) */
+  apiKey?: string;
+  /** API endpoint (overrides environment variable) */
+  endpoint?: string;
   /** Enable debug logging */
   debug?: boolean;
   /** Capture uncaught exceptions */
@@ -53,29 +55,25 @@ export function registerBugwatch(options: RegisterOptions = {}): void {
   }
 
   const mergedOptions = { ...DEFAULT_OPTIONS, ...options };
-  const dsn = mergedOptions.dsn || getDsnFromEnv();
+  const envConfig = getEnvConfig();
+  const apiKey = mergedOptions.apiKey || envConfig.apiKey;
+  const endpoint = mergedOptions.endpoint || envConfig.endpoint;
 
-  if (!dsn) {
+  if (!apiKey) {
     if (process.env.NODE_ENV === "development") {
       console.warn(
-        "[Bugwatch] No DSN provided. Set NEXT_PUBLIC_BUGWATCH_DSN environment variable."
+        "[Bugwatch] No API key provided. Set NEXT_PUBLIC_BUGWATCH_API_KEY environment variable."
       );
     }
-    return;
-  }
-
-  const config = parseDsn(dsn);
-  if (!config) {
-    console.error("[Bugwatch] Invalid DSN format. Server-side tracking disabled.");
     return;
   }
 
   const runtime = mergedOptions.runtime || detectRuntime();
 
   if (runtime === "edge") {
-    initEdge(config, mergedOptions);
+    initEdge(apiKey, endpoint, mergedOptions);
   } else {
-    initNode(config, mergedOptions);
+    initNode(apiKey, endpoint, mergedOptions);
   }
 
   registered = true;
@@ -103,12 +101,12 @@ declare const EdgeRuntime: string | undefined;
 /**
  * Initialize for Node.js runtime
  */
-function initNode(config: DsnComponents, options: RegisterOptions): void {
+function initNode(apiKey: string, endpoint: string | undefined, options: RegisterOptions): void {
   const { init } = require("./index");
 
   init({
-    apiKey: config.publicKey,
-    endpoint: config.endpoint,
+    apiKey,
+    ...(endpoint && { endpoint }),
     environment: process.env.NODE_ENV || "production",
     debug: options.debug || process.env.BUGWATCH_DEBUG === "true",
     captureUncaughtExceptions: options.captureUncaughtExceptions,
@@ -123,13 +121,12 @@ function initNode(config: DsnComponents, options: RegisterOptions): void {
 /**
  * Initialize for Edge runtime
  */
-function initEdge(config: DsnComponents, options: RegisterOptions): void {
-  // Edge runtime uses core SDK directly (lighter weight)
+function initEdge(apiKey: string, endpoint: string | undefined, options: RegisterOptions): void {
   const { init } = require("@bugwatch/core");
 
   init({
-    apiKey: config.publicKey,
-    endpoint: config.endpoint,
+    apiKey,
+    ...(endpoint && { endpoint }),
     environment: process.env.NODE_ENV || "production",
     debug: options.debug || process.env.BUGWATCH_DEBUG === "true",
   });

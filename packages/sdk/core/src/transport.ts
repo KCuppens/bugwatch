@@ -1,6 +1,23 @@
 import type { ErrorEvent, Transport, BugwatchOptions } from "./types";
 
 const DEFAULT_ENDPOINT = "https://api.bugwatch.dev";
+const DEFAULT_TIMEOUT_MS = 10000;
+
+/**
+ * Safely serialize a value to JSON, handling circular references.
+ */
+function safeJsonStringify(value: unknown): string {
+  const seen = new WeakSet();
+  return JSON.stringify(value, (_key, val) => {
+    if (typeof val === "object" && val !== null) {
+      if (seen.has(val)) {
+        return "[Circular]";
+      }
+      seen.add(val);
+    }
+    return val;
+  });
+}
 
 /**
  * HTTP transport for sending events to the Bugwatch API
@@ -9,11 +26,13 @@ export class HttpTransport implements Transport {
   private endpoint: string;
   private apiKey: string;
   private debug: boolean;
+  private timeoutMs: number;
 
   constructor(options: BugwatchOptions) {
     this.endpoint = options.endpoint || DEFAULT_ENDPOINT;
     this.apiKey = options.apiKey;
     this.debug = options.debug || false;
+    this.timeoutMs = DEFAULT_TIMEOUT_MS;
   }
 
   async send(event: ErrorEvent): Promise<void> {
@@ -24,40 +43,55 @@ export class HttpTransport implements Transport {
     }
 
     try {
-      const response = await this.fetch(url, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${this.apiKey}`,
-          "X-Bugwatch-SDK": event.sdk?.name || "bugwatch-core",
-          "X-Bugwatch-SDK-Version": event.sdk?.version || "0.1.0",
-        },
-        body: JSON.stringify(event),
-      });
+      const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+      const timeoutId = controller
+        ? setTimeout(() => controller.abort(), this.timeoutMs)
+        : null;
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        if (this.debug) {
-          console.error("[Bugwatch] Failed to send event:", response.status, errorText);
-        }
+      try {
+        const response = await this.fetch(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${this.apiKey}`,
+            "X-Bugwatch-SDK": event.sdk?.name || "bugwatch-core",
+            "X-Bugwatch-SDK-Version": event.sdk?.version || "0.1.0",
+          },
+          body: safeJsonStringify(event),
+          ...(controller && { signal: controller.signal }),
+        });
 
-        // Handle rate limiting
-        if (response.status === 429) {
-          const retryAfter = response.headers.get("Retry-After");
+        if (!response.ok) {
+          const errorText = await response.text();
           if (this.debug) {
-            console.warn(`[Bugwatch] Rate limited. Retry after ${retryAfter}s`);
+            console.error("[Bugwatch] Failed to send event:", response.status, errorText);
           }
+
+          // Handle rate limiting
+          if (response.status === 429) {
+            const retryAfter = response.headers.get("Retry-After");
+            if (this.debug) {
+              console.warn(`[Bugwatch] Rate limited. Retry after ${retryAfter}s`);
+            }
+          }
+
+          throw new Error(`Failed to send event: ${response.status}`);
         }
 
-        throw new Error(`Failed to send event: ${response.status}`);
-      }
-
-      if (this.debug) {
-        console.log("[Bugwatch] Event sent successfully:", event.event_id);
+        if (this.debug) {
+          console.log("[Bugwatch] Event sent successfully:", event.event_id);
+        }
+      } finally {
+        if (timeoutId !== null) {
+          clearTimeout(timeoutId);
+        }
       }
     } catch (error) {
       if (this.debug) {
-        console.error("[Bugwatch] Transport error:", error);
+        const message = error instanceof Error && error.name === "AbortError"
+          ? `[Bugwatch] Request timed out after ${this.timeoutMs}ms`
+          : "[Bugwatch] Transport error:";
+        console.error(message, error);
       }
       // Don't throw - we don't want SDK errors to break the application
     }
@@ -93,7 +127,7 @@ export class NoopTransport implements Transport {
  */
 export class ConsoleTransport implements Transport {
   async send(event: ErrorEvent): Promise<void> {
-    console.log("[Bugwatch Event]", JSON.stringify(event, null, 2));
+    console.log("[Bugwatch Event]", safeJsonStringify(event));
   }
 }
 
@@ -134,8 +168,15 @@ export class BatchTransport implements Transport {
 
     const events = this.queue.splice(0, this.maxBatchSize);
 
-    // Send events in parallel
-    await Promise.all(events.map((event) => this.transport.send(event)));
+    // Send events in parallel, don't fail the batch if individual events fail
+    const results = await Promise.allSettled(events.map((event) => this.transport.send(event)));
+
+    // Log failures in debug mode (transport itself doesn't throw, but just in case)
+    for (const result of results) {
+      if (result.status === "rejected") {
+        // Silently ignore - individual transport.send() already handles errors
+      }
+    }
   }
 
   private startTimer(): void {

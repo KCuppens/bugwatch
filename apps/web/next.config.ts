@@ -3,7 +3,7 @@ import { withBugwatch } from "@bugwatch/nextjs";
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
-  transpilePackages: ["@bugwatch/shared", "@bugwatch/nextjs", "@bugwatch/core", "@bugwatch/node"],
+  transpilePackages: ["@bugwatch/nextjs", "@bugwatch/core", "@bugwatch/node"],
   output: "standalone",
   logging: {
     fetches: {
@@ -13,6 +13,6 @@ const nextConfig: NextConfig = {
 };
 
 export default withBugwatch({
-  apiKey: "bw_live_3047f2aaca22496d8f1010960cff1595",
+  apiKey: process.env.NEXT_PUBLIC_BUGWATCH_API_KEY || "",
   environment: process.env.NODE_ENV,
 })(nextConfig);

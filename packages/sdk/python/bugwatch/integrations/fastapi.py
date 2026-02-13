@@ -4,6 +4,7 @@ from functools import wraps
 from typing import Any, Callable, Dict, Optional
 
 from .. import get_client, init
+from ..client import request_scope
 from ..types import Level, RequestContext, UserContext
 
 
@@ -81,49 +82,55 @@ class BugwatchFastAPI:
             ) -> Response:
                 client = get_client()
 
-                # Add request breadcrumb
-                if client:
-                    client.add_breadcrumb(
-                        category="http",
-                        message=f"{request.method} {request.url.path}",
-                        level=Level.INFO,
-                    )
-
-                try:
-                    response = await call_next(request)
-
-                    # Add response breadcrumb
+                # Use request_scope for context isolation between concurrent requests
+                async with request_scope():
+                    # Add request breadcrumb
                     if client:
                         client.add_breadcrumb(
                             category="http",
-                            message=f"Response {response.status_code}",
-                            level=Level.INFO if response.status_code < 400 else Level.WARNING,
-                            data={
-                                "url": str(request.url),
-                                "status_code": response.status_code,
-                            },
+                            message=f"{request.method} {request.url.path}",
+                            level=Level.INFO,
                         )
 
-                    return response
+                    try:
+                        response = await call_next(request)
 
-                except Exception as e:
-                    # Capture unhandled exceptions
-                    if client:
-                        request_context = await _extract_fastapi_request_context(request)
+                        # Add response breadcrumb
+                        if client:
+                            client.add_breadcrumb(
+                                category="http",
+                                message=f"Response {response.status_code}",
+                                level=Level.INFO if response.status_code < 400 else Level.WARNING,
+                                data={
+                                    "url": str(request.url),
+                                    "status_code": response.status_code,
+                                },
+                            )
 
-                        client.capture_exception(
-                            e,
-                            level=Level.ERROR,
-                            tags={
-                                "mechanism": "fastapi.middleware",
-                                "http.method": request.method,
-                                "http.url": str(request.url),
-                            },
-                            extra={
-                                "request": request_context.__dict__ if request_context else None,
-                            },
-                        )
-                    raise
+                        return response
+
+                    except Exception as e:
+                        # Capture unhandled exceptions — wrapped in try-except
+                        # so monitoring never breaks the actual error handling
+                        if client:
+                            try:
+                                request_context = await _extract_fastapi_request_context(request)
+
+                                client.capture_exception(
+                                    e,
+                                    level=Level.ERROR,
+                                    tags={
+                                        "mechanism": "fastapi.middleware",
+                                        "http.method": request.method,
+                                        "http.url": str(request.url),
+                                    },
+                                    extra={
+                                        "request": request_context.__dict__ if request_context else None,
+                                    },
+                                )
+                            except Exception:
+                                pass
+                        raise
 
         app.add_middleware(BugwatchMiddleware)
 
@@ -138,20 +145,23 @@ class BugwatchFastAPI:
         ) -> JSONResponse:
             client = get_client()
             if client:
-                request_context = await _extract_fastapi_request_context(request)
+                try:
+                    request_context = await _extract_fastapi_request_context(request)
 
-                client.capture_exception(
-                    exc,
-                    level=Level.ERROR,
-                    tags={
-                        "mechanism": "fastapi.exception_handler",
-                        "http.method": request.method,
-                        "http.url": str(request.url),
-                    },
-                    extra={
-                        "request": request_context.__dict__ if request_context else None,
-                    },
-                )
+                    client.capture_exception(
+                        exc,
+                        level=Level.ERROR,
+                        tags={
+                            "mechanism": "fastapi.exception_handler",
+                            "http.method": request.method,
+                            "http.url": str(request.url),
+                        },
+                        extra={
+                            "request": request_context.__dict__ if request_context else None,
+                        },
+                    )
+                except Exception:
+                    pass
 
             # Re-raise to let FastAPI handle it
             raise exc

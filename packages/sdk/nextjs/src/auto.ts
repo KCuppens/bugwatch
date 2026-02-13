@@ -5,14 +5,12 @@
  * Reads configuration from environment variables and initializes
  * the appropriate SDK (server or client) automatically.
  *
- * Supports two configuration methods:
- * 1. DSN format: NEXT_PUBLIC_BUGWATCH_DSN
- * 2. Individual env vars:
- *    - Server: BUGWATCH_API_KEY, BUGWATCH_ENVIRONMENT, etc.
- *    - Client: NEXT_PUBLIC_BUGWATCH_API_KEY, NEXT_PUBLIC_BUGWATCH_ENVIRONMENT, etc.
+ * Environment variables:
+ * - Server: BUGWATCH_API_KEY, BUGWATCH_ENVIRONMENT, etc.
+ * - Client: NEXT_PUBLIC_BUGWATCH_API_KEY, NEXT_PUBLIC_BUGWATCH_ENVIRONMENT, etc.
  */
 
-import { parseDsn, getDsnFromEnv, getEnvConfig, hasApiKey, type DsnComponents } from "./config";
+import { getEnvConfig, hasApiKey } from "./config";
 import type { BugwatchOptions } from "@bugwatch/core";
 
 let initialized = false;
@@ -23,77 +21,30 @@ let initialized = false;
 function autoInit(): void {
   if (initialized) return;
 
-  // Try DSN format first
-  const dsn = getDsnFromEnv();
-  if (dsn) {
-    const config = parseDsn(dsn);
-    if (!config) {
-      console.error("[Bugwatch] Invalid DSN format. Error tracking disabled.");
-      return;
-    }
-
-    if (typeof window === "undefined") {
-      initServerFromDsn(config);
-    } else {
-      initClientFromDsn(config);
-    }
-
-    initialized = true;
-    return;
-  }
-
-  // Fall back to individual env vars
-  if (hasApiKey()) {
-    const envConfig = getEnvConfig();
-
-    if (typeof window === "undefined") {
-      initServerFromEnv(envConfig);
-    } else {
-      initClientFromEnv(envConfig);
-    }
-
-    initialized = true;
-    return;
-  }
-
-  // No configuration found
-  if (process.env.NODE_ENV === "development") {
-    console.warn(
-      "[Bugwatch] No configuration found. Set BUGWATCH_API_KEY (server) or NEXT_PUBLIC_BUGWATCH_API_KEY (client), or use NEXT_PUBLIC_BUGWATCH_DSN."
-    );
-  }
-}
-
-/**
- * Initialize server-side SDK from DSN
- */
-function initServerFromDsn(config: DsnComponents): void {
-  try {
-    const { init } = require("./index");
-
-    init({
-      apiKey: config.publicKey,
-      endpoint: config.endpoint,
-      environment: process.env.BUGWATCH_ENVIRONMENT || process.env.NODE_ENV || "production",
-      release: process.env.BUGWATCH_RELEASE,
-      debug: process.env.BUGWATCH_DEBUG === "true",
-    });
-
-    if (process.env.NODE_ENV === "development" || process.env.BUGWATCH_DEBUG) {
-      console.log("[Bugwatch] Server SDK auto-initialized (DSN)");
-    }
-  } catch (err) {
+  if (!hasApiKey()) {
     if (process.env.NODE_ENV === "development") {
-      console.error("[Bugwatch] Server SDK initialization failed:", err);
+      console.warn(
+        "[Bugwatch] No API key found. Set BUGWATCH_API_KEY (server) or NEXT_PUBLIC_BUGWATCH_API_KEY (client)."
+      );
     }
-    // Gracefully degrade - don't crash the app
+    return;
   }
+
+  const envConfig = getEnvConfig();
+
+  if (typeof window === "undefined") {
+    initServer(envConfig);
+  } else {
+    initClient(envConfig);
+  }
+
+  initialized = true;
 }
 
 /**
- * Initialize server-side SDK from individual env vars
+ * Initialize server-side SDK
  */
-function initServerFromEnv(envConfig: Partial<BugwatchOptions>): void {
+function initServer(envConfig: Partial<BugwatchOptions>): void {
   try {
     const { init } = require("./index");
 
@@ -103,46 +54,19 @@ function initServerFromEnv(envConfig: Partial<BugwatchOptions>): void {
     });
 
     if (process.env.NODE_ENV === "development" || process.env.BUGWATCH_DEBUG) {
-      console.log("[Bugwatch] Server SDK auto-initialized (env vars)");
+      console.log("[Bugwatch] Server SDK auto-initialized");
     }
   } catch (err) {
     if (process.env.NODE_ENV === "development") {
       console.error("[Bugwatch] Server SDK initialization failed:", err);
     }
-    // Gracefully degrade - don't crash the app
   }
 }
 
 /**
- * Initialize client-side SDK from DSN
+ * Initialize client-side SDK
  */
-function initClientFromDsn(config: DsnComponents): void {
-  try {
-    const { initClient: initClientSdk } = require("./client");
-
-    initClientSdk({
-      apiKey: config.publicKey,
-      endpoint: config.endpoint,
-      environment: process.env.NEXT_PUBLIC_BUGWATCH_ENVIRONMENT || process.env.NODE_ENV || "production",
-      release: process.env.NEXT_PUBLIC_BUGWATCH_RELEASE,
-      debug: process.env.NEXT_PUBLIC_BUGWATCH_DEBUG === "true",
-    });
-
-    if (process.env.NODE_ENV === "development" || process.env.NEXT_PUBLIC_BUGWATCH_DEBUG) {
-      console.log("[Bugwatch] Client SDK auto-initialized (DSN)");
-    }
-  } catch (err) {
-    if (process.env.NODE_ENV === "development") {
-      console.error("[Bugwatch] Client SDK initialization failed:", err);
-    }
-    // Gracefully degrade - don't crash the app
-  }
-}
-
-/**
- * Initialize client-side SDK from individual env vars
- */
-function initClientFromEnv(envConfig: Partial<BugwatchOptions>): void {
+function initClient(envConfig: Partial<BugwatchOptions>): void {
   try {
     const { initClient: initClientSdk } = require("./client");
 
@@ -152,13 +76,12 @@ function initClientFromEnv(envConfig: Partial<BugwatchOptions>): void {
     });
 
     if (process.env.NODE_ENV === "development" || process.env.NEXT_PUBLIC_BUGWATCH_DEBUG) {
-      console.log("[Bugwatch] Client SDK auto-initialized (env vars)");
+      console.log("[Bugwatch] Client SDK auto-initialized");
     }
   } catch (err) {
     if (process.env.NODE_ENV === "development") {
       console.error("[Bugwatch] Client SDK initialization failed:", err);
     }
-    // Gracefully degrade - don't crash the app
   }
 }
 

@@ -232,7 +232,7 @@ export function errorHandler(
   options: BugwatchExpressOptions = {}
 ): ErrorRequestHandler {
   return async (
-    err: Error,
+    err: unknown,
     req: BugwatchRequest,
     res: Response,
     next: NextFunction
@@ -240,6 +240,14 @@ export function errorHandler(
     const client = getClient();
     if (!client) {
       return next(err);
+    }
+
+    // Normalize non-Error objects to Error instances
+    const error = err instanceof Error
+      ? err
+      : new Error(typeof err === "string" ? err : JSON.stringify(err));
+    if (!(err instanceof Error)) {
+      error.name = "NonErrorException";
     }
 
     // Build request context
@@ -255,8 +263,13 @@ export function errorHandler(
       extra.client_ip = clientIp;
     }
 
+    // If the original thrown value was not an Error, include it as extra data
+    if (!(err instanceof Error)) {
+      extra.originalValue = err;
+    }
+
     // Capture the error
-    const eventId = captureException(err, {
+    const eventId = captureException(error, {
       request: requestContext,
       extra,
       tags: {
@@ -275,7 +288,7 @@ export function errorHandler(
       await flush();
     }
 
-    // Pass to next error handler
+    // Pass to next error handler (pass original value, not normalized)
     next(err);
   };
 }

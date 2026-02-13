@@ -106,6 +106,7 @@ impl IntoResponse for AppError {
                 )
             }
             AppError::Validation(msg) => {
+                tracing::warn!("Validation error (422): {}", msg);
                 (StatusCode::UNPROCESSABLE_ENTITY, "validation_error", msg.clone(), None)
             }
             AppError::Anyhow(e) => {

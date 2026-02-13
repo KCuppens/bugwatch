@@ -112,14 +112,14 @@ export async function createErrorFiles(
 }
 
 /**
- * Update .env.local with the DSN
+ * Update .env.local with the API key
  */
 export async function updateEnvFile(
-  dsn: string,
+  apiKey: string,
   rootDir: string
 ): Promise<void> {
   const envPath = path.join(rootDir, ".env.local");
-  const envVar = `NEXT_PUBLIC_BUGWATCH_DSN=${dsn}`;
+  const envVar = `NEXT_PUBLIC_BUGWATCH_API_KEY=${apiKey}`;
 
   let content = "";
 
@@ -129,11 +129,11 @@ export async function updateEnvFile(
     // File doesn't exist, create it
   }
 
-  // Check if DSN is already set
-  if (content.includes("NEXT_PUBLIC_BUGWATCH_DSN=")) {
+  // Check if API key is already set
+  if (content.includes("NEXT_PUBLIC_BUGWATCH_API_KEY=")) {
     // Replace existing value
     content = content.replace(
-      /NEXT_PUBLIC_BUGWATCH_DSN=.*/,
+      /NEXT_PUBLIC_BUGWATCH_API_KEY=.*/,
       envVar
     );
   } else {

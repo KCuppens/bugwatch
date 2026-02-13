@@ -7,7 +7,8 @@ import {
   addBreadcrumb,
   setUser,
   flush,
-  runWithContextAsync,
+  close,
+  runWithContext,
   createScopedContext,
   type RequestContext,
   type BugwatchClient,
@@ -197,24 +198,26 @@ const bugwatchPluginImpl: FastifyPluginAsync<BugwatchFastifyOptions> = async (
     ...options,
   };
 
-  // Store request start times and scoped contexts
+  // Store request start times
   const requestStartTimes = new WeakMap<FastifyRequest, number>();
-  const requestContexts = new WeakMap<FastifyRequest, ScopedContext>();
 
   // Decorate requests with bugwatch
   fastify.decorateRequest("bugwatch", null);
 
-  // onRequest hook - set up context
-  fastify.addHook("onRequest", async (request) => {
+  // onRequest hook — create scoped context and run the entire request lifecycle inside it.
+  // We use runWithContext so that all downstream hooks and the route handler
+  // can access the request-scoped context via getRequestContext().
+  fastify.addHook("onRequest", (request, _reply, done) => {
     const client = getClient();
-    if (!client) return;
+    if (!client) {
+      return done();
+    }
 
     // Store start time
     requestStartTimes.set(request, Date.now());
 
     // Create a request-scoped context for isolation
     const scopedContext: ScopedContext = createScopedContext();
-    requestContexts.set(request, scopedContext);
 
     // Create and attach decorator
     request.bugwatch = createBugwatchDecorator(request, opts);
@@ -227,18 +230,24 @@ const bugwatchPluginImpl: FastifyPluginAsync<BugwatchFastifyOptions> = async (
       }
     }
 
-    // Add request breadcrumb to scoped context
-    if (opts.addBreadcrumbs) {
-      addBreadcrumb({
-        category: "http",
-        message: `${request.method} ${request.url}`,
-        level: "info",
-        data: {
-          method: request.method,
-          url: request.url,
-        },
-      });
-    }
+    // Run done() inside the scoped context so that all downstream
+    // hooks and route handlers inherit the AsyncLocalStorage context
+    runWithContext(scopedContext, () => {
+      // Add request breadcrumb within the scoped context
+      if (opts.addBreadcrumbs) {
+        addBreadcrumb({
+          category: "http",
+          message: `${request.method} ${request.url}`,
+          level: "info",
+          data: {
+            method: request.method,
+            url: request.url,
+          },
+        });
+      }
+
+      done();
+    });
   });
 
   // onResponse hook - add completion breadcrumb
@@ -265,7 +274,7 @@ const bugwatchPluginImpl: FastifyPluginAsync<BugwatchFastifyOptions> = async (
   });
 
   // onError hook - capture errors
-  fastify.addHook("onError", async (request, reply, error) => {
+  fastify.addHook("onError", async (request, _reply, error) => {
     if (!opts.captureErrors) return;
 
     const client = getClient();
@@ -278,6 +287,11 @@ const bugwatchPluginImpl: FastifyPluginAsync<BugwatchFastifyOptions> = async (
     if (opts.flushOnError) {
       await flush();
     }
+  });
+
+  // onClose hook - flush pending events on server shutdown
+  fastify.addHook("onClose", async () => {
+    await close();
   });
 };
 

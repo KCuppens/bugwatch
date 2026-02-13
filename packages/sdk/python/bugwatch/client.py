@@ -1,7 +1,9 @@
 """Bugwatch client for capturing and sending error events."""
+import contextvars
 import platform
 import socket
 import sys
+import threading
 import traceback
 import uuid
 from datetime import datetime, timezone
@@ -25,6 +27,18 @@ from .types import (
 SDK_NAME = "bugwatch-python"
 SDK_VERSION = "0.1.0"
 
+# Context variables for request-scoped isolation.
+# These prevent user/request data from leaking between concurrent async requests.
+_ctx_user: contextvars.ContextVar[Optional[UserContext]] = contextvars.ContextVar(
+    "bugwatch_user", default=None
+)
+_ctx_request: contextvars.ContextVar[Optional[RequestContext]] = contextvars.ContextVar(
+    "bugwatch_request", default=None
+)
+_ctx_breadcrumbs: contextvars.ContextVar[Optional[List[Breadcrumb]]] = contextvars.ContextVar(
+    "bugwatch_breadcrumbs", default=None
+)
+
 
 class BugwatchClient:
     """Main Bugwatch client for error tracking."""
@@ -43,6 +57,7 @@ class BugwatchClient:
         """
         self.options = options
         self.transport = transport or HttpTransport(options)
+        self._lock = threading.Lock()
         self._breadcrumbs: List[Breadcrumb] = []
         self._user: Optional[UserContext] = None
         self._request: Optional[RequestContext] = None
@@ -59,7 +74,7 @@ class BugwatchClient:
             self._tags["environment"] = options.environment
 
         if options.debug:
-            print(f"[Bugwatch] Python SDK initialized")
+            print("[Bugwatch] Python SDK initialized")
 
     def capture_exception(
         self,
@@ -176,6 +191,9 @@ class BugwatchClient:
         """
         Add a breadcrumb to the trail.
 
+        If called within a request scope (via ``request_scope()``), the breadcrumb
+        is added to the request-scoped list. Otherwise it goes to the global list.
+
         Args:
             category: The breadcrumb category
             message: The breadcrumb message
@@ -192,29 +210,51 @@ class BugwatchClient:
             data=data,
         )
 
-        self._breadcrumbs.append(breadcrumb)
+        # Prefer request-scoped breadcrumbs if available
+        ctx_crumbs = _ctx_breadcrumbs.get(None)
+        if ctx_crumbs is not None:
+            ctx_crumbs.append(breadcrumb)
+            max_b = self.options.max_breadcrumbs
+            if len(ctx_crumbs) > max_b:
+                del ctx_crumbs[: len(ctx_crumbs) - max_b]
+            return
 
-        # Limit breadcrumbs
-        if len(self._breadcrumbs) > self.options.max_breadcrumbs:
-            self._breadcrumbs = self._breadcrumbs[-self.options.max_breadcrumbs:]
+        with self._lock:
+            self._breadcrumbs.append(breadcrumb)
+            max_b = self.options.max_breadcrumbs
+            if len(self._breadcrumbs) > max_b:
+                self._breadcrumbs = self._breadcrumbs[-max_b:]
 
     def set_user(self, user: Optional[UserContext]) -> None:
         """
         Set the current user context.
 
+        If called within a request scope, sets the request-scoped user.
+        Otherwise sets the global user (shared across requests — avoid in async).
+
         Args:
             user: The user context or None to clear
         """
-        self._user = user
+        # If we're in a request scope, set on the context var
+        if _ctx_breadcrumbs.get(None) is not None:
+            _ctx_user.set(user)
+        else:
+            self._user = user
 
     def set_request(self, request: Optional[RequestContext]) -> None:
         """
         Set the current request context.
 
+        If called within a request scope, sets the request-scoped request.
+        Otherwise sets the global request context.
+
         Args:
             request: The request context or None to clear
         """
-        self._request = request
+        if _ctx_breadcrumbs.get(None) is not None:
+            _ctx_request.set(request)
+        else:
+            self._request = request
 
     def set_tag(self, key: str, value: str) -> None:
         """
@@ -224,7 +264,8 @@ class BugwatchClient:
             key: The tag key
             value: The tag value
         """
-        self._tags[key] = value
+        with self._lock:
+            self._tags[key] = value
 
     def set_extra(self, key: str, value: Any) -> None:
         """
@@ -234,11 +275,17 @@ class BugwatchClient:
             key: The extra key
             value: The extra value
         """
-        self._extra[key] = value
+        with self._lock:
+            self._extra[key] = value
 
     def clear_breadcrumbs(self) -> None:
         """Clear all breadcrumbs."""
-        self._breadcrumbs = []
+        ctx_crumbs = _ctx_breadcrumbs.get(None)
+        if ctx_crumbs is not None:
+            ctx_crumbs.clear()
+        else:
+            with self._lock:
+                self._breadcrumbs = []
 
     def _create_event(
         self,
@@ -251,14 +298,21 @@ class BugwatchClient:
         """Create an error event."""
         event_id = uuid.uuid4().hex
 
-        # Merge tags and extra
-        merged_tags = {**self._tags}
+        # Merge tags and extra (thread-safe read)
+        with self._lock:
+            merged_tags = {**self._tags}
+            merged_extra = {**self._extra}
+            global_breadcrumbs = list(self._breadcrumbs)
         if tags:
             merged_tags.update(tags)
-
-        merged_extra = {**self._extra}
         if extra:
             merged_extra.update(extra)
+
+        # Resolve request-scoped context (context vars take precedence)
+        user = _ctx_user.get(None) or self._user
+        request = _ctx_request.get(None) or self._request
+        ctx_crumbs = _ctx_breadcrumbs.get(None)
+        breadcrumbs = list(ctx_crumbs) if ctx_crumbs is not None else global_breadcrumbs
 
         # Ensure message is never None (server requires it)
         final_message = message
@@ -276,11 +330,11 @@ class BugwatchClient:
             platform="python",
             sdk=SdkInfo(name=SDK_NAME, version=SDK_VERSION),
             runtime=RuntimeInfo(name="python", version=platform.python_version()),
-            request=self._request,
-            user=self._user,
+            request=request,
+            user=user,
             tags=merged_tags,
             extra=merged_extra,
-            breadcrumbs=list(self._breadcrumbs),
+            breadcrumbs=breadcrumbs,
             environment=self.options.environment,
             release=self.options.release,
             server_name=self.options.server_name or socket.gethostname(),
@@ -453,3 +507,43 @@ class BugwatchClient:
             return str_val
         except Exception:
             return f"<{type(value).__name__}>"
+
+
+def request_scope():
+    """
+    Context manager that creates an isolated scope for a single request.
+
+    Use this in middleware to prevent user context, request data, and breadcrumbs
+    from leaking between concurrent async requests.
+
+    Example::
+
+        async def middleware(request, call_next):
+            with request_scope():
+                client.set_user(UserContext(id=request.user.id))
+                response = await call_next(request)
+            return response
+    """
+    return _RequestScope()
+
+
+class _RequestScope:
+    """Context manager for request-scoped isolation using contextvars."""
+
+    def __enter__(self):
+        self._user_token = _ctx_user.set(None)
+        self._request_token = _ctx_request.set(None)
+        self._breadcrumbs_token = _ctx_breadcrumbs.set([])
+        return self
+
+    def __exit__(self, *exc):
+        _ctx_user.reset(self._user_token)
+        _ctx_request.reset(self._request_token)
+        _ctx_breadcrumbs.reset(self._breadcrumbs_token)
+        return False
+
+    async def __aenter__(self):
+        return self.__enter__()
+
+    async def __aexit__(self, *exc):
+        return self.__exit__(*exc)

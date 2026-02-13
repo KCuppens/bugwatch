@@ -201,6 +201,63 @@ impl BugwatchClient {
         event_id
     }
 
+    /// Capture an exception internally using async transport.
+    #[cfg(feature = "async")]
+    pub(crate) async fn capture_exception_internal_async(
+        &self,
+        exception: ExceptionInfo,
+        level: Level,
+        tags: Option<HashMap<String, String>>,
+        extra: Option<HashMap<String, serde_json::Value>>,
+    ) -> String {
+        // Create event
+        let event_id = Uuid::new_v4().to_string().replace("-", "");
+        let mut event = ErrorEvent::new(&event_id, level);
+
+        // Generate fingerprint
+        event.fingerprint = Some(fingerprint_from_exception(&exception));
+        event.exception = Some(exception);
+
+        // Add state
+        {
+            let state = self.state.read();
+            event.tags = state.tags.clone();
+            if let Some(t) = tags {
+                event.tags.extend(t);
+            }
+            event.extra = state.extra.clone();
+            if let Some(e) = extra {
+                event.extra.extend(e);
+            }
+            event.breadcrumbs = state.breadcrumbs.clone();
+            event.user = state.user.clone();
+        }
+
+        event.environment = self.options.environment.clone();
+        event.release = self.options.release.clone();
+        event.server_name = self.options.server_name.clone().or_else(|| {
+            hostname::get().ok().map(|h| h.to_string_lossy().to_string())
+        });
+
+        // Send via async transport
+        if let Some(http) = self.transport.as_any().downcast_ref::<HttpTransport>() {
+            if let Err(e) = http.send_async(&event).await {
+                if self.options.debug {
+                    tracing::error!("Failed to send event async: {}", e);
+                }
+            }
+        } else {
+            // Fallback to sync send for non-HTTP transports
+            if let Err(e) = self.transport.send(&event) {
+                if self.options.debug {
+                    tracing::error!("Failed to send event: {}", e);
+                }
+            }
+        }
+
+        event_id
+    }
+
     /// Capture a message and send it to Bugwatch.
     ///
     /// # Example
@@ -341,7 +398,7 @@ impl BugwatchClient {
         rand::random::<f64>() <= self.options.sample_rate
     }
 
-    /// Capture an error asynchronously.
+    /// Capture an error asynchronously using the async transport.
     #[cfg(feature = "async")]
     pub async fn capture_error_async<E: std::error::Error>(&self, error: &E) -> String {
         self.capture_error_with_options_async(error, Level::Error, None, None)
@@ -357,12 +414,35 @@ impl BugwatchClient {
         tags: Option<HashMap<String, String>>,
         extra: Option<HashMap<String, serde_json::Value>>,
     ) -> String {
-        // For now, we delegate to the sync version
-        // In a future version, we could use an async transport
-        self.capture_error_with_options(error, level, tags, extra)
+        // Apply sample rate
+        if !self.should_sample() {
+            return String::new();
+        }
+
+        // Build stack trace
+        let stacktrace = if self.options.attach_stacktrace {
+            capture_backtrace_skip(3)
+        } else {
+            Vec::new()
+        };
+
+        // Create exception info
+        let exception = ExceptionInfo {
+            error_type: std::any::type_name_of_val(error)
+                .split("::")
+                .last()
+                .unwrap_or("Error")
+                .to_string(),
+            value: error.to_string(),
+            stacktrace,
+            module: None,
+        };
+
+        self.capture_exception_internal_async(exception, level, tags, extra)
+            .await
     }
 
-    /// Capture a message asynchronously.
+    /// Capture a message asynchronously using the async transport.
     #[cfg(feature = "async")]
     pub async fn capture_message_async(&self, message: &str, level: Level) -> String {
         self.capture_message_with_options_async(message, level, None, None)
@@ -378,8 +458,52 @@ impl BugwatchClient {
         tags: Option<HashMap<String, String>>,
         extra: Option<HashMap<String, serde_json::Value>>,
     ) -> String {
-        // For now, we delegate to the sync version
-        self.capture_message_with_options(message, level, tags, extra)
+        // Apply sample rate
+        if !self.should_sample() {
+            return String::new();
+        }
+
+        // Create event
+        let event_id = Uuid::new_v4().to_string().replace("-", "");
+        let mut event = ErrorEvent::new(&event_id, level);
+        event.message = Some(message.to_string());
+
+        // Add state
+        {
+            let state = self.state.read();
+            event.tags = state.tags.clone();
+            if let Some(t) = tags {
+                event.tags.extend(t);
+            }
+            event.extra = state.extra.clone();
+            if let Some(e) = extra {
+                event.extra.extend(e);
+            }
+            event.breadcrumbs = state.breadcrumbs.clone();
+            event.user = state.user.clone();
+        }
+
+        event.environment = self.options.environment.clone();
+        event.release = self.options.release.clone();
+        event.server_name = self.options.server_name.clone();
+
+        // Send via async transport
+        if let Some(http) = self.transport.as_any().downcast_ref::<HttpTransport>() {
+            if let Err(e) = http.send_async(&event).await {
+                if self.options.debug {
+                    tracing::error!("Failed to send event async: {}", e);
+                }
+            }
+        } else {
+            // Fallback to sync send for non-HTTP transports
+            if let Err(e) = self.transport.send(&event) {
+                if self.options.debug {
+                    tracing::error!("Failed to send event: {}", e);
+                }
+            }
+        }
+
+        event_id
     }
 
     /// Flush any pending events to Bugwatch.

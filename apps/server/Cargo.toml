@@ -62,7 +62,7 @@ aws-config = { version = "1.5", features = ["behavior-version-latest"] }
 aws-sdk-sesv2 = "1.54"
 
 # BugWatch SDK for self-monitoring (dogfooding)
-bugwatch = { version = "0.1", features = ["async"] }
+bugwatch = { version = "0.2", features = ["async"] }
 
 [dev-dependencies]
 tokio-test = "0.4"

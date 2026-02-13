@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { useSearchParams } from "next/navigation";
 import {
   Card,
   CardContent,
@@ -33,11 +32,10 @@ import {
 import { toast } from "sonner";
 import {
   serversApi,
-  projectsApi,
   type ServerInfo,
   type ServerMetricData,
-  type Project,
 } from "@/lib/api";
+import { useProject } from "@/lib/project-context";
 import {
   AreaChart,
   Area,
@@ -87,11 +85,8 @@ function getStatusBg(value: number | null, warn: number = 70, crit: number = 90)
 }
 
 export default function ServerPage() {
-  const searchParams = useSearchParams();
-  const projectId = searchParams.get("project");
+  const { selectedProject } = useProject();
 
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [selectedProject, setSelectedProject] = useState<string | null>(projectId);
   const [servers, setServers] = useState<ServerInfo[]>([]);
   const [selectedServer, setSelectedServer] = useState<string | null>(null);
   const [period, setPeriod] = useState<string>("1h");
@@ -105,33 +100,35 @@ export default function ServerPage() {
   const [processFilter, setProcessFilter] = useState("");
   const [showAllProcesses, setShowAllProcesses] = useState(false);
 
-  // Fetch projects
-  useEffect(() => {
-    async function fetchProjects() {
-      try {
-        const response = await projectsApi.list();
-        setProjects(response.data);
-        if (!selectedProject && response.data[0]) {
-          setSelectedProject(response.data[0].id);
-        }
-      } catch (err) {
-        toast.error("Failed to fetch projects");
-      }
-    }
-    fetchProjects();
-  }, []);
-
   // Fetch servers when project changes
   useEffect(() => {
-    if (!selectedProject) return;
+    if (!selectedProject) {
+      setIsLoading(false);
+      setHasAgent(null);
+      setServers([]);
+      setSelectedServer(null);
+      setMetrics([]);
+      setLatest(null);
+      setServerInfo(null);
+      return;
+    }
+    let cancelled = false;
     async function fetchServers() {
       setIsLoading(true);
+      setHasAgent(null);
+      setServers([]);
+      setSelectedServer(null);
+      setMetrics([]);
+      setLatest(null);
+      setServerInfo(null);
       try {
-        const status = await serversApi.hasAgent(selectedProject!);
+        const status = await serversApi.hasAgent(selectedProject!.id);
+        if (cancelled) return;
         setHasAgent(status.has_agent);
 
         if (status.has_agent) {
-          const response = await serversApi.listServers(selectedProject!);
+          const response = await serversApi.listServers(selectedProject!.id);
+          if (cancelled) return;
           setServers(response.data);
           const firstServer = response.data[0];
           setSelectedServer(firstServer ? firstServer.id : null);
@@ -140,13 +137,15 @@ export default function ServerPage() {
           setSelectedServer(null);
         }
       } catch (err) {
+        if (cancelled) return;
         toast.error("Failed to load servers");
         setHasAgent(false);
       } finally {
-        setIsLoading(false);
+        if (!cancelled) setIsLoading(false);
       }
     }
     fetchServers();
+    return () => { cancelled = true; };
   }, [selectedProject]);
 
   // Fetch metrics when server/period changes
@@ -154,8 +153,8 @@ export default function ServerPage() {
     if (!selectedProject || !selectedServer) return;
     try {
       const [metricsRes, latestRes] = await Promise.all([
-        serversApi.getMetrics(selectedProject, selectedServer, period),
-        serversApi.getLatest(selectedProject, selectedServer),
+        serversApi.getMetrics(selectedProject.id, selectedServer, period),
+        serversApi.getLatest(selectedProject.id, selectedServer),
       ]);
       setMetrics(metricsRes.data);
       setLatest(latestRes.data);
@@ -177,8 +176,7 @@ export default function ServerPage() {
   }, [fetchMetrics, selectedProject, selectedServer]);
 
   // Get API key for install command
-  const currentProject = projects.find((p) => p.id === selectedProject);
-  const apiKey = currentProject?.api_key || "<your_api_key>";
+  const apiKey = selectedProject?.api_key || "<your_api_key>";
 
   if (isLoading) {
     return (
@@ -215,29 +213,29 @@ export default function ServerPage() {
     );
   }
 
+  // No project selected
+  if (!selectedProject) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-2xl font-bold">Server Monitoring</h1>
+          <p className="text-muted-foreground mt-1">
+            Select a project from the sidebar to view server metrics.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   // Empty state — no agent installed
   if (hasAgent === false) {
     return (
       <div className="space-y-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold">Server Monitoring</h1>
-            <p className="text-muted-foreground mt-1">
-              Monitor your server health alongside error tracking
-            </p>
-          </div>
-          {projects.length > 1 && (
-            <Select value={selectedProject || ""} onValueChange={setSelectedProject}>
-              <SelectTrigger className="w-[200px] bg-white/5 border-white/10">
-                <SelectValue placeholder="Select project" />
-              </SelectTrigger>
-              <SelectContent>
-                {projects.map((p) => (
-                  <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          )}
+        <div>
+          <h1 className="text-2xl font-bold">Server Monitoring</h1>
+          <p className="text-muted-foreground mt-1">
+            Monitor your server health alongside error tracking
+          </p>
         </div>
 
         <Card className="border-white/10 bg-white/[0.02]">

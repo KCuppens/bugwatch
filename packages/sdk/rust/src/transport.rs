@@ -36,6 +36,15 @@ pub trait Transport: Send + Sync {
     fn close(&self) -> Result<(), TransportError> {
         self.flush()
     }
+
+    /// Downcast support for accessing concrete transport types.
+    ///
+    /// The default implementation returns a reference that will fail any downcast,
+    /// causing the client to fall back to synchronous `send()`. Override this in
+    /// custom transports that need async support.
+    fn as_any(&self) -> &dyn std::any::Any {
+        &()
+    }
 }
 
 /// HTTP transport for sending events.
@@ -46,6 +55,8 @@ pub struct HttpTransport {
     debug: bool,
     #[cfg(feature = "blocking")]
     blocking_client: Option<reqwest::blocking::Client>,
+    #[cfg(feature = "async")]
+    async_client: reqwest::Client,
 }
 
 impl HttpTransport {
@@ -63,12 +74,20 @@ impl HttpTransport {
                 .map_err(|e| TransportError::Request(format!("Failed to create HTTP client: {}", e)))?,
         );
 
+        #[cfg(feature = "async")]
+        let async_client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .build()
+            .map_err(|e| TransportError::Request(format!("Failed to create async HTTP client: {}", e)))?;
+
         Ok(Self {
             endpoint: format!("{}/api/v1/events", options.endpoint.trim_end_matches('/')),
             api_key: options.api_key.clone(),
             debug: options.debug,
             #[cfg(feature = "blocking")]
             blocking_client,
+            #[cfg(feature = "async")]
+            async_client,
         })
     }
 
@@ -80,12 +99,15 @@ impl HttpTransport {
             .as_ref()
             .ok_or_else(|| TransportError::Request("No blocking client available".to_string()))?;
 
+        // Serialize explicitly so we get a clear serialization error vs network error
+        let body = serde_json::to_vec(event)?;
+
         let response = client
             .post(&self.endpoint)
             .header("Content-Type", "application/json")
             .header("Authorization", format!("Bearer {}", self.api_key))
             .header("User-Agent", format!("bugwatch-rust/{}", env!("CARGO_PKG_VERSION")))
-            .json(event)
+            .body(body)
             .send()
             .map_err(|e| TransportError::Request(e.to_string()))?;
 
@@ -106,17 +128,15 @@ impl HttpTransport {
     /// Send an event asynchronously.
     #[cfg(feature = "async")]
     pub async fn send_async(&self, event: &ErrorEvent) -> Result<(), TransportError> {
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(10))
-            .build()
-            .map_err(|e| TransportError::Request(e.to_string()))?;
+        // Serialize explicitly so we get a clear serialization error vs network error
+        let body = serde_json::to_vec(event)?;
 
-        let response = client
+        let response = self.async_client
             .post(&self.endpoint)
             .header("Content-Type", "application/json")
             .header("Authorization", format!("Bearer {}", self.api_key))
             .header("User-Agent", format!("bugwatch-rust/{}", env!("CARGO_PKG_VERSION")))
-            .json(event)
+            .body(body)
             .send()
             .await
             .map_err(|e| TransportError::Request(e.to_string()))?;
@@ -149,6 +169,10 @@ impl Transport for HttpTransport {
             ))
         }
     }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
 
 /// No-op transport that does nothing (for testing).
@@ -158,6 +182,10 @@ pub struct NoopTransport;
 impl Transport for NoopTransport {
     fn send(&self, _event: &ErrorEvent) -> Result<(), TransportError> {
         Ok(())
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 }
 
@@ -184,6 +212,10 @@ impl Transport for ConsoleTransport {
         }
         println!("  Tags: {:?}", event.tags);
         Ok(())
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 }
 

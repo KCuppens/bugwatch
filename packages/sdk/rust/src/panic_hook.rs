@@ -62,42 +62,51 @@ pub fn install_panic_hook_with_abort(client: Arc<BugwatchClient>) {
 }
 
 /// Capture a panic to Bugwatch.
+///
+/// Wrapped in `catch_unwind` to prevent double-panics if our own
+/// capture logic (serialization, transport, etc.) panics.
 fn capture_panic(client: &BugwatchClient, panic_info: &PanicHookInfo<'_>) {
-    // Extract panic message
-    let message = if let Some(s) = panic_info.payload().downcast_ref::<&str>() {
-        s.to_string()
-    } else if let Some(s) = panic_info.payload().downcast_ref::<String>() {
-        s.clone()
-    } else {
-        "Unknown panic".to_string()
-    };
+    // Wrap everything in catch_unwind to prevent double-panic
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // Extract panic message
+        let message = if let Some(s) = panic_info.payload().downcast_ref::<&str>() {
+            s.to_string()
+        } else if let Some(s) = panic_info.payload().downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "Unknown panic".to_string()
+        };
 
-    // Extract location
-    let location = panic_info.location().map(|loc| {
-        format!("{}:{}:{}", loc.file(), loc.line(), loc.column())
-    });
+        // Extract location
+        let location = panic_info.location().map(|loc| {
+            format!("{}:{}:{}", loc.file(), loc.line(), loc.column())
+        });
 
-    // Capture backtrace (skip panic handling frames)
-    let stacktrace = capture_backtrace_skip(5);
+        // Capture backtrace (skip panic handling frames)
+        let stacktrace = capture_backtrace_skip(5);
 
-    // Create exception info
-    let exception = ExceptionInfo {
-        error_type: "panic".to_string(),
-        value: message,
-        stacktrace,
-        module: None,
-    };
+        // Create exception info
+        let exception = ExceptionInfo {
+            error_type: "panic".to_string(),
+            value: message,
+            stacktrace,
+            module: None,
+        };
 
-    // Build tags
-    let mut tags = std::collections::HashMap::new();
-    tags.insert("mechanism".to_string(), "panic_hook".to_string());
-    if let Some(loc) = location {
-        tags.insert("panic.location".to_string(), loc);
-    }
+        // Build tags
+        let mut tags = std::collections::HashMap::new();
+        tags.insert("mechanism".to_string(), "panic_hook".to_string());
+        if let Some(loc) = location {
+            tags.insert("panic.location".to_string(), loc);
+        }
 
-    // Capture to Bugwatch
-    // Note: We use blocking send here since we're in a panic handler
-    let _ = client.capture_exception_internal(exception, Level::Fatal, Some(tags), None);
+        // Capture to Bugwatch
+        // Note: We use blocking send here since we're in a panic handler
+        let _ = client.capture_exception_internal(exception, Level::Fatal, Some(tags), None);
+
+        // Best-effort flush so the event actually reaches the server
+        let _ = client.flush();
+    }));
 }
 
 /// A guard that captures panics when dropped.
@@ -143,18 +152,21 @@ impl Drop for PanicGuard {
     fn drop(&mut self) {
         // Check if a panic started during this guard's lifetime
         if std::thread::panicking() && !self.panicking {
-            // We're panicking, try to capture
-            // Note: We can't get panic info here, so we just log a generic message
-            let exception = ExceptionInfo::new("panic", "Panic detected in guarded section");
-            let mut tags = std::collections::HashMap::new();
-            tags.insert("mechanism".to_string(), "panic_guard".to_string());
+            // Wrap in catch_unwind to prevent double-panic if our capture logic fails
+            let client = self.client.clone();
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                let exception = ExceptionInfo::new("panic", "Panic detected in guarded section");
+                let mut tags = std::collections::HashMap::new();
+                tags.insert("mechanism".to_string(), "panic_guard".to_string());
 
-            let _ = self.client.capture_exception_internal(
-                exception,
-                Level::Fatal,
-                Some(tags),
-                None,
-            );
+                let _ = client.capture_exception_internal(
+                    exception,
+                    Level::Fatal,
+                    Some(tags),
+                    None,
+                );
+                let _ = client.flush();
+            }));
         }
     }
 }

@@ -62,7 +62,17 @@ class BugwatchMiddleware:
                     ip_address=ip_address,
                 ))
 
-        response = self.get_response(request)
+        try:
+            response = self.get_response(request)
+        except Exception as e:
+            # get_response() threw — process_exception won't fire for this,
+            # so capture it here before re-raising.
+            try:
+                self.process_exception(request, e)
+            except Exception:
+                # Never let monitoring break the original exception propagation
+                pass
+            raise
 
         return response
 

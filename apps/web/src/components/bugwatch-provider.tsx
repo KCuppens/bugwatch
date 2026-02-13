@@ -31,7 +31,7 @@ export function BugwatchProvider({ children }: { children: React.ReactNode }) {
   return (
     <SdkBugwatchProvider
       options={{
-        apiKey: "bw_live_3047f2aaca22496d8f1010960cff1595",
+        apiKey: process.env.NEXT_PUBLIC_BUGWATCH_API_KEY || "",
         environment: process.env.NODE_ENV,
         debug: process.env.NODE_ENV === "development",
       }}

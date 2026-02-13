@@ -1,9 +1,12 @@
+"use client";
+
 import React, {
   Component,
   createContext,
   useContext,
   useEffect,
   useCallback,
+  useRef,
   useMemo,
   type ReactNode,
   type ErrorInfo,
@@ -138,10 +141,21 @@ export function BugwatchProvider({
   fallback,
   onError,
 }: BugwatchProviderProps): JSX.Element {
+  // Serialize options to a stable string so useEffect doesn't re-run on every render.
+  // Object identity of `options` changes every render if passed inline.
+  const optionsKey = useMemo(
+    () => (options ? JSON.stringify(options) : ""),
+    [options]
+  );
+  const optionsRef = useRef(options);
+  optionsRef.current = options;
+
   useEffect(() => {
+    const currentOptions = optionsRef.current;
+
     // Merge env config with explicit options (explicit takes precedence)
     const envConfig = getEnvConfig();
-    const mergedOptions = { ...DEFAULT_REACT_OPTIONS, ...envConfig, ...options };
+    const mergedOptions = { ...DEFAULT_REACT_OPTIONS, ...envConfig, ...currentOptions };
 
     // Skip initialization if no API key is available
     if (!mergedOptions.apiKey) {
@@ -238,7 +252,8 @@ export function BugwatchProvider({
         }
       }
     };
-  }, [options]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [optionsKey]);
 
   const captureException = useCallback(
     (error: Error, context?: Partial<ErrorEvent>) => {

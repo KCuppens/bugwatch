@@ -122,8 +122,14 @@ lazy_static! {
 /// capture_message("Hello from Bugwatch!", Level::Info);
 /// ```
 pub fn init(options: BugwatchOptions) -> Arc<BugwatchClient> {
+    // Take write lock first to prevent TOCTOU race where two threads both
+    // create clients simultaneously
+    let mut guard = GLOBAL_CLIENT.write();
+    if let Some(ref existing) = *guard {
+        return existing.clone();
+    }
     let client = Arc::new(BugwatchClient::new(options));
-    *GLOBAL_CLIENT.write() = Some(client.clone());
+    *guard = Some(client.clone());
     client
 }
 
@@ -248,18 +254,20 @@ pub fn close() -> Result<(), TransportError> {
 mod tests {
     use super::*;
 
+    // These tests share GLOBAL_CLIENT and must run sequentially.
+    // Combining them prevents parallel test interference.
     #[test]
-    fn test_init_and_get_client() {
-        init(BugwatchOptions::new("test-key"));
-        assert!(get_client().is_some());
-    }
-
-    #[test]
-    fn test_capture_without_init() {
-        // Reset global client
+    fn test_global_client_lifecycle() {
+        // Phase 1: capture without init returns empty
         *GLOBAL_CLIENT.write() = None;
-
         let result = capture_message("test", Level::Info);
         assert!(result.is_empty());
+
+        // Phase 2: init creates a client, get_client returns it
+        init(BugwatchOptions::new("test-key"));
+        assert!(get_client().is_some());
+
+        // Cleanup for other tests
+        *GLOBAL_CLIENT.write() = None;
     }
 }
