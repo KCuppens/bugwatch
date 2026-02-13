@@ -109,6 +109,9 @@ export function useSearch({
     if (parsed.filters.level?.length) {
       filters.level = parsed.filters.level;
     }
+    if (parsed.filters.environment?.length) {
+      filters.environment = parsed.filters.environment;
+    }
     if (parsed.filters.count_gt !== undefined) {
       filters.count_gt = parsed.filters.count_gt;
     }

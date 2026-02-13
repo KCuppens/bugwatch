@@ -25,6 +25,7 @@ export interface ParsedQuery {
 export interface SearchFilters {
   status?: string[];
   level?: string[];
+  environment?: string[];
   count_gt?: number;
   count_lt?: number;
   count_gte?: number;
@@ -84,6 +85,7 @@ export interface SavedSearch {
 export interface Facets {
   level: Record<string, number>;
   status: Record<string, number>;
+  environment: Record<string, number>;
 }
 
 // API types

@@ -37,6 +37,7 @@ import {
   type MonitorWithProjectInfo,
   type MonitorsSummary,
 } from "@/lib/api";
+import { ENVIRONMENT_COLORS } from "@/lib/search";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 
@@ -628,6 +629,15 @@ export default function OverviewPage() {
                               <p className="font-medium text-sm truncate">
                                 {issue.title}
                               </p>
+                              {issue.environment && issue.environment !== "production" && (
+                                <span className={`shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-medium ${
+                                  (ENVIRONMENT_COLORS[issue.environment] ?? ENVIRONMENT_COLORS.production)!.bg
+                                } ${
+                                  (ENVIRONMENT_COLORS[issue.environment] ?? ENVIRONMENT_COLORS.production)!.text
+                                }`}>
+                                  {issue.environment}
+                                </span>
+                              )}
                               {isRecent && (
                                 <span className="shrink-0 flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-bug/10 text-bug text-[10px] font-medium">
                                   <span className="w-1.5 h-1.5 rounded-full bg-bug animate-pulse" />

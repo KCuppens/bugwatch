@@ -12,6 +12,7 @@ impl IssueRepository {
         fingerprint: &str,
         title: &str,
         level: &str,
+        environment: &str,
     ) -> Result<(Issue, bool)> {
         // Try to find existing issue
         if let Some(mut issue) = Self::find_by_fingerprint(pool, project_id, fingerprint).await? {
@@ -20,17 +21,19 @@ impl IssueRepository {
             sqlx::query(
                 r#"
                 UPDATE issues
-                SET last_seen = $1, count = count + 1
+                SET last_seen = $1, count = count + 1, environment = $3
                 WHERE id = $2
                 "#,
             )
             .bind(now)
             .bind(&issue.id)
+            .bind(environment)
             .execute(pool)
             .await?;
 
             issue.last_seen = now;
             issue.count += 1;
+            issue.environment = environment.to_string();
             return Ok((issue, false));
         }
 
@@ -40,8 +43,8 @@ impl IssueRepository {
 
         let issue = sqlx::query_as::<_, Issue>(
             r#"
-            INSERT INTO issues (id, project_id, fingerprint, title, level, first_seen, last_seen)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            INSERT INTO issues (id, project_id, fingerprint, title, level, first_seen, last_seen, environment)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             RETURNING *
             "#,
         )
@@ -52,6 +55,7 @@ impl IssueRepository {
         .bind(level)
         .bind(now)
         .bind(now)
+        .bind(environment)
         .fetch_one(pool)
         .await?;
 
@@ -86,6 +90,7 @@ impl IssueRepository {
         project_id: &str,
         status: Option<&str>,
         level: Option<&str>,
+        environment: Option<&str>,
         limit: i64,
         offset: i64,
     ) -> Result<Vec<Issue>> {
@@ -102,6 +107,12 @@ impl IssueRepository {
         if let Some(l) = level {
             query.push_str(&format!(" AND level = ${}", param_idx));
             params.push(l.to_string());
+            param_idx += 1;
+        }
+
+        if let Some(e) = environment {
+            query.push_str(&format!(" AND environment = ${}", param_idx));
+            params.push(e.to_string());
             param_idx += 1;
         }
 
@@ -184,6 +195,16 @@ impl IssueRepository {
                 query.push_str(&format!(" AND level IN ({})", placeholders.join(",")));
                 params.extend(levels.clone());
                 param_idx += levels.len();
+            }
+        }
+
+        // Environment filter (multiple values)
+        if let Some(environments) = &filters.environment {
+            if !environments.is_empty() {
+                let placeholders: Vec<String> = environments.iter().enumerate().map(|(i, _)| format!("${}", param_idx + i)).collect();
+                query.push_str(&format!(" AND environment IN ({})", placeholders.join(",")));
+                params.extend(environments.clone());
+                param_idx += environments.len();
             }
         }
 
@@ -303,6 +324,16 @@ impl IssueRepository {
             }
         }
 
+        // Environment filter
+        if let Some(environments) = &filters.environment {
+            if !environments.is_empty() {
+                let placeholders: Vec<String> = environments.iter().enumerate().map(|(i, _)| format!("${}", param_idx + i)).collect();
+                query.push_str(&format!(" AND environment IN ({})", placeholders.join(",")));
+                params.extend(environments.clone());
+                param_idx += environments.len();
+            }
+        }
+
         // Count filters (all variants for consistency with search)
         if let Some(v) = filters.count_gt {
             query.push_str(&format!(" AND count > ${}", param_idx));
@@ -406,7 +437,20 @@ impl IssueRepository {
             status.insert(s, c as u32);
         }
 
-        Ok(Facets { level, status })
+        // Get environment counts
+        let env_rows = sqlx::query_as::<_, (String, i64)>(
+            "SELECT environment, COUNT(*) as count FROM issues WHERE project_id = $1 GROUP BY environment"
+        )
+        .bind(project_id)
+        .fetch_all(pool)
+        .await?;
+
+        let mut environment = std::collections::HashMap::new();
+        for (e, c) in env_rows {
+            environment.insert(e, c as u32);
+        }
+
+        Ok(Facets { level, status, environment })
     }
 }
 
@@ -415,6 +459,7 @@ impl IssueRepository {
 pub struct SearchFilters {
     pub status: Option<Vec<String>>,
     pub level: Option<Vec<String>>,
+    pub environment: Option<Vec<String>>,
     pub count_gt: Option<i64>,
     pub count_lt: Option<i64>,
     pub count_gte: Option<i64>,
@@ -433,6 +478,7 @@ pub struct SearchFilters {
 pub struct Facets {
     pub level: std::collections::HashMap<String, u32>,
     pub status: std::collections::HashMap<String, u32>,
+    pub environment: std::collections::HashMap<String, u32>,
 }
 
 /// Statistics for a single project

@@ -154,6 +154,11 @@ function parseEnumField(
     if (!negated) {
       filters.level.push(normalizedValue);
     }
+  } else if (field === "env") {
+    if (!filters.environment) filters.environment = [];
+    if (!negated) {
+      filters.environment.push(normalizedValue);
+    }
   }
 
   return {};
@@ -385,6 +390,13 @@ export function stringifyQuery(parsed: ParsedQuery): string {
   if (parsed.filters.level) {
     for (const level of parsed.filters.level) {
       parts.push(`level:${level}`);
+    }
+  }
+
+  // Add environment filters
+  if (parsed.filters.environment) {
+    for (const env of parsed.filters.environment) {
+      parts.push(`env:${env}`);
     }
   }
 

@@ -23,6 +23,13 @@ export const SEARCH_FIELDS: Record<string, FieldConfig> = {
     description: "Error severity level",
     aliases: ["severity"],
   },
+  // Environment field
+  env: {
+    type: "enum",
+    values: ["production", "staging", "development", "testing"] as const,
+    description: "Deployment environment",
+    aliases: ["environment"],
+  },
   // Numeric fields
   count: {
     type: "number",
@@ -121,10 +128,35 @@ export const STATUS_COLORS: Record<string, { bg: string; text: string }> = {
   },
 };
 
+// Environment colors for UI
+export const ENVIRONMENT_COLORS: Record<string, { bg: string; text: string; border: string }> = {
+  production: {
+    bg: "bg-gray-500/10",
+    text: "text-gray-500",
+    border: "border-gray-500",
+  },
+  staging: {
+    bg: "bg-yellow-500/10",
+    text: "text-yellow-600 dark:text-yellow-400",
+    border: "border-yellow-500",
+  },
+  development: {
+    bg: "bg-blue-500/10",
+    text: "text-blue-600 dark:text-blue-400",
+    border: "border-blue-500",
+  },
+  testing: {
+    bg: "bg-purple-500/10",
+    text: "text-purple-600 dark:text-purple-400",
+    border: "border-purple-500",
+  },
+};
+
 // Field icons for autocomplete
 export const FIELD_ICONS: Record<string, string> = {
   is: "circle-dot",
   level: "alert-triangle",
+  env: "globe",
   count: "hash",
   users: "users",
   first_seen: "calendar",

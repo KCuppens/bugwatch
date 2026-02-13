@@ -41,6 +41,7 @@ import {
   ArrowRightLeft,
 } from "lucide-react";
 import { issuesApi, aiFixApi, type IssueDetail, type AiFix, type BreadcrumbDetail, type EventDetail, type FrequencyData, type ImpactData, type IssueComment } from "@/lib/api";
+import { ENVIRONMENT_COLORS } from "@/lib/search";
 import { useAuth } from "@/lib/auth-context";
 import { useTier } from "@/hooks/use-feature";
 import { Badge } from "@/components/ui/badge";
@@ -53,7 +54,7 @@ import { toast } from "sonner";
 const mockIssue: IssueDetail = {
   id: "1", project_id: "1", fingerprint: "abc123def456",
   title: "TypeError: Cannot read property 'map' of undefined",
-  level: "error", status: "unresolved", count: 142, user_count: 23,
+  level: "error", status: "unresolved", count: 142, user_count: 23, environment: "production",
   first_seen: "2024-01-12T10:30:00Z", last_seen: "2024-01-15T14:22:00Z",
   exception: {
     type: "TypeError", value: "Cannot read property 'map' of undefined",
@@ -503,6 +504,18 @@ export default function IssueDetailPage() {
                 <span>{issue.count} events</span>
                 <span>·</span>
                 <span>{issue.user_count} users</span>
+                {issue.environment && (
+                  <>
+                    <span>·</span>
+                    <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-medium ${
+                      (ENVIRONMENT_COLORS[issue.environment] ?? ENVIRONMENT_COLORS.production)!.bg
+                    } ${
+                      (ENVIRONMENT_COLORS[issue.environment] ?? ENVIRONMENT_COLORS.production)!.text
+                    }`}>
+                      {issue.environment}
+                    </span>
+                  </>
+                )}
                 {issue.status !== "unresolved" && (
                   <>
                     <span>·</span>
@@ -875,6 +888,21 @@ export default function IssueDetailPage() {
               </div>
               <p className="text-xs text-muted-foreground">Last seen</p>
             </div>
+            {issue.environment && (
+              <div className="col-span-2 rounded-lg border p-3">
+                <div className="flex items-center gap-2">
+                  <Globe className="h-4 w-4 text-muted-foreground" />
+                  <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
+                    (ENVIRONMENT_COLORS[issue.environment] ?? ENVIRONMENT_COLORS.production)!.bg
+                  } ${
+                    (ENVIRONMENT_COLORS[issue.environment] ?? ENVIRONMENT_COLORS.production)!.text
+                  }`}>
+                    {issue.environment}
+                  </span>
+                </div>
+                <p className="text-xs text-muted-foreground mt-1">Environment</p>
+              </div>
+            )}
           </div>
 
           {/* Frequency Chart */}

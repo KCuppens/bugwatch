@@ -27,6 +27,7 @@ pub struct IssueResponse {
     pub last_seen: String,
     pub count: i64,
     pub user_count: i64,
+    pub environment: String,
 }
 
 impl From<crate::db::models::Issue> for IssueResponse {
@@ -42,6 +43,7 @@ impl From<crate::db::models::Issue> for IssueResponse {
             last_seen: i.last_seen.to_rfc3339(),
             count: i.count,
             user_count: i.user_count,
+            environment: i.environment,
         }
     }
 }
@@ -50,6 +52,7 @@ impl From<crate::db::models::Issue> for IssueResponse {
 pub struct IssueFilters {
     pub status: Option<String>,
     pub level: Option<String>,
+    pub environment: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -83,6 +86,7 @@ pub async fn list(
         &project_id,
         filters.status.as_deref(),
         filters.level.as_deref(),
+        filters.environment.as_deref(),
         per_page as i64,
         offset,
     )
@@ -129,6 +133,7 @@ pub async fn search(
     let filters = SearchFilters {
         status: req.filters.as_ref().and_then(|f| f.status.clone()),
         level: req.filters.as_ref().and_then(|f| f.level.clone()),
+        environment: req.filters.as_ref().and_then(|f| f.environment.clone()),
         count_gt: req.filters.as_ref().and_then(|f| f.count_gt),
         count_lt: req.filters.as_ref().and_then(|f| f.count_lt),
         count_gte: req.filters.as_ref().and_then(|f| f.count_gte),
@@ -188,6 +193,7 @@ pub struct SearchRequest {
 pub struct SearchFiltersRequest {
     pub status: Option<Vec<String>>,
     pub level: Option<Vec<String>>,
+    pub environment: Option<Vec<String>>,
     pub count_gt: Option<i64>,
     pub count_lt: Option<i64>,
     pub count_gte: Option<i64>,
@@ -282,6 +288,7 @@ pub async fn get(
             last_seen: issue.last_seen.to_rfc3339(),
             count: issue.count,
             user_count: issue.user_count,
+            environment: issue.environment,
             exception,
             recent_events,
             tags,
@@ -564,6 +571,7 @@ pub struct IssueDetail {
     pub last_seen: String,
     pub count: i64,
     pub user_count: i64,
+    pub environment: String,
     pub exception: Option<ExceptionDetail>,
     pub recent_events: Vec<EventSummary>,
     pub tags: HashMap<String, String>,
@@ -1044,6 +1052,7 @@ pub struct IssueWithProject {
     pub last_seen: String,
     pub count: i64,
     pub user_count: i64,
+    pub environment: String,
 }
 
 /// GET /api/v1/issues/across-projects
@@ -1114,6 +1123,7 @@ pub async fn list_across_projects(
                 last_seen: issue.last_seen.to_rfc3339(),
                 count: issue.count,
                 user_count: issue.user_count,
+                environment: issue.environment,
             })
         })
         .collect();

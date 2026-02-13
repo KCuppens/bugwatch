@@ -24,6 +24,7 @@ import {
   X,
 } from "lucide-react";
 import { issuesApi, type Issue, type Facets } from "@/lib/api";
+import { ENVIRONMENT_COLORS } from "@/lib/search";
 import { useProject } from "@/lib/project-context";
 import { IssueSearchBar } from "@/components/search";
 import { Sparkline, generateSparklineData } from "@/components/sparkline";
@@ -739,6 +740,15 @@ export default function DashboardPage() {
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
                         <p className="font-medium text-sm truncate">{issue.title}</p>
+                        {issue.environment && issue.environment !== "production" && (
+                          <span className={`shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-medium ${
+                            (ENVIRONMENT_COLORS[issue.environment] ?? ENVIRONMENT_COLORS.production)!.bg
+                          } ${
+                            (ENVIRONMENT_COLORS[issue.environment] ?? ENVIRONMENT_COLORS.production)!.text
+                          }`}>
+                            {issue.environment}
+                          </span>
+                        )}
                         {isRecent && (
                           <span className="shrink-0 flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-bug/10 text-bug text-[10px] font-medium">
                             <span className="w-1.5 h-1.5 rounded-full bg-bug animate-pulse" />

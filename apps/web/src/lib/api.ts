@@ -450,6 +450,7 @@ export interface Issue {
   user_count: number;
   first_seen: string;
   last_seen: string;
+  environment: string;
 }
 
 export interface BreadcrumbDetail {
@@ -664,6 +665,7 @@ export const projectsApi = {
 export interface SearchFilters {
   status?: string[];
   level?: string[];
+  environment?: string[];
   count_gt?: number;
   count_lt?: number;
   count_gte?: number;
@@ -692,6 +694,7 @@ export interface SearchRequest {
 export interface Facets {
   level: Record<string, number>;
   status: Record<string, number>;
+  environment: Record<string, number>;
 }
 
 export interface SearchResponse {

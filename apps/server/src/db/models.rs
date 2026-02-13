@@ -55,6 +55,7 @@ pub struct Issue {
     pub last_seen: DateTime<Utc>,
     pub count: i64,
     pub user_count: i64,
+    pub environment: String,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize)]

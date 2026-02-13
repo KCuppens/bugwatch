@@ -136,6 +136,8 @@ function getValueSuggestions(
           count = facets.status[value];
         } else if (field === "level" && facets.level) {
           count = facets.level[value];
+        } else if (field === "env" && facets.environment) {
+          count = facets.environment[value];
         }
       }
 

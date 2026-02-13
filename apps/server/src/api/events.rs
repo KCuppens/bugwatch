@@ -237,6 +237,7 @@ pub async fn ingest(
         &fingerprint,
         &title,
         level,
+        &event.environment,
     )
     .await?;
 
