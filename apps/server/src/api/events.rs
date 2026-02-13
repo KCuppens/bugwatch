@@ -213,7 +213,17 @@ pub async fn ingest(
 
     // 5. Generate fingerprint and title
     let (fingerprint, title) = if let Some(ref exc) = event.exception {
-        (generate_fingerprint(exc), generate_title(exc))
+        let fp = generate_fingerprint(exc);
+        let t = generate_title(exc);
+        tracing::debug!(
+            "Fingerprint for {}: {} (type={}, in_app_frames={}, msg_prefix={})",
+            event.event_id,
+            fp,
+            exc.exception_type,
+            exc.stacktrace.iter().filter(|f| f.in_app).count(),
+            &exc.value[..exc.value.len().min(80)]
+        );
+        (fp, t)
     } else {
         // For events without exception, use message as fingerprint base
         let msg = event.message.as_deref().unwrap_or("(no message)");

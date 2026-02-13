@@ -14,37 +14,18 @@ impl IssueRepository {
         level: &str,
         environment: &str,
     ) -> Result<(Issue, bool)> {
-        // Try to find existing issue
-        if let Some(mut issue) = Self::find_by_fingerprint(pool, project_id, fingerprint).await? {
-            // Update existing issue
-            let now = Utc::now();
-            sqlx::query(
-                r#"
-                UPDATE issues
-                SET last_seen = $1, count = count + 1, environment = $3
-                WHERE id = $2
-                "#,
-            )
-            .bind(now)
-            .bind(&issue.id)
-            .bind(environment)
-            .execute(pool)
-            .await?;
-
-            issue.last_seen = now;
-            issue.count += 1;
-            issue.environment = environment.to_string();
-            return Ok((issue, false));
-        }
-
-        // Create new issue
         let id = Uuid::new_v4().to_string();
         let now = Utc::now();
 
+        // Atomic upsert: INSERT or increment count on fingerprint conflict.
+        // This prevents race conditions where two concurrent events with the
+        // same fingerprint could both INSERT (the old SELECT-then-INSERT pattern).
         let issue = sqlx::query_as::<_, Issue>(
             r#"
-            INSERT INTO issues (id, project_id, fingerprint, title, level, first_seen, last_seen, environment)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            INSERT INTO issues (id, project_id, fingerprint, title, level, first_seen, last_seen, environment, count)
+            VALUES ($1, $2, $3, $4, $5, $6, $6, $7, 1)
+            ON CONFLICT (project_id, fingerprint) DO UPDATE
+            SET last_seen = $6, count = issues.count + 1, environment = $7
             RETURNING *
             "#,
         )
@@ -54,12 +35,13 @@ impl IssueRepository {
         .bind(title)
         .bind(level)
         .bind(now)
-        .bind(now)
         .bind(environment)
         .fetch_one(pool)
         .await?;
 
-        Ok((issue, true))
+        // count == 1 means we just created it; count > 1 means it already existed
+        let is_new = issue.count == 1;
+        Ok((issue, is_new))
     }
 
     pub async fn find_by_fingerprint(

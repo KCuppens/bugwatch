@@ -45,6 +45,37 @@ pub enum AlertCondition {
         #[serde(default)]
         monitor_id: Option<String>,
     },
+    #[serde(rename = "server_cpu_high")]
+    ServerCpuHigh {
+        threshold_percent: f64,
+        #[serde(default)]
+        server_id: Option<String>,
+    },
+    #[serde(rename = "server_memory_high")]
+    ServerMemoryHigh {
+        threshold_percent: f64,
+        #[serde(default)]
+        server_id: Option<String>,
+    },
+    #[serde(rename = "server_disk_high")]
+    ServerDiskHigh {
+        threshold_percent: f64,
+        #[serde(default)]
+        mount: Option<String>,
+        #[serde(default)]
+        server_id: Option<String>,
+    },
+    #[serde(rename = "server_offline")]
+    ServerOffline {
+        #[serde(default = "default_missing_minutes")]
+        missing_minutes: u32,
+        #[serde(default)]
+        server_id: Option<String>,
+    },
+}
+
+fn default_missing_minutes() -> u32 {
+    5
 }
 
 #[derive(Debug, Deserialize)]

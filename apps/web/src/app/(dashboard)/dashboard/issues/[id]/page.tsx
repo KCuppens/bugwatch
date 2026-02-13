@@ -603,6 +603,50 @@ export default function IssueDetailPage() {
                 </Button>
               </div>
 
+              {/* HTTP Request/Response Payload */}
+              {issue.extra && !!(issue.extra.request_body || issue.extra.response_body) && (() => {
+                const reqBody = issue.extra.request_body ? String(issue.extra.request_body) : "";
+                const resBody = issue.extra.response_body ? String(issue.extra.response_body) : "";
+                const durationMs = issue.extra.duration_ms != null ? String(issue.extra.duration_ms) : "";
+                const formatBody = (raw: string) => { try { return JSON.stringify(JSON.parse(raw), null, 2); } catch { return raw; } };
+
+                return (
+                  <div className="rounded-lg border border-orange-200 dark:border-orange-900 bg-orange-50/50 dark:bg-orange-950/20 p-4 mb-2">
+                    <div className="flex items-center gap-2 mb-3">
+                      <ArrowRightLeft className="h-4 w-4 text-orange-600 dark:text-orange-400" />
+                      <span className="font-semibold text-sm">HTTP Payload</span>
+                      {durationMs && <span className="text-xs text-muted-foreground ml-auto">{durationMs}ms</span>}
+                    </div>
+                    <div className="space-y-3">
+                      {reqBody && (
+                        <div>
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Request Body</span>
+                            <Button variant="ghost" size="sm" className="h-5 px-1.5 text-[10px]"
+                              onClick={() => { navigator.clipboard.writeText(reqBody); toast.success("Request body copied"); }}>
+                              <Copy className="mr-1 h-2.5 w-2.5" />Copy
+                            </Button>
+                          </div>
+                          <pre className="bg-zinc-950 text-zinc-100 p-3 rounded-md overflow-x-auto text-xs font-mono max-h-48 overflow-y-auto">{formatBody(reqBody)}</pre>
+                        </div>
+                      )}
+                      {resBody && (
+                        <div>
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Response Body</span>
+                            <Button variant="ghost" size="sm" className="h-5 px-1.5 text-[10px]"
+                              onClick={() => { navigator.clipboard.writeText(resBody); toast.success("Response body copied"); }}>
+                              <Copy className="mr-1 h-2.5 w-2.5" />Copy
+                            </Button>
+                          </div>
+                          <pre className="bg-zinc-950 text-zinc-100 p-3 rounded-md overflow-x-auto text-xs font-mono max-h-48 overflow-y-auto">{formatBody(resBody)}</pre>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
+
               {stacktrace.length === 0 ? (
                 <p className="text-center text-muted-foreground py-8">No stack trace available</p>
               ) : (
