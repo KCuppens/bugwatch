@@ -1,6 +1,6 @@
 {
   "name": "@bugwatch/react",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Bugwatch SDK for React applications",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
