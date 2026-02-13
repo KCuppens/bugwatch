@@ -131,11 +131,26 @@ async function handleResponse<T>(response: Response): Promise<T> {
         // Response wasn't valid JSON
       }
     }
-    throw new ApiError(
+    const error = new ApiError(
       response.status,
       errorData?.error?.code || "unknown_error",
       errorData?.error?.message || `Request failed with status ${response.status}`
     );
+
+    // Report API errors to Bugwatch (skip 401s — those are auth flow)
+    if (response.status !== 401) {
+      import("@bugwatch/nextjs").then(({ captureException }) => {
+        captureException(error, {
+          tags: {
+            "api.status": String(response.status),
+            "api.url": response.url,
+            "api.code": error.code,
+          },
+        });
+      }).catch(() => {});
+    }
+
+    throw error;
   }
 
   // Handle empty successful responses
