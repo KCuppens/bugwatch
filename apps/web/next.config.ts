@@ -12,7 +12,11 @@ const nextConfig: NextConfig = {
   },
 };
 
-export default withBugwatch({
-  apiKey: process.env.NEXT_PUBLIC_BUGWATCH_API_KEY || "",
-  environment: process.env.NODE_ENV,
-})(nextConfig);
+const bugwatchApiKey = process.env.NEXT_PUBLIC_BUGWATCH_API_KEY;
+
+export default bugwatchApiKey
+  ? withBugwatch({
+      apiKey: bugwatchApiKey,
+      environment: process.env.NODE_ENV,
+    })(nextConfig)
+  : nextConfig;
