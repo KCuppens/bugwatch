@@ -15,6 +15,10 @@ COPY apps/web/package.json ./
 # Install dependencies from npm registry (includes @bugwatch/nextjs)
 RUN npm install
 
+# Overlay local SDK builds (includes fixes not yet published to npm)
+COPY packages/sdk/nextjs/dist ./node_modules/@bugwatch/nextjs/dist
+COPY packages/sdk/nextjs/package.json ./node_modules/@bugwatch/nextjs/package.json
+
 # Copy source code and config files
 COPY apps/web/src ./src
 COPY apps/web/public ./public

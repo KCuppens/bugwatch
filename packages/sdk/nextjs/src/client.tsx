@@ -324,6 +324,7 @@ function setupNavigationBreadcrumbs(): () => void {
 function setupFetchInstrumentation(options: ClientOptions): () => void {
   const originalFetch = window.fetch;
   const sdkEndpoint = options.endpoint || "https://api.bugwatch.dev";
+  const sdkEventUrl = `${sdkEndpoint}/api/v1/events`;
 
   window.fetch = async function (input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
     const url = typeof input === "string"
@@ -333,8 +334,8 @@ function setupFetchInstrumentation(options: ClientOptions): () => void {
         : input.url;
     const method = init?.method || "GET";
 
-    // Skip instrumenting our own SDK requests to avoid infinite loops
-    if (url.startsWith(sdkEndpoint)) {
+    // Skip instrumenting our own SDK event requests to avoid infinite loops
+    if (url.startsWith(sdkEventUrl)) {
       return originalFetch.call(window, input, init);
     }
 
