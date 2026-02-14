@@ -491,77 +491,38 @@ impl NotificationService {
             }
         }
 
-        // Build action buttons based on template configuration
+        // Build action links as mrkdwn (incoming webhooks don't support
+        // interactive actions blocks — only Slack apps with interactivity do).
         if !template.actions.is_empty() {
-            let mut action_elements: Vec<serde_json::Value> = Vec::new();
-            let mut action_id_counter: u32 = 0;
+            let mut links: Vec<String> = Vec::new();
 
             for action_config in &template.actions {
-                // Unique action_id per button (Slack requires uniqueness within a message)
-                action_id_counter += 1;
-
                 match action_config.action_type {
                     SlackActionType::ViewIssue => {
                         if let Some(url) = &payload.url {
-                            let label = truncate_str(&action_config.label, 75);
-                            let mut button = serde_json::json!({
-                                "type": "button",
-                                "action_id": format!("view_issue_{}", action_id_counter),
-                                "text": {
-                                    "type": "plain_text",
-                                    "text": label
-                                },
-                                "url": url
-                            });
-                            if let Some(style) = &action_config.style {
-                                button["style"] = serde_json::json!(style);
-                            }
-                            action_elements.push(button);
+                            links.push(format!("<{}|{}>", url, action_config.label));
                         }
                     }
                     SlackActionType::Resolve => {
                         if let Some(url) = &payload.url {
-                            let label = truncate_str(&action_config.label, 75);
-                            let mut button = serde_json::json!({
-                                "type": "button",
-                                "action_id": format!("resolve_issue_{}", action_id_counter),
-                                "text": {
-                                    "type": "plain_text",
-                                    "text": label
-                                },
-                                "url": format!("{}?action=resolve", url)
-                            });
-                            if let Some(style) = &action_config.style {
-                                button["style"] = serde_json::json!(style);
-                            }
-                            action_elements.push(button);
+                            links.push(format!("<{}?action=resolve|{}>", url, action_config.label));
                         }
                     }
                     SlackActionType::Mute => {
                         if let Some(url) = &payload.url {
-                            let label = truncate_str(&action_config.label, 75);
-                            let mut button = serde_json::json!({
-                                "type": "button",
-                                "action_id": format!("mute_issue_{}", action_id_counter),
-                                "text": {
-                                    "type": "plain_text",
-                                    "text": label
-                                },
-                                "url": format!("{}?action=mute", url)
-                            });
-                            if let Some(style) = &action_config.style {
-                                button["style"] = serde_json::json!(style);
-                            }
-                            action_elements.push(button);
+                            links.push(format!("<{}?action=mute|{}>", url, action_config.label));
                         }
                     }
                 }
             }
 
-            if !action_elements.is_empty() {
+            if !links.is_empty() {
                 blocks.push(serde_json::json!({
-                    "type": "actions",
-                    "elements": action_elements
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": links.join("  |  ")
+                    }
                 }));
             }
         }
