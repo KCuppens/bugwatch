@@ -580,11 +580,15 @@ impl NotificationService {
 
         let fallback_text = format!("[{}] {}: {}", payload.severity, payload.title, payload.message);
 
+        // Incoming webhooks do NOT support blocks inside attachments (that's
+        // only available via chat.postMessage). Use top-level blocks for content
+        // and a minimal attachment just for the color accent bar.
         let mut slack_payload = serde_json::json!({
+            "text": truncate_str(&fallback_text, 300),
+            "blocks": blocks,
             "attachments": [{
                 "color": color,
-                "fallback": truncate_str(&fallback_text, 300),
-                "blocks": blocks
+                "fallback": " "
             }]
         });
 
