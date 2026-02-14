@@ -324,7 +324,7 @@ impl NotificationService {
         let view_link = payload.url.as_ref().map(|url| {
             format!(
                 r#"<a href="{}" style="display: inline-block; padding: 12px 24px; background-color: #3b82f6; color: white; text-decoration: none; border-radius: 6px; margin-top: 16px;">View in Bugwatch</a>"#,
-                url
+                html_escape(url)
             )
         }).unwrap_or_default();
 
@@ -365,11 +365,11 @@ impl NotificationService {
 </body>
 </html>"#,
             severity_color,
-            payload.title,
-            payload.message,
-            payload.project_name,
-            payload.severity,
-            payload.timestamp,
+            html_escape(&payload.title),
+            html_escape(&payload.message),
+            html_escape(&payload.project_name),
+            html_escape(&payload.severity),
+            html_escape(&payload.timestamp),
             view_link
         )
     }
@@ -439,38 +439,48 @@ impl NotificationService {
 
             match block_config.block_type {
                 SlackBlockType::Header => {
+                    // Slack section text limit: 3000 chars
+                    let header_text = format!("{} *{}*", emoji, payload.title);
                     blocks.push(serde_json::json!({
                         "type": "section",
                         "text": {
                             "type": "mrkdwn",
-                            "text": format!("{} *{}*", emoji, payload.title)
+                            "text": truncate_str(&header_text, 3000)
                         }
                     }));
                 }
                 SlackBlockType::Message => {
+                    // Slack section text limit: 3000 chars (account for backticks + ellipsis)
+                    let msg = if payload.message.len() > 2997 {
+                        let end = payload.message.floor_char_boundary(2993);
+                        format!("`{}...`", &payload.message[..end])
+                    } else {
+                        format!("`{}`", payload.message)
+                    };
                     blocks.push(serde_json::json!({
                         "type": "section",
                         "text": {
                             "type": "mrkdwn",
-                            "text": format!("`{}`", payload.message)
+                            "text": msg
                         }
                     }));
                 }
                 SlackBlockType::StackTrace => {
                     // Stack trace would come from extended payload - skip if not available
-                    // This is a placeholder for when we have stack trace data
                 }
                 SlackBlockType::Context => {
+                    // Slack context text limit: 3000 chars
+                    let context_text = format!("*Project:* {} | *Severity:* {} | *Time:* {}",
+                        payload.project_name,
+                        payload.severity,
+                        payload.timestamp
+                    );
                     blocks.push(serde_json::json!({
                         "type": "context",
                         "elements": [
                             {
                                 "type": "mrkdwn",
-                                "text": format!("*Project:* {} | *Severity:* {} | *Time:* {}",
-                                    payload.project_name,
-                                    payload.severity,
-                                    payload.timestamp
-                                )
+                                "text": truncate_str(&context_text, 3000)
                             }
                         ]
                     }));
@@ -484,16 +494,22 @@ impl NotificationService {
         // Build action buttons based on template configuration
         if !template.actions.is_empty() {
             let mut action_elements: Vec<serde_json::Value> = Vec::new();
+            let mut action_id_counter: u32 = 0;
 
             for action_config in &template.actions {
+                // Unique action_id per button (Slack requires uniqueness within a message)
+                action_id_counter += 1;
+
                 match action_config.action_type {
                     SlackActionType::ViewIssue => {
                         if let Some(url) = &payload.url {
+                            let label = truncate_str(&action_config.label, 75);
                             let mut button = serde_json::json!({
                                 "type": "button",
+                                "action_id": format!("view_issue_{}", action_id_counter),
                                 "text": {
                                     "type": "plain_text",
-                                    "text": &action_config.label
+                                    "text": label
                                 },
                                 "url": url
                             });
@@ -504,14 +520,14 @@ impl NotificationService {
                         }
                     }
                     SlackActionType::Resolve => {
-                        // Interactive actions require Slack app setup
-                        // For now, just show as a link button that opens Bugwatch
                         if let Some(url) = &payload.url {
+                            let label = truncate_str(&action_config.label, 75);
                             let mut button = serde_json::json!({
                                 "type": "button",
+                                "action_id": format!("resolve_issue_{}", action_id_counter),
                                 "text": {
                                     "type": "plain_text",
-                                    "text": &action_config.label
+                                    "text": label
                                 },
                                 "url": format!("{}?action=resolve", url)
                             });
@@ -523,11 +539,13 @@ impl NotificationService {
                     }
                     SlackActionType::Mute => {
                         if let Some(url) = &payload.url {
+                            let label = truncate_str(&action_config.label, 75);
                             let mut button = serde_json::json!({
                                 "type": "button",
+                                "action_id": format!("mute_issue_{}", action_id_counter),
                                 "text": {
                                     "type": "plain_text",
-                                    "text": &action_config.label
+                                    "text": label
                                 },
                                 "url": format!("{}?action=mute", url)
                             });
@@ -548,9 +566,24 @@ impl NotificationService {
             }
         }
 
+        // If no blocks were generated, add a minimal fallback block
+        if blocks.is_empty() {
+            let fallback_block_text = format!("{} *{}*: {}", emoji, payload.title, payload.message);
+            blocks.push(serde_json::json!({
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": truncate_str(&fallback_block_text, 3000)
+                }
+            }));
+        }
+
+        let fallback_text = format!("[{}] {}: {}", payload.severity, payload.title, payload.message);
+
         let mut slack_payload = serde_json::json!({
             "attachments": [{
                 "color": color,
+                "fallback": truncate_str(&fallback_text, 300),
                 "blocks": blocks
             }]
         });
@@ -576,6 +609,25 @@ impl NotificationService {
         info!("Slack notification sent successfully to channel '{}'", channel.name);
         Ok(())
     }
+}
+
+/// Truncate a string to a max byte length, appending "..." if truncated.
+/// Ensures we don't cut in the middle of a multi-byte char.
+fn truncate_str(s: &str, max_len: usize) -> String {
+    if s.len() <= max_len {
+        return s.to_string();
+    }
+    let truncated = &s[..s.floor_char_boundary(max_len.saturating_sub(3))];
+    format!("{}...", truncated)
+}
+
+/// Escape HTML special characters to prevent injection in email bodies.
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#x27;")
 }
 
 /// Compute HMAC-SHA256 signature for webhook payloads
