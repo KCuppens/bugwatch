@@ -182,9 +182,14 @@ function setupFetchInstrumentation(options: { endpoint?: string }): () => void {
             "http.status_code": String(response.status),
             "http.url": url,
           },
+          request: {
+            url,
+            method: method.toUpperCase(),
+          },
           extra: {
             request_body: requestBody || undefined,
-            response_body: responseBody || undefined,
+            response_body: responseBody || "(empty response)",
+            response_status: response.status,
             duration_ms: duration,
           },
         });
