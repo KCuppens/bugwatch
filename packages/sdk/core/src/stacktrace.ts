@@ -152,3 +152,21 @@ export function extractErrorInfo(error: Error): { type: string; value: string } 
 
   return { type, value };
 }
+
+/**
+ * Check if an error originated from a browser extension.
+ * These errors are outside the application's control and should be filtered out.
+ */
+export function isBrowserExtensionError(error: Error): boolean {
+  const stack = error.stack || "";
+
+  const extensionPatterns = [
+    /chrome-extension:\/\//,
+    /moz-extension:\/\//,
+    /safari-extension:\/\//,
+    /safari-web-extension:\/\//,
+    /webkit-masked-url:\/\//,
+  ];
+
+  return extensionPatterns.some((pattern) => pattern.test(stack));
+}

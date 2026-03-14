@@ -26,7 +26,7 @@ export {
 } from "./transport";
 
 // Utilities
-export { parseStackTrace, extractErrorInfo } from "./stacktrace";
+export { parseStackTrace, extractErrorInfo, isBrowserExtensionError } from "./stacktrace";
 export { generateFingerprint, fingerprintFromException } from "./fingerprint";
 
 // Environment utilities

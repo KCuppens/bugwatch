@@ -1,5 +1,5 @@
 import { init as init$1 } from '@bugwatch/node';
-import { setUser, setTag, setExtra, getClient, captureMessage, captureException, addBreadcrumb, init as init$2 } from '@bugwatch/core';
+import { setUser, setTag, setExtra, getClient, captureMessage, captureException, addBreadcrumb, init as init$2, isBrowserExtensionError } from '@bugwatch/core';
 import { useEffect, Component } from 'react';
 import { jsx, jsxs } from 'react/jsx-runtime';
 
@@ -274,7 +274,7 @@ function closeClient() {
 function setupGlobalErrorHandler() {
   const originalOnError = window.onerror;
   window.onerror = (message, source, lineno, colno, error) => {
-    if (error && !error.__bugwatch_captured) {
+    if (error && !error.__bugwatch_captured && !isBrowserExtensionError(error)) {
       captureException(error, {
         tags: { mechanism: "onerror" }
       });
@@ -294,6 +294,9 @@ function setupUnhandledRejectionHandler() {
       return;
     }
     const error = event.reason instanceof Error ? event.reason : new Error(String(event.reason));
+    if (isBrowserExtensionError(error)) {
+      return;
+    }
     captureException(error, {
       tags: { mechanism: "onunhandledrejection" }
     });
@@ -448,9 +451,14 @@ function setupFetchInstrumentation(options) {
             "http.status_code": String(response.status),
             "http.url": url
           },
+          request: {
+            url,
+            method: method.toUpperCase()
+          },
           extra: {
             request_body: requestBody || void 0,
-            response_body: responseBody || void 0,
+            response_body: responseBody || "(empty response)",
+            response_status: response.status,
             duration_ms: duration
           }
         });

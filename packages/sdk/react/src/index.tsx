@@ -15,6 +15,7 @@ import {
   init as coreInit,
   getClient,
   getEnvConfig,
+  isBrowserExtensionError,
   captureException as coreCaptureException,
   captureMessage as coreCaptureMessage,
   addBreadcrumb as coreAddBreadcrumb,
@@ -335,7 +336,7 @@ export function BugwatchProvider({
       if (mergedOptions.captureGlobalErrors) {
         originalOnError = window.onerror;
         window.onerror = (message, source, lineno, colno, error) => {
-          if (error) {
+          if (error && !isBrowserExtensionError(error)) {
             coreCaptureException(error, {
               tags: { mechanism: "window.onerror" },
             });
@@ -353,6 +354,10 @@ export function BugwatchProvider({
             event.reason instanceof Error
               ? event.reason
               : new Error(String(event.reason));
+          // Skip errors originating from browser extensions
+          if (isBrowserExtensionError(error)) {
+            return;
+          }
           coreCaptureException(error, {
             tags: { mechanism: "unhandledrejection" },
           });

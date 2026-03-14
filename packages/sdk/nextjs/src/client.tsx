@@ -6,6 +6,7 @@ import {
   captureException,
   addBreadcrumb,
   getClient,
+  isBrowserExtensionError,
   type BugwatchOptions,
 } from "@bugwatch/core";
 import { getEnvConfig } from "./config";
@@ -140,7 +141,7 @@ function setupGlobalErrorHandler(): () => void {
   const originalOnError = window.onerror;
 
   window.onerror = (message, source, lineno, colno, error) => {
-    if (error && !(error as any).__bugwatch_captured) {
+    if (error && !(error as any).__bugwatch_captured && !isBrowserExtensionError(error)) {
       captureException(error, {
         tags: { mechanism: "onerror" },
       });
@@ -173,6 +174,11 @@ function setupUnhandledRejectionHandler(): () => void {
       event.reason instanceof Error
         ? event.reason
         : new Error(String(event.reason));
+
+    // Skip errors originating from browser extensions
+    if (isBrowserExtensionError(error)) {
+      return;
+    }
 
     captureException(error, {
       tags: { mechanism: "onunhandledrejection" },
