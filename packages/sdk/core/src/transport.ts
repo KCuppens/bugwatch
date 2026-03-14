@@ -2,6 +2,9 @@ import type { ErrorEvent, Transport, BugwatchOptions } from "./types";
 
 const DEFAULT_ENDPOINT = "https://api.bugwatch.dev";
 const DEFAULT_TIMEOUT_MS = 10000;
+const MAX_PAYLOAD_BYTES = 512 * 1024; // 512 KB
+const MAX_RETRIES = 2;
+const BASE_RETRY_DELAY_MS = 500;
 
 /**
  * Safely serialize a value to JSON, handling circular references.
@@ -20,6 +23,49 @@ function safeJsonStringify(value: unknown): string {
 }
 
 /**
+ * Truncate an event's breadcrumbs and extra data to fit within size limits.
+ * Returns the serialized JSON string.
+ */
+function serializeWithTruncation(event: ErrorEvent): string {
+  let json = safeJsonStringify(event);
+
+  if (json.length <= MAX_PAYLOAD_BYTES) {
+    return json;
+  }
+
+  // First pass: drop breadcrumbs from oldest until under limit
+  if (event.breadcrumbs && event.breadcrumbs.length > 0) {
+    const truncated = { ...event };
+    let crumbs = [...event.breadcrumbs];
+
+    while (crumbs.length > 0 && json.length > MAX_PAYLOAD_BYTES) {
+      crumbs = crumbs.slice(Math.ceil(crumbs.length / 2));
+      truncated.breadcrumbs = crumbs;
+      json = safeJsonStringify(truncated);
+    }
+
+    if (json.length <= MAX_PAYLOAD_BYTES) {
+      return json;
+    }
+  }
+
+  // Second pass: drop extra data
+  if (event.extra) {
+    const truncated = { ...event, breadcrumbs: [], extra: undefined };
+    json = safeJsonStringify(truncated);
+  }
+
+  return json;
+}
+
+/**
+ * Check if an HTTP status code is retryable
+ */
+function isRetryableStatus(status: number): boolean {
+  return status === 429 || status >= 500;
+}
+
+/**
  * HTTP transport for sending events to the Bugwatch API
  */
 export class HttpTransport implements Transport {
@@ -27,6 +73,8 @@ export class HttpTransport implements Transport {
   private apiKey: string;
   private debug: boolean;
   private timeoutMs: number;
+  private inFlightRequests: Set<Promise<void>> = new Set();
+  private rateLimitedUntil: number = 0;
 
   constructor(options: BugwatchOptions) {
     this.endpoint = options.endpoint || DEFAULT_ENDPOINT;
@@ -36,9 +84,23 @@ export class HttpTransport implements Transport {
   }
 
   async send(event: ErrorEvent): Promise<void> {
+    // Respect rate limit backoff
+    if (Date.now() < this.rateLimitedUntil) {
+      if (this.debug) {
+        console.warn("[Bugwatch] Rate limited, dropping event:", event.event_id);
+      }
+      return;
+    }
+
+    const promise = this.sendWithRetry(event);
+    this.inFlightRequests.add(promise);
+    promise.finally(() => this.inFlightRequests.delete(promise));
+  }
+
+  private async sendWithRetry(event: ErrorEvent, attempt = 0): Promise<void> {
     const url = `${this.endpoint}/api/v1/events`;
 
-    if (this.debug) {
+    if (this.debug && attempt === 0) {
       console.log("[Bugwatch] Sending event:", event.event_id);
     }
 
@@ -49,6 +111,8 @@ export class HttpTransport implements Transport {
         : null;
 
       try {
+        const body = serializeWithTruncation(event);
+
         const response = await this.fetch(url, {
           method: "POST",
           headers: {
@@ -57,25 +121,36 @@ export class HttpTransport implements Transport {
             "X-Bugwatch-SDK": event.sdk?.name || "bugwatch-core",
             "X-Bugwatch-SDK-Version": event.sdk?.version || "0.1.0",
           },
-          body: safeJsonStringify(event),
+          body,
           ...(controller && { signal: controller.signal }),
         });
 
         if (!response.ok) {
-          const errorText = await response.text();
-          if (this.debug) {
-            console.error("[Bugwatch] Failed to send event:", response.status, errorText);
-          }
-
-          // Handle rate limiting
+          // Handle rate limiting with backoff
           if (response.status === 429) {
             const retryAfter = response.headers.get("Retry-After");
+            const backoffMs = retryAfter
+              ? parseInt(retryAfter, 10) * 1000
+              : 60_000;
+            this.rateLimitedUntil = Date.now() + backoffMs;
+
             if (this.debug) {
-              console.warn(`[Bugwatch] Rate limited. Retry after ${retryAfter}s`);
+              console.warn(`[Bugwatch] Rate limited. Backing off for ${backoffMs}ms`);
             }
+            return; // Drop event, don't retry during rate limit
           }
 
-          throw new Error(`Failed to send event: ${response.status}`);
+          if (isRetryableStatus(response.status) && attempt < MAX_RETRIES) {
+            const delay = BASE_RETRY_DELAY_MS * Math.pow(2, attempt) + Math.random() * 200;
+            await new Promise((resolve) => setTimeout(resolve, delay));
+            return this.sendWithRetry(event, attempt + 1);
+          }
+
+          if (this.debug) {
+            const errorText = await response.text().catch(() => "");
+            console.error("[Bugwatch] Failed to send event:", response.status, errorText);
+          }
+          return;
         }
 
         if (this.debug) {
@@ -87,6 +162,13 @@ export class HttpTransport implements Transport {
         }
       }
     } catch (error) {
+      // Retry on network errors (timeout, connection refused, etc.)
+      if (attempt < MAX_RETRIES) {
+        const delay = BASE_RETRY_DELAY_MS * Math.pow(2, attempt) + Math.random() * 200;
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        return this.sendWithRetry(event, attempt + 1);
+      }
+
       if (this.debug) {
         const message = error instanceof Error && error.name === "AbortError"
           ? `[Bugwatch] Request timed out after ${this.timeoutMs}ms`
@@ -94,6 +176,15 @@ export class HttpTransport implements Transport {
         console.error(message, error);
       }
       // Don't throw - we don't want SDK errors to break the application
+    }
+  }
+
+  /**
+   * Wait for all in-flight requests to complete.
+   */
+  async flush(): Promise<void> {
+    if (this.inFlightRequests.size > 0) {
+      await Promise.allSettled([...this.inFlightRequests]);
     }
   }
 
@@ -163,19 +254,26 @@ export class BatchTransport implements Transport {
 
   async flush(): Promise<void> {
     if (this.queue.length === 0) {
+      // Also flush the underlying transport's in-flight requests
+      if (this.transport.flush) {
+        await this.transport.flush();
+      }
       return;
     }
 
     const events = this.queue.splice(0, this.maxBatchSize);
 
     // Send events in parallel, don't fail the batch if individual events fail
-    const results = await Promise.allSettled(events.map((event) => this.transport.send(event)));
+    await Promise.allSettled(events.map((event) => this.transport.send(event)));
 
-    // Log failures in debug mode (transport itself doesn't throw, but just in case)
-    for (const result of results) {
-      if (result.status === "rejected") {
-        // Silently ignore - individual transport.send() already handles errors
-      }
+    // If there are still events in the queue, flush recursively
+    if (this.queue.length > 0) {
+      await this.flush();
+    }
+
+    // Wait for underlying transport's in-flight requests
+    if (this.transport.flush) {
+      await this.transport.flush();
     }
   }
 
@@ -205,7 +303,7 @@ export class BatchTransport implements Transport {
    * Close the transport, flushing any remaining events and stopping the timer.
    */
   async close(): Promise<void> {
+    this.destroy(); // Stop timer first to prevent new flushes
     await this.flush();
-    this.destroy();
   }
 }

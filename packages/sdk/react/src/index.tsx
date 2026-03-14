@@ -367,12 +367,22 @@ export function BugwatchProvider({
 
       if (mergedOptions.captureConsoleBreadcrumbs) {
         originalConsoleError = console.error;
+        let inBreadcrumb = false;
         console.error = (...args: unknown[]) => {
-          coreAddBreadcrumb({
-            category: "console",
-            message: args.map(String).join(" "),
-            level: "error",
-          });
+          if (!inBreadcrumb) {
+            inBreadcrumb = true;
+            try {
+              coreAddBreadcrumb({
+                category: "console",
+                message: args.map(String).join(" "),
+                level: "error",
+              });
+            } catch {
+              // Silently ignore breadcrumb failures
+            } finally {
+              inBreadcrumb = false;
+            }
+          }
           originalConsoleError!(...args);
         };
       }

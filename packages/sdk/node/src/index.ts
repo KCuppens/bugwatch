@@ -380,39 +380,43 @@ export const ConsoleIntegration: Integration = {
       error: console.error,
     };
 
+    // Guard against recursion: if addBreadcrumb throws, the error would
+    // trigger console.error which calls addBreadcrumb again → infinite loop.
+    let inBreadcrumb = false;
+
+    function safeBreadcrumb(level: "debug" | "info" | "warning" | "error", args: unknown[]): void {
+      if (inBreadcrumb) return;
+      inBreadcrumb = true;
+      try {
+        client.addBreadcrumb({
+          category: "console",
+          message: args.map(String).join(" "),
+          level,
+        });
+      } catch {
+        // Silently ignore breadcrumb failures
+      } finally {
+        inBreadcrumb = false;
+      }
+    }
+
     console.log = (...args: unknown[]) => {
-      client.addBreadcrumb({
-        category: "console",
-        message: args.map(String).join(" "),
-        level: "debug",
-      });
+      safeBreadcrumb("debug", args);
       originalConsoleMethods!.log(...args);
     };
 
     console.info = (...args: unknown[]) => {
-      client.addBreadcrumb({
-        category: "console",
-        message: args.map(String).join(" "),
-        level: "info",
-      });
+      safeBreadcrumb("info", args);
       originalConsoleMethods!.info(...args);
     };
 
     console.warn = (...args: unknown[]) => {
-      client.addBreadcrumb({
-        category: "console",
-        message: args.map(String).join(" "),
-        level: "warning",
-      });
+      safeBreadcrumb("warning", args);
       originalConsoleMethods!.warn(...args);
     };
 
     console.error = (...args: unknown[]) => {
-      client.addBreadcrumb({
-        category: "console",
-        message: args.map(String).join(" "),
-        level: "error",
-      });
+      safeBreadcrumb("error", args);
       originalConsoleMethods!.error(...args);
     };
 

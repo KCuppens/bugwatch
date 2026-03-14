@@ -205,16 +205,27 @@ function setupConsoleBreadcrumbs(): () => void {
     debug: console.debug,
   };
 
+  let inBreadcrumb = false;
+
   const wrap = (
     method: keyof typeof originalConsole,
     level: "debug" | "info" | "warning" | "error"
   ) => {
     console[method] = (...args: unknown[]) => {
-      addBreadcrumb({
-        category: "console",
-        message: args.map(String).join(" "),
-        level,
-      });
+      if (!inBreadcrumb) {
+        inBreadcrumb = true;
+        try {
+          addBreadcrumb({
+            category: "console",
+            message: args.map(String).join(" "),
+            level,
+          });
+        } catch {
+          // Silently ignore breadcrumb failures
+        } finally {
+          inBreadcrumb = false;
+        }
+      }
       originalConsole[method](...args);
     };
   };
