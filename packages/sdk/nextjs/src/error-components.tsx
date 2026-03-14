@@ -75,14 +75,11 @@ const styles = {
  */
 export function BugwatchError({ error, reset }: ErrorPageProps): ReactNode {
   useEffect(() => {
-    // Server errors with a digest are already captured by onRequestError
-    // with the full error message. The client only receives a generic
-    // "An error occurred in the Server Components renderer" message,
-    // so capturing it again would just create a noisy duplicate.
-    if (error.digest) return;
-
     captureException(error, {
-      tags: { mechanism: "app-router-error-boundary" },
+      tags: {
+        mechanism: "app-router-error-boundary",
+        ...(error.digest && { "next.digest": error.digest }),
+      },
     });
   }, [error]);
 
@@ -120,10 +117,11 @@ export function BugwatchError({ error, reset }: ErrorPageProps): ReactNode {
  */
 export function BugwatchGlobalError({ error, reset }: ErrorPageProps): ReactNode {
   useEffect(() => {
-    if (error.digest) return;
-
     captureException(error, {
-      tags: { mechanism: "global-error-boundary" },
+      tags: {
+        mechanism: "global-error-boundary",
+        ...(error.digest && { "next.digest": error.digest }),
+      },
     });
   }, [error]);
 
@@ -210,10 +208,12 @@ export function CustomBugwatchError({
   children,
 }: CustomErrorPageProps): ReactNode {
   useEffect(() => {
-    if (error.digest) return;
-
     captureException(error, {
-      tags: { mechanism: "custom-error-boundary", ...tags },
+      tags: {
+        mechanism: "custom-error-boundary",
+        ...(error.digest && { "next.digest": error.digest }),
+        ...tags,
+      },
     });
   }, [error, tags]);
 

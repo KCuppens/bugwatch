@@ -75,6 +75,35 @@ impl EventRepository {
         Ok(count)
     }
 
+    /// Check if a recent event with a matching Next.js digest exists for a project.
+    /// Used to deduplicate client error boundary events when onRequestError
+    /// already captured the same server error.
+    pub async fn has_recent_event_with_digest(
+        pool: &DbPool,
+        project_id: &str,
+        digest: &str,
+    ) -> Result<bool> {
+        let cutoff = Utc::now() - chrono::Duration::seconds(30);
+
+        let (count,): (i64,) = sqlx::query_as(
+            r#"
+            SELECT COUNT(*) FROM events e
+            JOIN issues i ON e.issue_id = i.id
+            WHERE i.project_id = $1
+              AND e.timestamp > $2
+              AND e.payload::jsonb -> 'tags' ->> 'next.digest' = $3
+              AND e.payload::jsonb -> 'tags' ->> 'mechanism' = 'nextjs.onRequestError'
+            "#,
+        )
+        .bind(project_id)
+        .bind(cutoff)
+        .bind(digest)
+        .fetch_one(pool)
+        .await?;
+
+        Ok(count > 0)
+    }
+
     /// Cleanup old events to prevent database bloat
     pub async fn cleanup_old_events(pool: &DbPool, days: i32) -> Result<u64> {
         let result = sqlx::query(

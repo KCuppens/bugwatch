@@ -211,6 +211,40 @@ pub async fn ingest(
         ));
     }
 
+    // 4b. Deduplicate client-side error boundary events when onRequestError
+    //     already captured the same server error with full details.
+    //     Client error boundaries tag events with "next.digest" — if we already
+    //     have a recent event from "nextjs.onRequestError" with the same digest,
+    //     the client-side capture is redundant (it only has a generic message).
+    if let Some(ref tags) = event.tags {
+        let mechanism = tags.get("mechanism").map(|s| s.as_str());
+        let is_error_boundary = matches!(
+            mechanism,
+            Some("app-router-error-boundary" | "global-error-boundary" | "custom-error-boundary")
+        );
+        if is_error_boundary {
+            if let Some(digest) = tags.get("next.digest") {
+                let has_server_event = EventRepository::has_recent_event_with_digest(
+                    &state.db, &project.id, digest
+                ).await.unwrap_or(false);
+
+                if has_server_event {
+                    tracing::debug!(
+                        "Dropping duplicate client error boundary event {} (digest {} already captured server-side)",
+                        event.event_id, digest
+                    );
+                    return Ok((
+                        StatusCode::ACCEPTED,
+                        Json(IngestResponse {
+                            id: event.event_id,
+                            status: "deduplicated".to_string(),
+                        }),
+                    ));
+                }
+            }
+        }
+    }
+
     // 5. Generate fingerprint and title
     let (fingerprint, title) = if let Some(ref exc) = event.exception {
         let fp = generate_fingerprint(exc);
