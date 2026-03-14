@@ -114,12 +114,17 @@ function setupFetchInstrumentation(options: { endpoint?: string }): () => void {
   const sdkEventUrl = `${sdkEndpoint}/api/v1/events`;
 
   window.fetch = async function (input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-    const url = typeof input === "string"
-      ? input
-      : input instanceof URL
-        ? input.href
-        : input.url;
-    const method = init?.method || "GET";
+    let url: string;
+    try {
+      url = typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.href
+          : (input as Request).url || String(input);
+    } catch {
+      return originalFetch.call(window, input, init);
+    }
+    const method = init?.method || (typeof input !== "string" && !(input instanceof URL) ? (input as Request).method : "GET") || "GET";
 
     // Skip instrumenting our own SDK event requests to avoid infinite loops
     if (url.startsWith(sdkEventUrl)) {

@@ -154,7 +154,6 @@ function createBugwatchDecorator(
       eventId = captureException(error, {
         request: requestContext,
         extra: {
-          request: requestContext,
           ...(clientIp && { client_ip: clientIp }),
         },
         tags: {

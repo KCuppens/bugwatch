@@ -226,27 +226,28 @@ function setupExitHandler(): void {
     // Flushing is handled by SIGINT/SIGTERM handlers instead.
   };
 
-  sigintHandler = () => {
+  let shutdownPending = false;
+
+  const gracefulShutdown = (code: number) => {
+    if (shutdownPending) return;
+    shutdownPending = true;
+
     const client = getClient();
     if (client) {
-      client.flush().catch(() => {}).finally(() => {
-        process.exit(0);
+      // Race flush against a 2s timeout to prevent hanging
+      Promise.race([
+        client.flush().catch(() => {}),
+        new Promise<void>((r) => setTimeout(r, 2000)),
+      ]).finally(() => {
+        process.exit(code);
       });
     } else {
-      process.exit(0);
+      process.exit(code);
     }
   };
 
-  sigtermHandler = () => {
-    const client = getClient();
-    if (client) {
-      client.flush().catch(() => {}).finally(() => {
-        process.exit(0);
-      });
-    } else {
-      process.exit(0);
-    }
-  };
+  sigintHandler = () => gracefulShutdown(0);
+  sigtermHandler = () => gracefulShutdown(0);
 
   process.on("exit", exitHandler);
   process.on("SIGINT", sigintHandler);
@@ -332,8 +333,9 @@ export function wrapAsync<T extends (...args: unknown[]) => Promise<unknown>>(
       return await fn(...args);
     } catch (error) {
       const client = getClient();
-      if (client && error instanceof Error) {
-        client.captureException(error);
+      if (client) {
+        const normalized = error instanceof Error ? error : new Error(String(error));
+        client.captureException(normalized);
       }
       throw error;
     }

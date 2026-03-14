@@ -33,26 +33,37 @@ function serializeWithTruncation(event: ErrorEvent): string {
     return json;
   }
 
-  // First pass: drop breadcrumbs from oldest until under limit
+  // First pass: drop breadcrumbs progressively
   if (event.breadcrumbs && event.breadcrumbs.length > 0) {
-    const truncated = { ...event };
-    let crumbs = [...event.breadcrumbs];
-
-    while (crumbs.length > 0 && json.length > MAX_PAYLOAD_BYTES) {
-      crumbs = crumbs.slice(Math.ceil(crumbs.length / 2));
-      truncated.breadcrumbs = crumbs;
-      json = safeJsonStringify(truncated);
-    }
+    const truncated = { ...event, breadcrumbs: [] as typeof event.breadcrumbs };
+    json = safeJsonStringify(truncated);
 
     if (json.length <= MAX_PAYLOAD_BYTES) {
       return json;
     }
   }
 
-  // Second pass: drop extra data
-  if (event.extra) {
-    const truncated = { ...event, breadcrumbs: [], extra: undefined };
-    json = safeJsonStringify(truncated);
+  // Second pass: drop extra data and breadcrumbs
+  const stripped = { ...event, breadcrumbs: undefined, extra: undefined };
+  json = safeJsonStringify(stripped);
+
+  if (json.length <= MAX_PAYLOAD_BYTES) {
+    return json;
+  }
+
+  // Third pass: truncate exception stacktrace
+  if (stripped.exception?.stacktrace && stripped.exception.stacktrace.length > 5) {
+    stripped.exception = {
+      ...stripped.exception,
+      stacktrace: stripped.exception.stacktrace.slice(0, 5),
+    };
+    json = safeJsonStringify(stripped);
+  }
+
+  // Final pass: truncate message if still too large
+  if (json.length > MAX_PAYLOAD_BYTES && stripped.message && stripped.message.length > 500) {
+    stripped.message = stripped.message.slice(0, 500) + "...(truncated)";
+    json = safeJsonStringify(stripped);
   }
 
   return json;
