@@ -1,6 +1,6 @@
 """Type definitions for Bugwatch Python SDK."""
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
@@ -45,7 +45,7 @@ class Breadcrumb:
     message: str
     type: str = "default"  # Breadcrumb type: default, http, navigation, error, etc.
     level: Level = Level.INFO
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     data: Optional[Dict[str, Any]] = None
 
 
