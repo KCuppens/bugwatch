@@ -292,8 +292,18 @@ pub async fn ingest(
     ))
 }
 
-/// Extract API key from Authorization header
+/// Extract API key from Authorization header or X-API-Key header
 pub fn extract_api_key(headers: &HeaderMap) -> AppResult<String> {
+    // Support X-API-Key header (used by @bugwatch/core SDK)
+    // Note: HeaderMap normalizes header names to lowercase
+    if let Some(api_key) = headers.get("x-api-key") {
+        return api_key
+            .to_str()
+            .map(|s| s.to_string())
+            .map_err(|_| AppError::Unauthorized("Invalid X-API-Key header".to_string()));
+    }
+
+    // Fall back to Authorization: Bearer <key>
     let auth_header = headers
         .get("Authorization")
         .ok_or_else(|| AppError::Unauthorized("Missing Authorization header".to_string()))?
