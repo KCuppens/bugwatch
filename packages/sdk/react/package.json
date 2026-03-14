@@ -1,6 +1,6 @@
 {
   "name": "@bugwatch/react",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "Bugwatch SDK for React applications",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
@@ -24,7 +24,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@bugwatch/core": "^0.3.0"
+    "@bugwatch/core": "^0.4.0"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^6.9.1",

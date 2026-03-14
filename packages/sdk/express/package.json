@@ -1,6 +1,6 @@
 {
   "name": "@bugwatch/express",
-  "version": "0.2.0",
+  "version": "0.4.0",
   "description": "Bugwatch SDK integration for Express.js",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
@@ -24,7 +24,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@bugwatch/core": "^0.3.0"
+    "@bugwatch/core": "^0.4.0"
   },
   "peerDependencies": {
     "express": "^4.0.0 || ^5.0.0"

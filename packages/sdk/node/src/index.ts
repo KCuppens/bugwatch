@@ -22,6 +22,8 @@ export interface NodeOptions extends BugwatchOptions {
   exitOnUncaughtException?: boolean;
   /** Timeout before exiting after uncaught exception in ms (default: 2000) */
   shutdownTimeout?: number;
+  /** Capture errors logged via console.error (default: true) */
+  captureConsoleErrors?: boolean;
 }
 
 const DEFAULT_NODE_OPTIONS: Partial<NodeOptions> = {
@@ -100,6 +102,11 @@ export function init(options: NodeOptions): BugwatchClient {
 
   if (mergedOptions.captureUnhandledRejections) {
     setupUnhandledRejectionHandler(client);
+  }
+
+  // Capture console.error as warning-level events
+  if (mergedOptions.captureConsoleErrors !== false) {
+    setupConsoleErrorCapture();
   }
 
   // Handle process exit
@@ -266,6 +273,82 @@ function setupExitHandler(): void {
     if (sigtermHandler) {
       process.removeListener("SIGTERM", sigtermHandler);
       sigtermHandler = null;
+    }
+  });
+}
+
+/**
+ * Hook console.error to automatically capture server-side errors.
+ *
+ * Many errors are caught by application code and only logged via
+ * console.error (e.g., API timeouts, cache permission errors, DB errors).
+ * This hook detects Error objects and error-like messages and reports them.
+ */
+function setupConsoleErrorCapture(): void {
+  const originalConsoleError = console.error;
+  let inCapture = false;
+
+  const hookedConsoleError = (...args: unknown[]) => {
+    // Always call the original first so logs are never lost
+    originalConsoleError.apply(console, args);
+
+    if (inCapture) return;
+    inCapture = true;
+
+    try {
+      const client = getClient();
+      if (!client) return;
+
+      // Skip Bugwatch's own internal logs
+      const firstArg = String(args[0] || "");
+      if (firstArg.startsWith("[Bugwatch]")) return;
+
+      // Look for an Error object in the arguments
+      const error = args.find((arg): arg is Error => arg instanceof Error);
+
+      if (error) {
+        client.captureException(error, {
+          level: "warning",
+          tags: { mechanism: "console.error" },
+          extra: {
+            console_args: args
+              .filter((a) => !(a instanceof Error))
+              .map((a) => { try { return String(a); } catch { return "[unstringifiable]"; } })
+              .join(" ") || undefined,
+          },
+        });
+      } else {
+        // No Error object — check if the text looks like an error
+        const text = args.map((a) => {
+          try { return String(a); } catch { return "[unstringifiable]"; }
+        }).join(" ");
+
+        const lowerText = text.toLowerCase();
+        if (
+          lowerText.includes("error") ||
+          lowerText.includes("failed") ||
+          lowerText.includes("exception") ||
+          lowerText.includes("timeout") ||
+          lowerText.includes("eacces") ||
+          lowerText.includes("enoent") ||
+          lowerText.includes("econnrefused")
+        ) {
+          client.captureMessage(text.slice(0, 1000), "warning");
+        }
+      }
+    } catch {
+      // Never let capture logic break console.error
+    } finally {
+      inCapture = false;
+    }
+  };
+
+  console.error = hookedConsoleError;
+
+  // Track for cleanup
+  cleanupFunctions.push(() => {
+    if (console.error === hookedConsoleError) {
+      console.error = originalConsoleError;
     }
   });
 }
