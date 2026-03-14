@@ -24,7 +24,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@bugwatch/core": "*",
+    "@bugwatch/core": "^0.3.0",
     "fastify-plugin": "^4.5.1"
   },
   "peerDependencies": {

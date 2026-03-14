@@ -1,6 +1,6 @@
 {
   "name": "@bugwatch/node",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Bugwatch SDK for Node.js applications",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
@@ -24,7 +24,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@bugwatch/core": "*"
+    "@bugwatch/core": "^0.3.0"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

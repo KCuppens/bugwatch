@@ -24,7 +24,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@bugwatch/core": "*"
+    "@bugwatch/core": "^0.3.0"
   },
   "peerDependencies": {
     "express": "^4.0.0 || ^5.0.0"
