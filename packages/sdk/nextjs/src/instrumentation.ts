@@ -142,3 +142,94 @@ function initEdge(apiKey: string, endpoint: string | undefined, options: Registe
 export function isRegistered(): boolean {
   return registered;
 }
+
+/**
+ * Next.js App Router onRequestError hook (Next.js 15+)
+ *
+ * Captures server-side errors from Server Components, route handlers,
+ * server actions, and middleware that Next.js catches internally
+ * (these never reach process.on('uncaughtException')).
+ *
+ * Usage in your instrumentation.ts:
+ *
+ * ```ts
+ * export { onRequestError } from '@bugwatch/nextjs/instrumentation';
+ *
+ * export async function register() {
+ *   if (process.env.NEXT_RUNTIME === 'nodejs') {
+ *     const { registerBugwatch } = await import('@bugwatch/nextjs/instrumentation');
+ *     registerBugwatch();
+ *   }
+ * }
+ * ```
+ */
+export async function onRequestError(
+  err: { digest?: string } & Error,
+  request: {
+    path: string;
+    method: string;
+    headers: Record<string, string>;
+  },
+  context: {
+    routerKind: "Pages Router" | "App Router";
+    routePath: string;
+    routeType: "page" | "route" | "action" | "middleware";
+    renderSource?:
+      | "react-server-components"
+      | "react-server-components-payload"
+      | "server-rendering";
+  }
+): Promise<void> {
+  // Lazy-import to avoid issues if core isn't initialized yet
+  const { captureException, getClient } = await import("@bugwatch/core");
+
+  captureException(err, {
+    level: "error",
+    tags: {
+      mechanism: "nextjs.onRequestError",
+      "next.routerKind": context.routerKind,
+      "next.routePath": context.routePath,
+      "next.routeType": context.routeType,
+      ...(context.renderSource && { "next.renderSource": context.renderSource }),
+      ...(err.digest && { "next.digest": err.digest }),
+    },
+    request: {
+      url: request.path,
+      method: request.method,
+      headers: sanitizeHeaders(request.headers),
+    },
+  });
+
+  // Best-effort flush so the event is sent before the response completes
+  const client = getClient();
+  if (client) {
+    await client.flush().catch(() => {});
+  }
+}
+
+/**
+ * Sanitize headers to remove sensitive information
+ */
+function sanitizeHeaders(
+  headers: Record<string, string>
+): Record<string, string> {
+  const sensitiveKeys = [
+    "authorization",
+    "cookie",
+    "x-api-key",
+    "x-auth-token",
+    "x-csrf-token",
+  ];
+
+  const sanitized: Record<string, string> = {};
+
+  for (const [key, value] of Object.entries(headers)) {
+    if (sensitiveKeys.includes(key.toLowerCase())) {
+      sanitized[key] = "[Filtered]";
+    } else {
+      sanitized[key] = value;
+    }
+  }
+
+  return sanitized;
+}
