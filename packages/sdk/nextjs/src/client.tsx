@@ -1,6 +1,6 @@
 "use client";
 
-import { Component, useEffect, type ReactNode, type ErrorInfo } from "react";
+import { Component, useEffect, useMemo, type ReactNode, type ErrorInfo } from "react";
 import {
   init as coreInit,
   captureException,
@@ -577,6 +577,13 @@ export function BugwatchProvider({
   options,
   children,
 }: BugwatchProviderProps): JSX.Element {
+  // Serialize options to a stable string so useEffect doesn't re-run
+  // on every render when options object is passed inline.
+  const optionsKey = useMemo(
+    () => (options ? JSON.stringify(options) : ""),
+    [options]
+  );
+
   useEffect(() => {
     // Merge env config with explicit options (explicit takes precedence)
     const envConfig = getEnvConfig();
@@ -591,7 +598,12 @@ export function BugwatchProvider({
     }
 
     initClient(mergedOptions);
-  }, [options]);
+
+    return () => {
+      closeClient();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [optionsKey]);
 
   return <BugwatchErrorBoundary>{children}</BugwatchErrorBoundary>;
 }
