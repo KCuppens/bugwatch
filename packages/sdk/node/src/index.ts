@@ -124,27 +124,32 @@ function setupUncaughtExceptionHandler(
     process.removeListener("uncaughtException", uncaughtExceptionHandler);
   }
 
-  uncaughtExceptionHandler = (err: Error) => {
-    client.captureException(err, {
-      level: "fatal",
-      tags: { mechanism: "uncaughtException" },
-    });
+  uncaughtExceptionHandler = (err: unknown) => {
+    try {
+      // Normalize non-Error objects (Node.js can emit strings, objects, etc.)
+      const error = err instanceof Error ? err : new Error(String(err));
 
-    if (options.debug) {
-      console.error("[Bugwatch] Captured uncaught exception:", err);
+      client.captureException(error, {
+        level: "fatal",
+        tags: { mechanism: "uncaughtException" },
+      });
+
+      if (options.debug) {
+        console.error("[Bugwatch] Captured uncaught exception:", err);
+      }
+    } catch {
+      // Never let the error handler itself crash
     }
 
     // Flush pending events then exit
     if (options.exitOnUncaughtException) {
       const timeout = options.shutdownTimeout || 2000;
 
-      // Race: flush vs timeout — whichever finishes first
-      const flushPromise = client.flush().catch(() => {
-        // Ignore flush errors during shutdown
-      });
+      const flushPromise = client.flush().catch(() => {});
       const timeoutPromise = new Promise<void>((resolve) => setTimeout(resolve, timeout));
 
-      Promise.race([flushPromise, timeoutPromise]).then(() => {
+      // Use .finally() to guarantee exit even if both promises reject
+      Promise.race([flushPromise, timeoutPromise]).finally(() => {
         process.exit(1);
       });
     }
@@ -274,18 +279,22 @@ export function expressErrorHandler() {
     res: { statusCode?: number },
     next: (err?: Error) => void
   ) => {
-    const client = getClient();
-    if (client) {
-      client.captureException(err, {
-        request: {
-          method: req.method,
-          url: req.url,
-          headers: sanitizeHeaders(req.headers || {}),
-        },
-        tags: {
-          "http.status_code": String(res.statusCode || 500),
-        },
-      });
+    try {
+      const client = getClient();
+      if (client) {
+        client.captureException(err, {
+          request: {
+            method: req.method,
+            url: req.url,
+            headers: sanitizeHeaders(req.headers || {}),
+          },
+          tags: {
+            "http.status_code": String(res.statusCode || 500),
+          },
+        });
+      }
+    } catch {
+      // Never let error capture break the error handling chain
     }
     next(err);
   };

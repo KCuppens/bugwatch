@@ -164,9 +164,13 @@ export function requestHandler(
 
     // Extract and set user context in the scoped context
     if (options.extractUser) {
-      const user = options.extractUser(req);
-      if (user) {
-        scopedContext.user = user;
+      try {
+        const user = options.extractUser(req);
+        if (user) {
+          scopedContext.user = user;
+        }
+      } catch {
+        // Never let user extraction crash the request
       }
     }
 
@@ -242,50 +246,63 @@ export function errorHandler(
       return next(err);
     }
 
-    // Normalize non-Error objects to Error instances
-    const error = err instanceof Error
-      ? err
-      : new Error(typeof err === "string" ? err : JSON.stringify(err));
-    if (!(err instanceof Error)) {
-      error.name = "NonErrorException";
-    }
+    try {
+      // Normalize non-Error objects to Error instances
+      const error = err instanceof Error
+        ? err
+        : new Error(typeof err === "string" ? err : JSON.stringify(err));
+      if (!(err instanceof Error)) {
+        error.name = "NonErrorException";
+      }
 
-    // Build request context
-    const requestContext = extractRequestContext(req, options);
+      // Build request context (wrapped to prevent extraction errors from losing the event)
+      let requestContext;
+      try {
+        requestContext = extractRequestContext(req, options);
+      } catch {
+        requestContext = { url: req.originalUrl, method: req.method };
+      }
 
-    // Build extra context
-    const extra: Record<string, unknown> = {
-      request: requestContext,
-    };
+      // Build extra context
+      const extra: Record<string, unknown> = {
+        request: requestContext,
+      };
 
-    const clientIp = extractClientIp(req);
-    if (clientIp) {
-      extra.client_ip = clientIp;
-    }
+      try {
+        const clientIp = extractClientIp(req);
+        if (clientIp) {
+          extra.client_ip = clientIp;
+        }
+      } catch {
+        // Ignore IP extraction errors
+      }
 
-    // If the original thrown value was not an Error, include it as extra data
-    if (!(err instanceof Error)) {
-      extra.originalValue = err;
-    }
+      // If the original thrown value was not an Error, include it as extra data
+      if (!(err instanceof Error)) {
+        extra.originalValue = err;
+      }
 
-    // Capture the error
-    const eventId = captureException(error, {
-      request: requestContext,
-      extra,
-      tags: {
-        "http.method": req.method,
-        "http.url": req.originalUrl,
-      },
-    });
+      // Capture the error
+      const eventId = captureException(error, {
+        request: requestContext,
+        extra,
+        tags: {
+          "http.method": req.method,
+          "http.url": req.originalUrl,
+        },
+      });
 
-    // Store event ID for reference
-    if (req.bugwatch) {
-      req.bugwatch.eventId = eventId;
-    }
+      // Store event ID for reference
+      if (req.bugwatch) {
+        req.bugwatch.eventId = eventId;
+      }
 
-    // Flush if requested (useful for serverless)
-    if (options.flushOnError) {
-      await flush();
+      // Flush if requested (useful for serverless)
+      if (options.flushOnError) {
+        await flush();
+      }
+    } catch {
+      // Never let error capture break the error handling chain
     }
 
     // Pass to next error handler (pass original value, not normalized)

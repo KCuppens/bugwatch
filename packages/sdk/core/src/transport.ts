@@ -92,9 +92,15 @@ export class HttpTransport implements Transport {
       return;
     }
 
-    const promise = this.sendWithRetry(event);
-    this.inFlightRequests.add(promise);
-    promise.finally(() => this.inFlightRequests.delete(promise));
+    // Wrap in a new promise so we can add it to the Set synchronously
+    // before any async work starts, preventing a race with flush().
+    let resolve!: () => void;
+    const tracked = new Promise<void>((r) => { resolve = r; });
+    this.inFlightRequests.add(tracked);
+    this.sendWithRetry(event).finally(() => {
+      this.inFlightRequests.delete(tracked);
+      resolve();
+    });
   }
 
   private async sendWithRetry(event: ErrorEvent, attempt = 0): Promise<void> {
@@ -129,8 +135,9 @@ export class HttpTransport implements Transport {
           // Handle rate limiting with backoff
           if (response.status === 429) {
             const retryAfter = response.headers.get("Retry-After");
-            const backoffMs = retryAfter
-              ? parseInt(retryAfter, 10) * 1000
+            const parsed = retryAfter ? parseInt(retryAfter, 10) : NaN;
+            const backoffMs = !isNaN(parsed) && parsed > 0
+              ? parsed * 1000
               : 60_000;
             this.rateLimitedUntil = Date.now() + backoffMs;
 

@@ -336,7 +336,7 @@ export function BugwatchProvider({
       if (mergedOptions.captureGlobalErrors) {
         originalOnError = window.onerror;
         window.onerror = (message, source, lineno, colno, error) => {
-          if (error && !isBrowserExtensionError(error)) {
+          if (error && !(error as any).__bugwatch_captured && !isBrowserExtensionError(error)) {
             coreCaptureException(error, {
               tags: { mechanism: "window.onerror" },
             });
@@ -350,6 +350,10 @@ export function BugwatchProvider({
 
       if (mergedOptions.captureUnhandledRejections) {
         unhandledRejectionHandler = (event: PromiseRejectionEvent) => {
+          // Skip if already captured by fetch instrumentation
+          if (event.reason && (event.reason as any).__bugwatch_captured) {
+            return;
+          }
           const error =
             event.reason instanceof Error
               ? event.reason

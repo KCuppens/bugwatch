@@ -224,30 +224,43 @@ const bugwatchPluginImpl: FastifyPluginAsync<BugwatchFastifyOptions> = async (
 
     // Extract and set user context in the scoped context (not globally!)
     if (opts.extractUser) {
-      const user = opts.extractUser(request);
-      if (user) {
-        scopedContext.user = user;
+      try {
+        const user = opts.extractUser(request);
+        if (user) {
+          scopedContext.user = user;
+        }
+      } catch {
+        // Never let user extraction crash the request
       }
     }
 
     // Run done() inside the scoped context so that all downstream
-    // hooks and route handlers inherit the AsyncLocalStorage context
-    runWithContext(scopedContext, () => {
-      // Add request breadcrumb within the scoped context
-      if (opts.addBreadcrumbs) {
-        addBreadcrumb({
-          category: "http",
-          message: `${request.method} ${request.url}`,
-          level: "info",
-          data: {
-            method: request.method,
-            url: request.url,
-          },
-        });
-      }
+    // hooks and route handlers inherit the AsyncLocalStorage context.
+    // Wrap in try-catch to guarantee done() is always called.
+    try {
+      runWithContext(scopedContext, () => {
+        // Add request breadcrumb within the scoped context
+        if (opts.addBreadcrumbs) {
+          try {
+            addBreadcrumb({
+              category: "http",
+              message: `${request.method} ${request.url}`,
+              level: "info",
+              data: {
+                method: request.method,
+                url: request.url,
+              },
+            });
+          } catch {
+            // Ignore breadcrumb failures
+          }
+        }
 
-      done();
-    });
+        done();
+      });
+    } catch {
+      done(); // Guarantee done() is called even if runWithContext throws
+    }
   });
 
   // onResponse hook - add completion breadcrumb
@@ -257,20 +270,24 @@ const bugwatchPluginImpl: FastifyPluginAsync<BugwatchFastifyOptions> = async (
     const client = getClient();
     if (!client) return;
 
-    const startTime = requestStartTimes.get(request);
-    const duration = startTime ? Date.now() - startTime : undefined;
+    try {
+      const startTime = requestStartTimes.get(request);
+      const duration = startTime ? Date.now() - startTime : undefined;
 
-    addBreadcrumb({
-      category: "http",
-      message: `${request.method} ${request.url} -> ${reply.statusCode}`,
-      level: reply.statusCode >= 500 ? "error" : reply.statusCode >= 400 ? "warning" : "info",
-      data: {
-        method: request.method,
-        url: request.url,
-        status_code: reply.statusCode,
-        ...(duration !== undefined && { duration_ms: duration }),
-      },
-    });
+      addBreadcrumb({
+        category: "http",
+        message: `${request.method} ${request.url} -> ${reply.statusCode}`,
+        level: reply.statusCode >= 500 ? "error" : reply.statusCode >= 400 ? "warning" : "info",
+        data: {
+          method: request.method,
+          url: request.url,
+          status_code: reply.statusCode,
+          ...(duration !== undefined && { duration_ms: duration }),
+        },
+      });
+    } catch {
+      // Ignore breadcrumb failures
+    }
   });
 
   // onError hook - capture errors
@@ -280,12 +297,15 @@ const bugwatchPluginImpl: FastifyPluginAsync<BugwatchFastifyOptions> = async (
     const client = getClient();
     if (!client) return;
 
-    // Capture the error
-    request.bugwatch?.captureError(error);
+    try {
+      request.bugwatch?.captureError(error);
+    } catch {
+      // Never let error capture break error handling
+    }
 
     // Flush if requested
     if (opts.flushOnError) {
-      await flush();
+      await flush().catch(() => {});
     }
   });
 
