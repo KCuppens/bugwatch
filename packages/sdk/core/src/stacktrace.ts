@@ -148,9 +148,53 @@ function isInAppFrame(filename: string): boolean {
  */
 export function extractErrorInfo(error: Error): { type: string; value: string } {
   const type = error.name || "Error";
-  const value = error.message || String(error);
+  let value = error.message || String(error);
+
+  // Unminify React production error codes into human-readable messages
+  value = unminifyReactError(value);
 
   return { type, value };
+}
+
+/**
+ * Common React production error codes and their meanings.
+ * React minifies errors in production to "Minified React error #NNN".
+ * This map provides human-readable descriptions.
+ * See: https://react.dev/errors
+ */
+const REACT_ERROR_MESSAGES: Record<number, string> = {
+  418: "Hydration failed: Server-rendered HTML didn't match client content (text mismatch)",
+  419: "Hydration failed: Server-rendered HTML didn't match client content (tag mismatch)",
+  421: "Hydration failed: Server HTML contained more content than the client expected",
+  422: "Hydration failed: Client rendered more content than server HTML",
+  423: "Hydration failed: Server-rendered HTML had fewer nodes than expected",
+  425: "Hydration failed: Text content didn't match (server vs client)",
+  185: "Maximum update depth exceeded: Component calls setState inside useEffect without dependencies",
+  130: "Element type is invalid: Expected string or class/function but got undefined",
+  31: "Objects are not valid as a React child",
+  152: "Nothing was returned from render",
+  321: "Cannot update a component while rendering a different component",
+  301: "Cannot update during an existing state transition (e.g. within render)",
+};
+
+function unminifyReactError(message: string): string {
+  const match = message.match(/Minified React error #(\d+)/);
+  if (!match || !match[1]) return message;
+
+  const code = parseInt(match[1], 10);
+  const readable = REACT_ERROR_MESSAGES[code];
+
+  if (readable) {
+    // Extract args from the URL if present
+    const argsMatch = message.match(/args\[\d+\]=([^&\s]*)/g);
+    const args = argsMatch
+      ? argsMatch.map((a) => decodeURIComponent(a.split("=")[1] ?? "")).join(", ")
+      : "";
+
+    return `React Error #${code}: ${readable}${args ? ` [${args}]` : ""}`;
+  }
+
+  return `React Error #${code}: ${message}`;
 }
 
 /**
