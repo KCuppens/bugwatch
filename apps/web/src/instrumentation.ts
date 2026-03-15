@@ -5,6 +5,8 @@
  * It registers the BugWatch SDK when the Node.js runtime is detected.
  */
 
+export { onRequestError } from "@bugwatch/nextjs/instrumentation";
+
 export async function register() {
   // Only register on the Node.js runtime (not Edge)
   if (process.env.NEXT_RUNTIME === "nodejs") {
