@@ -5,10 +5,11 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    auth::AuthUser,
+    auth::{EitherAuth, AuthIdentity},
+    billing::tiers::can_access_feature,
     db::{
         models::{AlertRule, NotificationChannel, AlertLog},
-        repositories::{AlertRuleRepository, NotificationChannelRepository, AlertLogRepository, ProjectRepository},
+        repositories::{AlertRuleRepository, NotificationChannelRepository, AlertLogRepository, OrganizationRepository, ProjectRepository},
     },
     AppError, AppResult, AppState,
 };
@@ -119,17 +120,39 @@ impl TryFrom<AlertRule> for AlertRuleResponse {
 /// POST /api/v1/projects/:project_id/alerts
 pub async fn create_alert_rule(
     State(state): State<AppState>,
-    auth_user: AuthUser,
+    auth: EitherAuth,
     Path(project_id): Path<String>,
     Json(request): Json<CreateAlertRuleRequest>,
 ) -> AppResult<Json<AlertRuleResponse>> {
-    // Verify project ownership
+    if !auth.has_permission("write") {
+        return Err(AppError::Forbidden("write permission required".to_string()));
+    }
+
+    // Verify project access
     let project = ProjectRepository::find_by_id(&state.db, &project_id)
         .await?
         .ok_or_else(|| AppError::NotFound("Project not found".to_string()))?;
 
-    if project.owner_id != auth_user.id {
+    if !auth.can_access_project(&state.db, &project).await {
         return Err(AppError::Forbidden("Access denied".to_string()));
+    }
+
+    // Gate server alert conditions behind server_monitoring feature (Pro+)
+    let is_server_condition = matches!(
+        request.condition,
+        AlertCondition::ServerCpuHigh { .. }
+        | AlertCondition::ServerMemoryHigh { .. }
+        | AlertCondition::ServerDiskHigh { .. }
+        | AlertCondition::ServerOffline { .. }
+    );
+    if is_server_condition && !state.config.deployment_mode.is_self_hosted() {
+        let tier_str = OrganizationRepository::get_project_tier(&state.db, &project_id).await
+            .unwrap_or_else(|_| "free".to_string());
+        if !can_access_feature(&tier_str, "server_monitoring") {
+            return Err(AppError::PaymentRequired(
+                "Server alert rules require a Pro plan or higher.".to_string(),
+            ));
+        }
     }
 
     let condition_json = serde_json::to_string(&request.condition)
@@ -156,15 +179,15 @@ pub async fn create_alert_rule(
 /// GET /api/v1/projects/:project_id/alerts
 pub async fn list_alert_rules(
     State(state): State<AppState>,
-    auth_user: AuthUser,
+    auth: EitherAuth,
     Path(project_id): Path<String>,
 ) -> AppResult<Json<Vec<AlertRuleResponse>>> {
-    // Verify project ownership
+    // Verify project access
     let project = ProjectRepository::find_by_id(&state.db, &project_id)
         .await?
         .ok_or_else(|| AppError::NotFound("Project not found".to_string()))?;
 
-    if project.owner_id != auth_user.id {
+    if !auth.can_access_project(&state.db, &project).await {
         return Err(AppError::Forbidden("Access denied".to_string()));
     }
 
@@ -186,16 +209,20 @@ pub async fn list_alert_rules(
 /// PATCH /api/v1/projects/:project_id/alerts/:alert_id
 pub async fn update_alert_rule(
     State(state): State<AppState>,
-    auth_user: AuthUser,
+    auth: EitherAuth,
     Path((project_id, alert_id)): Path<(String, String)>,
     Json(request): Json<UpdateAlertRuleRequest>,
 ) -> AppResult<Json<AlertRuleResponse>> {
-    // Verify project ownership
+    if !auth.has_permission("write") {
+        return Err(AppError::Forbidden("write permission required".to_string()));
+    }
+
+    // Verify project access
     let project = ProjectRepository::find_by_id(&state.db, &project_id)
         .await?
         .ok_or_else(|| AppError::NotFound("Project not found".to_string()))?;
 
-    if project.owner_id != auth_user.id {
+    if !auth.can_access_project(&state.db, &project).await {
         return Err(AppError::Forbidden("Access denied".to_string()));
     }
 
@@ -241,15 +268,19 @@ pub async fn update_alert_rule(
 /// DELETE /api/v1/projects/:project_id/alerts/:alert_id
 pub async fn delete_alert_rule(
     State(state): State<AppState>,
-    auth_user: AuthUser,
+    auth: EitherAuth,
     Path((project_id, alert_id)): Path<(String, String)>,
 ) -> AppResult<Json<serde_json::Value>> {
-    // Verify project ownership
+    if !auth.has_permission("write") {
+        return Err(AppError::Forbidden("write permission required".to_string()));
+    }
+
+    // Verify project access
     let project = ProjectRepository::find_by_id(&state.db, &project_id)
         .await?
         .ok_or_else(|| AppError::NotFound("Project not found".to_string()))?;
 
-    if project.owner_id != auth_user.id {
+    if !auth.can_access_project(&state.db, &project).await {
         return Err(AppError::Forbidden("Access denied".to_string()));
     }
 
@@ -331,23 +362,53 @@ impl From<NotificationChannel> for ChannelResponse {
 /// POST /api/v1/projects/:project_id/channels
 pub async fn create_channel(
     State(state): State<AppState>,
-    auth_user: AuthUser,
+    auth: EitherAuth,
     Path(project_id): Path<String>,
     Json(request): Json<CreateChannelRequest>,
 ) -> AppResult<Json<ChannelResponse>> {
-    // Verify project ownership
+    if !auth.has_permission("write") {
+        return Err(AppError::Forbidden("write permission required".to_string()));
+    }
+
+    // Verify project access
     let project = ProjectRepository::find_by_id(&state.db, &project_id)
         .await?
         .ok_or_else(|| AppError::NotFound("Project not found".to_string()))?;
 
-    if project.owner_id != auth_user.id {
+    if !auth.can_access_project(&state.db, &project).await {
         return Err(AppError::Forbidden("Access denied".to_string()));
     }
 
-    let channel_type = match request.channel_type {
-        ChannelType::Email => "email",
-        ChannelType::Webhook => "webhook",
-        ChannelType::Slack => "slack",
+    // Gate notification channel types by tier (bypassed in self-hosted mode)
+    let channel_type = if state.config.deployment_mode.is_self_hosted() {
+        match request.channel_type {
+            ChannelType::Email => "email",
+            ChannelType::Webhook => "webhook",
+            ChannelType::Slack => "slack",
+        }
+    } else {
+        let tier_str = OrganizationRepository::get_project_tier(&state.db, &project_id).await
+            .unwrap_or_else(|_| "free".to_string());
+
+        match request.channel_type {
+            ChannelType::Email => {
+                if !can_access_feature(&tier_str, "email_notifications") {
+                    return Err(AppError::PaymentRequired(
+                        "Email notifications require a Pro plan or higher.".to_string(),
+                    ));
+                }
+                "email"
+            }
+            ChannelType::Webhook => {
+                if !can_access_feature(&tier_str, "webhooks") {
+                    return Err(AppError::PaymentRequired(
+                        "Webhook notifications require a Pro plan or higher.".to_string(),
+                    ));
+                }
+                "webhook"
+            }
+            ChannelType::Slack => "slack",
+        }
     };
 
     let config_json = serde_json::to_string(&request.config)
@@ -369,15 +430,15 @@ pub async fn create_channel(
 /// GET /api/v1/projects/:project_id/channels
 pub async fn list_channels(
     State(state): State<AppState>,
-    auth_user: AuthUser,
+    auth: EitherAuth,
     Path(project_id): Path<String>,
 ) -> AppResult<Json<Vec<ChannelResponse>>> {
-    // Verify project ownership
+    // Verify project access
     let project = ProjectRepository::find_by_id(&state.db, &project_id)
         .await?
         .ok_or_else(|| AppError::NotFound("Project not found".to_string()))?;
 
-    if project.owner_id != auth_user.id {
+    if !auth.can_access_project(&state.db, &project).await {
         return Err(AppError::Forbidden("Access denied".to_string()));
     }
 
@@ -393,16 +454,20 @@ pub async fn list_channels(
 /// PATCH /api/v1/projects/:project_id/channels/:channel_id
 pub async fn update_channel(
     State(state): State<AppState>,
-    auth_user: AuthUser,
+    auth: EitherAuth,
     Path((project_id, channel_id)): Path<(String, String)>,
     Json(request): Json<UpdateChannelRequest>,
 ) -> AppResult<Json<ChannelResponse>> {
-    // Verify project ownership
+    if !auth.has_permission("write") {
+        return Err(AppError::Forbidden("write permission required".to_string()));
+    }
+
+    // Verify project access
     let project = ProjectRepository::find_by_id(&state.db, &project_id)
         .await?
         .ok_or_else(|| AppError::NotFound("Project not found".to_string()))?;
 
-    if project.owner_id != auth_user.id {
+    if !auth.can_access_project(&state.db, &project).await {
         return Err(AppError::Forbidden("Access denied".to_string()));
     }
 
@@ -437,15 +502,19 @@ pub async fn update_channel(
 /// DELETE /api/v1/projects/:project_id/channels/:channel_id
 pub async fn delete_channel(
     State(state): State<AppState>,
-    auth_user: AuthUser,
+    auth: EitherAuth,
     Path((project_id, channel_id)): Path<(String, String)>,
 ) -> AppResult<Json<serde_json::Value>> {
-    // Verify project ownership
+    if !auth.has_permission("write") {
+        return Err(AppError::Forbidden("write permission required".to_string()));
+    }
+
+    // Verify project access
     let project = ProjectRepository::find_by_id(&state.db, &project_id)
         .await?
         .ok_or_else(|| AppError::NotFound("Project not found".to_string()))?;
 
-    if project.owner_id != auth_user.id {
+    if !auth.can_access_project(&state.db, &project).await {
         return Err(AppError::Forbidden("Access denied".to_string()));
     }
 
@@ -479,16 +548,16 @@ fn default_limit() -> u32 {
 /// GET /api/v1/projects/:project_id/alerts/logs
 pub async fn list_alert_logs(
     State(state): State<AppState>,
-    auth_user: AuthUser,
+    auth: EitherAuth,
     Path(project_id): Path<String>,
     Query(query): Query<AlertLogsQuery>,
 ) -> AppResult<Json<Vec<AlertLog>>> {
-    // Verify project ownership
+    // Verify project access
     let project = ProjectRepository::find_by_id(&state.db, &project_id)
         .await?
         .ok_or_else(|| AppError::NotFound("Project not found".to_string()))?;
 
-    if project.owner_id != auth_user.id {
+    if !auth.can_access_project(&state.db, &project).await {
         return Err(AppError::Forbidden("Access denied".to_string()));
     }
 
@@ -535,11 +604,14 @@ pub struct AlertLogsAcrossProjectsResponse {
 /// GET /api/v1/alerts/across-projects
 pub async fn list_alert_logs_across_projects(
     State(state): State<AppState>,
-    auth_user: AuthUser,
+    auth: EitherAuth,
     Query(query): Query<AcrossProjectsAlertLogsQuery>,
 ) -> AppResult<Json<AlertLogsAcrossProjectsResponse>> {
-    // Get all user's projects
-    let projects = ProjectRepository::find_by_owner(&state.db, &auth_user.id, 100, 0).await?;
+    // Get projects based on auth type
+    let projects = match &*auth {
+        AuthIdentity::User(user) => ProjectRepository::find_by_owner(&state.db, &user.id, 100, 0).await?,
+        AuthIdentity::Agent(agent) => ProjectRepository::find_by_organization(&state.db, &agent.organization_id, 100, 0).await?,
+    };
 
     if projects.is_empty() {
         return Ok(Json(AlertLogsAcrossProjectsResponse { data: vec![] }));
@@ -597,15 +669,19 @@ pub async fn list_alert_logs_across_projects(
 /// POST /api/v1/projects/:project_id/channels/:channel_id/test
 pub async fn test_channel(
     State(state): State<AppState>,
-    auth_user: AuthUser,
+    auth: EitherAuth,
     Path((project_id, channel_id)): Path<(String, String)>,
 ) -> AppResult<Json<serde_json::Value>> {
-    // Verify project ownership
+    if !auth.has_permission("write") {
+        return Err(AppError::Forbidden("write permission required".to_string()));
+    }
+
+    // Verify project access
     let project = ProjectRepository::find_by_id(&state.db, &project_id)
         .await?
         .ok_or_else(|| AppError::NotFound("Project not found".to_string()))?;
 
-    if project.owner_id != auth_user.id {
+    if !auth.can_access_project(&state.db, &project).await {
         return Err(AppError::Forbidden("Access denied".to_string()));
     }
 

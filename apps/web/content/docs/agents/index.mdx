@@ -1,0 +1,62 @@
+---
+title: Agent Integration
+description: Enable AI agents to monitor, triage, and resolve errors in your Bugwatch projects
+---
+
+# Agent Integration
+
+Bugwatch exposes a full programmatic interface so AI agents can interact with your error tracking data. Agents can list and search issues, resolve or ignore errors, create monitors, and query project health -- all without a human clicking through the dashboard.
+
+## Integration Paths
+
+There are three ways to connect an agent to Bugwatch:
+
+### MCP Server
+
+The **Model Context Protocol** server lets AI coding tools query and act on your Bugwatch data directly. Supported clients include Claude Desktop, Cursor, and Windsurf.
+
+```bash
+npx @bugwatch/mcp
+```
+
+[Set up the MCP server](/docs/agents/mcp)
+
+### CLI
+
+The **Bugwatch CLI** provides structured commands that terminal-based agents (or shell-tool-equipped LLMs) can invoke. Pass `--json` to any command for machine-readable output.
+
+```bash
+bugwatch issues --project proj_abc --status unresolved --json
+```
+
+[View CLI commands](/docs/agents/cli)
+
+### OpenAPI Spec
+
+For custom agent frameworks like LangChain or CrewAI, fetch the **OpenAPI 3.1 specification** and auto-generate tool definitions.
+
+```bash
+curl https://api.bugwatch.dev/api/v1/openapi.yaml
+```
+
+[Use the OpenAPI spec](/docs/agents/openapi)
+
+## Agent API Keys
+
+Agent API keys are separate from SDK keys. They use the prefix `bw_agent_*` (compared to `bw_live_*` for SDK keys) and are scoped to your organization with configurable permissions.
+
+- **Read** -- list projects, issues, monitors, and alerts
+- **Write** -- resolve/ignore issues, add comments, create monitors
+- **Admin** -- manage agent keys, access audit logs
+
+[Manage agent API keys](/docs/agents/api-keys)
+
+## What Can Agents Do?
+
+With Bugwatch agent integration, an AI agent can:
+
+- Triage new errors by reading stack traces and suggesting fixes
+- Automatically resolve issues that match known patterns
+- Set up uptime monitors and alert rules for new services
+- Generate daily error reports and trend summaries
+- Investigate specific issues by querying frequency and affected users

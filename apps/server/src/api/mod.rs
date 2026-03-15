@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::AppState;
 
-pub mod ai_fixes;
+pub mod agent_keys;
 pub mod alerts;
 pub mod auth;
 pub mod billing;
@@ -13,16 +13,30 @@ pub mod issues;
 pub mod metrics;
 pub mod monitors;
 pub mod projects;
+#[cfg(feature = "saas")]
 pub mod webhooks;
 
 pub fn router() -> Router<AppState> {
-    Router::new()
+    let router = Router::new()
         // Auth routes
         .route("/auth/signup", post(auth::signup))
         .route("/auth/login", post(auth::login))
         .route("/auth/logout", post(auth::logout))
         .route("/auth/refresh", post(auth::refresh))
-        .route("/auth/me", get(auth::me))
+        .route("/auth/me", get(auth::me).patch(auth::update_profile))
+        .route("/auth/change-password", post(auth::change_password))
+        // Agent API Keys (JWT auth required to manage)
+        .route(
+            "/agent-keys",
+            get(agent_keys::list).post(agent_keys::create),
+        )
+        .route("/agent-keys/:key_id", delete(agent_keys::revoke))
+        .route(
+            "/agent-keys/:key_id/audit-log",
+            get(agent_keys::audit_log),
+        )
+        // OpenAPI spec
+        .route("/openapi.yaml", get(serve_openapi_spec))
         // Event ingestion
         .route("/events", post(events::ingest))
         // Server metrics ingestion (agent pushes here)
@@ -78,12 +92,6 @@ pub fn router() -> Router<AppState> {
             "/projects/:project_id/issues/:issue_id/comments/:comment_id",
             patch(comments::update).delete(comments::delete),
         )
-        // AI Fix generation
-        .route(
-            "/projects/:project_id/issues/:issue_id/ai-fix",
-            post(ai_fixes::generate_fix),
-        )
-        .route("/ai/generate-fix", post(ai_fixes::generate_fix_standalone))
         // Monitors
         .route(
             "/projects/:project_id/monitors",
@@ -142,14 +150,14 @@ pub fn router() -> Router<AppState> {
             "/projects/:project_id/channels/:channel_id/test",
             post(alerts::test_channel),
         )
-        // Organization routes
+        // Organization routes (always available)
         .route(
             "/organization",
             get(billing::get_organization)
                 .post(billing::create_organization)
                 .patch(billing::update_organization),
         )
-        // Organization members
+        // Organization members (always available)
         .route(
             "/organization/members",
             get(billing::list_members).post(billing::add_member),
@@ -157,7 +165,11 @@ pub fn router() -> Router<AppState> {
         .route(
             "/organization/members/:member_user_id",
             patch(billing::update_member_role).delete(billing::remove_member),
-        )
+        );
+
+    // SaaS-only routes: billing and Stripe webhooks
+    #[cfg(feature = "saas")]
+    let router = router
         // Subscription
         .route("/billing/subscription", get(billing::get_subscription))
         .route("/billing/checkout", post(billing::create_checkout))
@@ -192,15 +204,24 @@ pub fn router() -> Router<AppState> {
         // Dashboard & usage history
         .route("/billing/dashboard", get(billing::get_billing_dashboard))
         .route("/billing/usage/history", get(billing::get_usage_history))
-        // Credits
-        .route(
-            "/billing/credits",
-            get(billing::get_credits).post(billing::purchase_credits),
-        )
         // Usage
         .route("/billing/usage", get(billing::get_usage))
         // Webhooks (no auth required)
-        .route("/webhooks/stripe", post(webhooks::stripe_webhook))
+        .route("/webhooks/stripe", post(webhooks::stripe_webhook));
+
+    router
+}
+
+/// Serve OpenAPI 3.1 specification
+async fn serve_openapi_spec() -> axum::response::Response {
+    use axum::response::IntoResponse;
+    use axum::http::{header, StatusCode};
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "application/yaml")],
+        include_str!("../../openapi.yaml"),
+    )
+        .into_response()
 }
 
 /// Standard API success response

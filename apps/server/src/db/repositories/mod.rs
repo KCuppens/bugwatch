@@ -8,6 +8,7 @@ pub mod alerts;
 pub mod comments;
 pub mod organizations;
 pub mod server_metrics;
+pub mod agent_keys;
 
 pub use users::UserRepository;
 pub use sessions::SessionRepository;
@@ -19,6 +20,7 @@ pub use alerts::{AlertRuleRepository, NotificationChannelRepository, AlertLogRep
 pub use comments::CommentRepository;
 pub use organizations::{
     OrganizationRepository, OrganizationMemberRepository, UsageRepository,
-    BillingEventRepository, CreditPurchaseRepository,
+    BillingEventRepository,
 };
 pub use server_metrics::{ServerRepository, ServerMetricsRepository};
+pub use agent_keys::{AgentKeyRepository, AgentAuditLogRepository};

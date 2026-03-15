@@ -5,8 +5,8 @@ use tracing::{error, info};
 use crate::db::{
     models::{Issue, Monitor, NotificationChannel, ServerMetric},
     repositories::{
-        AlertLogRepository, AlertRuleRepository, NotificationChannelRepository, ProjectRepository,
-        ServerRepository,
+        AlertLogRepository, AlertRuleRepository, IssueRepository, NotificationChannelRepository,
+        ProjectRepository, ServerRepository,
     },
     DbPool,
 };
@@ -135,6 +135,11 @@ impl AlertingService {
                         self.app_url, issue.id, project_id
                     )),
                     timestamp: chrono::Utc::now().to_rfc3339(),
+                    project_id: None,
+                    issue: None,
+                    stack_trace: None,
+                    affected_users: None,
+                    frequency: None,
                 };
 
                 self.send_alert(&rule.id, &rule.actions, &payload).await;
@@ -202,6 +207,11 @@ impl AlertingService {
                         self.app_url, project_id
                     )),
                     timestamp: chrono::Utc::now().to_rfc3339(),
+                    project_id: None,
+                    issue: None,
+                    stack_trace: None,
+                    affected_users: None,
+                    frequency: None,
                 };
 
                 self.send_alert(&rule.id, &rule.actions, &payload).await;
@@ -252,6 +262,11 @@ impl AlertingService {
                         self.app_url, project_id
                     )),
                     timestamp: chrono::Utc::now().to_rfc3339(),
+                    project_id: None,
+                    issue: None,
+                    stack_trace: None,
+                    affected_users: None,
+                    frequency: None,
                 };
 
                 self.send_alert(&rule.id, &rule.actions, &payload).await;
@@ -404,6 +419,11 @@ impl AlertingService {
                         self.app_url, project_id
                     )),
                     timestamp: chrono::Utc::now().to_rfc3339(),
+                    project_id: None,
+                    issue: None,
+                    stack_trace: None,
+                    affected_users: None,
+                    frequency: None,
                 };
 
                 self.send_alert(&rule.id, &rule.actions, &payload).await;
@@ -466,6 +486,11 @@ impl AlertingService {
                         self.app_url, &server.project_id
                     )),
                     timestamp: chrono::Utc::now().to_rfc3339(),
+                    project_id: None,
+                    issue: None,
+                    stack_trace: None,
+                    affected_users: None,
+                    frequency: None,
                 };
 
                 self.send_alert(&rule.id, &rule.actions, &payload).await;
@@ -530,7 +555,7 @@ impl AlertingService {
 
             // Send notification
             match self.notification_service.send(&channel, payload).await {
-                Ok(_) => {
+                Ok(action) => {
                     if let Err(e) = AlertLogRepository::mark_sent(&self.pool, &log.id).await {
                         error!("Failed to mark log as sent: {}", e);
                     }
@@ -538,6 +563,23 @@ impl AlertingService {
                         "Alert sent via {} channel '{}'",
                         channel.channel_type, channel.name
                     );
+
+                    // Handle webhook response actions (resolve/ignore)
+                    if let Some(action) = action {
+                        if let Some(issue_id) = &payload.trigger_id {
+                            if payload.trigger_type == "new_issue" || payload.trigger_type == "issue_frequency" {
+                                let new_status = match action.as_str() {
+                                    "resolve" => "resolved",
+                                    "ignore" => "ignored",
+                                    _ => continue,
+                                };
+                                match IssueRepository::update_status(&self.pool, issue_id, new_status).await {
+                                    Ok(_) => info!("Webhook action '{}' applied to issue {}", action, issue_id),
+                                    Err(e) => error!("Failed to apply webhook action '{}' to issue {}: {}", action, issue_id, e),
+                                }
+                            }
+                        }
+                    }
                 }
                 Err(e) => {
                     let error_msg = e.to_string();

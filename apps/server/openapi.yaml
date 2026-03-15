@@ -1,0 +1,3351 @@
+openapi: 3.1.0
+info:
+  title: Bugwatch API
+  description: |
+    The Bugwatch API provides error tracking, uptime monitoring, server monitoring,
+    and alerting for your applications. Authenticate using JWT bearer tokens (for
+    dashboard users), Agent API keys (for CI/CD and automation), or SDK API keys
+    (for event ingestion from your application code).
+  version: 1.0.0
+  contact:
+    name: Bugwatch
+    url: https://bugwatch.dev
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+
+servers:
+  - url: https://api.bugwatch.dev/api/v1
+    description: Bugwatch Cloud
+  - url: "{server_url}/api/v1"
+    description: Self-hosted instance
+    variables:
+      server_url:
+        default: http://localhost:3001
+        description: Base URL of your self-hosted Bugwatch server
+
+security:
+  - BearerJWT: []
+
+tags:
+  - name: Auth
+    description: User authentication and profile management
+  - name: Projects
+    description: Project CRUD and key management
+  - name: Issues
+    description: Error issues grouped by fingerprint
+  - name: Events
+    description: Raw error event ingestion from SDKs
+  - name: Comments
+    description: Issue comments and collaboration
+  - name: Monitors
+    description: Uptime monitoring
+  - name: Server Metrics
+    description: Server resource monitoring (CPU, memory, disk, network)
+  - name: Alerts
+    description: Alert rules and alert logs
+  - name: Notification Channels
+    description: Notification delivery channels (email, webhook, Slack)
+  - name: Agent Keys
+    description: Agent API key management
+  - name: Billing
+    description: Subscription, invoices, and payment management (SaaS only)
+  - name: Organization
+    description: Organization and team member management
+
+components:
+  securitySchemes:
+    BearerJWT:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT access token obtained from /auth/login or /auth/signup
+    AgentApiKey:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: "Agent API key (prefixed with bw_agent_). Also accepted via Authorization: Bearer bw_agent_*"
+    SdkApiKey:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: Project SDK API key for event ingestion. Also accepted via Authorization Bearer header.
+
+  schemas:
+    # ---------------------------------------------------------------
+    # Common
+    # ---------------------------------------------------------------
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              example: not_found
+            message:
+              type: string
+              example: "Project abc123 not found"
+
+    PaginationMeta:
+      type: object
+      required: [page, per_page, total, total_pages]
+      properties:
+        page:
+          type: integer
+          example: 1
+        per_page:
+          type: integer
+          example: 20
+        total:
+          type: integer
+          example: 42
+        total_pages:
+          type: integer
+          example: 3
+
+    MessageResponse:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            message:
+              type: string
+
+    # ---------------------------------------------------------------
+    # Auth
+    # ---------------------------------------------------------------
+    SignupRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          format: password
+          minLength: 8
+        name:
+          type: string
+          maxLength: 100
+
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          format: password
+
+    RefreshRequest:
+      type: object
+      required: [refresh_token]
+      properties:
+        refresh_token:
+          type: string
+
+    TokenResponse:
+      type: object
+      properties:
+        access_token:
+          type: string
+        refresh_token:
+          type: string
+        expires_in:
+          type: integer
+          description: Seconds until the access token expires
+
+    UserResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        email:
+          type: string
+          format: email
+        name:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+
+    AuthData:
+      type: object
+      properties:
+        user:
+          $ref: "#/components/schemas/UserResponse"
+        tokens:
+          $ref: "#/components/schemas/TokenResponse"
+
+    AuthResponse:
+      type: object
+      properties:
+        data:
+          $ref: "#/components/schemas/AuthData"
+
+    RefreshResponse:
+      type: object
+      properties:
+        data:
+          $ref: "#/components/schemas/TokenResponse"
+
+    OrganizationInfo:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        slug:
+          type: string
+        tier:
+          type: string
+          enum: [free, pro, team]
+        seats:
+          type: integer
+        subscription_status:
+          type: string
+        current_period_end:
+          type: string
+          format: date-time
+          nullable: true
+        cancel_at_period_end:
+          type: boolean
+
+    MeResponse:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            id:
+              type: string
+            email:
+              type: string
+              format: email
+            name:
+              type: string
+              nullable: true
+            created_at:
+              type: string
+              format: date-time
+            organization:
+              nullable: true
+              $ref: "#/components/schemas/OrganizationInfo"
+
+    UpdateProfileRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          maxLength: 100
+
+    ChangePasswordRequest:
+      type: object
+      required: [current_password, new_password]
+      properties:
+        current_password:
+          type: string
+          format: password
+        new_password:
+          type: string
+          format: password
+          minLength: 8
+
+    # ---------------------------------------------------------------
+    # Projects
+    # ---------------------------------------------------------------
+    Project:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        slug:
+          type: string
+        api_key:
+          type: string
+        owner_id:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        platform:
+          type: string
+          nullable: true
+        framework:
+          type: string
+          nullable: true
+        onboarding_completed_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    CreateProjectRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          maxLength: 100
+        platform:
+          type: string
+        framework:
+          type: string
+
+    UpdateProjectRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          maxLength: 100
+        platform:
+          type: string
+        framework:
+          type: string
+
+    VerificationResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [success, waiting]
+        event_count:
+          type: integer
+          format: int64
+
+    # ---------------------------------------------------------------
+    # Issues
+    # ---------------------------------------------------------------
+    Issue:
+      type: object
+      properties:
+        id:
+          type: string
+        project_id:
+          type: string
+        fingerprint:
+          type: string
+        title:
+          type: string
+        status:
+          type: string
+          enum: [unresolved, resolved, ignored]
+        level:
+          type: string
+          enum: [fatal, error, warning, info, debug]
+        first_seen:
+          type: string
+          format: date-time
+        last_seen:
+          type: string
+          format: date-time
+        count:
+          type: integer
+          format: int64
+        user_count:
+          type: integer
+          format: int64
+        environment:
+          type: string
+
+    UpdateIssueRequest:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [unresolved, resolved, ignored]
+
+    SearchFilters:
+      type: object
+      properties:
+        query:
+          type: string
+        status:
+          type: string
+        level:
+          type: string
+        environment:
+          type: string
+        date_from:
+          type: string
+          format: date-time
+        date_to:
+          type: string
+          format: date-time
+        sort_by:
+          type: string
+          enum: [last_seen, first_seen, count, user_count]
+        sort_order:
+          type: string
+          enum: [asc, desc]
+        page:
+          type: integer
+        per_page:
+          type: integer
+
+    FrequencyPoint:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        count:
+          type: integer
+
+    ImpactResponse:
+      type: object
+      properties:
+        user_count:
+          type: integer
+          format: int64
+        event_count:
+          type: integer
+          format: int64
+        environments:
+          type: array
+          items:
+            type: string
+
+    ProjectStats:
+      type: object
+      properties:
+        project_id:
+          type: string
+        project_name:
+          type: string
+        total_issues:
+          type: integer
+        unresolved_issues:
+          type: integer
+        events_24h:
+          type: integer
+
+    # ---------------------------------------------------------------
+    # Events
+    # ---------------------------------------------------------------
+    ErrorEvent:
+      type: object
+      required: [event_id, timestamp, level]
+      properties:
+        event_id:
+          type: string
+          format: uuid
+        timestamp:
+          type: string
+          format: date-time
+        level:
+          type: string
+          enum: [fatal, error, warning, info, debug]
+        message:
+          type: string
+          nullable: true
+        exception:
+          $ref: "#/components/schemas/ExceptionInfo"
+        environment:
+          type: string
+          default: production
+        release:
+          type: string
+        server_name:
+          type: string
+        request:
+          $ref: "#/components/schemas/RequestContext"
+        user:
+          $ref: "#/components/schemas/UserContext"
+        tags:
+          type: object
+          additionalProperties:
+            type: string
+        extra:
+          type: object
+          description: Arbitrary extra context
+        breadcrumbs:
+          type: array
+          items:
+            $ref: "#/components/schemas/Breadcrumb"
+        sdk:
+          $ref: "#/components/schemas/SdkInfo"
+        platform:
+          type: string
+        runtime:
+          $ref: "#/components/schemas/RuntimeInfo"
+
+    ExceptionInfo:
+      type: object
+      required: [type, value, stacktrace]
+      properties:
+        type:
+          type: string
+        value:
+          type: string
+        stacktrace:
+          type: array
+          items:
+            $ref: "#/components/schemas/StackFrame"
+
+    StackFrame:
+      type: object
+      properties:
+        filename:
+          type: string
+        function:
+          type: string
+        lineno:
+          type: integer
+        colno:
+          type: integer
+        abs_path:
+          type: string
+          nullable: true
+        context_line:
+          type: string
+          nullable: true
+        pre_context:
+          type: array
+          items:
+            type: string
+          nullable: true
+        post_context:
+          type: array
+          items:
+            type: string
+          nullable: true
+        in_app:
+          type: boolean
+
+    RequestContext:
+      type: object
+      properties:
+        url:
+          type: string
+        method:
+          type: string
+        headers:
+          type: object
+          additionalProperties:
+            type: string
+        query_string:
+          type: string
+        data:
+          type: object
+
+    UserContext:
+      type: object
+      properties:
+        id:
+          type: string
+        email:
+          type: string
+        username:
+          type: string
+        ip_address:
+          type: string
+
+    Breadcrumb:
+      type: object
+      properties:
+        timestamp:
+          type: string
+        type:
+          type: string
+        category:
+          type: string
+        message:
+          type: string
+          nullable: true
+        data:
+          type: object
+          nullable: true
+        level:
+          type: string
+          enum: [fatal, error, warning, info, debug]
+          nullable: true
+
+    SdkInfo:
+      type: object
+      properties:
+        name:
+          type: string
+        version:
+          type: string
+
+    RuntimeInfo:
+      type: object
+      properties:
+        name:
+          type: string
+        version:
+          type: string
+
+    IngestResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        status:
+          type: string
+          enum: [accepted, duplicate, deduplicated]
+
+    # ---------------------------------------------------------------
+    # Event Detail (stored payload)
+    # ---------------------------------------------------------------
+    EventRecord:
+      type: object
+      properties:
+        id:
+          type: string
+        issue_id:
+          type: string
+        event_id:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        payload:
+          type: object
+          description: Full ErrorEvent payload as JSON
+        processed_at:
+          type: string
+          format: date-time
+
+    # ---------------------------------------------------------------
+    # Comments
+    # ---------------------------------------------------------------
+    Comment:
+      type: object
+      properties:
+        id:
+          type: string
+        issue_id:
+          type: string
+        user_id:
+          type: string
+        user_name:
+          type: string
+          nullable: true
+        user_email:
+          type: string
+        content:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    CreateCommentRequest:
+      type: object
+      required: [content]
+      properties:
+        content:
+          type: string
+          maxLength: 10000
+
+    UpdateCommentRequest:
+      type: object
+      required: [content]
+      properties:
+        content:
+          type: string
+          maxLength: 10000
+
+    # ---------------------------------------------------------------
+    # Monitors
+    # ---------------------------------------------------------------
+    Monitor:
+      type: object
+      properties:
+        id:
+          type: string
+        project_id:
+          type: string
+        name:
+          type: string
+        url:
+          type: string
+          format: uri
+        method:
+          type: string
+          default: GET
+        interval_seconds:
+          type: integer
+          default: 60
+          minimum: 30
+        timeout_ms:
+          type: integer
+          default: 30000
+        expected_status:
+          type: integer
+          nullable: true
+        headers:
+          type: string
+          description: JSON-encoded headers object
+        body:
+          type: string
+          nullable: true
+        is_active:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        last_checked_at:
+          type: string
+          format: date-time
+          nullable: true
+        current_status:
+          type: string
+          enum: [up, down, pending]
+
+    MonitorResponse:
+      type: object
+      allOf:
+        - $ref: "#/components/schemas/Monitor"
+        - type: object
+          properties:
+            uptime_24h:
+              type: number
+              format: double
+              nullable: true
+              description: Uptime percentage in last 24 hours
+            avg_response_24h:
+              type: number
+              format: double
+              nullable: true
+              description: Average response time (ms) in last 24 hours
+            last_error:
+              type: string
+              nullable: true
+
+    MonitorDetailResponse:
+      type: object
+      allOf:
+        - $ref: "#/components/schemas/Monitor"
+        - type: object
+          properties:
+            uptime_24h:
+              type: number
+              format: double
+              nullable: true
+            avg_response_24h:
+              type: number
+              format: double
+              nullable: true
+            recent_checks:
+              type: array
+              items:
+                $ref: "#/components/schemas/MonitorCheck"
+            recent_incidents:
+              type: array
+              items:
+                $ref: "#/components/schemas/MonitorIncident"
+
+    MonitorCheck:
+      type: object
+      properties:
+        id:
+          type: string
+        monitor_id:
+          type: string
+        status:
+          type: string
+        response_time_ms:
+          type: integer
+          nullable: true
+        status_code:
+          type: integer
+          nullable: true
+        error_message:
+          type: string
+          nullable: true
+        checked_at:
+          type: string
+          format: date-time
+
+    MonitorIncident:
+      type: object
+      properties:
+        id:
+          type: string
+        monitor_id:
+          type: string
+        started_at:
+          type: string
+          format: date-time
+        resolved_at:
+          type: string
+          format: date-time
+          nullable: true
+        cause:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+
+    CreateMonitorRequest:
+      type: object
+      required: [name, url]
+      properties:
+        name:
+          type: string
+          maxLength: 200
+        url:
+          type: string
+          format: uri
+          maxLength: 2048
+        method:
+          type: string
+          default: GET
+        interval_seconds:
+          type: integer
+          default: 60
+          minimum: 30
+        timeout_ms:
+          type: integer
+          default: 30000
+        expected_status:
+          type: integer
+        headers:
+          type: object
+          additionalProperties:
+            type: string
+        body:
+          type: string
+
+    UpdateMonitorRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          maxLength: 200
+        url:
+          type: string
+          format: uri
+          maxLength: 2048
+        method:
+          type: string
+        interval_seconds:
+          type: integer
+          minimum: 30
+        timeout_ms:
+          type: integer
+        expected_status:
+          type: integer
+        headers:
+          type: object
+          additionalProperties:
+            type: string
+        body:
+          type: string
+        is_active:
+          type: boolean
+
+    MonitorWithProjectInfo:
+      type: object
+      properties:
+        id:
+          type: string
+        project_id:
+          type: string
+        project_name:
+          type: string
+        name:
+          type: string
+        url:
+          type: string
+        current_status:
+          type: string
+        uptime_24h:
+          type: number
+          format: double
+          nullable: true
+        avg_response_24h:
+          type: number
+          format: double
+          nullable: true
+        last_error:
+          type: string
+          nullable: true
+        last_checked_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    MonitorsSummary:
+      type: object
+      properties:
+        total:
+          type: integer
+        up:
+          type: integer
+        down:
+          type: integer
+
+    # ---------------------------------------------------------------
+    # Server Metrics
+    # ---------------------------------------------------------------
+    ServerMetricsPayload:
+      type: object
+      required: [server_id, hostname]
+      properties:
+        server_id:
+          type: string
+        hostname:
+          type: string
+        os:
+          type: string
+        kernel:
+          type: string
+        cpu:
+          type: object
+          properties:
+            usage_percent:
+              type: number
+              format: double
+        memory:
+          type: object
+          properties:
+            total_bytes:
+              type: integer
+              format: int64
+            used_bytes:
+              type: integer
+              format: int64
+            available_bytes:
+              type: integer
+              format: int64
+            usage_percent:
+              type: number
+              format: double
+        swap:
+          type: object
+          properties:
+            total_bytes:
+              type: integer
+              format: int64
+            used_bytes:
+              type: integer
+              format: int64
+        network:
+          type: object
+          properties:
+            rx_bytes_per_sec:
+              type: integer
+              format: int64
+            tx_bytes_per_sec:
+              type: integer
+              format: int64
+        load:
+          type: object
+          properties:
+            avg_1:
+              type: number
+              format: double
+            avg_5:
+              type: number
+              format: double
+            avg_15:
+              type: number
+              format: double
+        uptime_seconds:
+          type: integer
+          format: int64
+        disks:
+          type: array
+          items:
+            $ref: "#/components/schemas/DiskInfo"
+        processes:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProcessInfo"
+        docker:
+          type: array
+          items:
+            $ref: "#/components/schemas/DockerContainer"
+
+    DiskInfo:
+      type: object
+      properties:
+        mount:
+          type: string
+        filesystem:
+          type: string
+          nullable: true
+        total_bytes:
+          type: integer
+          format: int64
+        used_bytes:
+          type: integer
+          format: int64
+        available_bytes:
+          type: integer
+          format: int64
+        usage_percent:
+          type: number
+          format: double
+
+    ProcessInfo:
+      type: object
+      properties:
+        pid:
+          type: integer
+        name:
+          type: string
+        cpu_percent:
+          type: number
+          format: double
+        mem_percent:
+          type: number
+          format: double
+        user:
+          type: string
+          nullable: true
+
+    DockerContainer:
+      type: object
+      properties:
+        name:
+          type: string
+        id:
+          type: string
+        status:
+          type: string
+        cpu_percent:
+          type: number
+          format: double
+          nullable: true
+        mem_usage:
+          type: string
+          nullable: true
+        mem_percent:
+          type: number
+          format: double
+          nullable: true
+
+    MetricsIngestResponse:
+      type: object
+      properties:
+        status:
+          type: string
+        server_db_id:
+          type: string
+
+    Server:
+      type: object
+      properties:
+        id:
+          type: string
+        project_id:
+          type: string
+        server_id:
+          type: string
+        hostname:
+          type: string
+        os:
+          type: string
+          nullable: true
+        kernel:
+          type: string
+          nullable: true
+        first_seen:
+          type: string
+          format: date-time
+        last_seen:
+          type: string
+          format: date-time
+        is_active:
+          type: boolean
+
+    ServerMetricPoint:
+      type: object
+      properties:
+        id:
+          type: string
+        recorded_at:
+          type: string
+          format: date-time
+        cpu_usage_percent:
+          type: number
+          format: double
+          nullable: true
+        load_avg_1:
+          type: number
+          format: double
+          nullable: true
+        load_avg_5:
+          type: number
+          format: double
+          nullable: true
+        load_avg_15:
+          type: number
+          format: double
+          nullable: true
+        mem_total_bytes:
+          type: integer
+          format: int64
+          nullable: true
+        mem_used_bytes:
+          type: integer
+          format: int64
+          nullable: true
+        mem_available_bytes:
+          type: integer
+          format: int64
+          nullable: true
+        mem_usage_percent:
+          type: number
+          format: double
+          nullable: true
+        swap_total_bytes:
+          type: integer
+          format: int64
+          nullable: true
+        swap_used_bytes:
+          type: integer
+          format: int64
+          nullable: true
+        net_rx_bytes_per_sec:
+          type: integer
+          format: int64
+          nullable: true
+        net_tx_bytes_per_sec:
+          type: integer
+          format: int64
+          nullable: true
+        uptime_seconds:
+          type: integer
+          format: int64
+          nullable: true
+        disks:
+          type: array
+          items:
+            $ref: "#/components/schemas/DiskInfo"
+          nullable: true
+        processes:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProcessInfo"
+          nullable: true
+        docker:
+          type: array
+          items:
+            $ref: "#/components/schemas/DockerContainer"
+          nullable: true
+
+    # ---------------------------------------------------------------
+    # Alerts
+    # ---------------------------------------------------------------
+    AlertCondition:
+      type: object
+      required: [type]
+      discriminator:
+        propertyName: type
+      properties:
+        type:
+          type: string
+          enum:
+            - new_issue
+            - issue_frequency
+            - monitor_down
+            - monitor_recovery
+            - server_cpu_high
+            - server_memory_high
+            - server_disk_high
+            - server_offline
+        level:
+          type: string
+          description: "For new_issue: filter by level"
+        threshold:
+          type: integer
+          description: "For issue_frequency: occurrence threshold"
+        window_minutes:
+          type: integer
+          description: "For issue_frequency: time window in minutes"
+        monitor_id:
+          type: string
+          nullable: true
+          description: "For monitor_down/monitor_recovery: specific monitor or null for all"
+        threshold_percent:
+          type: number
+          format: double
+          description: "For server_cpu_high, server_memory_high, server_disk_high"
+        server_id:
+          type: string
+          nullable: true
+          description: "For server_* conditions: specific server or null for all"
+        mount:
+          type: string
+          nullable: true
+          description: "For server_disk_high: specific mount point"
+        missing_minutes:
+          type: integer
+          description: "For server_offline: minutes before considered offline"
+          default: 5
+
+    AlertRule:
+      type: object
+      properties:
+        id:
+          type: string
+        project_id:
+          type: string
+        name:
+          type: string
+        condition:
+          $ref: "#/components/schemas/AlertCondition"
+        channel_ids:
+          type: array
+          items:
+            type: string
+        is_active:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+
+    CreateAlertRuleRequest:
+      type: object
+      required: [name, condition, channel_ids]
+      properties:
+        name:
+          type: string
+        condition:
+          $ref: "#/components/schemas/AlertCondition"
+        channel_ids:
+          type: array
+          items:
+            type: string
+
+    UpdateAlertRuleRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        condition:
+          $ref: "#/components/schemas/AlertCondition"
+        channel_ids:
+          type: array
+          items:
+            type: string
+        is_active:
+          type: boolean
+
+    AlertLog:
+      type: object
+      properties:
+        id:
+          type: string
+        alert_rule_id:
+          type: string
+        channel_id:
+          type: string
+          nullable: true
+        trigger_type:
+          type: string
+        trigger_id:
+          type: string
+          nullable: true
+        status:
+          type: string
+        message:
+          type: string
+        error_message:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        sent_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    AlertLogWithProjectInfo:
+      type: object
+      properties:
+        id:
+          type: string
+        alert_rule_id:
+          type: string
+        rule_name:
+          type: string
+        project_id:
+          type: string
+        project_name:
+          type: string
+        trigger_type:
+          type: string
+        trigger_id:
+          type: string
+          nullable: true
+        status:
+          type: string
+        message:
+          type: string
+        error_message:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        sent_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    # ---------------------------------------------------------------
+    # Notification Channels
+    # ---------------------------------------------------------------
+    ChannelConfig:
+      description: "Configuration varies by channel type"
+      oneOf:
+        - type: object
+          title: EmailConfig
+          properties:
+            recipients:
+              type: array
+              items:
+                type: string
+                format: email
+        - type: object
+          title: WebhookConfig
+          properties:
+            url:
+              type: string
+              format: uri
+            secret:
+              type: string
+              nullable: true
+        - type: object
+          title: SlackConfig
+          properties:
+            webhook_url:
+              type: string
+              format: uri
+            channel:
+              type: string
+              nullable: true
+
+    NotificationChannel:
+      type: object
+      properties:
+        id:
+          type: string
+        project_id:
+          type: string
+        name:
+          type: string
+        channel_type:
+          type: string
+          enum: [email, webhook, slack]
+        config:
+          $ref: "#/components/schemas/ChannelConfig"
+        is_active:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+
+    CreateChannelRequest:
+      type: object
+      required: [name, channel_type, config]
+      properties:
+        name:
+          type: string
+        channel_type:
+          type: string
+          enum: [email, webhook, slack]
+        config:
+          $ref: "#/components/schemas/ChannelConfig"
+
+    UpdateChannelRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        config:
+          $ref: "#/components/schemas/ChannelConfig"
+        is_active:
+          type: boolean
+
+    # ---------------------------------------------------------------
+    # Agent Keys
+    # ---------------------------------------------------------------
+    AgentKey:
+      type: object
+      properties:
+        id:
+          type: string
+        organization_id:
+          type: string
+        name:
+          type: string
+        key_prefix:
+          type: string
+        permissions:
+          type: array
+          items:
+            type: string
+            enum: [read, write, admin]
+        created_by:
+          type: string
+        last_used_at:
+          type: string
+          format: date-time
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        revoked_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    AgentKeyCreated:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        key:
+          type: string
+          description: Full API key (only returned once at creation)
+        key_prefix:
+          type: string
+        permissions:
+          type: array
+          items:
+            type: string
+            enum: [read, write, admin]
+        created_at:
+          type: string
+          format: date-time
+
+    CreateAgentKeyRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          maxLength: 100
+        permissions:
+          type: array
+          items:
+            type: string
+            enum: [read, write, admin]
+          default: [read]
+
+    AuditLogEntry:
+      type: object
+      properties:
+        id:
+          type: string
+        agent_key_id:
+          type: string
+        action:
+          type: string
+        resource_type:
+          type: string
+          nullable: true
+        resource_id:
+          type: string
+          nullable: true
+        metadata:
+          type: object
+          nullable: true
+        ip_address:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+
+    # ---------------------------------------------------------------
+    # Organization
+    # ---------------------------------------------------------------
+    Organization:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        slug:
+          type: string
+        owner_id:
+          type: string
+        tier:
+          type: string
+          enum: [free, pro, team]
+        stripe_customer_id:
+          type: string
+          nullable: true
+        stripe_subscription_id:
+          type: string
+          nullable: true
+        subscription_status:
+          type: string
+        seats:
+          type: integer
+        billing_interval:
+          type: string
+          nullable: true
+        current_period_start:
+          type: string
+          format: date-time
+          nullable: true
+        current_period_end:
+          type: string
+          format: date-time
+          nullable: true
+        cancel_at_period_end:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    OrganizationResponse:
+      type: object
+      properties:
+        organization:
+          $ref: "#/components/schemas/Organization"
+        members_count:
+          type: integer
+        is_owner:
+          type: boolean
+
+    CreateOrganizationRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+
+    UpdateOrganizationRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+
+    OrganizationMember:
+      type: object
+      properties:
+        id:
+          type: string
+        organization_id:
+          type: string
+        user_id:
+          type: string
+        role:
+          type: string
+          enum: [owner, admin, member]
+        created_at:
+          type: string
+          format: date-time
+
+    MemberResponse:
+      type: object
+      properties:
+        member:
+          $ref: "#/components/schemas/OrganizationMember"
+        user_email:
+          type: string
+        user_name:
+          type: string
+          nullable: true
+
+    InviteMemberRequest:
+      type: object
+      required: [email]
+      properties:
+        email:
+          type: string
+          format: email
+        role:
+          type: string
+          enum: [admin, member]
+          default: member
+
+    UpdateMemberRoleRequest:
+      type: object
+      required: [role]
+      properties:
+        role:
+          type: string
+          enum: [admin, member]
+
+  parameters:
+    ProjectId:
+      name: project_id
+      in: path
+      required: true
+      schema:
+        type: string
+    IssueId:
+      name: issue_id
+      in: path
+      required: true
+      schema:
+        type: string
+    EventId:
+      name: event_id
+      in: path
+      required: true
+      schema:
+        type: string
+    MonitorId:
+      name: monitor_id
+      in: path
+      required: true
+      schema:
+        type: string
+    AlertId:
+      name: alert_id
+      in: path
+      required: true
+      schema:
+        type: string
+    ChannelId:
+      name: channel_id
+      in: path
+      required: true
+      schema:
+        type: string
+    CommentId:
+      name: comment_id
+      in: path
+      required: true
+      schema:
+        type: string
+    KeyId:
+      name: key_id
+      in: path
+      required: true
+      schema:
+        type: string
+    ServerId:
+      name: server_id
+      in: path
+      required: true
+      schema:
+        type: string
+    MemberUserId:
+      name: member_user_id
+      in: path
+      required: true
+      schema:
+        type: string
+    Page:
+      name: page
+      in: query
+      schema:
+        type: integer
+        default: 1
+        minimum: 1
+    PerPage:
+      name: per_page
+      in: query
+      schema:
+        type: integer
+        default: 20
+        minimum: 1
+        maximum: 100
+
+  responses:
+    Unauthorized:
+      description: Missing or invalid authentication
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Forbidden:
+      description: Insufficient permissions
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    PaymentRequired:
+      description: Feature requires a paid plan
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    RateLimited:
+      description: Rate limit exceeded
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+# =====================================================================
+# Paths
+# =====================================================================
+paths:
+  # -------------------------------------------------------------------
+  # Auth
+  # -------------------------------------------------------------------
+  /auth/signup:
+    post:
+      operationId: signup
+      tags: [Auth]
+      summary: Register a new user account
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SignupRequest"
+      responses:
+        "200":
+          description: Account created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+        "409":
+          description: Email already registered
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Validation error (invalid email or password)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /auth/login:
+    post:
+      operationId: login
+      tags: [Auth]
+      summary: Authenticate with email and password
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /auth/logout:
+    post:
+      operationId: logout
+      tags: [Auth]
+      summary: Log out and invalidate all sessions
+      responses:
+        "200":
+          description: Logged out
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /auth/refresh:
+    post:
+      operationId: refreshTokens
+      tags: [Auth]
+      summary: Refresh access and refresh tokens
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RefreshRequest"
+      responses:
+        "200":
+          description: Tokens refreshed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RefreshResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /auth/me:
+    get:
+      operationId: getMe
+      tags: [Auth]
+      summary: Get the current user profile
+      responses:
+        "200":
+          description: User profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MeResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    patch:
+      operationId: updateProfile
+      tags: [Auth]
+      summary: Update the current user profile
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateProfileRequest"
+      responses:
+        "200":
+          description: Profile updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /auth/change-password:
+    post:
+      operationId: changePassword
+      tags: [Auth]
+      summary: Change the current user password
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChangePasswordRequest"
+      responses:
+        "200":
+          description: Password changed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  # -------------------------------------------------------------------
+  # Agent Keys
+  # -------------------------------------------------------------------
+  /agent-keys:
+    post:
+      operationId: createAgentKey
+      tags: [Agent Keys]
+      summary: Create a new agent API key
+      description: Only the organization owner can create agent keys. The full key is returned only once.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAgentKeyRequest"
+      responses:
+        "200":
+          description: Agent key created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/AgentKeyCreated"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    get:
+      operationId: listAgentKeys
+      tags: [Agent Keys]
+      summary: List all agent keys for the organization
+      responses:
+        "200":
+          description: Agent keys list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/AgentKey"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /agent-keys/{key_id}:
+    delete:
+      operationId: revokeAgentKey
+      tags: [Agent Keys]
+      summary: Revoke an agent key
+      parameters:
+        - $ref: "#/components/parameters/KeyId"
+      responses:
+        "200":
+          description: Key revoked
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /agent-keys/{key_id}/audit-log:
+    get:
+      operationId: getAgentKeyAuditLog
+      tags: [Agent Keys]
+      summary: Get the audit log for an agent key
+      parameters:
+        - $ref: "#/components/parameters/KeyId"
+      responses:
+        "200":
+          description: Audit log entries
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/AuditLogEntry"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # -------------------------------------------------------------------
+  # Events
+  # -------------------------------------------------------------------
+  /events:
+    post:
+      operationId: ingestEvent
+      tags: [Events]
+      summary: Ingest an error event from an SDK
+      description: Accepts an error event payload. Authenticates via SDK project API key.
+      security:
+        - SdkApiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ErrorEvent"
+      responses:
+        "202":
+          description: Event accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IngestResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  # -------------------------------------------------------------------
+  # Projects
+  # -------------------------------------------------------------------
+  /projects:
+    get:
+      operationId: listProjects
+      tags: [Projects]
+      summary: List projects
+      security:
+        - BearerJWT: []
+        - AgentApiKey: []
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PerPage"
+      responses:
+        "200":
+          description: Paginated project list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Project"
+                  pagination:
+                    $ref: "#/components/schemas/PaginationMeta"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      operationId: createProject
+      tags: [Projects]
+      summary: Create a new project
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateProjectRequest"
+      responses:
+        "200":
+          description: Project created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Project"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "402":
+          $ref: "#/components/responses/PaymentRequired"
+
+  /projects/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: getProject
+      tags: [Projects]
+      summary: Get a project by ID
+      security:
+        - BearerJWT: []
+        - AgentApiKey: []
+      responses:
+        "200":
+          description: Project details
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Project"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      operationId: updateProject
+      tags: [Projects]
+      summary: Update a project
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateProjectRequest"
+      responses:
+        "200":
+          description: Project updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Project"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      operationId: deleteProject
+      tags: [Projects]
+      summary: Delete a project
+      responses:
+        "200":
+          description: Project deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /projects/{id}/keys:
+    post:
+      operationId: rotateProjectKey
+      tags: [Projects]
+      summary: Rotate a project API key
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Key rotated, returns project with new key
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Project"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /projects/{id}/onboarding/complete:
+    post:
+      operationId: completeOnboarding
+      tags: [Projects]
+      summary: Mark project onboarding as complete
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Onboarding completed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Project"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /projects/{id}/verify:
+    get:
+      operationId: verifyProjectEvents
+      tags: [Projects]
+      summary: Check if the project has received events
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Verification status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/VerificationResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # -------------------------------------------------------------------
+  # Issues
+  # -------------------------------------------------------------------
+  /projects/{project_id}/issues:
+    get:
+      operationId: listIssues
+      tags: [Issues]
+      summary: List issues for a project
+      security:
+        - BearerJWT: []
+        - AgentApiKey: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [unresolved, resolved, ignored]
+        - name: level
+          in: query
+          schema:
+            type: string
+            enum: [fatal, error, warning, info, debug]
+        - name: environment
+          in: query
+          schema:
+            type: string
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PerPage"
+      responses:
+        "200":
+          description: Paginated issue list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Issue"
+                  pagination:
+                    $ref: "#/components/schemas/PaginationMeta"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /projects/{project_id}/issues/_search:
+    post:
+      operationId: searchIssues
+      tags: [Issues]
+      summary: Full-text search issues with filters
+      security:
+        - BearerJWT: []
+        - AgentApiKey: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SearchFilters"
+      responses:
+        "200":
+          description: Search results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Issue"
+                  pagination:
+                    $ref: "#/components/schemas/PaginationMeta"
+                  facets:
+                    type: object
+                    properties:
+                      statuses:
+                        type: object
+                        additionalProperties:
+                          type: integer
+                      levels:
+                        type: object
+                        additionalProperties:
+                          type: integer
+                      environments:
+                        type: object
+                        additionalProperties:
+                          type: integer
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /projects/{project_id}/issues/{issue_id}:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+      - $ref: "#/components/parameters/IssueId"
+    get:
+      operationId: getIssue
+      tags: [Issues]
+      summary: Get issue details
+      security:
+        - BearerJWT: []
+        - AgentApiKey: []
+      responses:
+        "200":
+          description: Issue details with latest event
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    allOf:
+                      - $ref: "#/components/schemas/Issue"
+                      - type: object
+                        properties:
+                          latest_event:
+                            $ref: "#/components/schemas/EventRecord"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      operationId: updateIssue
+      tags: [Issues]
+      summary: Update issue status
+      security:
+        - BearerJWT: []
+        - AgentApiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateIssueRequest"
+      responses:
+        "200":
+          description: Issue updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Issue"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      operationId: deleteIssue
+      tags: [Issues]
+      summary: Delete an issue and all its events
+      security:
+        - BearerJWT: []
+        - AgentApiKey: []
+      responses:
+        "200":
+          description: Issue deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /projects/{project_id}/issues/{issue_id}/events/{event_id}:
+    get:
+      operationId: getEvent
+      tags: [Issues]
+      summary: Get a specific event for an issue
+      security:
+        - BearerJWT: []
+        - AgentApiKey: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/IssueId"
+        - $ref: "#/components/parameters/EventId"
+      responses:
+        "200":
+          description: Event details
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/EventRecord"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /projects/{project_id}/issues/{issue_id}/frequency:
+    get:
+      operationId: getIssueFrequency
+      tags: [Issues]
+      summary: Get issue occurrence frequency over time
+      security:
+        - BearerJWT: []
+        - AgentApiKey: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/IssueId"
+      responses:
+        "200":
+          description: Frequency data points
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/FrequencyPoint"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /projects/{project_id}/issues/{issue_id}/impact:
+    get:
+      operationId: getIssueImpact
+      tags: [Issues]
+      summary: Get issue impact metrics (affected users, environments)
+      security:
+        - BearerJWT: []
+        - AgentApiKey: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/IssueId"
+      responses:
+        "200":
+          description: Impact data
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/ImpactResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /issues/across-projects:
+    get:
+      operationId: listIssuesAcrossProjects
+      tags: [Issues]
+      summary: List recent issues across all user projects
+      security:
+        - BearerJWT: []
+        - AgentApiKey: []
+      responses:
+        "200":
+          description: Issues from all projects
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      allOf:
+                        - $ref: "#/components/schemas/Issue"
+                        - type: object
+                          properties:
+                            project_name:
+                              type: string
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /issues/stats/by-project:
+    get:
+      operationId: getIssueStatsByProject
+      tags: [Issues]
+      summary: Get issue statistics grouped by project
+      security:
+        - BearerJWT: []
+        - AgentApiKey: []
+      responses:
+        "200":
+          description: Per-project statistics
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ProjectStats"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  # -------------------------------------------------------------------
+  # Comments
+  # -------------------------------------------------------------------
+  /projects/{project_id}/issues/{issue_id}/comments:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+      - $ref: "#/components/parameters/IssueId"
+    get:
+      operationId: listComments
+      tags: [Comments]
+      summary: List comments on an issue
+      security:
+        - BearerJWT: []
+        - AgentApiKey: []
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PerPage"
+      responses:
+        "200":
+          description: Comment list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Comment"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    post:
+      operationId: createComment
+      tags: [Comments]
+      summary: Add a comment to an issue
+      security:
+        - BearerJWT: []
+        - AgentApiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCommentRequest"
+      responses:
+        "200":
+          description: Comment created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Comment"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /projects/{project_id}/issues/{issue_id}/comments/{comment_id}:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+      - $ref: "#/components/parameters/IssueId"
+      - $ref: "#/components/parameters/CommentId"
+    patch:
+      operationId: updateComment
+      tags: [Comments]
+      summary: Edit a comment (owner only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateCommentRequest"
+      responses:
+        "200":
+          description: Comment updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Comment"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      operationId: deleteComment
+      tags: [Comments]
+      summary: Delete a comment (owner or project owner)
+      responses:
+        "200":
+          description: Comment deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # -------------------------------------------------------------------
+  # Monitors
+  # -------------------------------------------------------------------
+  /projects/{project_id}/monitors:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+    get:
+      operationId: listMonitors
+      tags: [Monitors]
+      summary: List monitors for a project
+      security:
+        - BearerJWT: []
+        - AgentApiKey: []
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PerPage"
+      responses:
+        "200":
+          description: Paginated monitor list with stats
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/MonitorResponse"
+                  pagination:
+                    $ref: "#/components/schemas/PaginationMeta"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    post:
+      operationId: createMonitor
+      tags: [Monitors]
+      summary: Create an uptime monitor
+      security:
+        - BearerJWT: []
+        - AgentApiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateMonitorRequest"
+      responses:
+        "200":
+          description: Monitor created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MonitorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "402":
+          $ref: "#/components/responses/PaymentRequired"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /projects/{project_id}/monitors/{monitor_id}:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+      - $ref: "#/components/parameters/MonitorId"
+    get:
+      operationId: getMonitor
+      tags: [Monitors]
+      summary: Get monitor details with recent checks and incidents
+      security:
+        - BearerJWT: []
+        - AgentApiKey: []
+      responses:
+        "200":
+          description: Monitor details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MonitorDetailResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      operationId: updateMonitor
+      tags: [Monitors]
+      summary: Update a monitor
+      security:
+        - BearerJWT: []
+        - AgentApiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateMonitorRequest"
+      responses:
+        "200":
+          description: Monitor updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MonitorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      operationId: deleteMonitor
+      tags: [Monitors]
+      summary: Delete a monitor
+      security:
+        - BearerJWT: []
+        - AgentApiKey: []
+      responses:
+        "200":
+          description: Monitor deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /projects/{project_id}/monitors/{monitor_id}/checks:
+    get:
+      operationId: listMonitorChecks
+      tags: [Monitors]
+      summary: List recent checks for a monitor
+      security:
+        - BearerJWT: []
+        - AgentApiKey: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/MonitorId"
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 100
+            maximum: 500
+      responses:
+        "200":
+          description: Monitor checks
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/MonitorCheck"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /monitors/across-projects:
+    get:
+      operationId: listMonitorsAcrossProjects
+      tags: [Monitors]
+      summary: List all monitors across projects with summary
+      security:
+        - BearerJWT: []
+        - AgentApiKey: []
+      responses:
+        "200":
+          description: All monitors with summary counts
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/MonitorWithProjectInfo"
+                  summary:
+                    $ref: "#/components/schemas/MonitorsSummary"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  # -------------------------------------------------------------------
+  # Server Metrics
+  # -------------------------------------------------------------------
+  /metrics:
+    post:
+      operationId: ingestMetrics
+      tags: [Server Metrics]
+      summary: Push server metrics from an agent
+      description: Authenticates via SDK/agent API key. Requires Pro plan on SaaS.
+      security:
+        - AgentApiKey: []
+        - SdkApiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ServerMetricsPayload"
+      responses:
+        "202":
+          description: Metrics accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MetricsIngestResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "402":
+          $ref: "#/components/responses/PaymentRequired"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /projects/{project_id}/servers:
+    get:
+      operationId: listServers
+      tags: [Server Metrics]
+      summary: List servers for a project
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      responses:
+        "200":
+          description: Server list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Server"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /projects/{project_id}/servers/status:
+    get:
+      operationId: getServersStatus
+      tags: [Server Metrics]
+      summary: Check if project has any server agents connected
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      responses:
+        "200":
+          description: Agent status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  has_agent:
+                    type: boolean
+                  server_count:
+                    type: integer
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /projects/{project_id}/servers/{server_id}/metrics:
+    get:
+      operationId: getServerMetrics
+      tags: [Server Metrics]
+      summary: Get historical metrics for a server
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/ServerId"
+        - name: period
+          in: query
+          schema:
+            type: string
+            enum: ["1h", "6h", "24h", "7d"]
+            default: "1h"
+      responses:
+        "200":
+          description: Time-series metrics
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ServerMetricPoint"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /projects/{project_id}/servers/{server_id}/metrics/latest:
+    get:
+      operationId: getLatestServerMetrics
+      tags: [Server Metrics]
+      summary: Get the latest metrics snapshot for a server
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/ServerId"
+      responses:
+        "200":
+          description: Latest metrics and server info
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    nullable: true
+                    $ref: "#/components/schemas/ServerMetricPoint"
+                  server:
+                    $ref: "#/components/schemas/Server"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # -------------------------------------------------------------------
+  # Alerts
+  # -------------------------------------------------------------------
+  /projects/{project_id}/alerts:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+    get:
+      operationId: listAlertRules
+      tags: [Alerts]
+      summary: List alert rules for a project
+      security:
+        - BearerJWT: []
+        - AgentApiKey: []
+      responses:
+        "200":
+          description: Alert rules
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AlertRule"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    post:
+      operationId: createAlertRule
+      tags: [Alerts]
+      summary: Create an alert rule
+      security:
+        - BearerJWT: []
+        - AgentApiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAlertRuleRequest"
+      responses:
+        "200":
+          description: Alert rule created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AlertRule"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "402":
+          $ref: "#/components/responses/PaymentRequired"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /projects/{project_id}/alerts/{alert_id}:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+      - $ref: "#/components/parameters/AlertId"
+    patch:
+      operationId: updateAlertRule
+      tags: [Alerts]
+      summary: Update an alert rule
+      security:
+        - BearerJWT: []
+        - AgentApiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateAlertRuleRequest"
+      responses:
+        "200":
+          description: Alert rule updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AlertRule"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      operationId: deleteAlertRule
+      tags: [Alerts]
+      summary: Delete an alert rule
+      security:
+        - BearerJWT: []
+        - AgentApiKey: []
+      responses:
+        "200":
+          description: Alert rule deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /projects/{project_id}/alerts/logs:
+    get:
+      operationId: listAlertLogs
+      tags: [Alerts]
+      summary: List alert logs for a project
+      security:
+        - BearerJWT: []
+        - AgentApiKey: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+            maximum: 100
+      responses:
+        "200":
+          description: Alert log entries
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AlertLog"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /alerts/across-projects:
+    get:
+      operationId: listAlertLogsAcrossProjects
+      tags: [Alerts]
+      summary: List recent alert logs across all projects
+      security:
+        - BearerJWT: []
+        - AgentApiKey: []
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 10
+            maximum: 100
+      responses:
+        "200":
+          description: Cross-project alert logs
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/AlertLogWithProjectInfo"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  # -------------------------------------------------------------------
+  # Notification Channels
+  # -------------------------------------------------------------------
+  /projects/{project_id}/channels:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+    get:
+      operationId: listChannels
+      tags: [Notification Channels]
+      summary: List notification channels for a project
+      security:
+        - BearerJWT: []
+        - AgentApiKey: []
+      responses:
+        "200":
+          description: Channel list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/NotificationChannel"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    post:
+      operationId: createChannel
+      tags: [Notification Channels]
+      summary: Create a notification channel
+      security:
+        - BearerJWT: []
+        - AgentApiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateChannelRequest"
+      responses:
+        "200":
+          description: Channel created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotificationChannel"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "402":
+          $ref: "#/components/responses/PaymentRequired"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /projects/{project_id}/channels/{channel_id}:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+      - $ref: "#/components/parameters/ChannelId"
+    patch:
+      operationId: updateChannel
+      tags: [Notification Channels]
+      summary: Update a notification channel
+      security:
+        - BearerJWT: []
+        - AgentApiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateChannelRequest"
+      responses:
+        "200":
+          description: Channel updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotificationChannel"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      operationId: deleteChannel
+      tags: [Notification Channels]
+      summary: Delete a notification channel
+      security:
+        - BearerJWT: []
+        - AgentApiKey: []
+      responses:
+        "200":
+          description: Channel deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /projects/{project_id}/channels/{channel_id}/test:
+    post:
+      operationId: testChannel
+      tags: [Notification Channels]
+      summary: Send a test notification through the channel
+      security:
+        - BearerJWT: []
+        - AgentApiKey: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/ChannelId"
+      responses:
+        "200":
+          description: Test notification sent
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # -------------------------------------------------------------------
+  # Organization
+  # -------------------------------------------------------------------
+  /organization:
+    get:
+      operationId: getOrganization
+      tags: [Organization]
+      summary: Get the current user's organization
+      responses:
+        "200":
+          description: Organization details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrganizationResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    post:
+      operationId: createOrganization
+      tags: [Organization]
+      summary: Create a new organization
+      description: Each user can only have one organization.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateOrganizationRequest"
+      responses:
+        "200":
+          description: Organization created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrganizationResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          description: User already has an organization
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    patch:
+      operationId: updateOrganization
+      tags: [Organization]
+      summary: Update the organization name
+      description: Only the organization owner can update.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateOrganizationRequest"
+      responses:
+        "200":
+          description: Organization updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrganizationResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /organization/members:
+    get:
+      operationId: listMembers
+      tags: [Organization]
+      summary: List organization members
+      responses:
+        "200":
+          description: Member list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/MemberResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      operationId: addMember
+      tags: [Organization]
+      summary: Invite a member to the organization
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/InviteMemberRequest"
+      responses:
+        "200":
+          description: Member added
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MemberResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "402":
+          $ref: "#/components/responses/PaymentRequired"
+        "404":
+          description: User not found by email
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /organization/members/{member_user_id}:
+    parameters:
+      - $ref: "#/components/parameters/MemberUserId"
+    patch:
+      operationId: updateMemberRole
+      tags: [Organization]
+      summary: Update a member's role
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateMemberRoleRequest"
+      responses:
+        "200":
+          description: Role updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MemberResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    delete:
+      operationId: removeMember
+      tags: [Organization]
+      summary: Remove a member from the organization
+      responses:
+        "200":
+          description: Member removed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"

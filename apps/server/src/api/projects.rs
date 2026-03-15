@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{ApiResponse, PaginatedResponse, PaginationMeta, PaginationParams};
 use crate::{
-    auth::AuthUser,
+    auth::{EitherAuth, AuthIdentity},
     billing::{Tier, get_tier_limits},
     db::repositories::{OrganizationRepository, ProjectRepository},
     AppError, AppResult, AppState,
@@ -58,15 +58,30 @@ pub struct UpdateProjectRequest {
 /// GET /api/v1/projects
 pub async fn list(
     State(state): State<AppState>,
-    auth_user: AuthUser,
+    auth: EitherAuth,
     Query(params): Query<PaginationParams>,
 ) -> AppResult<Json<PaginatedResponse<ProjectResponse>>> {
+    auth.has_permission("read").then_some(()).ok_or_else(|| {
+        AppError::Forbidden("read permission required".to_string())
+    })?;
+
     let page = params.page.max(1);
     let per_page = params.per_page.min(100).max(1);
     let offset = ((page - 1) * per_page) as i64;
 
-    let projects = ProjectRepository::find_by_owner(&state.db, &auth_user.id, per_page as i64, offset).await?;
-    let total = ProjectRepository::count_by_owner(&state.db, &auth_user.id).await?;
+    let (projects, total) = match &*auth {
+        AuthIdentity::User(user) => {
+            let projects = ProjectRepository::find_by_owner(&state.db, &user.id, per_page as i64, offset).await?;
+            let total = ProjectRepository::count_by_owner(&state.db, &user.id).await?;
+            (projects, total)
+        }
+        AuthIdentity::Agent(agent) => {
+            let projects = ProjectRepository::find_by_organization(&state.db, &agent.organization_id, per_page as i64, offset).await?;
+            let total = ProjectRepository::count_by_organization(&state.db, &agent.organization_id).await?;
+            (projects, total)
+        }
+    };
+
     let total_pages = ((total as f64) / (per_page as f64)).ceil() as u32;
 
     Ok(Json(PaginatedResponse {
@@ -83,22 +98,42 @@ pub async fn list(
 /// POST /api/v1/projects
 pub async fn create(
     State(state): State<AppState>,
-    auth_user: AuthUser,
+    auth: EitherAuth,
     Json(req): Json<CreateProjectRequest>,
 ) -> AppResult<Json<ApiResponse<ProjectResponse>>> {
+    if !auth.has_permission("write") {
+        return Err(AppError::Forbidden("write permission required".to_string()));
+    }
+
     if req.name.trim().is_empty() {
         return Err(AppError::Validation("Project name cannot be empty".to_string()));
     }
+    if req.name.len() > 100 {
+        return Err(AppError::Validation("Project name too long (max 100 characters)".to_string()));
+    }
 
-    // Check project limit based on user's tier
-    let tier = match OrganizationRepository::find_by_user(&state.db, &auth_user.id).await? {
+    // Resolve owner_id and org for tier checks
+    let (owner_id, org) = match &*auth {
+        AuthIdentity::User(user) => {
+            let org = OrganizationRepository::find_by_user(&state.db, &user.id).await?;
+            (user.id.clone(), org)
+        }
+        AuthIdentity::Agent(agent) => {
+            let org = OrganizationRepository::find_by_id(&state.db, &agent.organization_id).await?;
+            let owner_id = org.as_ref().map(|o| o.owner_id.clone()).unwrap_or_default();
+            (owner_id, org)
+        }
+    };
+
+    // Check project limit based on tier
+    let tier = match &org {
         Some(org) => Tier::from_str(&org.tier),
         None => Tier::Free,
     };
     let limits = get_tier_limits(tier);
 
     if let Some(project_limit) = limits.project_limit {
-        let current_count = ProjectRepository::count_by_owner(&state.db, &auth_user.id).await?;
+        let current_count = ProjectRepository::count_by_owner(&state.db, &owner_id).await?;
         if current_count >= project_limit as i64 {
             return Err(AppError::PaymentRequired(format!(
                 "Project limit reached ({}/{}). Upgrade your plan to create more projects.",
@@ -113,7 +148,7 @@ pub async fn create(
         &state.db,
         &req.name,
         &slug,
-        &auth_user.id,
+        &owner_id,
         req.platform.as_deref(),
         req.framework.as_deref(),
     )
@@ -127,15 +162,14 @@ pub async fn create(
 /// GET /api/v1/projects/:id
 pub async fn get(
     State(state): State<AppState>,
-    auth_user: AuthUser,
+    auth: EitherAuth,
     Path(id): Path<String>,
 ) -> AppResult<Json<ApiResponse<ProjectResponse>>> {
     let project = ProjectRepository::find_by_id(&state.db, &id)
         .await?
         .ok_or_else(|| AppError::NotFound(format!("Project {} not found", id)))?;
 
-    // Verify user has access
-    if project.owner_id != auth_user.id {
+    if !auth.can_access_project(&state.db, &project).await {
         return Err(AppError::Forbidden("You don't have access to this project".to_string()));
     }
 
@@ -147,16 +181,19 @@ pub async fn get(
 /// PATCH /api/v1/projects/:id
 pub async fn update(
     State(state): State<AppState>,
-    auth_user: AuthUser,
+    auth: EitherAuth,
     Path(id): Path<String>,
     Json(req): Json<UpdateProjectRequest>,
 ) -> AppResult<Json<ApiResponse<ProjectResponse>>> {
+    if !auth.has_permission("write") {
+        return Err(AppError::Forbidden("write permission required".to_string()));
+    }
+
     let project = ProjectRepository::find_by_id(&state.db, &id)
         .await?
         .ok_or_else(|| AppError::NotFound(format!("Project {} not found", id)))?;
 
-    // Verify user is owner
-    if project.owner_id != auth_user.id {
+    if !auth.can_access_project(&state.db, &project).await {
         return Err(AppError::Forbidden("You don't have access to this project".to_string()));
     }
 
@@ -164,6 +201,9 @@ pub async fn update(
     if let Some(name) = &req.name {
         if name.trim().is_empty() {
             return Err(AppError::Validation("Project name cannot be empty".to_string()));
+        }
+        if name.len() > 100 {
+            return Err(AppError::Validation("Project name too long (max 100 characters)".to_string()));
         }
         ProjectRepository::update_name(&state.db, &id, name).await?;
     }
@@ -188,15 +228,18 @@ pub async fn update(
 /// DELETE /api/v1/projects/:id
 pub async fn delete(
     State(state): State<AppState>,
-    auth_user: AuthUser,
+    auth: EitherAuth,
     Path(id): Path<String>,
 ) -> AppResult<Json<ApiResponse<serde_json::Value>>> {
+    if !auth.has_permission("write") {
+        return Err(AppError::Forbidden("write permission required".to_string()));
+    }
+
     let project = ProjectRepository::find_by_id(&state.db, &id)
         .await?
         .ok_or_else(|| AppError::NotFound(format!("Project {} not found", id)))?;
 
-    // Verify user is owner
-    if project.owner_id != auth_user.id {
+    if !auth.can_access_project(&state.db, &project).await {
         return Err(AppError::Forbidden("You don't have access to this project".to_string()));
     }
 
@@ -210,15 +253,18 @@ pub async fn delete(
 /// POST /api/v1/projects/:id/keys
 pub async fn rotate_key(
     State(state): State<AppState>,
-    auth_user: AuthUser,
+    auth: EitherAuth,
     Path(id): Path<String>,
 ) -> AppResult<Json<ApiResponse<ProjectResponse>>> {
+    if !auth.has_permission("admin") {
+        return Err(AppError::Forbidden("admin permission required".to_string()));
+    }
+
     let project = ProjectRepository::find_by_id(&state.db, &id)
         .await?
         .ok_or_else(|| AppError::NotFound(format!("Project {} not found", id)))?;
 
-    // Verify user is owner
-    if project.owner_id != auth_user.id {
+    if !auth.can_access_project(&state.db, &project).await {
         return Err(AppError::Forbidden("You don't have access to this project".to_string()));
     }
 
@@ -237,15 +283,18 @@ pub async fn rotate_key(
 /// POST /api/v1/projects/:id/onboarding/complete
 pub async fn complete_onboarding(
     State(state): State<AppState>,
-    auth_user: AuthUser,
+    auth: EitherAuth,
     Path(id): Path<String>,
 ) -> AppResult<Json<ApiResponse<ProjectResponse>>> {
+    if !auth.has_permission("write") {
+        return Err(AppError::Forbidden("write permission required".to_string()));
+    }
+
     let project = ProjectRepository::find_by_id(&state.db, &id)
         .await?
         .ok_or_else(|| AppError::NotFound(format!("Project {} not found", id)))?;
 
-    // Verify user is owner
-    if project.owner_id != auth_user.id {
+    if !auth.can_access_project(&state.db, &project).await {
         return Err(AppError::Forbidden("You don't have access to this project".to_string()));
     }
 
@@ -271,15 +320,14 @@ pub struct VerificationResponse {
 /// Check if the project has received any events (for onboarding verification)
 pub async fn verify_events(
     State(state): State<AppState>,
-    auth_user: AuthUser,
+    auth: EitherAuth,
     Path(id): Path<String>,
 ) -> AppResult<Json<ApiResponse<VerificationResponse>>> {
     let project = ProjectRepository::find_by_id(&state.db, &id)
         .await?
         .ok_or_else(|| AppError::NotFound(format!("Project {} not found", id)))?;
 
-    // Verify user is owner
-    if project.owner_id != auth_user.id {
+    if !auth.can_access_project(&state.db, &project).await {
         return Err(AppError::Forbidden("You don't have access to this project".to_string()));
     }
 

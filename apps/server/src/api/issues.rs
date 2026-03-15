@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use super::{ApiResponse, PaginatedResponse, PaginationMeta, PaginationParams};
 use crate::{
-    auth::AuthUser,
+    auth::{EitherAuth, AuthIdentity},
     db::repositories::{
         issues::{Facets, ProjectStats, SearchFilters},
         EventRepository, IssueRepository, ProjectRepository,
@@ -63,7 +63,7 @@ pub struct UpdateIssueRequest {
 /// GET /api/v1/projects/:project_id/issues
 pub async fn list(
     State(state): State<AppState>,
-    auth_user: AuthUser,
+    auth: EitherAuth,
     Path(project_id): Path<String>,
     Query(params): Query<PaginationParams>,
     Query(filters): Query<IssueFilters>,
@@ -73,8 +73,8 @@ pub async fn list(
         .await?
         .ok_or_else(|| AppError::NotFound(format!("Project {} not found", project_id)))?;
 
-    if project.owner_id != auth_user.id {
-        return Err(AppError::Forbidden("You don't have access to this project".to_string()));
+    if !auth.can_access_project(&state.db, &project).await {
+        return Err(AppError::Forbidden("Access denied".to_string()));
     }
 
     let page = params.page.max(1);
@@ -110,7 +110,7 @@ pub async fn list(
 /// Advanced search with filters, sorting, and facets
 pub async fn search(
     State(state): State<AppState>,
-    auth_user: AuthUser,
+    auth: EitherAuth,
     Path(project_id): Path<String>,
     Json(req): Json<SearchRequest>,
 ) -> AppResult<Json<SearchResponse>> {
@@ -121,13 +121,22 @@ pub async fn search(
         .await?
         .ok_or_else(|| AppError::NotFound(format!("Project {} not found", project_id)))?;
 
-    if project.owner_id != auth_user.id {
-        return Err(AppError::Forbidden("You don't have access to this project".to_string()));
+    if !auth.can_access_project(&state.db, &project).await {
+        return Err(AppError::Forbidden("Access denied".to_string()));
     }
 
     let page = req.page.unwrap_or(1).max(1);
     let per_page = req.per_page.unwrap_or(50).min(100).max(1);
     let offset = ((page - 1) * per_page) as i64;
+
+    // Validate text search length
+    if let Some(ref filters) = req.filters {
+        if let Some(ref text) = filters.text {
+            if text.len() > 200 {
+                return Err(AppError::BadRequest("Search text too long (max 200 characters)".to_string()));
+            }
+        }
+    }
 
     // Convert API filters to repository filters
     let filters = SearchFilters {
@@ -224,7 +233,7 @@ pub struct SearchResponse {
 /// GET /api/v1/projects/:project_id/issues/:issue_id
 pub async fn get(
     State(state): State<AppState>,
-    auth_user: AuthUser,
+    auth: EitherAuth,
     Path((project_id, issue_id)): Path<(String, String)>,
 ) -> AppResult<Json<ApiResponse<IssueDetail>>> {
     // Verify project access
@@ -232,8 +241,8 @@ pub async fn get(
         .await?
         .ok_or_else(|| AppError::NotFound(format!("Project {} not found", project_id)))?;
 
-    if project.owner_id != auth_user.id {
-        return Err(AppError::Forbidden("You don't have access to this project".to_string()));
+    if !auth.can_access_project(&state.db, &project).await {
+        return Err(AppError::Forbidden("Access denied".to_string()));
     }
 
     // Get issue
@@ -303,7 +312,7 @@ pub async fn get(
 /// PATCH /api/v1/projects/:project_id/issues/:issue_id
 pub async fn update(
     State(state): State<AppState>,
-    auth_user: AuthUser,
+    auth: EitherAuth,
     Path((project_id, issue_id)): Path<(String, String)>,
     Json(req): Json<UpdateIssueRequest>,
 ) -> AppResult<Json<ApiResponse<IssueResponse>>> {
@@ -312,8 +321,12 @@ pub async fn update(
         .await?
         .ok_or_else(|| AppError::NotFound(format!("Project {} not found", project_id)))?;
 
-    if project.owner_id != auth_user.id {
-        return Err(AppError::Forbidden("You don't have access to this project".to_string()));
+    if !auth.can_access_project(&state.db, &project).await {
+        return Err(AppError::Forbidden("Access denied".to_string()));
+    }
+
+    if !auth.has_permission("write") {
+        return Err(AppError::Forbidden("write permission required".to_string()));
     }
 
     // Get issue
@@ -351,7 +364,7 @@ pub async fn update(
 /// DELETE /api/v1/projects/:project_id/issues/:issue_id
 pub async fn delete(
     State(state): State<AppState>,
-    auth_user: AuthUser,
+    auth: EitherAuth,
     Path((project_id, issue_id)): Path<(String, String)>,
 ) -> AppResult<Json<ApiResponse<serde_json::Value>>> {
     // Verify project access
@@ -359,8 +372,12 @@ pub async fn delete(
         .await?
         .ok_or_else(|| AppError::NotFound(format!("Project {} not found", project_id)))?;
 
-    if project.owner_id != auth_user.id {
-        return Err(AppError::Forbidden("You don't have access to this project".to_string()));
+    if !auth.can_access_project(&state.db, &project).await {
+        return Err(AppError::Forbidden("Access denied".to_string()));
+    }
+
+    if !auth.has_permission("write") {
+        return Err(AppError::Forbidden("write permission required".to_string()));
     }
 
     // Get issue
@@ -383,7 +400,7 @@ pub async fn delete(
 /// GET /api/v1/projects/:project_id/issues/:issue_id/events/:event_id
 pub async fn get_event(
     State(state): State<AppState>,
-    auth_user: AuthUser,
+    auth: EitherAuth,
     Path((project_id, issue_id, event_id)): Path<(String, String, String)>,
 ) -> AppResult<Json<ApiResponse<EventDetail>>> {
     // Verify project access
@@ -391,8 +408,8 @@ pub async fn get_event(
         .await?
         .ok_or_else(|| AppError::NotFound(format!("Project {} not found", project_id)))?;
 
-    if project.owner_id != auth_user.id {
-        return Err(AppError::Forbidden("You don't have access to this project".to_string()));
+    if !auth.can_access_project(&state.db, &project).await {
+        return Err(AppError::Forbidden("Access denied".to_string()));
     }
 
     // Get issue to verify it belongs to project
@@ -450,7 +467,7 @@ pub async fn get_event(
 /// GET /api/v1/projects/:project_id/issues/:issue_id/frequency
 pub async fn get_frequency(
     State(state): State<AppState>,
-    auth_user: AuthUser,
+    auth: EitherAuth,
     Path((project_id, issue_id)): Path<(String, String)>,
     Query(params): Query<FrequencyParams>,
 ) -> AppResult<Json<ApiResponse<FrequencyData>>> {
@@ -459,8 +476,8 @@ pub async fn get_frequency(
         .await?
         .ok_or_else(|| AppError::NotFound(format!("Project {} not found", project_id)))?;
 
-    if project.owner_id != auth_user.id {
-        return Err(AppError::Forbidden("You don't have access to this project".to_string()));
+    if !auth.can_access_project(&state.db, &project).await {
+        return Err(AppError::Forbidden("Access denied".to_string()));
     }
 
     // Get issue to verify it belongs to project
@@ -819,7 +836,7 @@ fn parse_extra_from_payload(payload: &str) -> Option<serde_json::Value> {
 /// GET /api/v1/projects/:project_id/issues/:issue_id/impact
 pub async fn get_impact(
     State(state): State<AppState>,
-    auth_user: AuthUser,
+    auth: EitherAuth,
     Path((project_id, issue_id)): Path<(String, String)>,
 ) -> AppResult<Json<ApiResponse<ImpactData>>> {
     // Verify project access
@@ -827,8 +844,8 @@ pub async fn get_impact(
         .await?
         .ok_or_else(|| AppError::NotFound(format!("Project {} not found", project_id)))?;
 
-    if project.owner_id != auth_user.id {
-        return Err(AppError::Forbidden("You don't have access to this project".to_string()));
+    if !auth.can_access_project(&state.db, &project).await {
+        return Err(AppError::Forbidden("Access denied".to_string()));
     }
 
     // Get issue to verify it belongs to project
@@ -1059,11 +1076,14 @@ pub struct IssueWithProject {
 /// Fetch issues across all user's projects
 pub async fn list_across_projects(
     State(state): State<AppState>,
-    auth_user: AuthUser,
+    auth: EitherAuth,
     Query(params): Query<AcrossProjectsParams>,
 ) -> AppResult<Json<AcrossProjectsResponse>> {
-    // Get all user's projects
-    let projects = ProjectRepository::find_by_owner(&state.db, &auth_user.id, 100, 0).await?;
+    // Get all projects based on auth type
+    let projects = match &*auth {
+        AuthIdentity::User(user) => ProjectRepository::find_by_owner(&state.db, &user.id, 100, 0).await?,
+        AuthIdentity::Agent(agent) => ProjectRepository::find_by_organization(&state.db, &agent.organization_id, 100, 0).await?,
+    };
 
     if projects.is_empty() {
         return Ok(Json(AcrossProjectsResponse {
@@ -1169,10 +1189,13 @@ pub struct AggregateTotals {
 /// Get aggregated statistics grouped by project
 pub async fn get_stats_by_project(
     State(state): State<AppState>,
-    auth_user: AuthUser,
+    auth: EitherAuth,
 ) -> AppResult<Json<ProjectStatsResponse>> {
-    // Get all user's projects
-    let projects = ProjectRepository::find_by_owner(&state.db, &auth_user.id, 100, 0).await?;
+    // Get all projects based on auth type
+    let projects = match &*auth {
+        AuthIdentity::User(user) => ProjectRepository::find_by_owner(&state.db, &user.id, 100, 0).await?,
+        AuthIdentity::Agent(agent) => ProjectRepository::find_by_organization(&state.db, &agent.organization_id, 100, 0).await?,
+    };
 
     if projects.is_empty() {
         return Ok(Json(ProjectStatsResponse {

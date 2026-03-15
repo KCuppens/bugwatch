@@ -1,0 +1,115 @@
+---
+title: Agent API Keys
+description: Create and manage API keys for AI agent access to your Bugwatch organization
+---
+
+# Agent API Keys
+
+Agent API keys authenticate AI agents against the Bugwatch API. They are distinct from SDK keys and provide organization-scoped access with granular permissions.
+
+## Key Format
+
+| Key type | Prefix | Scope | Purpose |
+|----------|--------|-------|---------|
+| SDK key | `bw_live_*` | Project | Send error events from your application |
+| Agent key | `bw_agent_*` | Organization | Read and manage data via API |
+
+## Permissions
+
+Each agent key is created with one of three permission levels:
+
+- **read** -- List and view projects, issues, monitors, alerts, and metrics
+- **write** -- Everything in read, plus resolve/ignore issues, add comments, create monitors and alert rules
+- **admin** -- Everything in write, plus create/revoke other agent keys and access audit logs
+
+## Creating a Key
+
+```bash
+curl -X POST https://api.bugwatch.dev/api/v1/agent-keys \
+  -H "Authorization: Bearer <your-session-token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "ci-triage-bot",
+    "permission": "write"
+  }'
+```
+
+Response:
+
+```json
+{
+  "id": "ak_01j8k...",
+  "key": "bw_agent_sk_live_xxxxx",
+  "name": "ci-triage-bot",
+  "permission": "write",
+  "created_at": "2026-03-15T10:00:00Z"
+}
+```
+
+<Callout type="warn">
+The full key value is only returned once at creation time. Store it securely -- you cannot retrieve it again.
+</Callout>
+
+## Listing Keys
+
+```bash
+curl https://api.bugwatch.dev/api/v1/agent-keys \
+  -H "Authorization: Bearer <your-session-token>"
+```
+
+Response:
+
+```json
+{
+  "keys": [
+    {
+      "id": "ak_01j8k...",
+      "name": "ci-triage-bot",
+      "permission": "write",
+      "last_used_at": "2026-03-14T18:30:00Z",
+      "created_at": "2026-03-10T10:00:00Z"
+    }
+  ]
+}
+```
+
+## Revoking a Key
+
+```bash
+curl -X DELETE https://api.bugwatch.dev/api/v1/agent-keys/ak_01j8k... \
+  -H "Authorization: Bearer <your-session-token>"
+```
+
+Revoked keys are rejected immediately on all subsequent requests.
+
+## Audit Log
+
+Every action performed with an agent key is logged. Query the audit trail for a specific key:
+
+```bash
+curl https://api.bugwatch.dev/api/v1/agent-keys/ak_01j8k.../audit-log \
+  -H "Authorization: Bearer <your-session-token>"
+```
+
+Response:
+
+```json
+{
+  "entries": [
+    {
+      "action": "resolve_issue",
+      "resource_id": "iss_abc123",
+      "timestamp": "2026-03-14T18:30:00Z",
+      "ip": "203.0.113.10"
+    }
+  ]
+}
+```
+
+## Security Best Practices
+
+- **Rotate regularly** -- create new keys and revoke old ones on a schedule (e.g., every 90 days)
+- **Use minimum permissions** -- give agents `read` access unless they need to modify data
+- **Revoke unused keys** -- delete keys for agents that are no longer active
+- **Monitor audit logs** -- review agent activity periodically to detect unexpected behavior
+- **Never commit keys** -- store agent keys in environment variables or a secrets manager, not in source code

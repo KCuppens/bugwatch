@@ -1,0 +1,10 @@
+{
+  "title": "Agent Integration",
+  "pages": [
+    "index",
+    "api-keys",
+    "mcp",
+    "cli",
+    "openapi"
+  ]
+}

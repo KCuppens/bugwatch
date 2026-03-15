@@ -1,0 +1,21 @@
+{
+  "title": "Documentation",
+  "pages": [
+    "---Getting Started---",
+    "getting-started",
+    "---SDKs---",
+    "sdks",
+    "---API---",
+    "api-reference",
+    "---Agents---",
+    "agents",
+    "---Infrastructure---",
+    "server-agent",
+    "alerting",
+    "---Deploy---",
+    "self-hosting",
+    "---Learn More---",
+    "architecture",
+    "migration"
+  ]
+}

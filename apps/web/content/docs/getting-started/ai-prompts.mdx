@@ -1,0 +1,166 @@
+---
+title: AI-Assisted Setup
+description: Copy-paste prompts for Claude, ChatGPT, Cursor, and other AI tools to integrate Bugwatch into your project.
+---
+
+Use these prompts with your favorite AI coding assistant to set up Bugwatch in minutes. Each prompt is self-contained — just paste it, provide your API key, and let the AI handle the integration.
+
+For best results, include your API key directly in the prompt and mention your endpoint if you're self-hosting.
+
+<Callout type="info">
+AI tools that accept URL context can use `https://bugwatch.dev/llms-full.txt` for comprehensive Bugwatch documentation.
+</Callout>
+
+## Next.js (App Router)
+
+```text
+Add Bugwatch error tracking to my Next.js App Router project. Install @bugwatch/nextjs, create an instrumentation.ts file that calls init() with API key "YOUR_API_KEY", wrap the root layout with BugwatchProvider, and add the onRequestError hook in instrumentation.ts. Refer to https://bugwatch.dev/llms-full.txt for the full SDK docs.
+```
+
+**What the AI will do:**
+- Install `@bugwatch/nextjs`
+- Create `instrumentation.ts` with `init({ apiKey })`
+- Add `BugwatchProvider` to `app/layout.tsx`
+- Configure `onRequestError` for server-side error capture
+
+## React SPA
+
+```text
+Add Bugwatch error tracking to my React project. Install @bugwatch/react, wrap my app root with BugwatchProvider passing apiKey "YOUR_API_KEY" and a fallback error UI component. Refer to https://bugwatch.dev/llms-full.txt for the full SDK docs.
+```
+
+**What the AI will do:**
+- Install `@bugwatch/react`
+- Add `BugwatchProvider` with error boundary to your app entry point
+- Create a fallback error component
+
+## Express.js
+
+```text
+Add Bugwatch error tracking to my Express.js API. Install @bugwatch/express, call init() with API key "YOUR_API_KEY" before defining routes, and add the Bugwatch error handler as the last middleware. Refer to https://bugwatch.dev/llms-full.txt for the full SDK docs.
+```
+
+**What the AI will do:**
+- Install `@bugwatch/express`
+- Add `init()` call at app startup
+- Add error handling middleware after all routes
+
+## Django
+
+```text
+Add Bugwatch error tracking to my Django project. Install bugwatch-python, add 'bugwatch.django.BugwatchMiddleware' to the top of MIDDLEWARE in settings.py, and set BUGWATCH_API_KEY to "YOUR_API_KEY". Refer to https://bugwatch.dev/llms-full.txt for the full SDK docs.
+```
+
+**What the AI will do:**
+- Install `bugwatch-python` via pip
+- Add middleware to `settings.py`
+- Configure the API key
+
+## FastAPI
+
+```text
+Add Bugwatch error tracking to my FastAPI project. Install bugwatch-python, import and call bugwatch.init() with API key "YOUR_API_KEY" at startup, and add the BugwatchMiddleware to the FastAPI app. Refer to https://bugwatch.dev/llms-full.txt for the full SDK docs.
+```
+
+**What the AI will do:**
+- Install `bugwatch-python`
+- Add `init()` call in your app factory
+- Register exception handler middleware
+
+## Flask
+
+```text
+Add Bugwatch error tracking to my Flask app. Install bugwatch-python, call bugwatch.init() with API key "YOUR_API_KEY", and register the Bugwatch error handler on the Flask app. Refer to https://bugwatch.dev/llms-full.txt for the full SDK docs.
+```
+
+**What the AI will do:**
+- Install `bugwatch-python`
+- Initialize Bugwatch before first request
+- Register error handlers
+
+## Rust (Tokio)
+
+```text
+Add Bugwatch error tracking to my Rust project using Tokio. Add bugwatch with the "async" feature to Cargo.toml, call bugwatch::init() with my API key "YOUR_API_KEY" at the start of main, and use bugwatch::capture_error() in error handling paths. Refer to https://bugwatch.dev/llms-full.txt for the full SDK docs.
+```
+
+**What the AI will do:**
+- Add `bugwatch` crate with async feature
+- Initialize at application startup
+- Add error capture in key error paths
+
+## Self-Hosted Deployment
+
+```text
+Help me deploy Bugwatch self-hosted using Docker Compose. I need to: clone the repo, create a .env file with JWT_SECRET and DOMAIN, run docker compose -f docker-compose.self-hosted.yml up -d, and verify the deployment is healthy. My domain is example.com. Refer to https://bugwatch.dev/llms-full.txt for the full deployment docs.
+```
+
+**What the AI will do:**
+- Guide you through cloning and configuring
+- Generate a secure JWT secret
+- Create the `.env` file
+- Start the Docker stack and verify health
+
+## Server Monitoring Agent
+
+```text
+Install the Bugwatch server monitoring agent on my Linux server. It should report CPU, memory, disk, and network metrics to my Bugwatch instance at "YOUR_ENDPOINT" with API key "YOUR_API_KEY". Refer to https://bugwatch.dev/llms-full.txt for agent installation docs.
+```
+
+**What the AI will do:**
+- Download and install the agent binary
+- Configure the agent with your endpoint and API key
+- Set up systemd service for automatic startup
+
+## Alerts + Slack
+
+```text
+Configure Bugwatch alerting for my project. I want to set up a Slack notification channel and create alert rules for: new error spike (>10 events in 5 minutes), uptime monitor down, and server CPU above 90%. My Bugwatch API endpoint is "YOUR_ENDPOINT" and API key is "YOUR_API_KEY". Refer to https://bugwatch.dev/llms-full.txt for alerting docs.
+```
+
+**What the AI will do:**
+- Create a Slack notification channel via the API
+- Set up alert rules for error spikes, downtime, and CPU thresholds
+- Test the notification pipeline
+
+## Migrate from Sentry
+
+```text
+Help me migrate from Sentry to Bugwatch. I'm currently using @sentry/nextjs in a Next.js project. Replace all Sentry SDK imports with @bugwatch/nextjs equivalents, update the initialization code, and map Sentry.captureException to bugwatch.captureException. My Bugwatch API key is "YOUR_API_KEY". Refer to https://bugwatch.dev/llms-full.txt for migration docs.
+```
+
+**What the AI will do:**
+- Remove `@sentry/*` packages
+- Install `@bugwatch/nextjs`
+- Replace all Sentry imports and API calls with Bugwatch equivalents
+- Update configuration files
+
+## MCP Server Setup
+
+For AI coding tools (Claude Desktop, Cursor, Windsurf), install the Bugwatch MCP server:
+
+```json
+{
+  "mcpServers": {
+    "bugwatch": {
+      "command": "npx",
+      "args": ["@bugwatch/mcp"],
+      "env": {
+        "BUGWATCH_API_KEY": "bw_agent_...",
+        "BUGWATCH_URL": "https://api.bugwatch.dev"
+      }
+    }
+  }
+}
+```
+
+This enables your AI assistant to search issues, resolve errors, create monitors, and more directly from your editor.
+
+See the [Agent Integration docs](/docs/agents/mcp) for full details.
+
+## Tips
+
+- **Include your API key** directly in the prompt so the AI can write working code immediately
+- **Specify your endpoint** if self-hosting: add `endpoint: "https://your-domain.com/api/v1"` to prompts
+- **Reference the docs URL** — AI tools that support URL context can read `https://bugwatch.dev/llms-full.txt` for complete, up-to-date documentation
+- **Be specific** about your framework version and project structure for more accurate results

@@ -1,6 +1,11 @@
 use anyhow::{anyhow, Result};
+#[cfg(feature = "saas")]
 use aws_sdk_sesv2::types::{Body, Content, Destination, EmailContent, Message};
+#[cfg(feature = "saas")]
 use aws_sdk_sesv2::Client as SesClient;
+use lettre::message::header::ContentType;
+use lettre::transport::smtp::authentication::Credentials;
+use lettre::{AsyncSmtpTransport, AsyncTransport, Message as LettreMessage, Tokio1Executor};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use tracing::{error, info, warn};
@@ -9,10 +14,17 @@ use crate::db::models::NotificationChannel;
 use crate::db::repositories::alerts::EmailRateLimitRepository;
 use crate::db::DbPool;
 
+/// Email transport abstraction — SMTP for self-hosted, SES for SaaS
+enum EmailTransport {
+    Smtp(AsyncSmtpTransport<Tokio1Executor>),
+    #[cfg(feature = "saas")]
+    Ses(SesClient),
+}
+
 /// Notification service for sending alerts via various channels
 pub struct NotificationService {
     client: Client,
-    ses_client: Option<SesClient>,
+    email_transport: Option<EmailTransport>,
     from_email: String,
 }
 
@@ -27,6 +39,45 @@ pub struct AlertPayload {
     pub trigger_id: Option<String>,
     pub url: Option<String>,
     pub timestamp: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub issue: Option<AlertIssueDetail>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stack_trace: Option<Vec<StackFrame>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub affected_users: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frequency: Option<AlertFrequency>,
+}
+
+/// Embedded issue detail for webhook payloads
+#[derive(Debug, Clone, Serialize)]
+pub struct AlertIssueDetail {
+    pub id: String,
+    pub title: String,
+    pub status: String,
+    pub level: String,
+    pub count: i64,
+    pub first_seen: String,
+    pub last_seen: String,
+    pub environment: String,
+}
+
+/// Top stack frames from latest event
+#[derive(Debug, Clone, Serialize)]
+pub struct StackFrame {
+    pub filename: Option<String>,
+    pub function: Option<String>,
+    pub lineno: Option<i64>,
+    pub colno: Option<i64>,
+}
+
+/// Event frequency data
+#[derive(Debug, Clone, Serialize)]
+pub struct AlertFrequency {
+    pub last_hour: i64,
+    pub last_day: i64,
 }
 
 /// Extended alert context for rate limiting
@@ -48,6 +99,12 @@ pub struct EmailConfig {
 pub struct WebhookConfig {
     pub url: String,
     pub secret: Option<String>,
+}
+
+/// Response from a webhook endpoint (optional action commands)
+#[derive(Debug, Deserialize)]
+struct WebhookResponse {
+    action: Option<String>,
 }
 
 /// Slack configuration
@@ -132,28 +189,81 @@ impl NotificationService {
             .build()
             .expect("Failed to create HTTP client");
 
-        // Initialize AWS SES client if credentials are available
-        let ses_client = match Self::init_ses_client().await {
-            Ok(client) => {
-                info!("AWS SES client initialized successfully");
-                Some(client)
-            }
-            Err(e) => {
-                warn!("AWS SES not configured, email notifications will be logged only: {}", e);
-                None
-            }
-        };
+        // Try SMTP first (self-hosted), then AWS SES (SaaS)
+        let email_transport = Self::init_smtp_transport()
+            .map(|t| {
+                info!("SMTP email transport initialized");
+                EmailTransport::Smtp(t)
+            })
+            .ok()
+            .or_else(|| Self::init_ses_transport_sync());
 
-        let from_email = std::env::var("FROM_EMAIL")
+        if email_transport.is_none() {
+            warn!("No email transport configured (set SMTP_HOST or AWS credentials). Email notifications will be logged only.");
+        }
+
+        let from_email = std::env::var("SMTP_FROM")
+            .or_else(|_| std::env::var("FROM_EMAIL"))
             .unwrap_or_else(|_| "alerts@bugwatch.dev".to_string());
 
         Self {
             client,
-            ses_client,
+            email_transport,
             from_email,
         }
     }
 
+    /// Initialize SMTP transport from environment variables
+    fn init_smtp_transport() -> Result<AsyncSmtpTransport<Tokio1Executor>> {
+        let host = std::env::var("SMTP_HOST")
+            .map_err(|_| anyhow!("SMTP_HOST not set"))?;
+        let port: u16 = std::env::var("SMTP_PORT")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(587);
+
+        let mut builder = if port == 465 {
+            AsyncSmtpTransport::<Tokio1Executor>::relay(&host)?
+        } else {
+            AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&host)?
+        };
+
+        builder = builder.port(port);
+
+        // Add credentials if provided
+        if let (Ok(user), Ok(pass)) = (std::env::var("SMTP_USER"), std::env::var("SMTP_PASSWORD")) {
+            let creds = Credentials::new(user, pass);
+            builder = builder.credentials(creds);
+        }
+
+        Ok(builder.build())
+    }
+
+    /// Initialize SES transport (SaaS only)
+    fn init_ses_transport_sync() -> Option<EmailTransport> {
+        #[cfg(feature = "saas")]
+        {
+            // Use tokio::task::block_in_place to run async SES init
+            match tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(Self::init_ses_client())
+            }) {
+                Ok(client) => {
+                    info!("AWS SES email transport initialized");
+                    Some(EmailTransport::Ses(client))
+                }
+                Err(e) => {
+                    warn!("AWS SES not configured: {}", e);
+                    None
+                }
+            }
+        }
+        #[cfg(not(feature = "saas"))]
+        {
+            None
+        }
+    }
+
+    #[cfg(feature = "saas")]
     async fn init_ses_client() -> Result<SesClient> {
         let config = aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await;
 
@@ -166,27 +276,33 @@ impl NotificationService {
     }
 
     /// Send an alert to a notification channel (without rate limiting)
-    pub async fn send(&self, channel: &NotificationChannel, payload: &AlertPayload) -> Result<()> {
+    ///
+    /// Returns `Ok(Some(action))` when a webhook responds with
+    /// `{"action": "resolve"}` or `{"action": "ignore"}`.
+    pub async fn send(&self, channel: &NotificationChannel, payload: &AlertPayload) -> Result<Option<String>> {
         match channel.channel_type.as_str() {
-            "email" => self.send_email(channel, payload).await,
+            "email" => { self.send_email(channel, payload).await?; Ok(None) }
             "webhook" => self.send_webhook(channel, payload).await,
-            "slack" => self.send_slack(channel, payload).await,
+            "slack" => { self.send_slack(channel, payload).await?; Ok(None) }
             _ => Err(anyhow!("Unknown channel type: {}", channel.channel_type)),
         }
     }
 
     /// Send an alert with rate limiting support (for email)
+    ///
+    /// Returns `Ok((true, Some(action)))` when a webhook responds with an action,
+    /// `Ok((true, None))` when sent successfully, or `Ok((false, None))` when rate-limited.
     pub async fn send_with_rate_limit(
         &self,
         pool: &DbPool,
         channel: &NotificationChannel,
         payload: &AlertPayload,
         context: &AlertContext,
-    ) -> Result<bool> {
+    ) -> Result<(bool, Option<String>)> {
         // Only apply rate limiting to email channels
         if channel.channel_type != "email" {
-            self.send(channel, payload).await?;
-            return Ok(true);
+            let action = self.send(channel, payload).await?;
+            return Ok((true, action));
         }
 
         // Check rate limit for email
@@ -205,7 +321,7 @@ impl NotificationService {
                     "Email rate limited for project={}, fingerprint={}, last_sent={}",
                     context.project_id, fingerprint, last_sent
                 );
-                return Ok(false);
+                return Ok((false, None));
             }
         }
 
@@ -223,7 +339,7 @@ impl NotificationService {
             .await?;
         }
 
-        Ok(true)
+        Ok((true, None))
     }
 
     /// Send a test notification
@@ -237,12 +353,19 @@ impl NotificationService {
             trigger_id: None,
             url: None,
             timestamp: chrono::Utc::now().to_rfc3339(),
+            project_id: None,
+            issue: None,
+            stack_trace: None,
+            affected_users: None,
+            frequency: None,
         };
 
-        self.send(channel, &payload).await
+        // Ignore any webhook action from test notifications
+        let _ = self.send(channel, &payload).await?;
+        Ok(())
     }
 
-    /// Send email notification via AWS SES
+    /// Send email notification via configured transport (SMTP or SES)
     async fn send_email(&self, channel: &NotificationChannel, payload: &AlertPayload) -> Result<()> {
         let config: EmailConfig = serde_json::from_str(&channel.config)?;
 
@@ -250,9 +373,15 @@ impl NotificationService {
             return Err(anyhow!("No email recipients configured"));
         }
 
-        // Use AWS SES if available, otherwise log
-        match &self.ses_client {
-            Some(ses) => {
+        match &self.email_transport {
+            Some(EmailTransport::Smtp(transport)) => {
+                for recipient in &config.recipients {
+                    self.send_via_smtp(transport, recipient, payload).await?;
+                }
+                info!("Email sent to {:?} via SMTP", config.recipients);
+            }
+            #[cfg(feature = "saas")]
+            Some(EmailTransport::Ses(ses)) => {
                 for recipient in &config.recipients {
                     self.send_via_ses(ses, recipient, payload).await?;
                 }
@@ -261,7 +390,7 @@ impl NotificationService {
             None => {
                 // Fallback: just log the email (for development/testing)
                 info!(
-                    "Email alert (SES not configured) to {:?}: {} - {}",
+                    "Email alert (no transport configured) to {:?}: {} - {}",
                     config.recipients, payload.title, payload.message
                 );
             }
@@ -270,6 +399,34 @@ impl NotificationService {
         Ok(())
     }
 
+    /// Send email via SMTP (self-hosted)
+    async fn send_via_smtp(
+        &self,
+        transport: &AsyncSmtpTransport<Tokio1Executor>,
+        recipient: &str,
+        payload: &AlertPayload,
+    ) -> Result<()> {
+        let subject = format!("[Bugwatch] {}", payload.title);
+        let html_body = self.build_email_html(payload);
+
+        let email = LettreMessage::builder()
+            .from(self.from_email.parse().map_err(|e| anyhow!("Invalid from address: {}", e))?)
+            .to(recipient.parse().map_err(|e| anyhow!("Invalid recipient address: {}", e))?)
+            .subject(subject)
+            .header(ContentType::TEXT_HTML)
+            .body(html_body)
+            .map_err(|e| anyhow!("Failed to build email: {}", e))?;
+
+        transport
+            .send(email)
+            .await
+            .map_err(|e| anyhow!("Failed to send email via SMTP: {}", e))?;
+
+        Ok(())
+    }
+
+    /// Send email via AWS SES (SaaS)
+    #[cfg(feature = "saas")]
     async fn send_via_ses(&self, ses: &SesClient, recipient: &str, payload: &AlertPayload) -> Result<()> {
         let subject = format!("[Bugwatch] {}", payload.title);
 
@@ -375,7 +532,10 @@ impl NotificationService {
     }
 
     /// Send webhook notification
-    async fn send_webhook(&self, channel: &NotificationChannel, payload: &AlertPayload) -> Result<()> {
+    ///
+    /// Returns `Ok(Some(action))` when the webhook responds with
+    /// `{"action": "resolve"}` or `{"action": "ignore"}`.
+    async fn send_webhook(&self, channel: &NotificationChannel, payload: &AlertPayload) -> Result<Option<String>> {
         let config: WebhookConfig = serde_json::from_str(&channel.config)?;
 
         let mut request = self.client.post(&config.url).json(payload);
@@ -388,15 +548,28 @@ impl NotificationService {
         }
 
         let response = request.send().await?;
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
+        if !status.is_success() {
             return Err(anyhow!("Webhook failed: {} - {}", status, body));
         }
 
         info!("Webhook sent to {}", config.url);
-        Ok(())
+
+        // Try to parse the response body for an action command
+        if !body.is_empty() {
+            if let Ok(webhook_resp) = serde_json::from_str::<WebhookResponse>(&body) {
+                if let Some(action) = webhook_resp.action {
+                    if action == "resolve" || action == "ignore" {
+                        info!("Webhook returned action: {}", action);
+                        return Ok(Some(action));
+                    }
+                }
+            }
+        }
+
+        Ok(None)
     }
 
     /// Send Slack notification
@@ -452,7 +625,7 @@ impl NotificationService {
                 SlackBlockType::Message => {
                     // Slack section text limit: 3000 chars (account for backticks + ellipsis)
                     let msg = if payload.message.len() > 2997 {
-                        let end = payload.message.floor_char_boundary(2993);
+                        let end = floor_char_boundary(&payload.message, 2993);
                         format!("`{}...`", &payload.message[..end])
                     } else {
                         format!("`{}`", payload.message)
@@ -576,13 +749,26 @@ impl NotificationService {
     }
 }
 
+/// Find the largest byte index <= `i` that is a char boundary in `s`.
+/// Stable replacement for the nightly `str::floor_char_boundary`.
+fn floor_char_boundary(s: &str, i: usize) -> usize {
+    if i >= s.len() {
+        return s.len();
+    }
+    let mut pos = i;
+    while pos > 0 && !s.is_char_boundary(pos) {
+        pos -= 1;
+    }
+    pos
+}
+
 /// Truncate a string to a max byte length, appending "..." if truncated.
 /// Ensures we don't cut in the middle of a multi-byte char.
 fn truncate_str(s: &str, max_len: usize) -> String {
     if s.len() <= max_len {
         return s.to_string();
     }
-    let truncated = &s[..s.floor_char_boundary(max_len.saturating_sub(3))];
+    let truncated = &s[..floor_char_boundary(s, max_len.saturating_sub(3))];
     format!("{}...", truncated)
 }
 

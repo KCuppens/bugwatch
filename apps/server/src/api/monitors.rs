@@ -7,13 +7,63 @@ use tracing::warn;
 
 use crate::{
     api::{PaginatedResponse, PaginationMeta, PaginationParams},
-    auth::AuthUser,
+    auth::{EitherAuth, AuthIdentity},
+    billing::tiers::{get_tier_limits, Tier},
     db::{
         models::{Monitor, MonitorCheck, MonitorIncident},
-        repositories::{MonitorCheckRepository, MonitorIncidentRepository, MonitorRepository, ProjectRepository},
+        repositories::{MonitorCheckRepository, MonitorIncidentRepository, MonitorRepository, OrganizationRepository, ProjectRepository},
     },
     AppError, AppResult, AppState,
 };
+
+/// Validate that a monitor URL is safe (no SSRF to internal networks)
+fn validate_monitor_url(url_str: &str) -> Result<(), crate::AppError> {
+    let parsed = url::Url::parse(url_str)
+        .map_err(|_| crate::AppError::BadRequest("Invalid URL format".to_string()))?;
+
+    // Require http or https scheme
+    match parsed.scheme() {
+        "http" | "https" => {}
+        _ => return Err(crate::AppError::BadRequest("URL must use http or https scheme".to_string())),
+    }
+
+    // Get the host
+    let host = parsed.host_str()
+        .ok_or_else(|| crate::AppError::BadRequest("URL must have a host".to_string()))?;
+
+    // Block localhost and loopback
+    let blocked_hosts = ["localhost", "127.0.0.1", "0.0.0.0", "[::1]", "[::]"];
+    if blocked_hosts.iter().any(|&h| host.eq_ignore_ascii_case(h)) {
+        return Err(crate::AppError::BadRequest("URL cannot target localhost or loopback addresses".to_string()));
+    }
+
+    // Try to parse as IP and block private/reserved ranges
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        let is_blocked = match ip {
+            std::net::IpAddr::V4(ipv4) => {
+                ipv4.is_loopback()           // 127.0.0.0/8
+                || ipv4.is_private()         // 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16
+                || ipv4.is_link_local()      // 169.254.0.0/16
+                || ipv4.is_unspecified()     // 0.0.0.0
+                || ipv4.octets()[0] == 169 && ipv4.octets()[1] == 254  // link-local / cloud metadata
+            }
+            std::net::IpAddr::V6(ipv6) => {
+                ipv6.is_loopback()
+                || ipv6.is_unspecified()
+            }
+        };
+        if is_blocked {
+            return Err(crate::AppError::BadRequest("URL cannot target private, loopback, or link-local addresses".to_string()));
+        }
+    }
+
+    // Block well-known cloud metadata endpoints
+    if host == "169.254.169.254" || host == "metadata.google.internal" {
+        return Err(crate::AppError::BadRequest("URL cannot target cloud metadata endpoints".to_string()));
+    }
+
+    Ok(())
+}
 
 /// Request to create a monitor
 #[derive(Debug, Deserialize)]
@@ -110,10 +160,13 @@ pub struct MonitorsAcrossProjectsResponse {
 /// GET /api/v1/monitors/across-projects
 pub async fn list_across_projects(
     State(state): State<AppState>,
-    auth_user: AuthUser,
+    auth: EitherAuth,
 ) -> AppResult<Json<MonitorsAcrossProjectsResponse>> {
     // Get all user's projects
-    let projects = ProjectRepository::find_by_owner(&state.db, &auth_user.id, 100, 0).await?;
+    let projects = match &*auth {
+        AuthIdentity::User(user) => ProjectRepository::find_by_owner(&state.db, &user.id, 100, 0).await?,
+        AuthIdentity::Agent(agent) => ProjectRepository::find_by_organization(&state.db, &agent.organization_id, 100, 0).await?,
+    };
 
     if projects.is_empty() {
         return Ok(Json(MonitorsAcrossProjectsResponse {
@@ -193,23 +246,53 @@ pub async fn list_across_projects(
 /// POST /api/v1/projects/:project_id/monitors
 pub async fn create(
     State(state): State<AppState>,
-    auth_user: AuthUser,
+    auth: EitherAuth,
     Path(project_id): Path<String>,
     Json(request): Json<CreateMonitorRequest>,
 ) -> AppResult<Json<MonitorResponse>> {
-    // Verify project exists and user owns it
+    if !auth.has_permission("write") {
+        return Err(AppError::Forbidden("write permission required".to_string()));
+    }
+
+    // Verify project exists and user has access
     let project = ProjectRepository::find_by_id(&state.db, &project_id)
         .await?
         .ok_or_else(|| AppError::NotFound("Project not found".to_string()))?;
 
-    if project.owner_id != auth_user.id {
+    if !auth.can_access_project(&state.db, &project).await {
         return Err(AppError::Forbidden("Access denied".to_string()));
     }
 
-    // Validate URL
-    if !request.url.starts_with("http://") && !request.url.starts_with("https://") {
-        return Err(AppError::BadRequest("URL must start with http:// or https://".to_string()));
+    // Enforce monitor limit based on tier (counted across all org projects)
+    let tier_str = OrganizationRepository::get_project_tier(&state.db, &project_id).await
+        .unwrap_or_else(|_| "free".to_string());
+    let tier = Tier::from_str(&tier_str);
+    let limits = get_tier_limits(tier);
+    if limits.monitor_limit >= 0 {
+        let owner_id = match &*auth {
+            AuthIdentity::User(user) => user.id.clone(),
+            AuthIdentity::Agent(_) => project.owner_id.clone(),
+        };
+        let current_count = MonitorRepository::count_by_owner(&state.db, &owner_id).await
+            .map_err(|e| AppError::Internal(format!("Failed to count monitors: {}", e)))?;
+        if current_count >= limits.monitor_limit as i64 {
+            return Err(AppError::PaymentRequired(format!(
+                "Monitor limit reached ({}/{}). Upgrade your plan to add more monitors.",
+                current_count, limits.monitor_limit
+            )));
+        }
     }
+
+    // Input length validation
+    if request.name.len() > 200 {
+        return Err(AppError::BadRequest("Monitor name too long (max 200 characters)".to_string()));
+    }
+    if request.url.len() > 2048 {
+        return Err(AppError::BadRequest("Monitor URL too long (max 2048 characters)".to_string()));
+    }
+
+    // Validate URL (scheme + SSRF protection)
+    validate_monitor_url(&request.url)?;
 
     // Validate interval (minimum 30 seconds)
     if request.interval_seconds < 30 {
@@ -245,16 +328,16 @@ pub async fn create(
 /// GET /api/v1/projects/:project_id/monitors
 pub async fn list(
     State(state): State<AppState>,
-    auth_user: AuthUser,
+    auth: EitherAuth,
     Path(project_id): Path<String>,
     Query(params): Query<PaginationParams>,
 ) -> AppResult<Json<PaginatedResponse<MonitorResponse>>> {
-    // Verify project exists and user owns it
+    // Verify project exists and user has access
     let project = ProjectRepository::find_by_id(&state.db, &project_id)
         .await?
         .ok_or_else(|| AppError::NotFound("Project not found".to_string()))?;
 
-    if project.owner_id != auth_user.id {
+    if !auth.can_access_project(&state.db, &project).await {
         return Err(AppError::Forbidden("Access denied".to_string()));
     }
 
@@ -318,15 +401,15 @@ pub async fn list(
 /// GET /api/v1/projects/:project_id/monitors/:monitor_id
 pub async fn get(
     State(state): State<AppState>,
-    auth_user: AuthUser,
+    auth: EitherAuth,
     Path((project_id, monitor_id)): Path<(String, String)>,
 ) -> AppResult<Json<MonitorDetailResponse>> {
-    // Verify project exists and user owns it
+    // Verify project exists and user has access
     let project = ProjectRepository::find_by_id(&state.db, &project_id)
         .await?
         .ok_or_else(|| AppError::NotFound("Project not found".to_string()))?;
 
-    if project.owner_id != auth_user.id {
+    if !auth.can_access_project(&state.db, &project).await {
         return Err(AppError::Forbidden("Access denied".to_string()));
     }
 
@@ -370,16 +453,20 @@ pub async fn get(
 /// PATCH /api/v1/projects/:project_id/monitors/:monitor_id
 pub async fn update(
     State(state): State<AppState>,
-    auth_user: AuthUser,
+    auth: EitherAuth,
     Path((project_id, monitor_id)): Path<(String, String)>,
     Json(request): Json<UpdateMonitorRequest>,
 ) -> AppResult<Json<MonitorResponse>> {
-    // Verify project exists and user owns it
+    if !auth.has_permission("write") {
+        return Err(AppError::Forbidden("write permission required".to_string()));
+    }
+
+    // Verify project exists and user has access
     let project = ProjectRepository::find_by_id(&state.db, &project_id)
         .await?
         .ok_or_else(|| AppError::NotFound("Project not found".to_string()))?;
 
-    if project.owner_id != auth_user.id {
+    if !auth.can_access_project(&state.db, &project).await {
         return Err(AppError::Forbidden("Access denied".to_string()));
     }
 
@@ -391,11 +478,21 @@ pub async fn update(
         return Err(AppError::NotFound("Monitor not found".to_string()));
     }
 
-    // Validate URL if provided
-    if let Some(ref url) = request.url {
-        if !url.starts_with("http://") && !url.starts_with("https://") {
-            return Err(AppError::BadRequest("URL must start with http:// or https://".to_string()));
+    // Input length validation
+    if let Some(ref name) = request.name {
+        if name.len() > 200 {
+            return Err(AppError::BadRequest("Monitor name too long (max 200 characters)".to_string()));
         }
+    }
+    if let Some(ref url) = request.url {
+        if url.len() > 2048 {
+            return Err(AppError::BadRequest("Monitor URL too long (max 2048 characters)".to_string()));
+        }
+    }
+
+    // Validate URL if provided (scheme + SSRF protection)
+    if let Some(ref url) = request.url {
+        validate_monitor_url(url)?;
     }
 
     // Validate interval if provided
@@ -458,15 +555,19 @@ pub async fn update(
 /// DELETE /api/v1/projects/:project_id/monitors/:monitor_id
 pub async fn delete(
     State(state): State<AppState>,
-    auth_user: AuthUser,
+    auth: EitherAuth,
     Path((project_id, monitor_id)): Path<(String, String)>,
 ) -> AppResult<Json<serde_json::Value>> {
-    // Verify project exists and user owns it
+    if !auth.has_permission("write") {
+        return Err(AppError::Forbidden("write permission required".to_string()));
+    }
+
+    // Verify project exists and user has access
     let project = ProjectRepository::find_by_id(&state.db, &project_id)
         .await?
         .ok_or_else(|| AppError::NotFound("Project not found".to_string()))?;
 
-    if project.owner_id != auth_user.id {
+    if !auth.can_access_project(&state.db, &project).await {
         return Err(AppError::Forbidden("Access denied".to_string()));
     }
 
@@ -488,16 +589,16 @@ pub async fn delete(
 /// GET /api/v1/projects/:project_id/monitors/:monitor_id/checks
 pub async fn list_checks(
     State(state): State<AppState>,
-    auth_user: AuthUser,
+    auth: EitherAuth,
     Path((project_id, monitor_id)): Path<(String, String)>,
     Query(params): Query<ChecksParams>,
 ) -> AppResult<Json<Vec<MonitorCheck>>> {
-    // Verify project exists and user owns it
+    // Verify project exists and user has access
     let project = ProjectRepository::find_by_id(&state.db, &project_id)
         .await?
         .ok_or_else(|| AppError::NotFound("Project not found".to_string()))?;
 
-    if project.owner_id != auth_user.id {
+    if !auth.can_access_project(&state.db, &project).await {
         return Err(AppError::Forbidden("Access denied".to_string()));
     }
 

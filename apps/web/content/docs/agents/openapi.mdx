@@ -1,0 +1,173 @@
+---
+title: OpenAPI Spec
+description: Auto-generate agent tools from the Bugwatch OpenAPI 3.1 specification
+---
+
+# OpenAPI Spec
+
+Bugwatch publishes an OpenAPI 3.1 specification that describes every API endpoint. Agent frameworks can consume this spec to auto-generate tool definitions, eliminating manual integration work.
+
+## Fetching the Spec
+
+```bash
+curl https://api.bugwatch.dev/api/v1/openapi.yaml -o bugwatch-openapi.yaml
+```
+
+The spec is also available at `/api/v1/openapi.yaml` for YAML format.
+
+## Authentication
+
+All API requests require an agent API key passed via the `X-API-Key` header:
+
+```bash
+curl https://api.bugwatch.dev/api/v1/projects \
+  -H "X-API-Key: bw_agent_xxxxx"
+```
+
+The OpenAPI spec includes the security scheme definition, so most frameworks will handle authentication automatically once you provide the key.
+
+## Using with LangChain
+
+LangChain's OpenAPI toolkit can generate tools directly from the spec:
+
+```python
+from langchain_community.agent_toolkits.openapi import planner
+from langchain_community.agent_toolkits.openapi.spec import reduce_openapi_spec
+from langchain_openai import ChatOpenAI
+import json
+import requests
+
+# Load the spec
+import yaml
+
+spec_response = requests.get("https://api.bugwatch.dev/api/v1/openapi.yaml")
+raw_spec = yaml.safe_load(spec_response.text)
+spec = reduce_openapi_spec(raw_spec)
+
+# Set up headers with your agent key
+headers = {"X-API-Key": "bw_agent_xxxxx"}
+
+# Create the agent
+llm = ChatOpenAI(model="gpt-4o", temperature=0)
+agent = planner.create_openapi_agent(
+    spec,
+    requests_wrapper=requests.Session(),
+    llm=llm,
+    allow_dangerous_requests=True,
+    headers=headers,
+)
+
+agent.invoke("List all unresolved issues in my web-app project")
+```
+
+## Using with CrewAI
+
+CrewAI agents can use the OpenAPI spec through a custom tool:
+
+```python
+from crewai import Agent, Task, Crew
+from crewai_tools import tool
+import requests
+
+API_KEY = "bw_agent_xxxxx"
+BASE_URL = "https://api.bugwatch.dev/api/v1"
+HEADERS = {"X-API-Key": API_KEY}
+
+@tool("List Bugwatch Issues")
+def list_issues(project_id: str, status: str = "unresolved") -> str:
+    """List issues from Bugwatch for a given project."""
+    response = requests.get(
+        f"{BASE_URL}/projects/{project_id}/issues",
+        headers=HEADERS,
+        params={"status": status},
+    )
+    return response.json()
+
+@tool("Resolve Bugwatch Issue")
+def resolve_issue(issue_id: str) -> str:
+    """Resolve an issue in Bugwatch."""
+    response = requests.post(
+        f"{BASE_URL}/issues/{issue_id}/resolve",
+        headers=HEADERS,
+    )
+    return response.json()
+
+triage_agent = Agent(
+    role="Error Triage Specialist",
+    goal="Review and prioritize unresolved errors",
+    tools=[list_issues, resolve_issue],
+)
+
+triage_task = Task(
+    description="List all unresolved issues, prioritize by frequency, and resolve any that are duplicates.",
+    agent=triage_agent,
+)
+
+crew = Crew(agents=[triage_agent], tasks=[triage_task])
+crew.kickoff()
+```
+
+## Using with Custom Agents
+
+### Python
+
+```python
+import requests
+
+API_KEY = "bw_agent_xxxxx"
+BASE_URL = "https://api.bugwatch.dev/api/v1"
+HEADERS = {"X-API-Key": API_KEY}
+
+# List projects
+projects = requests.get(f"{BASE_URL}/projects", headers=HEADERS).json()
+
+# Get unresolved issues for a project
+issues = requests.get(
+    f"{BASE_URL}/projects/{projects[0]['id']}/issues",
+    headers=HEADERS,
+    params={"status": "unresolved"},
+).json()
+
+# Resolve an issue
+requests.post(
+    f"{BASE_URL}/issues/{issues[0]['id']}/resolve",
+    headers=HEADERS,
+)
+```
+
+### JavaScript / TypeScript
+
+```typescript
+const API_KEY = "bw_agent_xxxxx";
+const BASE_URL = "https://api.bugwatch.dev/api/v1";
+
+async function getUnresolvedIssues(projectId: string) {
+  const response = await fetch(
+    `${BASE_URL}/projects/${projectId}/issues?status=unresolved`,
+    { headers: { "X-API-Key": API_KEY } }
+  );
+  return response.json();
+}
+
+async function resolveIssue(issueId: string) {
+  const response = await fetch(`${BASE_URL}/issues/${issueId}/resolve`, {
+    method: "POST",
+    headers: { "X-API-Key": API_KEY },
+  });
+  return response.json();
+}
+```
+
+## Spec Contents
+
+The OpenAPI spec covers all Bugwatch API endpoints including:
+
+- **Projects** -- CRUD operations, settings, and team management
+- **Issues** -- list, search, resolve, ignore, and comment
+- **Events** -- raw error event data and metadata
+- **Monitors** -- uptime monitor CRUD and status checks
+- **Alerts** -- alert rule configuration and history
+- **Metrics** -- error rates, response times, and trends
+- **Agent Keys** -- key management and audit logs
+
+All request and response schemas are fully typed, so code generators can produce strongly-typed clients in any language.

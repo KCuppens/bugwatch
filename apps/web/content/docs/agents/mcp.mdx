@@ -1,0 +1,150 @@
+---
+title: MCP Server
+description: Connect AI coding tools like Claude, Cursor, and Windsurf to Bugwatch via MCP
+---
+
+# MCP Server
+
+The Bugwatch MCP (Model Context Protocol) server lets AI coding assistants read your error data and take actions directly. It works with any MCP-compatible client including Claude Desktop, Cursor, and Windsurf.
+
+## What is MCP?
+
+The [Model Context Protocol](https://modelcontextprotocol.io) is an open standard for connecting AI tools to external data sources. Instead of copy-pasting error details into a chat, MCP lets your AI assistant query Bugwatch directly -- listing issues, reading stack traces, resolving errors, and more.
+
+## Installation
+
+Run the MCP server with npx (no global install required):
+
+```bash
+npx @bugwatch/mcp
+```
+
+Or install globally:
+
+```bash
+npm install -g @bugwatch/mcp
+```
+
+## Configuration
+
+### Claude Desktop
+
+Add the following to your Claude Desktop config file (`claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "bugwatch": {
+      "command": "npx",
+      "args": ["@bugwatch/mcp"],
+      "env": {
+        "BUGWATCH_API_KEY": "bw_agent_xxxxx",
+        "BUGWATCH_URL": "https://api.bugwatch.dev"
+      }
+    }
+  }
+}
+```
+
+### Cursor
+
+Add the same configuration to your Cursor MCP settings (`.cursor/mcp.json` in your project root or global config):
+
+```json
+{
+  "mcpServers": {
+    "bugwatch": {
+      "command": "npx",
+      "args": ["@bugwatch/mcp"],
+      "env": {
+        "BUGWATCH_API_KEY": "bw_agent_xxxxx",
+        "BUGWATCH_URL": "https://api.bugwatch.dev"
+      }
+    }
+  }
+}
+```
+
+### Windsurf
+
+Windsurf uses the same MCP configuration format. Add it to your Windsurf MCP settings file:
+
+```json
+{
+  "mcpServers": {
+    "bugwatch": {
+      "command": "npx",
+      "args": ["@bugwatch/mcp"],
+      "env": {
+        "BUGWATCH_API_KEY": "bw_agent_xxxxx",
+        "BUGWATCH_URL": "https://api.bugwatch.dev"
+      }
+    }
+  }
+}
+```
+
+## Environment Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `BUGWATCH_API_KEY` | Yes | Agent API key with `bw_agent_*` prefix |
+| `BUGWATCH_URL` | No | API base URL. Defaults to `https://api.bugwatch.dev`. Set this for self-hosted instances. |
+
+## Available Resources
+
+Resources expose read-only data that the AI can browse:
+
+| Resource | URI | Description |
+|----------|-----|-------------|
+| Projects | `bugwatch://projects` | List all projects in your organization |
+| Project detail | `bugwatch://projects/{id}` | Project settings, SDK key, and stats |
+| Issues | `bugwatch://projects/{id}/issues` | List issues with status and frequency |
+| Issue detail | `bugwatch://issues/{id}` | Full stack trace, metadata, and event history |
+| Monitors | `bugwatch://projects/{id}/monitors` | Uptime monitors and their current status |
+| Servers | `bugwatch://projects/{id}/servers` | Server agent instances and host metrics |
+| Alerts | `bugwatch://projects/{id}/alerts` | Configured alert rules and their state |
+
+## Available Tools
+
+Tools let the AI take actions on your behalf:
+
+| Tool | Parameters | Description |
+|------|------------|-------------|
+| `search_issues` | `query`, `project_id`, `status` | Full-text search across issues |
+| `resolve_issue` | `issue_id` | Mark an issue as resolved |
+| `ignore_issue` | `issue_id` | Mark an issue as ignored |
+| `get_issue_frequency` | `issue_id`, `period` | Get event counts over time (24h, 7d, 30d) |
+| `add_comment` | `issue_id`, `body` | Add a comment to an issue |
+| `create_monitor` | `project_id`, `url`, `interval` | Create an uptime monitor |
+| `create_alert_rule` | `project_id`, `condition`, `channel` | Create an alert rule (email, Slack, webhook) |
+| `get_project_health` | `project_id` | Summary of error rates, uptime, and trends |
+
+## Available Prompts
+
+Prompts are reusable templates the AI can invoke for common workflows:
+
+| Prompt | Description |
+|--------|-------------|
+| `triage-new-errors` | Review unresolved issues, prioritize by frequency, and suggest next steps |
+| `investigate-issue` | Deep-dive into a specific issue with stack trace analysis and fix suggestions |
+| `setup-monitoring` | Walk through creating monitors and alert rules for a project |
+
+## Example Conversations
+
+Once the MCP server is connected, you can interact with Bugwatch naturally:
+
+**Triaging errors:**
+> "What are the top unresolved errors in my web-app project this week?"
+
+The agent will call `search_issues` with the project ID and status filter, then summarize the results with frequency data.
+
+**Investigating a specific issue:**
+> "Investigate issue ISS-1234 and suggest a fix."
+
+The agent reads the issue detail resource, analyzes the stack trace, and provides a code fix.
+
+**Setting up monitoring:**
+> "Create an uptime monitor for api.example.com that checks every 60 seconds and alerts me on Slack."
+
+The agent calls `create_monitor` and `create_alert_rule` with the provided parameters.

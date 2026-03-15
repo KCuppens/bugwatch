@@ -1,0 +1,95 @@
+# Bugwatch
+
+> Bugwatch is an open-source error tracking platform (FSL-1.1-Apache-2.0 license, converts to Apache 2.0 on 2028-03-15). It offers unlimited error events with per-seat pricing, official SDKs for JavaScript, Python, and Rust, uptime monitoring, server metrics, real-time alerting, and is fully self-hostable. Source code: https://github.com/KCuppens/bugwatch
+
+## Getting Started
+
+- [Bugwatch Documentation](https://bugwatch.dev/docs): Overview of Bugwatch and its capabilities.
+- [Getting Started](https://bugwatch.dev/docs/getting-started): Go from zero to tracking errors in production in under five minutes.
+- [Create a Project](https://bugwatch.dev/docs/getting-started/create-project): Create a project in Bugwatch and obtain your API key.
+- [Verify Integration](https://bugwatch.dev/docs/getting-started/verify-integration): Send a test error and confirm it appears in your dashboard.
+- [AI-Assisted Setup](https://bugwatch.dev/docs/getting-started/ai-prompts): Copy-paste prompts for Claude, ChatGPT, Cursor, and other AI tools to integrate Bugwatch.
+
+## JavaScript SDKs
+
+- [SDKs Overview](https://bugwatch.dev/docs/sdks): Choose the right SDK for your language and framework.
+- [@bugwatch/core](https://bugwatch.dev/docs/sdks/javascript/core): Foundational browser SDK and building block for framework integrations.
+- [@bugwatch/node](https://bugwatch.dev/docs/sdks/javascript/node): Node.js SDK with automatic uncaught exception and unhandled rejection capture.
+- [@bugwatch/nextjs](https://bugwatch.dev/docs/sdks/javascript/nextjs): Full-stack Next.js error tracking for server, API routes, and browser.
+- [@bugwatch/react](https://bugwatch.dev/docs/sdks/javascript/react): React SDK with error boundaries, hooks, and automatic browser error capture.
+- [@bugwatch/express](https://bugwatch.dev/docs/sdks/javascript/express): Express.js SDK with route error capture and request context.
+- [@bugwatch/fastify](https://bugwatch.dev/docs/sdks/javascript/fastify): Fastify plugin for route error capture and per-request client access.
+
+## Python SDK
+
+- [Python SDK](https://bugwatch.dev/docs/sdks/python): Install and configure the Bugwatch Python SDK.
+- [Django Integration](https://bugwatch.dev/docs/sdks/python/django): Automatic request error capture and user context for Django.
+- [Flask Integration](https://bugwatch.dev/docs/sdks/python/flask): Automatic request error capture and context for Flask.
+- [FastAPI Integration](https://bugwatch.dev/docs/sdks/python/fastapi): Async request error capture and context for FastAPI.
+- [Celery Integration](https://bugwatch.dev/docs/sdks/python/celery): Automatic task failure and retry capture for Celery workers.
+
+## Rust SDK
+
+- [Rust SDK](https://bugwatch.dev/docs/sdks/rust): Install and configure the Bugwatch Rust SDK for panic and error capture.
+- [Async Rust](https://bugwatch.dev/docs/sdks/rust/async): Non-blocking error capture with tokio and async-std.
+- [Blocking Rust](https://bugwatch.dev/docs/sdks/rust/blocking): Synchronous API for CLI tools and non-async applications.
+
+## API Reference
+
+- [API Overview](https://bugwatch.dev/docs/api-reference): Base URL, authentication, rate limits, and response formats.
+- [Authentication](https://bugwatch.dev/docs/api-reference/authentication): Endpoints for registration, login, logout, token refresh, and profiles.
+- [Events](https://bugwatch.dev/docs/api-reference/events): Ingest error events from SDKs or custom integrations.
+- [Projects](https://bugwatch.dev/docs/api-reference/projects): Create, manage, and configure projects.
+- [Issues](https://bugwatch.dev/docs/api-reference/issues): List, search, update, and analyze error issues.
+- [Uptime Monitors](https://bugwatch.dev/docs/api-reference/monitors): Create and manage uptime monitors for service availability.
+- [Server Metrics](https://bugwatch.dev/docs/api-reference/server-metrics): Ingest and query CPU, memory, disk, and network metrics.
+- [Alerts](https://bugwatch.dev/docs/api-reference/alerts): Configure alert rules, notification channels, and view alert logs.
+- [Billing](https://bugwatch.dev/docs/api-reference/billing): Manage subscriptions, invoices, payment methods, and usage.
+- [Webhooks](https://bugwatch.dev/docs/api-reference/webhooks): Stripe incoming webhooks and outgoing alert webhook payloads.
+
+## Alerting
+
+- [Alerting](https://bugwatch.dev/docs/alerting): Configure real-time alerts for your team when something breaks.
+- [Alert Rules](https://bugwatch.dev/docs/alerting/alert-rules): Define conditions based on error frequency, monitor status, or server metrics.
+- [Notification Channels](https://bugwatch.dev/docs/alerting/notification-channels): Receive alerts via email, Slack, or webhooks.
+- [Webhooks](https://bugwatch.dev/docs/alerting/webhooks): Integrate alerts with external systems using outgoing webhooks with HMAC-SHA256 verification.
+
+## Server Agent
+
+- [Server Agent](https://bugwatch.dev/docs/server-agent): Lightweight daemon that collects host-level metrics for your dashboard.
+- [Installation](https://bugwatch.dev/docs/server-agent/installation): Install with a single curl command on Linux with systemd.
+- [Configuration](https://bugwatch.dev/docs/server-agent/configuration): Configure via config file or environment variables, enable Docker monitoring.
+- [Troubleshooting](https://bugwatch.dev/docs/server-agent/troubleshooting): Diagnose startup failures, missing data, and permission errors.
+
+## Agents
+
+Bugwatch supports AI agent integration through multiple interfaces:
+- Agent API Keys: Organization-scoped keys with read/write/admin permissions (bw_agent_* format)
+- MCP Server: Model Context Protocol server for Claude, Cursor, Windsurf (@bugwatch/mcp)
+- CLI: Terminal commands for agent workflows (bugwatch issues, resolve, status, monitors, alerts)
+- OpenAPI: Full OpenAPI 3.1 spec at /api/v1/openapi.yaml for custom agent frameworks
+
+Documentation: /docs/agents
+
+## Self-Hosting
+
+- [Self-Hosting](https://bugwatch.dev/docs/self-hosting): Run Bugwatch on your own infrastructure for full data control.
+- [Docker Compose](https://bugwatch.dev/docs/self-hosting/docker): Deploy with Docker Compose in a single command.
+- [Manual Setup](https://bugwatch.dev/docs/self-hosting/manual-setup): Build from source for custom environments without Docker.
+- [Configuration](https://bugwatch.dev/docs/self-hosting/configuration): Complete reference for all environment variables.
+- [Upgrading](https://bugwatch.dev/docs/self-hosting/upgrading): Pull latest releases, run migrations, and rebuild.
+
+## Optional
+
+### Architecture
+
+- [Architecture](https://bugwatch.dev/docs/architecture): Technology stack and system design behind Bugwatch.
+- [System Overview](https://bugwatch.dev/docs/architecture/overview): How components interact from SDK capture to dashboard display.
+- [Event Pipeline](https://bugwatch.dev/docs/architecture/event-pipeline): Error flow through ingestion, fingerprinting, grouping, and alerting.
+- [Data Model](https://bugwatch.dev/docs/architecture/data-model): Key database entities including users, orgs, projects, issues, and events.
+
+### Migration
+
+- [Migration](https://bugwatch.dev/docs/migration): Migrate from other error tracking platforms to Bugwatch.
+- [Migrating from Sentry](https://bugwatch.dev/docs/migration/from-sentry): Step-by-step guide to replace Sentry SDKs and map concepts.
+- [Bugwatch vs Alternatives](https://bugwatch.dev/docs/migration/comparison): Feature-by-feature comparison of Bugwatch against Sentry, GlitchTip, and Highlight.io.

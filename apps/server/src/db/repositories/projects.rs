@@ -71,6 +71,28 @@ impl ProjectRepository {
         Ok(result.0)
     }
 
+    /// Find projects by organization ID (for agent key access)
+    pub async fn find_by_organization(pool: &DbPool, organization_id: &str, limit: i64, offset: i64) -> Result<Vec<Project>> {
+        sqlx::query_as::<_, Project>(
+            "SELECT * FROM projects WHERE organization_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
+        )
+        .bind(organization_id)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(pool)
+        .await
+        .map_err(Into::into)
+    }
+
+    /// Count projects by organization ID
+    pub async fn count_by_organization(pool: &DbPool, organization_id: &str) -> Result<i64> {
+        let result: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM projects WHERE organization_id = $1")
+            .bind(organization_id)
+            .fetch_one(pool)
+            .await?;
+        Ok(result.0)
+    }
+
     pub async fn update_name(pool: &DbPool, id: &str, name: &str) -> Result<()> {
         sqlx::query("UPDATE projects SET name = $1 WHERE id = $2")
             .bind(name)

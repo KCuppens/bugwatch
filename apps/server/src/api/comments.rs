@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{ApiResponse, PaginationParams};
 use crate::{
-    auth::AuthUser,
+    auth::{EitherAuth, AuthIdentity},
     db::repositories::{CommentRepository, IssueRepository, ProjectRepository, UserRepository},
     AppError, AppResult, AppState,
 };
@@ -36,7 +36,7 @@ pub struct UpdateCommentRequest {
 /// GET /api/v1/projects/:project_id/issues/:issue_id/comments
 pub async fn list(
     State(state): State<AppState>,
-    auth_user: AuthUser,
+    auth: EitherAuth,
     Path((project_id, issue_id)): Path<(String, String)>,
     Query(params): Query<PaginationParams>,
 ) -> AppResult<Json<ApiResponse<Vec<CommentResponse>>>> {
@@ -45,7 +45,7 @@ pub async fn list(
         .await?
         .ok_or_else(|| AppError::NotFound(format!("Project {} not found", project_id)))?;
 
-    if project.owner_id != auth_user.id {
+    if !auth.can_access_project(&state.db, &project).await {
         return Err(AppError::Forbidden("You don't have access to this project".to_string()));
     }
 
@@ -88,16 +88,20 @@ pub async fn list(
 /// POST /api/v1/projects/:project_id/issues/:issue_id/comments
 pub async fn create(
     State(state): State<AppState>,
-    auth_user: AuthUser,
+    auth: EitherAuth,
     Path((project_id, issue_id)): Path<(String, String)>,
     Json(req): Json<CreateCommentRequest>,
 ) -> AppResult<Json<ApiResponse<CommentResponse>>> {
+    if !auth.has_permission("write") {
+        return Err(AppError::Forbidden("write permission required".to_string()));
+    }
+
     // Verify project access
     let project = ProjectRepository::find_by_id(&state.db, &project_id)
         .await?
         .ok_or_else(|| AppError::NotFound(format!("Project {} not found", project_id)))?;
 
-    if project.owner_id != auth_user.id {
+    if !auth.can_access_project(&state.db, &project).await {
         return Err(AppError::Forbidden("You don't have access to this project".to_string()));
     }
 
@@ -119,11 +123,17 @@ pub async fn create(
         return Err(AppError::Validation("Comment content is too long (max 10000 characters)".to_string()));
     }
 
+    // For agents, use the agent key creator as the commenter; for users, use their ID
+    let commenter_id = match &*auth {
+        AuthIdentity::User(user) => user.id.clone(),
+        AuthIdentity::Agent(agent) => agent.agent_key.created_by.clone(),
+    };
+
     // Create comment
-    let comment = CommentRepository::create(&state.db, &issue_id, &auth_user.id, &req.content).await?;
+    let comment = CommentRepository::create(&state.db, &issue_id, &commenter_id, &req.content).await?;
 
     // Get user info
-    let user = UserRepository::find_by_id(&state.db, &auth_user.id).await?;
+    let user = UserRepository::find_by_id(&state.db, &commenter_id).await?;
 
     Ok(Json(ApiResponse {
         data: CommentResponse {
@@ -142,16 +152,20 @@ pub async fn create(
 /// PATCH /api/v1/projects/:project_id/issues/:issue_id/comments/:comment_id
 pub async fn update(
     State(state): State<AppState>,
-    auth_user: AuthUser,
+    auth: EitherAuth,
     Path((project_id, issue_id, comment_id)): Path<(String, String, String)>,
     Json(req): Json<UpdateCommentRequest>,
 ) -> AppResult<Json<ApiResponse<CommentResponse>>> {
+    if !auth.has_permission("write") {
+        return Err(AppError::Forbidden("write permission required".to_string()));
+    }
+
     // Verify project access
     let project = ProjectRepository::find_by_id(&state.db, &project_id)
         .await?
         .ok_or_else(|| AppError::NotFound(format!("Project {} not found", project_id)))?;
 
-    if project.owner_id != auth_user.id {
+    if !auth.can_access_project(&state.db, &project).await {
         return Err(AppError::Forbidden("You don't have access to this project".to_string()));
     }
 
@@ -165,9 +179,11 @@ pub async fn update(
         return Err(AppError::NotFound(format!("Comment {} not found in issue", comment_id)));
     }
 
-    // Verify user owns the comment
-    if comment.user_id != auth_user.id {
-        return Err(AppError::Forbidden("You can only edit your own comments".to_string()));
+    // For users, verify they own the comment; agents with write access can edit any comment in the project
+    if let AuthIdentity::User(user) = &*auth {
+        if comment.user_id != user.id {
+            return Err(AppError::Forbidden("You can only edit your own comments".to_string()));
+        }
     }
 
     // Validate content
@@ -187,8 +203,8 @@ pub async fn update(
         .await?
         .ok_or_else(|| AppError::Internal("Failed to fetch updated comment".to_string()))?;
 
-    // Get user info
-    let user = UserRepository::find_by_id(&state.db, &auth_user.id).await?;
+    // Get user info for the comment author
+    let user = UserRepository::find_by_id(&state.db, &updated.user_id).await?;
 
     Ok(Json(ApiResponse {
         data: CommentResponse {
@@ -207,15 +223,19 @@ pub async fn update(
 /// DELETE /api/v1/projects/:project_id/issues/:issue_id/comments/:comment_id
 pub async fn delete(
     State(state): State<AppState>,
-    auth_user: AuthUser,
+    auth: EitherAuth,
     Path((project_id, issue_id, comment_id)): Path<(String, String, String)>,
 ) -> AppResult<Json<ApiResponse<serde_json::Value>>> {
+    if !auth.has_permission("write") {
+        return Err(AppError::Forbidden("write permission required".to_string()));
+    }
+
     // Verify project access
     let project = ProjectRepository::find_by_id(&state.db, &project_id)
         .await?
         .ok_or_else(|| AppError::NotFound(format!("Project {} not found", project_id)))?;
 
-    if project.owner_id != auth_user.id {
+    if !auth.can_access_project(&state.db, &project).await {
         return Err(AppError::Forbidden("You don't have access to this project".to_string()));
     }
 
@@ -229,9 +249,11 @@ pub async fn delete(
         return Err(AppError::NotFound(format!("Comment {} not found in issue", comment_id)));
     }
 
-    // Verify user owns the comment (or is project owner)
-    if comment.user_id != auth_user.id && project.owner_id != auth_user.id {
-        return Err(AppError::Forbidden("You can only delete your own comments".to_string()));
+    // For users, verify they own the comment or are the project owner; agents with write can delete any
+    if let AuthIdentity::User(user) = &*auth {
+        if comment.user_id != user.id && project.owner_id != user.id {
+            return Err(AppError::Forbidden("You can only delete your own comments".to_string()));
+        }
     }
 
     // Delete comment

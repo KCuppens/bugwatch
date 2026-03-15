@@ -13,7 +13,6 @@ pub struct User {
     pub email_verified: bool,
     pub failed_login_attempts: i32,
     pub locked_until: Option<DateTime<Utc>>,
-    pub credits: i32,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize)]
@@ -66,21 +65,6 @@ pub struct Event {
     pub timestamp: DateTime<Utc>,
     pub payload: String,
     pub processed_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, FromRow, Serialize)]
-pub struct AiFix {
-    pub id: String,
-    pub issue_id: String,
-    pub requested_by: Option<String>,
-    pub status: String,
-    pub fix_diff: Option<String>,
-    pub explanation: Option<String>,
-    pub pr_url: Option<String>,
-    pub credits_used: Option<f64>,
-    pub created_at: DateTime<Utc>,
-    pub completed_at: Option<DateTime<Utc>>,
-    pub feedback: Option<String>,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
@@ -231,17 +215,6 @@ pub struct BillingEvent {
     pub created_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, FromRow, Serialize)]
-pub struct CreditPurchase {
-    pub id: String,
-    pub user_id: String,
-    pub credits: i32,
-    pub amount_cents: i32,
-    pub stripe_payment_intent_id: Option<String>,
-    pub status: String,
-    pub created_at: DateTime<Utc>,
-}
-
 // ============================================================================
 // Server Monitoring
 // ============================================================================
@@ -280,6 +253,37 @@ pub struct ServerMetric {
     pub processes_json: Option<String>,
     pub docker_json: Option<String>,
     pub recorded_at: DateTime<Utc>,
+}
+
+// ============================================================================
+// Agent API Keys
+// ============================================================================
+
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct AgentKey {
+    pub id: String,
+    pub organization_id: String,
+    pub name: String,
+    #[serde(skip_serializing)]
+    pub key_hash: String,
+    pub key_prefix: String,
+    pub permissions: String, // JSON: ["read", "write", "admin"]
+    pub created_by: String,
+    pub last_used_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub revoked_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, FromRow, Serialize)]
+pub struct AgentAuditLog {
+    pub id: String,
+    pub agent_key_id: String,
+    pub action: String,
+    pub resource_type: Option<String>,
+    pub resource_id: Option<String>,
+    pub metadata: Option<String>,
+    pub ip_address: Option<String>,
+    pub created_at: DateTime<Utc>,
 }
 
 // ============================================================================

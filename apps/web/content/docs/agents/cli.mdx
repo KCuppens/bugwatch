@@ -1,0 +1,162 @@
+---
+title: CLI Commands
+description: Use the Bugwatch CLI for terminal-based agent workflows
+---
+
+# CLI Commands
+
+The Bugwatch CLI provides structured commands that terminal-based agents can invoke. Every command supports a `--json` flag for machine-readable output, making it straightforward for LLMs with shell access to parse responses.
+
+## Authentication
+
+Log in interactively (for human use):
+
+```bash
+bugwatch login
+```
+
+For agents, set the API key as an environment variable instead:
+
+```bash
+export BUGWATCH_API_KEY=bw_agent_xxxxx
+```
+
+All commands will use the `BUGWATCH_API_KEY` environment variable when set. This takes precedence over any stored login session.
+
+## Commands
+
+### List Issues
+
+```bash
+bugwatch issues [--project <id>] [--status unresolved|resolved|ignored] [--json]
+```
+
+List issues for a project, optionally filtered by status.
+
+```bash
+# Human-readable output
+bugwatch issues --project proj_abc --status unresolved
+
+# JSON output for agent consumption
+bugwatch issues --project proj_abc --status unresolved --json
+```
+
+Example JSON output:
+
+```json
+{
+  "issues": [
+    {
+      "id": "iss_abc123",
+      "title": "TypeError: Cannot read property 'map' of undefined",
+      "status": "unresolved",
+      "event_count": 142,
+      "first_seen": "2026-03-10T08:00:00Z",
+      "last_seen": "2026-03-15T09:30:00Z"
+    }
+  ],
+  "total": 23,
+  "page": 1
+}
+```
+
+### Issue Detail
+
+```bash
+bugwatch issue <id> --project <id> [--json]
+```
+
+Get full details for a specific issue including the stack trace, metadata, and recent events.
+
+```bash
+bugwatch issue iss_abc123 --project proj_abc --json
+```
+
+### Resolve an Issue
+
+```bash
+bugwatch resolve <id> --project <id>
+```
+
+Mark an issue as resolved. If the same error occurs again, it will reopen automatically.
+
+```bash
+bugwatch resolve iss_abc123 --project proj_abc
+```
+
+### Ignore an Issue
+
+```bash
+bugwatch ignore <id> --project <id>
+```
+
+Mark an issue as ignored. Ignored issues will not trigger alerts or appear in default views.
+
+```bash
+bugwatch ignore iss_abc123 --project proj_abc
+```
+
+### Project Status
+
+```bash
+bugwatch status [--project <id>] [--json]
+```
+
+Show a summary of project health including error rates, unresolved issue count, and uptime.
+
+```bash
+bugwatch status --project proj_abc --json
+```
+
+Example JSON output:
+
+```json
+{
+  "project": "proj_abc",
+  "name": "web-app",
+  "unresolved_issues": 23,
+  "events_24h": 1420,
+  "uptime_percent": 99.97,
+  "monitors_up": 3,
+  "monitors_down": 0
+}
+```
+
+### List Monitors
+
+```bash
+bugwatch monitors [--project <id>] [--json]
+```
+
+List uptime monitors and their current status.
+
+```bash
+bugwatch monitors --project proj_abc --json
+```
+
+### List Alerts
+
+```bash
+bugwatch alerts [--project <id>] [--json]
+```
+
+List configured alert rules.
+
+```bash
+bugwatch alerts --project proj_abc --json
+```
+
+## JSON Output Mode
+
+Every command accepts the `--json` flag. When set, the command outputs structured JSON to stdout with no decorative formatting. This is the recommended mode for agent integrations.
+
+Agents should always use `--json` to avoid parsing human-readable tables. Error responses in JSON mode use a consistent format:
+
+```json
+{
+  "error": "not_found",
+  "message": "Issue iss_xyz not found in project proj_abc"
+}
+```
+
+Exit codes follow standard conventions: `0` for success, `1` for errors.
