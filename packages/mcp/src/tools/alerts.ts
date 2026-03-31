@@ -62,22 +62,19 @@ export async function handleAlertTool(
     }
   } catch (error) {
     if (error instanceof PaymentRequiredError) {
+      let paymentText: string;
+      try {
+        paymentText = JSON.stringify(
+          { error: "payment_required", message: error.message, payment: error.x402 },
+          null,
+          2
+        );
+      } catch {
+        paymentText = JSON.stringify({ error: "payment_required", message: error.message });
+      }
       return {
         isError: true,
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(
-              {
-                error: "payment_required",
-                message: error.message,
-                payment: error.x402,
-              },
-              null,
-              2
-            ),
-          },
-        ],
+        content: [{ type: "text" as const, text: paymentText }],
       };
     }
     const message = error instanceof Error ? error.message : String(error);

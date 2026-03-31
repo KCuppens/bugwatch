@@ -68,15 +68,17 @@ export class BugwatchClient {
 
     if (!response.ok) {
       if (response.status === 402) {
-        let body: Record<string, unknown> | null = null;
+        const rawBody = await response.text();
         try {
-          body = (await response.json()) as Record<string, unknown>;
-        } catch {
-          // ignore parse failure, fall through to generic error
+          const body = JSON.parse(rawBody);
+          if (body && typeof body === "object" && "x402" in body) {
+            throw new PaymentRequiredError(body.x402, path);
+          }
+        } catch (parseErr) {
+          if (parseErr instanceof PaymentRequiredError) throw parseErr;
+          // body wasn't valid JSON or had no x402 key — fall through to generic error
         }
-        if (body && "x402" in body) {
-          throw new PaymentRequiredError(body.x402, path);
-        }
+        throw new Error(`Bugwatch API error ${response.status}: ${rawBody}`);
       }
       const errorBody = await response.text().catch(() => "Unknown error");
       throw new Error(`Bugwatch API error ${response.status} ${response.statusText}: ${errorBody}`);
