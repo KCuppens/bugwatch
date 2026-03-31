@@ -1271,7 +1271,7 @@ pub async fn list_across_projects(
                 (org.id, org.tier)
             }
         };
-        if !can_access_feature(&tier_str, "performance_monitoring") {
+        if !can_access_feature(&tier_str, "server_monitoring") {
             return Err(crate::payments::x402_feature_response(
                 &state,
                 "cross_project_issues",
@@ -1421,7 +1421,7 @@ pub async fn get_stats_by_project(
                 (org.id, org.tier)
             }
         };
-        if !can_access_feature(&tier_str, "performance_monitoring") {
+        if !can_access_feature(&tier_str, "server_monitoring") {
             return Err(crate::payments::x402_feature_response(
                 &state,
                 "cross_project_issues",
