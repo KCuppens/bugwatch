@@ -1,15 +1,19 @@
 use anyhow::Result;
-use axum::{routing::get, Router};
+use axum::http::{header, HeaderName, HeaderValue, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
+use axum::{
+    extract::{DefaultBodyLimit, State},
+    routing::get,
+    Router,
+};
 use std::sync::Arc;
 use tokio::net::TcpListener;
-use axum::http::{header, HeaderName, HeaderValue, Method, StatusCode};
 use tower_http::{
     cors::{Any, CorsLayer},
     trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer},
 };
-use tracing::Level;
 use tracing::info;
+use tracing::Level;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 mod api;
@@ -19,16 +23,21 @@ mod config;
 mod db;
 mod error;
 mod middleware;
+mod payments;
 mod processing;
 mod rate_limit;
 mod services;
+pub mod utils;
 
 pub use error::{AppError, AppResult};
-pub use rate_limit::{RateLimiter, Tier};
-pub use services::{AiService, AlertingService, HealthCheckWorker, RetentionService};
+pub use rate_limit::RateLimiter;
+pub use services::{AlertingService, HealthCheckWorker, RetentionService};
 
 // BugWatch self-monitoring
-use bugwatch::{init as bugwatch_init, BugwatchClient, BugwatchOptions, install_panic_hook};
+use bugwatch::{init as bugwatch_init, install_panic_hook, BugwatchClient, BugwatchOptions};
+
+/// Maximum concurrent alert evaluation tasks
+const MAX_CONCURRENT_ALERTS: usize = 100;
 
 /// Application state shared across handlers
 #[derive(Clone)]
@@ -36,46 +45,61 @@ pub struct AppState {
     pub db: db::DbPool,
     pub config: Arc<config::Config>,
     pub rate_limiter: RateLimiter,
-    pub ai_service: Option<AiService>,
+    #[cfg(feature = "saas")]
     pub stripe: Option<billing::StripeClient>,
     pub alerting_service: Arc<AlertingService>,
     pub bugwatch: Option<Arc<BugwatchClient>>,
+    pub alert_semaphore: Arc<tokio::sync::Semaphore>,
+    pub payment_store: Arc<crate::payments::store::PaymentStore>,
+    pub onchain_verifier: Arc<crate::payments::verify::OnChainVerifier>,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize tracing
-    tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "bugwatch_server=debug,tower_http=debug".into()),
-        )
-        .with(tracing_subscriber::fmt::layer())
-        .init();
+    // Load environment variables first (needed for tracing config)
+    dotenvy::dotenv().ok();
+
+    // Initialize tracing - JSON format in production, pretty format in dev
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| "bugwatch_server=debug,tower_http=debug".into());
+
+    let is_production = std::env::var("ENVIRONMENT")
+        .map(|e| e == "production")
+        .unwrap_or(false);
+
+    if is_production {
+        tracing_subscriber::registry()
+            .with(env_filter)
+            .with(tracing_subscriber::fmt::layer().json())
+            .init();
+    } else {
+        tracing_subscriber::registry()
+            .with(env_filter)
+            .with(tracing_subscriber::fmt::layer())
+            .init();
+    }
 
     // Load configuration
-    dotenvy::dotenv().ok();
     let config = config::Config::from_env()?;
+    config.validate();
 
-    info!("Starting Bugwatch server on {}", config.server_addr);
+    info!(
+        "Starting Bugwatch server on {} (mode: {:?})",
+        config.server_addr, config.deployment_mode
+    );
 
     // Initialize database
-    let db = db::init(&config.database_url).await?;
+    let db = db::init_with_pool_size(&config.database_url, config.database_max_connections).await?;
 
-    // Initialize AI service (only if API key is configured)
-    let ai_service = config
-        .anthropic_api_key
-        .as_ref()
-        .map(|key| {
-            info!("AI service enabled");
-            AiService::new(key.clone())
-        });
-
-    // Initialize Stripe client (only if configured)
-    let stripe = api::billing::create_stripe_client(&config);
-    if stripe.is_some() {
-        info!("Stripe billing enabled");
-    }
+    // Initialize Stripe client (SaaS mode only)
+    #[cfg(feature = "saas")]
+    let stripe = {
+        let s = api::billing::create_stripe_client(&config);
+        if s.is_some() {
+            info!("Stripe billing enabled");
+        }
+        s
+    };
 
     // Initialize alerting service (shared between AppState and workers)
     let alerting_service = Arc::new(AlertingService::new(db.clone(), config.app_url.clone()).await);
@@ -113,13 +137,18 @@ async fn main() -> Result<()> {
 
     // Create app state
     let state = AppState {
-        db,
+        db: db.clone(),
         config: Arc::new(config.clone()),
         rate_limiter: RateLimiter::new(),
-        ai_service,
+        #[cfg(feature = "saas")]
         stripe,
         alerting_service: alerting_service.clone(),
         bugwatch,
+        alert_semaphore: Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_ALERTS)),
+        payment_store: Arc::new(crate::payments::store::PaymentStore::new(db.clone())),
+        onchain_verifier: Arc::new(crate::payments::verify::OnChainVerifier::new(
+            config.x402_rpc_url.clone(),
+        )),
     };
 
     // Build application
@@ -136,8 +165,9 @@ async fn main() -> Result<()> {
 
     // Start data retention cleanup task (runs daily)
     let retention_db = state.db.clone();
+    let retention_days = config.retention_days;
     tokio::spawn(async move {
-        let retention = RetentionService::new(retention_db);
+        let retention = RetentionService::with_retention_days(retention_db, retention_days);
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(24 * 60 * 60)); // 24 hours
         loop {
             interval.tick().await;
@@ -157,7 +187,9 @@ async fn main() -> Result<()> {
             interval.tick().await;
             // Mark servers inactive if no metrics for 5 minutes
             let threshold = chrono::Utc::now() - chrono::Duration::minutes(5);
-            match crate::db::repositories::ServerRepository::mark_inactive(&offline_db, threshold).await {
+            match crate::db::repositories::ServerRepository::mark_inactive(&offline_db, threshold)
+                .await
+            {
                 Ok(newly_offline) => {
                     for server in &newly_offline {
                         tracing::info!("Server {} ({}) marked offline", server.hostname, server.id);
@@ -188,6 +220,21 @@ async fn main() -> Result<()> {
     });
     info!("Rate limiter cleanup task started (runs hourly)");
 
+    // Start x402 payment challenge expiry task (runs hourly)
+    let payment_store_clone = state.payment_store.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(3600)); // every hour
+        loop {
+            interval.tick().await;
+            match payment_store_clone.expire_old().await {
+                Ok(n) if n > 0 => tracing::info!("Expired {} stale x402 payment challenges", n),
+                Err(e) => tracing::warn!("Failed to expire old x402 challenges: {}", e),
+                _ => {}
+            }
+        }
+    });
+    info!("x402 payment challenge expiry task started (runs hourly)");
+
     // Start server
     let listener = TcpListener::bind(&config.server_addr).await?;
     info!("Listening on {}", config.server_addr);
@@ -200,29 +247,88 @@ async fn main() -> Result<()> {
 }
 
 fn create_app(state: AppState) -> Router {
-    // CORS configuration - permissive for development
-    let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods([
-            Method::GET,
-            Method::POST,
-            Method::PUT,
-            Method::PATCH,
-            Method::DELETE,
-            Method::OPTIONS,
-        ])
-        .allow_headers([
-            header::CONTENT_TYPE,
-            header::AUTHORIZATION,
-            header::ACCEPT,
-            header::ORIGIN,
-            HeaderName::from_static("x-api-key"),
-            HeaderName::from_static("x-bugwatch-sdk"),
-            HeaderName::from_static("x-bugwatch-sdk-version"),
-            HeaderName::from_static("x-bugwatch-agent"),
-        ])
-        .expose_headers(Any)
-        .allow_credentials(false);
+    // CORS configuration
+    let cors = if state.config.allowed_origins.is_empty()
+        && state.config.environment == "development"
+    {
+        // Development only: allow all origins
+        CorsLayer::new()
+            .allow_origin(Any)
+            .allow_methods([
+                Method::GET,
+                Method::POST,
+                Method::PUT,
+                Method::PATCH,
+                Method::DELETE,
+                Method::OPTIONS,
+            ])
+            .allow_headers([
+                header::CONTENT_TYPE,
+                header::AUTHORIZATION,
+                header::ACCEPT,
+                header::ORIGIN,
+                HeaderName::from_static("x-api-key"),
+                HeaderName::from_static("x-bugwatch-sdk"),
+                HeaderName::from_static("x-bugwatch-sdk-version"),
+                HeaderName::from_static("x-bugwatch-agent"),
+            ])
+            .allow_credentials(false)
+    } else if state.config.allowed_origins.is_empty() {
+        // Non-development with no origins configured: restrictive default
+        tracing::warn!("No ALLOWED_ORIGINS configured in non-development mode. CORS will reject cross-origin requests.");
+        CorsLayer::new()
+            .allow_origin(tower_http::cors::AllowOrigin::list(
+                Vec::<HeaderValue>::new(),
+            ))
+            .allow_methods([
+                Method::GET,
+                Method::POST,
+                Method::PUT,
+                Method::PATCH,
+                Method::DELETE,
+                Method::OPTIONS,
+            ])
+            .allow_headers([
+                header::CONTENT_TYPE,
+                header::AUTHORIZATION,
+                header::ACCEPT,
+                header::ORIGIN,
+                HeaderName::from_static("x-api-key"),
+                HeaderName::from_static("x-bugwatch-sdk"),
+                HeaderName::from_static("x-bugwatch-sdk-version"),
+                HeaderName::from_static("x-bugwatch-agent"),
+            ])
+            .allow_credentials(true)
+    } else {
+        // Production: restrict to configured origins
+        let origins: Vec<HeaderValue> = state
+            .config
+            .allowed_origins
+            .iter()
+            .filter_map(|o| o.parse::<HeaderValue>().ok())
+            .collect();
+        CorsLayer::new()
+            .allow_origin(origins)
+            .allow_methods([
+                Method::GET,
+                Method::POST,
+                Method::PUT,
+                Method::PATCH,
+                Method::DELETE,
+                Method::OPTIONS,
+            ])
+            .allow_headers([
+                header::CONTENT_TYPE,
+                header::AUTHORIZATION,
+                header::ACCEPT,
+                header::ORIGIN,
+                HeaderName::from_static("x-api-key"),
+                HeaderName::from_static("x-bugwatch-sdk"),
+                HeaderName::from_static("x-bugwatch-sdk-version"),
+                HeaderName::from_static("x-bugwatch-agent"),
+            ])
+            .allow_credentials(true)
+    };
 
     Router::new()
         .route("/health", get(health_check))
@@ -231,6 +337,10 @@ fn create_app(state: AppState) -> Router {
         .route("/agent/install.sh", get(serve_install_script))
         .route("/agent/agent.sh", get(serve_agent_script))
         .nest("/api/v1", api::router())
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::payments::x402_payment_middleware,
+        ))
         .with_state(state)
         .layer(
             TraceLayer::new_for_http()
@@ -238,10 +348,30 @@ fn create_app(state: AppState) -> Router {
                 .on_response(DefaultOnResponse::new().level(Level::INFO)),
         )
         .layer(cors)
+        .layer(DefaultBodyLimit::max(2 * 1024 * 1024)) // 2MB max body size
 }
 
-async fn health_check() -> &'static str {
-    "OK"
+async fn health_check(State(state): State<AppState>) -> axum::response::Response {
+    use axum::response::IntoResponse;
+
+    match sqlx::query("SELECT 1").execute(&state.db).await {
+        Ok(_) => (
+            StatusCode::OK,
+            axum::Json(serde_json::json!({
+                "status": "healthy",
+                "database": "connected"
+            })),
+        )
+            .into_response(),
+        Err(_) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            axum::Json(serde_json::json!({
+                "status": "unhealthy",
+                "database": "disconnected"
+            })),
+        )
+            .into_response(),
+    }
 }
 
 async fn serve_install_script() -> Response {
@@ -249,7 +379,8 @@ async fn serve_install_script() -> Response {
         StatusCode::OK,
         [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
         include_str!("../../../apps/agent/install.sh"),
-    ).into_response()
+    )
+        .into_response()
 }
 
 async fn serve_agent_script() -> Response {
@@ -257,7 +388,8 @@ async fn serve_agent_script() -> Response {
         StatusCode::OK,
         [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
         include_str!("../../../apps/agent/agent.sh"),
-    ).into_response()
+    )
+        .into_response()
 }
 
 async fn shutdown_signal() {

@@ -7,8 +7,10 @@ import {
   ReadResourceRequestSchema,
   ListPromptsRequestSchema,
   GetPromptRequestSchema,
+  McpError,
+  ErrorCode,
 } from "@modelcontextprotocol/sdk/types.js";
-import { BugwatchClient } from "./client.js";
+import { BugwatchClient, PaymentRequiredError } from "./client.js";
 
 // Resources
 import { buildIssueResourceHandlers } from "./resources/issues.js";
@@ -17,36 +19,15 @@ import { buildServerResourceHandlers } from "./resources/servers.js";
 import { buildAlertResourceHandlers } from "./resources/alerts.js";
 
 // Tools
-import {
-  issueToolDefinitions,
-  handleIssueTool,
-} from "./tools/issues.js";
-import {
-  monitorToolDefinitions,
-  handleMonitorTool,
-} from "./tools/monitors.js";
-import {
-  alertToolDefinitions,
-  handleAlertTool,
-} from "./tools/alerts.js";
-import {
-  commentToolDefinitions,
-  handleCommentTool,
-} from "./tools/comments.js";
+import { issueToolDefinitions, handleIssueTool } from "./tools/issues.js";
+import { monitorToolDefinitions, handleMonitorTool } from "./tools/monitors.js";
+import { alertToolDefinitions, handleAlertTool } from "./tools/alerts.js";
+import { commentToolDefinitions, handleCommentTool } from "./tools/comments.js";
 
 // Prompts
-import {
-  triagePromptDefinition,
-  buildTriagePrompt,
-} from "./prompts/triage.js";
-import {
-  investigatePromptDefinition,
-  buildInvestigatePrompt,
-} from "./prompts/investigate.js";
-import {
-  setupPromptDefinition,
-  buildSetupPrompt,
-} from "./prompts/setup.js";
+import { triagePromptDefinition, buildTriagePrompt } from "./prompts/triage.js";
+import { investigatePromptDefinition, buildInvestigatePrompt } from "./prompts/investigate.js";
+import { setupPromptDefinition, buildSetupPrompt } from "./prompts/setup.js";
 
 async function main() {
   let client: BugwatchClient;
@@ -126,8 +107,8 @@ async function main() {
           }
         );
       }
-    } catch {
-      // If we can't fetch projects, return the static resource only
+    } catch (error) {
+      console.error("Failed to list projects for resource discovery:", error);
     }
 
     return { resources };
@@ -136,50 +117,64 @@ async function main() {
   server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
     const uri = request.params.uri;
 
-    // Projects list
-    if (uri === "bugwatch://projects") {
-      const projects = await client.listProjects(1, 100);
-      return {
-        contents: [
-          {
-            uri,
-            mimeType: "application/json",
-            text: JSON.stringify(projects.data, null, 2),
-          },
-        ],
-      };
-    }
+    try {
+      // Projects list
+      if (uri === "bugwatch://projects") {
+        const projects = await client.listProjects(1, 100);
+        return {
+          contents: [
+            {
+              uri,
+              mimeType: "application/json",
+              text: JSON.stringify(projects.data, null, 2),
+            },
+          ],
+        };
+      }
 
-    // Single project detail
-    const projectMatch = uri.match(/^bugwatch:\/\/projects\/([^/]+)$/);
-    if (projectMatch) {
-      const project = await client.getProject(projectMatch[1]);
-      return {
-        contents: [
-          {
-            uri,
-            mimeType: "application/json",
-            text: JSON.stringify(project.data, null, 2),
-          },
-        ],
-      };
-    }
+      // Single project detail
+      const projectMatch = uri.match(/^bugwatch:\/\/projects\/([^/]+)$/);
+      if (projectMatch) {
+        const project = await client.getProject(projectMatch[1]);
+        return {
+          contents: [
+            {
+              uri,
+              mimeType: "application/json",
+              text: JSON.stringify(project.data, null, 2),
+            },
+          ],
+        };
+      }
 
-    // Delegate to sub-resource handlers
-    if (issueResources.matchesUri(uri)) {
-      return issueResources.read(uri);
-    }
-    if (monitorResources.matchesUri(uri)) {
-      return monitorResources.read(uri);
-    }
-    if (serverResources.matchesUri(uri)) {
-      return serverResources.read(uri);
-    }
-    if (alertResources.matchesUri(uri)) {
-      return alertResources.read(uri);
-    }
+      // Delegate to sub-resource handlers
+      if (issueResources.matchesUri(uri)) {
+        return issueResources.read(uri);
+      }
+      if (monitorResources.matchesUri(uri)) {
+        return monitorResources.read(uri);
+      }
+      if (serverResources.matchesUri(uri)) {
+        return serverResources.read(uri);
+      }
+      if (alertResources.matchesUri(uri)) {
+        return alertResources.read(uri);
+      }
 
-    throw new Error(`Unknown resource: ${uri}`);
+      throw new Error(`Unknown resource: ${uri}`);
+    } catch (err) {
+      if (err instanceof PaymentRequiredError) {
+        throw new McpError(
+          ErrorCode.InvalidRequest,
+          JSON.stringify({
+            error: "payment_required",
+            message: err.message,
+            payment: err.x402,
+          })
+        );
+      }
+      throw err;
+    }
   });
 
   // --- Tool handlers ---
@@ -225,11 +220,7 @@ async function main() {
 
   // --- Prompt handlers ---
 
-  const allPromptDefinitions = [
-    triagePromptDefinition,
-    investigatePromptDefinition,
-    setupPromptDefinition,
-  ];
+  const allPromptDefinitions = [triagePromptDefinition, investigatePromptDefinition, setupPromptDefinition];
 
   server.setRequestHandler(ListPromptsRequestSchema, async () => {
     return { prompts: allPromptDefinitions };
