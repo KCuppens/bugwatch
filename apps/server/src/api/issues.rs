@@ -7,10 +7,11 @@ use std::collections::HashMap;
 
 use super::{ApiResponse, PaginatedResponse, PaginationMeta, PaginationParams};
 use crate::{
-    auth::{EitherAuth, AuthIdentity},
+    auth::{AuthIdentity, EitherAuth},
+    billing::tiers::can_access_feature,
     db::repositories::{
         issues::{Facets, ProjectStats, SearchFilters},
-        EventRepository, IssueRepository, ProjectRepository,
+        EventRepository, IssueRepository, OrganizationRepository, ProjectRepository,
     },
     AppError, AppResult, AppState,
 };
@@ -92,7 +93,9 @@ pub async fn list(
     )
     .await?;
 
-    let total = IssueRepository::count_by_project(&state.db, &project_id, filters.status.as_deref()).await?;
+    let total =
+        IssueRepository::count_by_project(&state.db, &project_id, filters.status.as_deref())
+            .await?;
     let total_pages = ((total as f64) / (per_page as f64)).ceil() as u32;
 
     Ok(Json(PaginatedResponse {
@@ -133,7 +136,9 @@ pub async fn search(
     if let Some(ref filters) = req.filters {
         if let Some(ref text) = filters.text {
             if text.len() > 200 {
-                return Err(AppError::BadRequest("Search text too long (max 200 characters)".to_string()));
+                return Err(AppError::BadRequest(
+                    "Search text too long (max 200 characters)".to_string(),
+                ));
             }
         }
     }
@@ -149,10 +154,19 @@ pub async fn search(
         count_lte: req.filters.as_ref().and_then(|f| f.count_lte),
         users_gt: req.filters.as_ref().and_then(|f| f.users_gt),
         users_lt: req.filters.as_ref().and_then(|f| f.users_lt),
-        first_seen_after: req.filters.as_ref().and_then(|f| f.first_seen_after.clone()),
-        first_seen_before: req.filters.as_ref().and_then(|f| f.first_seen_before.clone()),
+        first_seen_after: req
+            .filters
+            .as_ref()
+            .and_then(|f| f.first_seen_after.clone()),
+        first_seen_before: req
+            .filters
+            .as_ref()
+            .and_then(|f| f.first_seen_before.clone()),
         last_seen_after: req.filters.as_ref().and_then(|f| f.last_seen_after.clone()),
-        last_seen_before: req.filters.as_ref().and_then(|f| f.last_seen_before.clone()),
+        last_seen_before: req
+            .filters
+            .as_ref()
+            .and_then(|f| f.last_seen_before.clone()),
         text: req.filters.as_ref().and_then(|f| f.text.clone()),
     };
 
@@ -252,7 +266,10 @@ pub async fn get(
 
     // Verify issue belongs to project
     if issue.project_id != project_id {
-        return Err(AppError::NotFound(format!("Issue {} not found in project", issue_id)));
+        return Err(AppError::NotFound(format!(
+            "Issue {} not found in project",
+            issue_id
+        )));
     }
 
     // Get recent events
@@ -279,8 +296,15 @@ pub async fn get(
             EventSummary {
                 id: e.id.clone(),
                 timestamp: e.timestamp.to_rfc3339(),
-                user_id: payload.get("user").and_then(|u| u.get("id")).and_then(|v| v.as_str()).map(String::from),
-                release: payload.get("release").and_then(|v| v.as_str()).map(String::from),
+                user_id: payload
+                    .get("user")
+                    .and_then(|u| u.get("id"))
+                    .and_then(|v| v.as_str())
+                    .map(String::from),
+                release: payload
+                    .get("release")
+                    .and_then(|v| v.as_str())
+                    .map(String::from),
             }
         })
         .collect();
@@ -336,7 +360,10 @@ pub async fn update(
 
     // Verify issue belongs to project
     if issue.project_id != project_id {
-        return Err(AppError::NotFound(format!("Issue {} not found in project", issue_id)));
+        return Err(AppError::NotFound(format!(
+            "Issue {} not found in project",
+            issue_id
+        )));
     }
 
     // Update status if provided
@@ -387,7 +414,10 @@ pub async fn delete(
 
     // Verify issue belongs to project
     if issue.project_id != project_id {
-        return Err(AppError::NotFound(format!("Issue {} not found in project", issue_id)));
+        return Err(AppError::NotFound(format!(
+            "Issue {} not found in project",
+            issue_id
+        )));
     }
 
     IssueRepository::delete(&state.db, &issue_id).await?;
@@ -418,7 +448,10 @@ pub async fn get_event(
         .ok_or_else(|| AppError::NotFound(format!("Issue {} not found", issue_id)))?;
 
     if issue.project_id != project_id {
-        return Err(AppError::NotFound(format!("Issue {} not found in project", issue_id)));
+        return Err(AppError::NotFound(format!(
+            "Issue {} not found in project",
+            issue_id
+        )));
     }
 
     // Get the event
@@ -428,7 +461,10 @@ pub async fn get_event(
 
     // Verify event belongs to issue
     if event.issue_id != issue_id {
-        return Err(AppError::NotFound(format!("Event {} not found in issue", event_id)));
+        return Err(AppError::NotFound(format!(
+            "Event {} not found in issue",
+            event_id
+        )));
     }
 
     // Parse all context from the event
@@ -441,9 +477,18 @@ pub async fn get_event(
 
     // Parse additional metadata
     let payload: serde_json::Value = serde_json::from_str(&event.payload).unwrap_or_default();
-    let release = payload.get("release").and_then(|v| v.as_str()).map(String::from);
-    let environment = payload.get("environment").and_then(|v| v.as_str()).map(String::from);
-    let server_name = payload.get("server_name").and_then(|v| v.as_str()).map(String::from);
+    let release = payload
+        .get("release")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    let environment = payload
+        .get("environment")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    let server_name = payload
+        .get("server_name")
+        .and_then(|v| v.as_str())
+        .map(String::from);
 
     Ok(Json(ApiResponse {
         data: EventDetail {
@@ -486,15 +531,18 @@ pub async fn get_frequency(
         .ok_or_else(|| AppError::NotFound(format!("Issue {} not found", issue_id)))?;
 
     if issue.project_id != project_id {
-        return Err(AppError::NotFound(format!("Issue {} not found in project", issue_id)));
+        return Err(AppError::NotFound(format!(
+            "Issue {} not found in project",
+            issue_id
+        )));
     }
 
     // Get events for the issue within the time range
     let period = params.period.as_deref().unwrap_or("24h");
     let (hours, bucket_size_hours): (i64, i64) = match period {
-        "7d" => (168, 24),   // 7 days, daily buckets
-        "30d" => (720, 24),  // 30 days, daily buckets
-        _ => (24, 1),        // 24 hours, hourly buckets
+        "7d" => (168, 24),  // 7 days, daily buckets
+        "30d" => (720, 24), // 30 days, daily buckets
+        _ => (24, 1),       // 24 hours, hourly buckets
     };
 
     let events = EventRepository::find_by_issue(&state.db, &issue_id, 1000, 0).await?;
@@ -524,7 +572,7 @@ pub async fn get_frequency(
             // Clamp bucket_index to valid range (0 to num_buckets-1)
             let bucket_index = std::cmp::min(
                 (hours_since_start / bucket_size_hours) as usize,
-                buckets.len().saturating_sub(1)
+                buckets.len().saturating_sub(1),
             );
             buckets[bucket_index].count += 1;
             total_in_period += 1;
@@ -616,7 +664,7 @@ pub struct StackFrameDetail {
     pub pre_context: Option<Vec<String>>,
     pub post_context: Option<Vec<String>>,
     pub in_app: bool,
-    pub vars: Option<serde_json::Value>,  // Local variables at this frame
+    pub vars: Option<serde_json::Value>, // Local variables at this frame
 }
 
 #[derive(Debug, Serialize)]
@@ -662,39 +710,66 @@ fn parse_exception_from_payload(payload: &str) -> Option<ExceptionDetail> {
 
     // Try Sentry format first: exception.values[0]
     // Then try Bugwatch Python SDK format: exception directly has type/value/stacktrace
-    let (exception_type, value, frames) = if let Some(values) = exception_obj.get("values").and_then(|v| v.as_array()) {
-        // Sentry format
-        let exc = values.get(0)?;
-        let exc_type = exc.get("type")?.as_str()?.to_string();
-        let exc_value = exc.get("value").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        let frames = exc.get("stacktrace")?.get("frames")?.as_array()?;
-        (exc_type, exc_value, frames.clone())
-    } else {
-        // Bugwatch Python SDK format
-        let exc_type = exception_obj.get("type")?.as_str()?.to_string();
-        let exc_value = exception_obj.get("value").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        let frames = exception_obj.get("stacktrace")?.as_array()?;
-        (exc_type, exc_value, frames.clone())
-    };
+    let (exception_type, value, frames) =
+        if let Some(values) = exception_obj.get("values").and_then(|v| v.as_array()) {
+            // Sentry format
+            let exc = values.get(0)?;
+            let exc_type = exc.get("type")?.as_str()?.to_string();
+            let exc_value = exc
+                .get("value")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let frames = exc.get("stacktrace")?.get("frames")?.as_array()?;
+            (exc_type, exc_value, frames.clone())
+        } else {
+            // Bugwatch Python SDK format
+            let exc_type = exception_obj.get("type")?.as_str()?.to_string();
+            let exc_value = exception_obj
+                .get("value")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let frames = exception_obj.get("stacktrace")?.as_array()?;
+            (exc_type, exc_value, frames.clone())
+        };
 
     let stacktrace = frames
         .iter()
         .filter_map(|frame| {
             Some(StackFrameDetail {
                 filename: frame.get("filename")?.as_str()?.to_string(),
-                function: frame.get("function").and_then(|v| v.as_str()).unwrap_or("<anonymous>").to_string(),
+                function: frame
+                    .get("function")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("<anonymous>")
+                    .to_string(),
                 lineno: frame.get("lineno")?.as_u64()? as u32,
                 colno: frame.get("colno").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
-                context_line: frame.get("context_line").and_then(|v| v.as_str()).map(String::from),
+                context_line: frame
+                    .get("context_line")
+                    .and_then(|v| v.as_str())
+                    .map(String::from),
                 pre_context: frame
                     .get("pre_context")
                     .and_then(|v| v.as_array())
-                    .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect()),
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(String::from))
+                            .collect()
+                    }),
                 post_context: frame
                     .get("post_context")
                     .and_then(|v| v.as_array())
-                    .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect()),
-                in_app: frame.get("in_app").and_then(|v| v.as_bool()).unwrap_or(true),
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(String::from))
+                            .collect()
+                    }),
+                in_app: frame
+                    .get("in_app")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(true),
                 vars: frame.get("vars").cloned(),
             })
         })
@@ -725,22 +800,37 @@ fn parse_tags_from_payload(payload: &str) -> HashMap<String, String> {
             // Browser
             if let Some(browser) = contexts.get("browser") {
                 if let Some(name) = browser.get("name").and_then(|v| v.as_str()) {
-                    let version = browser.get("version").and_then(|v| v.as_str()).unwrap_or("");
-                    tags.insert("browser".to_string(), format!("{} {}", name, version).trim().to_string());
+                    let version = browser
+                        .get("version")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    tags.insert(
+                        "browser".to_string(),
+                        format!("{} {}", name, version).trim().to_string(),
+                    );
                 }
             }
             // OS
             if let Some(os) = contexts.get("os") {
                 if let Some(name) = os.get("name").and_then(|v| v.as_str()) {
                     let version = os.get("version").and_then(|v| v.as_str()).unwrap_or("");
-                    tags.insert("os".to_string(), format!("{} {}", name, version).trim().to_string());
+                    tags.insert(
+                        "os".to_string(),
+                        format!("{} {}", name, version).trim().to_string(),
+                    );
                 }
             }
             // Runtime
             if let Some(runtime) = contexts.get("runtime") {
                 if let Some(name) = runtime.get("name").and_then(|v| v.as_str()) {
-                    let version = runtime.get("version").and_then(|v| v.as_str()).unwrap_or("");
-                    tags.insert("runtime".to_string(), format!("{} {}", name, version).trim().to_string());
+                    let version = runtime
+                        .get("version")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    tags.insert(
+                        "runtime".to_string(),
+                        format!("{} {}", name, version).trim().to_string(),
+                    );
                 }
             }
         }
@@ -772,11 +862,27 @@ fn parse_breadcrumbs_from_payload(payload: &str) -> Vec<BreadcrumbDetail> {
         .iter()
         .filter_map(|b| {
             Some(BreadcrumbDetail {
-                timestamp: b.get("timestamp").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                breadcrumb_type: b.get("type").and_then(|v| v.as_str()).unwrap_or("default").to_string(),
-                category: b.get("category").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                timestamp: b
+                    .get("timestamp")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                breadcrumb_type: b
+                    .get("type")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("default")
+                    .to_string(),
+                category: b
+                    .get("category")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
                 message: b.get("message").and_then(|v| v.as_str()).map(String::from),
-                level: b.get("level").and_then(|v| v.as_str()).unwrap_or("info").to_string(),
+                level: b
+                    .get("level")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("info")
+                    .to_string(),
                 data: b.get("data").cloned(),
             })
         })
@@ -787,30 +893,43 @@ fn parse_request_context_from_payload(payload: &str) -> Option<RequestContextDet
     let json: serde_json::Value = serde_json::from_str(payload).ok()?;
 
     // Try top-level "request" first, then fall back to "extra.request" (Django SDK format)
-    let request = json.get("request")
+    let request = json
+        .get("request")
         .or_else(|| json.get("extra").and_then(|e| e.get("request")))?;
 
     // Sanitize headers - redact sensitive values
-    let headers = request.get("headers").and_then(|h| h.as_object()).map(|obj| {
-        let mut sanitized: HashMap<String, String> = HashMap::new();
-        let sensitive_headers = ["authorization", "cookie", "x-api-key", "x-auth-token"];
+    let headers = request
+        .get("headers")
+        .and_then(|h| h.as_object())
+        .map(|obj| {
+            let mut sanitized: HashMap<String, String> = HashMap::new();
+            let sensitive_headers = ["authorization", "cookie", "x-api-key", "x-auth-token"];
 
-        for (key, value) in obj {
-            let key_lower = key.to_lowercase();
-            if sensitive_headers.iter().any(|s| key_lower.contains(s)) {
-                sanitized.insert(key.clone(), "[REDACTED]".to_string());
-            } else if let Some(v) = value.as_str() {
-                sanitized.insert(key.clone(), v.to_string());
+            for (key, value) in obj {
+                let key_lower = key.to_lowercase();
+                if sensitive_headers.iter().any(|s| key_lower.contains(s)) {
+                    sanitized.insert(key.clone(), "[REDACTED]".to_string());
+                } else if let Some(v) = value.as_str() {
+                    sanitized.insert(key.clone(), v.to_string());
+                }
             }
-        }
-        sanitized
-    });
+            sanitized
+        });
 
     Some(RequestContextDetail {
-        url: request.get("url").and_then(|v| v.as_str()).map(String::from),
-        method: request.get("method").and_then(|v| v.as_str()).map(String::from),
+        url: request
+            .get("url")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        method: request
+            .get("method")
+            .and_then(|v| v.as_str())
+            .map(String::from),
         headers,
-        query_string: request.get("query_string").and_then(|v| v.as_str()).map(String::from),
+        query_string: request
+            .get("query_string")
+            .and_then(|v| v.as_str())
+            .map(String::from),
         data: request.get("data").cloned(),
     })
 }
@@ -822,8 +941,14 @@ fn parse_user_context_from_payload(payload: &str) -> Option<UserContextDetail> {
     Some(UserContextDetail {
         id: user.get("id").and_then(|v| v.as_str()).map(String::from),
         email: user.get("email").and_then(|v| v.as_str()).map(String::from),
-        username: user.get("username").and_then(|v| v.as_str()).map(String::from),
-        ip_address: user.get("ip_address").and_then(|v| v.as_str()).map(String::from),
+        username: user
+            .get("username")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        ip_address: user
+            .get("ip_address")
+            .and_then(|v| v.as_str())
+            .map(String::from),
         extra: user.get("extra").cloned(),
     })
 }
@@ -854,7 +979,10 @@ pub async fn get_impact(
         .ok_or_else(|| AppError::NotFound(format!("Issue {} not found", issue_id)))?;
 
     if issue.project_id != project_id {
-        return Err(AppError::NotFound(format!("Issue {} not found in project", issue_id)));
+        return Err(AppError::NotFound(format!(
+            "Issue {} not found in project",
+            issue_id
+        )));
     }
 
     // Get all events for this issue
@@ -877,26 +1005,46 @@ pub async fn get_impact(
         // Parse event payload
         if let Ok(payload) = serde_json::from_str::<serde_json::Value>(&event.payload) {
             // Count unique users
-            if let Some(user_id) = payload.get("user").and_then(|u| u.get("id")).and_then(|v| v.as_str()) {
+            if let Some(user_id) = payload
+                .get("user")
+                .and_then(|u| u.get("id"))
+                .and_then(|v| v.as_str())
+            {
                 unique_users.insert(user_id.to_string());
             }
 
             // Count unique sessions (use IP as proxy if no session ID)
             if let Some(session_id) = payload.get("session_id").and_then(|v| v.as_str()) {
                 unique_sessions.insert(session_id.to_string());
-            } else if let Some(ip) = payload.get("user").and_then(|u| u.get("ip_address")).and_then(|v| v.as_str()) {
+            } else if let Some(ip) = payload
+                .get("user")
+                .and_then(|u| u.get("ip_address"))
+                .and_then(|v| v.as_str())
+            {
                 unique_sessions.insert(ip.to_string());
             }
 
             // Browser distribution
-            if let Some(browser) = payload.get("tags").and_then(|t| t.get("browser")).and_then(|v| v.as_str()) {
+            if let Some(browser) = payload
+                .get("tags")
+                .and_then(|t| t.get("browser"))
+                .and_then(|v| v.as_str())
+            {
                 *browser_counts.entry(browser.to_string()).or_insert(0) += 1;
-            } else if let Some(runtime) = payload.get("tags").and_then(|t| t.get("runtime")).and_then(|v| v.as_str()) {
+            } else if let Some(runtime) = payload
+                .get("tags")
+                .and_then(|t| t.get("runtime"))
+                .and_then(|v| v.as_str())
+            {
                 *browser_counts.entry(runtime.to_string()).or_insert(0) += 1;
             }
 
             // OS distribution
-            if let Some(os) = payload.get("tags").and_then(|t| t.get("os.name")).and_then(|v| v.as_str()) {
+            if let Some(os) = payload
+                .get("tags")
+                .and_then(|t| t.get("os.name"))
+                .and_then(|v| v.as_str())
+            {
                 *os_counts.entry(os.to_string()).or_insert(0) += 1;
             }
         }
@@ -912,7 +1060,8 @@ pub async fn get_impact(
 
     // Calculate trend percentage
     let trend_percent = if prev_hour_count > 0 {
-        ((last_hour_count as f64 - prev_hour_count as f64) / prev_hour_count as f64 * 100.0).round() as i32
+        ((last_hour_count as f64 - prev_hour_count as f64) / prev_hour_count as f64 * 100.0).round()
+            as i32
     } else if last_hour_count > 0 {
         100 // New issue, 100% increase
     } else {
@@ -925,17 +1074,41 @@ pub async fn get_impact(
     // Convert browser/OS counts to sorted lists (top 5)
     let mut browsers: Vec<_> = browser_counts.into_iter().collect();
     browsers.sort_by(|a, b| b.1.cmp(&a.1));
-    let browsers: Vec<DistributionItem> = browsers.into_iter().take(5).map(|(name, count)| {
-        let percentage = if events.len() > 0 { (count as f64 / events.len() as f64 * 100.0).round() as u32 } else { 0 };
-        DistributionItem { name, count, percentage }
-    }).collect();
+    let browsers: Vec<DistributionItem> = browsers
+        .into_iter()
+        .take(5)
+        .map(|(name, count)| {
+            let percentage = if events.len() > 0 {
+                (count as f64 / events.len() as f64 * 100.0).round() as u32
+            } else {
+                0
+            };
+            DistributionItem {
+                name,
+                count,
+                percentage,
+            }
+        })
+        .collect();
 
     let mut oses: Vec<_> = os_counts.into_iter().collect();
     oses.sort_by(|a, b| b.1.cmp(&a.1));
-    let oses: Vec<DistributionItem> = oses.into_iter().take(5).map(|(name, count)| {
-        let percentage = if events.len() > 0 { (count as f64 / events.len() as f64 * 100.0).round() as u32 } else { 0 };
-        DistributionItem { name, count, percentage }
-    }).collect();
+    let oses: Vec<DistributionItem> = oses
+        .into_iter()
+        .take(5)
+        .map(|(name, count)| {
+            let percentage = if events.len() > 0 {
+                (count as f64 / events.len() as f64 * 100.0).round() as u32
+            } else {
+                0
+            };
+            DistributionItem {
+                name,
+                count,
+                percentage,
+            }
+        })
+        .collect();
 
     Ok(Json(ApiResponse {
         data: ImpactData {
@@ -983,10 +1156,10 @@ fn parse_flexible_timestamp(timestamp: &str) -> Option<chrono::DateTime<chrono::
 
     // Try ISO 8601 formats with timezone
     let tz_formats = [
-        "%Y-%m-%dT%H:%M:%S%.f%:z",  // 2024-01-15T14:22:00.123456+00:00
-        "%Y-%m-%dT%H:%M:%S%:z",     // 2024-01-15T14:22:00+00:00
-        "%Y-%m-%dT%H:%M:%S%.f%z",   // 2024-01-15T14:22:00.123456+0000
-        "%Y-%m-%dT%H:%M:%S%z",      // 2024-01-15T14:22:00+0000
+        "%Y-%m-%dT%H:%M:%S%.f%:z", // 2024-01-15T14:22:00.123456+00:00
+        "%Y-%m-%dT%H:%M:%S%:z",    // 2024-01-15T14:22:00+00:00
+        "%Y-%m-%dT%H:%M:%S%.f%z",  // 2024-01-15T14:22:00.123456+0000
+        "%Y-%m-%dT%H:%M:%S%z",     // 2024-01-15T14:22:00+0000
     ];
 
     for fmt in &tz_formats {
@@ -1077,12 +1250,49 @@ pub struct IssueWithProject {
 pub async fn list_across_projects(
     State(state): State<AppState>,
     auth: EitherAuth,
+    x402_verified: Option<axum::Extension<crate::payments::X402PaymentVerified>>,
     Query(params): Query<AcrossProjectsParams>,
 ) -> AppResult<Json<AcrossProjectsResponse>> {
+    // Gate: Pro+ tier required for cross-project issue aggregation
+    // x402_verified is set by the payment middleware when a valid feature_access payment was
+    // verified; when present we bypass the tier check entirely.
+    if !state.config.deployment_mode.is_self_hosted() && x402_verified.is_none() {
+        let (org_id, tier_str) = match &*auth {
+            AuthIdentity::User(user) => {
+                let org = OrganizationRepository::find_by_user(&state.db, &user.id)
+                    .await?
+                    .ok_or_else(|| AppError::Forbidden("No organization found".to_string()))?;
+                (org.id, org.tier)
+            }
+            AuthIdentity::Agent(agent) => {
+                let org = OrganizationRepository::find_by_id(&state.db, &agent.organization_id)
+                    .await?
+                    .ok_or_else(|| AppError::Forbidden("Organization not found".to_string()))?;
+                (org.id, org.tier)
+            }
+        };
+        if !can_access_feature(&tier_str, "performance_monitoring") {
+            return Err(crate::payments::x402_feature_response(
+                &state,
+                "cross_project_issues",
+                "/api/v1/issues/across-projects",
+                &org_id,
+                None,
+                "Cross-project issue aggregation requires a Pro plan or higher.",
+            )
+            .await);
+        }
+    }
+
     // Get all projects based on auth type
     let projects = match &*auth {
-        AuthIdentity::User(user) => ProjectRepository::find_by_owner(&state.db, &user.id, 100, 0).await?,
-        AuthIdentity::Agent(agent) => ProjectRepository::find_by_organization(&state.db, &agent.organization_id, 100, 0).await?,
+        AuthIdentity::User(user) => {
+            ProjectRepository::find_by_owner(&state.db, &user.id, 100, 0).await?
+        }
+        AuthIdentity::Agent(agent) => {
+            ProjectRepository::find_by_organization(&state.db, &agent.organization_id, 100, 0)
+                .await?
+        }
     };
 
     if projects.is_empty() {
@@ -1121,7 +1331,8 @@ pub async fn list_across_projects(
     )
     .await?;
 
-    let total = IssueRepository::count_across_projects(&state.db, &project_ids, status_filter).await?;
+    let total =
+        IssueRepository::count_across_projects(&state.db, &project_ids, status_filter).await?;
     let total_pages = ((total as f64) / (limit as f64)).ceil() as u32;
 
     // Enrich issues with project info
@@ -1190,11 +1401,48 @@ pub struct AggregateTotals {
 pub async fn get_stats_by_project(
     State(state): State<AppState>,
     auth: EitherAuth,
+    x402_verified: Option<axum::Extension<crate::payments::X402PaymentVerified>>,
 ) -> AppResult<Json<ProjectStatsResponse>> {
+    // Gate: Pro+ tier required for cross-project statistics
+    // x402_verified is set by the payment middleware when a valid feature_access payment was
+    // verified; when present we bypass the tier check entirely.
+    if !state.config.deployment_mode.is_self_hosted() && x402_verified.is_none() {
+        let (org_id, tier_str) = match &*auth {
+            AuthIdentity::User(user) => {
+                let org = OrganizationRepository::find_by_user(&state.db, &user.id)
+                    .await?
+                    .ok_or_else(|| AppError::Forbidden("No organization found".to_string()))?;
+                (org.id, org.tier)
+            }
+            AuthIdentity::Agent(agent) => {
+                let org = OrganizationRepository::find_by_id(&state.db, &agent.organization_id)
+                    .await?
+                    .ok_or_else(|| AppError::Forbidden("Organization not found".to_string()))?;
+                (org.id, org.tier)
+            }
+        };
+        if !can_access_feature(&tier_str, "performance_monitoring") {
+            return Err(crate::payments::x402_feature_response(
+                &state,
+                "cross_project_issues",
+                "/api/v1/issues/stats/by-project",
+                &org_id,
+                None,
+                "Cross-project issue aggregation requires a Pro plan or higher.",
+            )
+            .await);
+        }
+    }
+
     // Get all projects based on auth type
     let projects = match &*auth {
-        AuthIdentity::User(user) => ProjectRepository::find_by_owner(&state.db, &user.id, 100, 0).await?,
-        AuthIdentity::Agent(agent) => ProjectRepository::find_by_organization(&state.db, &agent.organization_id, 100, 0).await?,
+        AuthIdentity::User(user) => {
+            ProjectRepository::find_by_owner(&state.db, &user.id, 100, 0).await?
+        }
+        AuthIdentity::Agent(agent) => {
+            ProjectRepository::find_by_organization(&state.db, &agent.organization_id, 100, 0)
+                .await?
+        }
     };
 
     if projects.is_empty() {
