@@ -1255,8 +1255,10 @@ pub async fn list_across_projects(
 ) -> AppResult<Json<AcrossProjectsResponse>> {
     // Gate: Pro+ tier required for cross-project issue aggregation
     // x402_verified is set by the payment middleware when a valid feature_access payment was
-    // verified; when present we bypass the tier check entirely.
-    if !state.config.deployment_mode.is_self_hosted() && x402_verified.is_none() {
+    // verified; bypass the tier check only when x402 is enabled AND payment was verified.
+    if !state.config.deployment_mode.is_self_hosted()
+        && !(state.config.x402_enabled && x402_verified.is_some())
+    {
         let (org_id, tier_str) = match &*auth {
             AuthIdentity::User(user) => {
                 let org = OrganizationRepository::find_by_user(&state.db, &user.id)
@@ -1271,7 +1273,7 @@ pub async fn list_across_projects(
                 (org.id, org.tier)
             }
         };
-        if !can_access_feature(&tier_str, "server_monitoring") {
+        if !can_access_feature(&tier_str, "cross_project_issues") {
             return Err(crate::payments::x402_feature_response(
                 &state,
                 "cross_project_issues",
@@ -1405,8 +1407,10 @@ pub async fn get_stats_by_project(
 ) -> AppResult<Json<ProjectStatsResponse>> {
     // Gate: Pro+ tier required for cross-project statistics
     // x402_verified is set by the payment middleware when a valid feature_access payment was
-    // verified; when present we bypass the tier check entirely.
-    if !state.config.deployment_mode.is_self_hosted() && x402_verified.is_none() {
+    // verified; bypass the tier check only when x402 is enabled AND payment was verified.
+    if !state.config.deployment_mode.is_self_hosted()
+        && !(state.config.x402_enabled && x402_verified.is_some())
+    {
         let (org_id, tier_str) = match &*auth {
             AuthIdentity::User(user) => {
                 let org = OrganizationRepository::find_by_user(&state.db, &user.id)
@@ -1421,7 +1425,7 @@ pub async fn get_stats_by_project(
                 (org.id, org.tier)
             }
         };
-        if !can_access_feature(&tier_str, "server_monitoring") {
+        if !can_access_feature(&tier_str, "cross_project_issues") {
             return Err(crate::payments::x402_feature_response(
                 &state,
                 "cross_project_issues",

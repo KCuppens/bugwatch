@@ -48,6 +48,8 @@ pub struct TierFeatures {
     pub opsgenie: bool,
     pub session_replay: bool,
     pub performance_monitoring: bool,
+    pub server_monitoring: bool,
+    pub email_notifications: bool,
     pub jira: bool,
     pub linear: bool,
     pub github_issues: bool,
@@ -61,13 +63,12 @@ pub struct TierFeatures {
 pub struct TierLimits {
     pub tier: Tier,
     pub retention_days: i32,
-    pub project_limit: Option<i32>,      // None = unlimited
-    pub monitors_per_seat: i32,
-    pub ai_fixes_per_seat: i32,
-    pub session_replays_per_seat: i32,
+    pub project_limit: Option<i32>, // None = unlimited
+    pub monitor_limit: i32,         // Flat limit per org (-1 = unlimited)
     pub rate_limit_per_minute: u32,
-    pub max_seats: Option<i32>,          // None = unlimited
-    pub email_cooldown_minutes: i32,     // Minutes between emails per issue (0 = real-time)
+    pub max_seats: Option<i32>,      // None = unlimited
+    pub email_cooldown_minutes: i32, // Minutes between emails per issue (0 = real-time)
+    pub replay_storage_bytes: i64,   // Max replay storage per project in bytes (0 = disabled)
     pub features: TierFeatures,
 }
 
@@ -78,18 +79,19 @@ pub fn get_tier_limits(tier: Tier) -> TierLimits {
             tier: Tier::Free,
             retention_days: 7,
             project_limit: Some(1),
-            monitors_per_seat: 3,
-            ai_fixes_per_seat: 0,
-            session_replays_per_seat: 0,
+            monitor_limit: 1,
             rate_limit_per_minute: 100,
             max_seats: Some(1),
-            email_cooldown_minutes: 60,  // 1 email per hour
+            email_cooldown_minutes: 60, // 1 email per hour
+            replay_storage_bytes: 0,    // No replay for free tier
             features: TierFeatures {
                 webhooks: false,
                 pagerduty: false,
                 opsgenie: false,
                 session_replay: false,
                 performance_monitoring: false,
+                server_monitoring: false,
+                email_notifications: false,
                 jira: false,
                 linear: false,
                 github_issues: false,
@@ -102,18 +104,19 @@ pub fn get_tier_limits(tier: Tier) -> TierLimits {
             tier: Tier::Pro,
             retention_days: 90,
             project_limit: None,
-            monitors_per_seat: 10,
-            ai_fixes_per_seat: 5,
-            session_replays_per_seat: 0,
+            monitor_limit: 10,
             rate_limit_per_minute: 1000,
             max_seats: None,
-            email_cooldown_minutes: 15,  // 1 email per 15 min
+            email_cooldown_minutes: 15,          // 1 email per 15 min
+            replay_storage_bytes: 1_073_741_824, // 1GB
             features: TierFeatures {
                 webhooks: true,
                 pagerduty: true,
                 opsgenie: false,
                 session_replay: false,
-                performance_monitoring: false,
+                performance_monitoring: true,
+                server_monitoring: true,
+                email_notifications: true,
                 jira: false,
                 linear: false,
                 github_issues: false,
@@ -126,18 +129,19 @@ pub fn get_tier_limits(tier: Tier) -> TierLimits {
             tier: Tier::Team,
             retention_days: 365,
             project_limit: None,
-            monitors_per_seat: 20,
-            ai_fixes_per_seat: 15,
-            session_replays_per_seat: 100,
+            monitor_limit: 25,
             rate_limit_per_minute: 5000,
             max_seats: None,
-            email_cooldown_minutes: 5,  // 1 email per 5 min
+            email_cooldown_minutes: 5,            // 1 email per 5 min
+            replay_storage_bytes: 10_737_418_240, // 10GB
             features: TierFeatures {
                 webhooks: true,
                 pagerduty: true,
                 opsgenie: true,
                 session_replay: true,
                 performance_monitoring: true,
+                server_monitoring: true,
+                email_notifications: true,
                 jira: true,
                 linear: true,
                 github_issues: true,
@@ -150,18 +154,19 @@ pub fn get_tier_limits(tier: Tier) -> TierLimits {
             tier: Tier::Enterprise,
             retention_days: -1, // unlimited / custom
             project_limit: None,
-            monitors_per_seat: -1, // unlimited
-            ai_fixes_per_seat: -1, // unlimited
-            session_replays_per_seat: -1, // unlimited
+            monitor_limit: -1, // unlimited
             rate_limit_per_minute: 10000,
             max_seats: None,
-            email_cooldown_minutes: 0,  // real-time
+            email_cooldown_minutes: 0,             // real-time
+            replay_storage_bytes: 107_374_182_400, // 100GB
             features: TierFeatures {
                 webhooks: true,
                 pagerduty: true,
                 opsgenie: true,
                 session_replay: true,
                 performance_monitoring: true,
+                server_monitoring: true,
+                email_notifications: true,
                 jira: true,
                 linear: true,
                 github_issues: true,
@@ -169,6 +174,36 @@ pub fn get_tier_limits(tier: Tier) -> TierLimits {
                 audit_logs: true,
                 custom_domain: true,
             },
+        },
+    }
+}
+
+/// Get limits for self-hosted mode — everything unlocked, no artificial limits.
+/// Rate limit and retention are configurable via environment variables.
+pub fn self_hosted_limits(retention_days: i32, rate_limit_per_minute: u32) -> TierLimits {
+    TierLimits {
+        tier: Tier::Team, // Self-hosted gets Team-level features
+        retention_days,
+        project_limit: None, // Unlimited
+        monitor_limit: -1,   // Unlimited
+        rate_limit_per_minute,
+        max_seats: None,           // Unlimited
+        email_cooldown_minutes: 0, // Real-time
+        replay_storage_bytes: -1,  // Unlimited for self-hosted
+        features: TierFeatures {
+            webhooks: true,
+            pagerduty: true,
+            opsgenie: true,
+            session_replay: true,
+            performance_monitoring: true,
+            server_monitoring: true,
+            email_notifications: true,
+            jira: true,
+            linear: true,
+            github_issues: true,
+            sso: false,           // Enterprise/SaaS only
+            audit_logs: false,    // Enterprise/SaaS only
+            custom_domain: false, // SaaS only
         },
     }
 }
@@ -184,9 +219,13 @@ pub fn can_access_feature(tier: &str, feature: &str) -> bool {
         "opsgenie" => limits.features.opsgenie,
         "session_replay" => limits.features.session_replay,
         "performance_monitoring" => limits.features.performance_monitoring,
+        "server_monitoring" => limits.features.server_monitoring,
+        "email_notifications" => limits.features.email_notifications,
         "jira" => limits.features.jira,
         "linear" => limits.features.linear,
-        "github_issues" => limits.features.github_issues,
+        // Cross-project issue aggregation — requires Pro+ (same gate as server_monitoring)
+        "cross_project_issues" => limits.features.server_monitoring,
+        "github_issues" | "github" => limits.features.github_issues,
         "sso" => limits.features.sso,
         "audit_logs" => limits.features.audit_logs,
         "custom_domain" => limits.features.custom_domain,
@@ -205,9 +244,9 @@ pub fn tier_includes(tier_a: &str, tier_b: &str) -> bool {
 pub fn get_price_per_seat(tier: Tier) -> i32 {
     match tier {
         Tier::Free => 0,
-        Tier::Pro => 1200,      // $12.00
-        Tier::Team => 2500,     // $25.00
-        Tier::Enterprise => 0,  // custom pricing
+        Tier::Pro => 1200,     // $12.00
+        Tier::Team => 2500,    // $25.00
+        Tier::Enterprise => 0, // custom pricing
     }
 }
 
@@ -215,8 +254,8 @@ pub fn get_price_per_seat(tier: Tier) -> i32 {
 pub fn get_min_seats(tier: Tier) -> i32 {
     match tier {
         Tier::Free => 1,
-        Tier::Pro => 2,
-        Tier::Team => 5,
+        Tier::Pro => 1,
+        Tier::Team => 1,
         Tier::Enterprise => 1,
     }
 }
@@ -262,8 +301,12 @@ mod tests {
     #[test]
     fn test_feature_access() {
         assert!(!can_access_feature("free", "webhooks"));
+        assert!(!can_access_feature("free", "server_monitoring"));
+        assert!(!can_access_feature("free", "email_notifications"));
         assert!(can_access_feature("pro", "webhooks"));
         assert!(can_access_feature("pro", "pagerduty"));
+        assert!(can_access_feature("pro", "server_monitoring"));
+        assert!(can_access_feature("pro", "email_notifications"));
         assert!(!can_access_feature("pro", "session_replay"));
         assert!(can_access_feature("team", "session_replay"));
         assert!(can_access_feature("enterprise", "sso"));
@@ -283,29 +326,38 @@ mod tests {
         // Team tier monthly - 10 seats
         assert_eq!(calculate_price(Tier::Team, 10, false), 25000); // $250
 
-        // Minimum seats enforced
-        assert_eq!(calculate_price(Tier::Pro, 1, false), 2400); // 2 seats min = $24
+        // Minimum seats: 1 for all paid tiers
+        assert_eq!(calculate_price(Tier::Pro, 1, false), 1200); // 1 seat = $12
+        assert_eq!(calculate_price(Tier::Team, 1, false), 2500); // 1 seat = $25
     }
 
     #[test]
     fn test_tier_limits() {
         // Free tier limits
         let free = get_tier_limits(Tier::Free);
-        assert_eq!(free.project_limit, Some(1)); // Free tier has 1 project
-        assert_eq!(free.email_cooldown_minutes, 60); // 1 hour cooldown
+        assert_eq!(free.project_limit, Some(1));
+        assert_eq!(free.monitor_limit, 1);
+        assert_eq!(free.email_cooldown_minutes, 60);
         assert_eq!(free.max_seats, Some(1));
+        assert!(!free.features.server_monitoring);
+        assert!(!free.features.email_notifications);
 
         // Pro tier limits
         let pro = get_tier_limits(Tier::Pro);
-        assert_eq!(pro.project_limit, None); // Unlimited projects
-        assert_eq!(pro.email_cooldown_minutes, 15); // 15 min cooldown
+        assert_eq!(pro.project_limit, None);
+        assert_eq!(pro.monitor_limit, 10);
+        assert_eq!(pro.email_cooldown_minutes, 15);
+        assert!(pro.features.server_monitoring);
+        assert!(pro.features.email_notifications);
 
         // Team tier limits
         let team = get_tier_limits(Tier::Team);
-        assert_eq!(team.email_cooldown_minutes, 5); // 5 min cooldown
+        assert_eq!(team.monitor_limit, 25);
+        assert_eq!(team.email_cooldown_minutes, 5);
 
         // Enterprise tier limits
         let enterprise = get_tier_limits(Tier::Enterprise);
-        assert_eq!(enterprise.email_cooldown_minutes, 0); // Real-time (no cooldown)
+        assert_eq!(enterprise.monitor_limit, -1); // Unlimited
+        assert_eq!(enterprise.email_cooldown_minutes, 0);
     }
 }
