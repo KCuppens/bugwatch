@@ -8,7 +8,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     auth::middleware::AuthUser,
-    db::repositories::{ProjectRepository, ServerMetricsRepository, ServerRepository},
+    billing::tiers::can_access_feature,
+    db::repositories::{
+        OrganizationRepository, ProjectRepository, ServerMetricsRepository, ServerRepository,
+    },
     AppError, AppResult, AppState,
 };
 
@@ -112,6 +115,7 @@ pub struct MetricsIngestResponse {
 
 pub async fn ingest_metrics(
     State(state): State<AppState>,
+    x402_verified: Option<axum::Extension<crate::payments::X402PaymentVerified>>,
     headers: HeaderMap,
     Json(payload): Json<ServerMetricsPayload>,
 ) -> AppResult<(StatusCode, Json<MetricsIngestResponse>)> {
@@ -123,8 +127,38 @@ pub async fn ingest_metrics(
         .await?
         .ok_or_else(|| AppError::Unauthorized("Invalid API key".to_string()))?;
 
-    // 3. Rate limit
-    let rate_limit_result = state.rate_limiter.check_with_tier_lookup(&api_key, &state.db).await;
+    // 3. Check tier — server monitoring is Pro+ only (bypassed in self-hosted mode or valid x402 payment)
+    if !state.config.deployment_mode.is_self_hosted()
+        && !(state.config.x402_enabled && x402_verified.is_some())
+    {
+        let tier_str = OrganizationRepository::get_project_tier(&state.db, &project.id)
+            .await
+            .unwrap_or_else(|_| "free".to_string());
+        if !can_access_feature(&tier_str, "server_monitoring") {
+            let org_id = project.organization_id.as_deref().unwrap_or("");
+            let resource = format!("/api/v1/metrics");
+            return Err(crate::payments::x402_feature_response(
+                &state,
+                "server_monitoring",
+                &resource,
+                org_id,
+                None,
+                "Server monitoring requires a Pro plan or higher. Upgrade to access this feature.",
+            )
+            .await);
+        }
+    }
+
+    // 4. Rate limit
+    let rate_limit_result = state
+        .rate_limiter
+        .check_with_tier_lookup(
+            &api_key,
+            &state.db,
+            state.config.deployment_mode,
+            state.config.rate_limit_per_minute,
+        )
+        .await;
     if !rate_limit_result.allowed {
         return Err(AppError::RateLimitExceeded {
             retry_after_secs: rate_limit_result.retry_after_secs.unwrap_or(60),
@@ -133,7 +167,7 @@ pub async fn ingest_metrics(
         });
     }
 
-    // 4. Upsert server record
+    // 5. Upsert server record
     let server = ServerRepository::upsert(
         &state.db,
         &project.id,
@@ -144,12 +178,21 @@ pub async fn ingest_metrics(
     )
     .await?;
 
-    // 5. Serialize JSON columns
-    let disks_json = payload.disks.as_ref().map(|d| serde_json::to_string(d).unwrap_or_default());
-    let processes_json = payload.processes.as_ref().map(|p| serde_json::to_string(p).unwrap_or_default());
-    let docker_json = payload.docker.as_ref().map(|d| serde_json::to_string(d).unwrap_or_default());
+    // 6. Serialize JSON columns
+    let disks_json = payload
+        .disks
+        .as_ref()
+        .map(|d| serde_json::to_string(d).unwrap_or_default());
+    let processes_json = payload
+        .processes
+        .as_ref()
+        .map(|p| serde_json::to_string(p).unwrap_or_default());
+    let docker_json = payload
+        .docker
+        .as_ref()
+        .map(|d| serde_json::to_string(d).unwrap_or_default());
 
-    // 6. Insert metrics
+    // 7. Insert metrics
     let metric = ServerMetricsRepository::create(
         &state.db,
         &server.id,
@@ -172,7 +215,7 @@ pub async fn ingest_metrics(
     )
     .await?;
 
-    // 7. Async alert evaluation
+    // 8. Async alert evaluation
     let alerting = state.alerting_service.clone();
     let project_id = project.id.clone();
     let server_id_clone = server.id.clone();
@@ -276,7 +319,9 @@ pub async fn get_server_metrics(
         .ok_or_else(|| AppError::NotFound("Server not found".to_string()))?;
 
     if server.project_id != project_id {
-        return Err(AppError::Forbidden("Server does not belong to this project".to_string()));
+        return Err(AppError::Forbidden(
+            "Server does not belong to this project".to_string(),
+        ));
     }
 
     let duration = match params.period.as_str() {
@@ -357,7 +402,9 @@ pub async fn get_latest_metrics(
         .ok_or_else(|| AppError::NotFound("Server not found".to_string()))?;
 
     if server.project_id != project_id {
-        return Err(AppError::Forbidden("Server does not belong to this project".to_string()));
+        return Err(AppError::Forbidden(
+            "Server does not belong to this project".to_string(),
+        ));
     }
 
     let metric = ServerMetricsRepository::get_latest(&state.db, &server.id).await?;

@@ -1,0 +1,526 @@
+use axum::{
+    extract::{Path, Query, State},
+    http::{HeaderMap, StatusCode},
+    Json,
+};
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use tracing::info;
+
+use crate::{
+    auth::middleware::AuthUser,
+    db::repositories::{OrganizationRepository, ProjectRepository, ReplayRepository},
+    middleware::tier_guard::features,
+    AppError, AppResult, AppState,
+};
+
+use super::events::extract_api_key;
+
+// ============================================================================
+// Request/Response Types
+// ============================================================================
+
+#[derive(Debug, Deserialize)]
+pub struct IngestSegmentRequest {
+    pub session_id: String,
+    pub segment_index: i32,
+    pub data: String, // base64 encoded compressed rrweb events
+    pub started_at: Option<String>,
+    pub user_agent: Option<String>,
+    pub screen_width: Option<i32>,
+    pub screen_height: Option<i32>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct FinishRecordingRequest {
+    pub session_id: String,
+    pub duration_ms: Option<i32>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ListRecordingsQuery {
+    #[serde(default = "default_limit")]
+    pub limit: i64,
+    #[serde(default)]
+    pub offset: i64,
+}
+
+fn default_limit() -> i64 {
+    20
+}
+
+#[derive(Debug, Serialize)]
+pub struct IngestSegmentResponse {
+    pub status: String,
+    pub recording_id: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SegmentData {
+    pub segment_index: i32,
+    pub data: String, // base64 encoded
+    pub size_bytes: i32,
+}
+
+// ============================================================================
+// SDK Ingestion Endpoints (API key auth)
+// ============================================================================
+
+/// POST /api/v1/replay/segments
+///
+/// SDK pushes compressed rrweb segments. Authenticated via API key.
+pub async fn ingest_segment(
+    State(state): State<AppState>,
+    x402_verified: Option<axum::Extension<crate::payments::X402PaymentVerified>>,
+    headers: HeaderMap,
+    Json(req): Json<IngestSegmentRequest>,
+) -> AppResult<(StatusCode, Json<IngestSegmentResponse>)> {
+    // 1. Auth via API key
+    let api_key = extract_api_key(&headers)?;
+    let project = ProjectRepository::find_by_api_key(&state.db, &api_key)
+        .await?
+        .ok_or_else(|| AppError::Unauthorized("Invalid API key".to_string()))?;
+
+    // 2. Check tier and storage limits
+    if !state.config.deployment_mode.is_self_hosted() {
+        let replay_org = OrganizationRepository::find_by_project_id(&state.db, &project.id)
+            .await
+            .unwrap_or(None);
+        let tier_str = replay_org
+            .as_ref()
+            .map(|o| o.tier.clone())
+            .unwrap_or_else(|| "free".to_string());
+        if !crate::billing::tiers::can_access_feature(&tier_str, "session_replay")
+            && !(state.config.x402_enabled && x402_verified.is_some())
+        {
+            let org_id = project.organization_id.as_deref().unwrap_or("");
+            return Err(crate::payments::x402_feature_response(
+                &state,
+                "session_replay",
+                "/api/v1/replay/segments",
+                org_id,
+                None,
+                "Session replay requires a Team plan or higher.",
+            )
+            .await);
+        }
+
+        // Check per-project storage limit
+        let tier = crate::billing::tiers::Tier::from_str(&tier_str);
+        let limits = crate::billing::tiers::get_tier_limits(tier);
+        if limits.replay_storage_bytes > 0 {
+            let current_usage: (i64,) = sqlx::query_as(
+                "SELECT COALESCE(SUM(total_size_bytes), 0) FROM session_recordings WHERE project_id = $1"
+            )
+            .bind(&project.id)
+            .fetch_one(&state.db)
+            .await
+            .unwrap_or((0,));
+
+            let x402_extra_storage = replay_org
+                .as_ref()
+                .map(|o| o.x402_extra_storage_bytes)
+                .unwrap_or(0);
+            let effective_storage = limits.replay_storage_bytes + x402_extra_storage;
+
+            if current_usage.0 >= effective_storage {
+                let org_id = replay_org
+                    .as_ref()
+                    .map(|o| o.id.clone())
+                    .unwrap_or_default();
+                let segment_quantity = 1_048_576i64; // 1MB default segment estimate
+                let msg = "Replay storage limit exceeded. Upgrade your plan or pay to add storage."
+                    .to_string();
+                if state.config.x402_enabled && !state.config.deployment_mode.is_self_hosted() {
+                    let nonce = uuid::Uuid::new_v4().to_string();
+                    let challenge = crate::payments::challenge::build_capacity_challenge(
+                        &state.config.x402_wallet_address,
+                        &state.config.x402_usdc_address,
+                        "/api/v1/replay/segments",
+                        "storage_bytes",
+                        segment_quantity,
+                        &tier_str,
+                        &nonce,
+                    );
+                    let store = state.payment_store.clone();
+                    let nonce_c = nonce.clone();
+                    let org_id_c = org_id.clone();
+                    let tier_str_c = tier_str.clone();
+                    tokio::spawn(async move {
+                        let _ = store
+                            .create_capacity_challenge(
+                                &nonce_c,
+                                &org_id_c,
+                                None,
+                                "/api/v1/replay/segments",
+                                "storage_bytes",
+                                segment_quantity,
+                                crate::payments::challenge::PaymentPricing::for_capacity_grant(
+                                    "storage_bytes",
+                                    &tier_str_c,
+                                    segment_quantity,
+                                ) as i64,
+                                300,
+                            )
+                            .await;
+                    });
+                    return Err(AppError::PaymentRequiredWithChallenge {
+                        message: msg,
+                        challenge: serde_json::json!(challenge),
+                    });
+                }
+                return Err(AppError::PaymentRequired(msg));
+            }
+        }
+    }
+
+    // 3. Rate limit
+    let rate_limit_result = state
+        .rate_limiter
+        .check_with_tier_lookup(
+            &api_key,
+            &state.db,
+            state.config.deployment_mode,
+            state.config.rate_limit_per_minute,
+        )
+        .await;
+    if !rate_limit_result.allowed {
+        return Err(AppError::RateLimitExceeded {
+            retry_after_secs: rate_limit_result.retry_after_secs.unwrap_or(60),
+            limit: rate_limit_result.limit,
+            remaining: rate_limit_result.remaining,
+        });
+    }
+
+    // 4. Decode base64 data
+    use base64::Engine;
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(&req.data)
+        .map_err(|e| AppError::BadRequest(format!("Invalid base64 data: {}", e)))?;
+
+    // 5. Check segment size limit (1MB)
+    if decoded.len() > 1_048_576 {
+        return Err(AppError::BadRequest(
+            "Segment data exceeds 1MB limit".to_string(),
+        ));
+    }
+
+    // 6. Find or create recording
+    let recording = match ReplayRepository::find_by_session_id(
+        &state.db,
+        &project.id,
+        &req.session_id,
+    )
+    .await?
+    {
+        Some(r) => r,
+        None => {
+            let started_at = req
+                .started_at
+                .as_ref()
+                .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+                .map(|dt| dt.with_timezone(&Utc))
+                .unwrap_or_else(Utc::now);
+
+            ReplayRepository::create_recording(
+                &state.db,
+                &project.id,
+                &req.session_id,
+                started_at,
+                req.user_agent.as_deref(),
+                req.screen_width,
+                req.screen_height,
+            )
+            .await?
+        }
+    };
+
+    // 7. Store segment
+    let _segment =
+        ReplayRepository::create_segment(&state.db, &recording.id, req.segment_index, &decoded)
+            .await?;
+
+    // 8. Update recording stats (atomic increment to avoid race conditions)
+    sqlx::query("UPDATE session_recordings SET segment_count = segment_count + 1, total_size_bytes = total_size_bytes + $1 WHERE id = $2")
+        .bind(decoded.len() as i64)
+        .bind(&recording.id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| AppError::Internal(format!("Failed to update recording stats: {}", e)))?;
+
+    info!(
+        "Stored replay segment {} for session {} (recording {})",
+        req.segment_index, req.session_id, recording.id
+    );
+
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(IngestSegmentResponse {
+            status: "accepted".to_string(),
+            recording_id: recording.id,
+        }),
+    ))
+}
+
+/// POST /api/v1/replay/finish
+///
+/// SDK signals that a recording session is complete.
+pub async fn finish_recording(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<FinishRecordingRequest>,
+) -> AppResult<Json<serde_json::Value>> {
+    let api_key = extract_api_key(&headers)?;
+    let project = ProjectRepository::find_by_api_key(&state.db, &api_key)
+        .await?
+        .ok_or_else(|| AppError::Unauthorized("Invalid API key".to_string()))?;
+
+    let recording = ReplayRepository::find_by_session_id(&state.db, &project.id, &req.session_id)
+        .await?
+        .ok_or_else(|| {
+            AppError::NotFound(format!(
+                "Recording not found for session {}",
+                req.session_id
+            ))
+        })?;
+
+    ReplayRepository::finish_recording(&state.db, &recording.id, req.duration_ms).await?;
+
+    info!(
+        "Finished replay recording {} (session {})",
+        recording.id, req.session_id
+    );
+
+    Ok(Json(serde_json::json!({
+        "status": "completed",
+        "recording_id": recording.id
+    })))
+}
+
+// ============================================================================
+// Dashboard Endpoints (user auth, tier gated)
+// ============================================================================
+
+/// GET /projects/:project_id/replay
+///
+/// List recent recordings for a project.
+pub async fn list_recordings(
+    State(state): State<AppState>,
+    user: AuthUser,
+    x402_verified: Option<axum::Extension<crate::payments::X402PaymentVerified>>,
+    Path(project_id): Path<String>,
+    Query(params): Query<ListRecordingsQuery>,
+) -> AppResult<Json<serde_json::Value>> {
+    // Tier gate
+    {
+        if !state.config.deployment_mode.is_self_hosted()
+            && !(state.config.x402_enabled && x402_verified.is_some())
+        {
+            let org = OrganizationRepository::find_by_user(&state.db, &user.id)
+                .await
+                .map_err(|e| AppError::Internal(e.to_string()))?
+                .ok_or_else(|| AppError::Forbidden("No organization found".to_string()))?;
+            if !crate::billing::tiers::can_access_feature(&org.tier, features::SESSION_REPLAY) {
+                return Err(crate::payments::x402_feature_response(
+                    &state,
+                    features::SESSION_REPLAY,
+                    "/api/v1/projects/{project_id}/replay",
+                    &org.id,
+                    None,
+                    &format!(
+                        "The '{}' feature is not available on your current plan ({}). Please upgrade to access this feature.",
+                        features::SESSION_REPLAY, org.tier
+                    ),
+                ).await);
+            }
+        }
+    }
+
+    // Verify project access
+    let project = ProjectRepository::find_by_id(&state.db, &project_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Project not found".to_string()))?;
+
+    if project.owner_id != user.id {
+        return Err(AppError::Forbidden("Access denied".to_string()));
+    }
+
+    let limit = params.limit.min(100);
+    let offset = params.offset.max(0);
+
+    let recordings =
+        ReplayRepository::list_recordings(&state.db, &project_id, limit, offset).await?;
+    let total = ReplayRepository::count_recordings(&state.db, &project_id).await?;
+
+    Ok(Json(serde_json::json!({
+        "data": recordings,
+        "total": total
+    })))
+}
+
+/// GET /projects/:project_id/replay/:recording_id
+///
+/// Get recording metadata.
+pub async fn get_recording(
+    State(state): State<AppState>,
+    user: AuthUser,
+    x402_verified: Option<axum::Extension<crate::payments::X402PaymentVerified>>,
+    Path((project_id, recording_id)): Path<(String, String)>,
+) -> AppResult<Json<serde_json::Value>> {
+    {
+        if !state.config.deployment_mode.is_self_hosted()
+            && !(state.config.x402_enabled && x402_verified.is_some())
+        {
+            let org = OrganizationRepository::find_by_user(&state.db, &user.id)
+                .await
+                .map_err(|e| AppError::Internal(e.to_string()))?
+                .ok_or_else(|| AppError::Forbidden("No organization found".to_string()))?;
+            if !crate::billing::tiers::can_access_feature(&org.tier, features::SESSION_REPLAY) {
+                return Err(crate::payments::x402_feature_response(
+                    &state,
+                    features::SESSION_REPLAY,
+                    "/api/v1/projects/{project_id}/replay",
+                    &org.id,
+                    None,
+                    &format!(
+                        "The '{}' feature is not available on your current plan ({}). Please upgrade to access this feature.",
+                        features::SESSION_REPLAY, org.tier
+                    ),
+                ).await);
+            }
+        }
+    }
+
+    let project = ProjectRepository::find_by_id(&state.db, &project_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Project not found".to_string()))?;
+
+    if project.owner_id != user.id {
+        return Err(AppError::Forbidden("Access denied".to_string()));
+    }
+
+    let recording = ReplayRepository::find_recording(&state.db, &recording_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Recording not found".to_string()))?;
+
+    // Verify it belongs to the project
+    if recording.project_id != project_id {
+        return Err(AppError::NotFound("Recording not found".to_string()));
+    }
+
+    Ok(Json(serde_json::json!({ "data": recording })))
+}
+
+/// GET /projects/:project_id/replay/:recording_id/segments
+///
+/// Get all segments for playback.
+pub async fn get_segments(
+    State(state): State<AppState>,
+    user: AuthUser,
+    x402_verified: Option<axum::Extension<crate::payments::X402PaymentVerified>>,
+    Path((project_id, recording_id)): Path<(String, String)>,
+) -> AppResult<Json<Vec<SegmentData>>> {
+    {
+        if !state.config.deployment_mode.is_self_hosted()
+            && !(state.config.x402_enabled && x402_verified.is_some())
+        {
+            let org = OrganizationRepository::find_by_user(&state.db, &user.id)
+                .await
+                .map_err(|e| AppError::Internal(e.to_string()))?
+                .ok_or_else(|| AppError::Forbidden("No organization found".to_string()))?;
+            if !crate::billing::tiers::can_access_feature(&org.tier, features::SESSION_REPLAY) {
+                return Err(crate::payments::x402_feature_response(
+                    &state,
+                    features::SESSION_REPLAY,
+                    "/api/v1/projects/{project_id}/replay",
+                    &org.id,
+                    None,
+                    &format!(
+                        "The '{}' feature is not available on your current plan ({}). Please upgrade to access this feature.",
+                        features::SESSION_REPLAY, org.tier
+                    ),
+                ).await);
+            }
+        }
+    }
+
+    let project = ProjectRepository::find_by_id(&state.db, &project_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Project not found".to_string()))?;
+
+    if project.owner_id != user.id {
+        return Err(AppError::Forbidden("Access denied".to_string()));
+    }
+
+    // Verify recording belongs to project
+    let recording = ReplayRepository::find_recording(&state.db, &recording_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Recording not found".to_string()))?;
+
+    if recording.project_id != project_id {
+        return Err(AppError::NotFound("Recording not found".to_string()));
+    }
+
+    let segments = ReplayRepository::list_segments(&state.db, &recording_id).await?;
+
+    use base64::Engine;
+    let segment_data: Vec<SegmentData> = segments
+        .into_iter()
+        .map(|s| SegmentData {
+            segment_index: s.segment_index,
+            data: base64::engine::general_purpose::STANDARD.encode(&s.data),
+            size_bytes: s.size_bytes,
+        })
+        .collect();
+
+    Ok(Json(segment_data))
+}
+
+/// GET /projects/:project_id/issues/:issue_id/replay
+///
+/// Get the recording linked to an issue's latest event.
+pub async fn get_issue_replay(
+    State(state): State<AppState>,
+    user: AuthUser,
+    x402_verified: Option<axum::Extension<crate::payments::X402PaymentVerified>>,
+    Path((project_id, issue_id)): Path<(String, String)>,
+) -> AppResult<Json<serde_json::Value>> {
+    {
+        if !state.config.deployment_mode.is_self_hosted()
+            && !(state.config.x402_enabled && x402_verified.is_some())
+        {
+            let org = OrganizationRepository::find_by_user(&state.db, &user.id)
+                .await
+                .map_err(|e| AppError::Internal(e.to_string()))?
+                .ok_or_else(|| AppError::Forbidden("No organization found".to_string()))?;
+            if !crate::billing::tiers::can_access_feature(&org.tier, features::SESSION_REPLAY) {
+                return Err(crate::payments::x402_feature_response(
+                    &state,
+                    features::SESSION_REPLAY,
+                    "/api/v1/projects/{project_id}/replay",
+                    &org.id,
+                    None,
+                    &format!(
+                        "The '{}' feature is not available on your current plan ({}). Please upgrade to access this feature.",
+                        features::SESSION_REPLAY, org.tier
+                    ),
+                ).await);
+            }
+        }
+    }
+
+    let project = ProjectRepository::find_by_id(&state.db, &project_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Project not found".to_string()))?;
+
+    if project.owner_id != user.id {
+        return Err(AppError::Forbidden("Access denied".to_string()));
+    }
+
+    let recording = ReplayRepository::find_by_event_issue(&state.db, &issue_id).await?;
+
+    match recording {
+        Some(r) if r.project_id == project_id => Ok(Json(serde_json::json!({ "data": r }))),
+        _ => Ok(Json(serde_json::json!({ "data": null }))),
+    }
+}

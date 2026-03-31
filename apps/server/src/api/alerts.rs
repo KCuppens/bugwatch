@@ -5,11 +5,14 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    auth::{EitherAuth, AuthIdentity},
+    auth::{AuthIdentity, EitherAuth},
     billing::tiers::can_access_feature,
     db::{
-        models::{AlertRule, NotificationChannel, AlertLog},
-        repositories::{AlertRuleRepository, NotificationChannelRepository, AlertLogRepository, OrganizationRepository, ProjectRepository},
+        models::{AlertLog, AlertRule, NotificationChannel},
+        repositories::{
+            AlertLogRepository, AlertRuleRepository, NotificationChannelRepository,
+            OrganizationRepository, ProjectRepository,
+        },
     },
     AppError, AppResult, AppState,
 };
@@ -32,10 +35,7 @@ pub enum AlertCondition {
         level: Option<String>, // 'error', 'warning', 'fatal'
     },
     #[serde(rename = "issue_frequency")]
-    IssueFrequency {
-        threshold: u32,
-        window_minutes: u32,
-    },
+    IssueFrequency { threshold: u32, window_minutes: u32 },
     #[serde(rename = "monitor_down")]
     MonitorDown {
         #[serde(default)]
@@ -96,6 +96,7 @@ pub struct AlertRuleResponse {
     pub channel_ids: Vec<String>,
     pub is_active: bool,
     pub created_at: String,
+    pub muted_until: Option<String>,
 }
 
 impl TryFrom<AlertRule> for AlertRuleResponse {
@@ -113,6 +114,7 @@ impl TryFrom<AlertRule> for AlertRuleResponse {
             channel_ids,
             is_active: rule.is_active,
             created_at: rule.created_at.to_rfc3339(),
+            muted_until: rule.muted_until.map(|t| t.to_rfc3339()),
         })
     }
 }
@@ -121,6 +123,7 @@ impl TryFrom<AlertRule> for AlertRuleResponse {
 pub async fn create_alert_rule(
     State(state): State<AppState>,
     auth: EitherAuth,
+    x402_verified: Option<axum::Extension<crate::payments::X402PaymentVerified>>,
     Path(project_id): Path<String>,
     Json(request): Json<CreateAlertRuleRequest>,
 ) -> AppResult<Json<AlertRuleResponse>> {
@@ -141,17 +144,29 @@ pub async fn create_alert_rule(
     let is_server_condition = matches!(
         request.condition,
         AlertCondition::ServerCpuHigh { .. }
-        | AlertCondition::ServerMemoryHigh { .. }
-        | AlertCondition::ServerDiskHigh { .. }
-        | AlertCondition::ServerOffline { .. }
+            | AlertCondition::ServerMemoryHigh { .. }
+            | AlertCondition::ServerDiskHigh { .. }
+            | AlertCondition::ServerOffline { .. }
     );
-    if is_server_condition && !state.config.deployment_mode.is_self_hosted() {
-        let tier_str = OrganizationRepository::get_project_tier(&state.db, &project_id).await
+    if is_server_condition
+        && !state.config.deployment_mode.is_self_hosted()
+        && !(state.config.x402_enabled && x402_verified.is_some())
+    {
+        let tier_str = OrganizationRepository::get_project_tier(&state.db, &project_id)
+            .await
             .unwrap_or_else(|_| "free".to_string());
         if !can_access_feature(&tier_str, "server_monitoring") {
-            return Err(AppError::PaymentRequired(
-                "Server alert rules require a Pro plan or higher.".to_string(),
-            ));
+            let org_id = project.organization_id.as_deref().unwrap_or("");
+            let resource = format!("/api/v1/projects/{}/alerts", project_id);
+            return Err(crate::payments::x402_feature_response(
+                &state,
+                "server_monitoring",
+                &resource,
+                org_id,
+                None,
+                "Server alert rules require a Pro plan or higher.",
+            )
+            .await);
         }
     }
 
@@ -195,13 +210,11 @@ pub async fn list_alert_rules(
         .await
         .map_err(|e| AppError::Internal(format!("Failed to list alert rules: {}", e)))?;
 
-    let responses: Result<Vec<AlertRuleResponse>, _> = rules
-        .into_iter()
-        .map(AlertRuleResponse::try_from)
-        .collect();
+    let responses: Result<Vec<AlertRuleResponse>, _> =
+        rules.into_iter().map(AlertRuleResponse::try_from).collect();
 
-    let responses = responses
-        .map_err(|e| AppError::Internal(format!("Failed to parse rules: {}", e)))?;
+    let responses =
+        responses.map_err(|e| AppError::Internal(format!("Failed to parse rules: {}", e)))?;
 
     Ok(Json(responses))
 }
@@ -314,14 +327,33 @@ pub enum ChannelType {
     Email,
     Webhook,
     Slack,
+    Pagerduty,
+    Opsgenie,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum ChannelConfig {
-    Email { recipients: Vec<String> },
-    Webhook { url: String, secret: Option<String> },
-    Slack { webhook_url: String, channel: Option<String> },
+    Email {
+        recipients: Vec<String>,
+    },
+    Webhook {
+        url: String,
+        secret: Option<String>,
+    },
+    Slack {
+        webhook_url: String,
+        channel: Option<String>,
+    },
+    PagerDuty {
+        routing_key: String,
+        severity_mapping: Option<std::collections::HashMap<String, String>>,
+    },
+    OpsGenie {
+        api_key: String,
+        team: Option<String>,
+        priority_mapping: Option<std::collections::HashMap<String, String>>,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -344,8 +376,8 @@ pub struct ChannelResponse {
 
 impl From<NotificationChannel> for ChannelResponse {
     fn from(channel: NotificationChannel) -> Self {
-        let config: serde_json::Value = serde_json::from_str(&channel.config)
-            .unwrap_or(serde_json::Value::Null);
+        let config: serde_json::Value =
+            serde_json::from_str(&channel.config).unwrap_or(serde_json::Value::Null);
 
         Self {
             id: channel.id,
@@ -363,6 +395,7 @@ impl From<NotificationChannel> for ChannelResponse {
 pub async fn create_channel(
     State(state): State<AppState>,
     auth: EitherAuth,
+    x402_verified: Option<axum::Extension<crate::payments::X402PaymentVerified>>,
     Path(project_id): Path<String>,
     Json(request): Json<CreateChannelRequest>,
 ) -> AppResult<Json<ChannelResponse>> {
@@ -379,37 +412,98 @@ pub async fn create_channel(
         return Err(AppError::Forbidden("Access denied".to_string()));
     }
 
-    // Gate notification channel types by tier (bypassed in self-hosted mode)
-    let channel_type = if state.config.deployment_mode.is_self_hosted() {
+    // Gate notification channel types by tier (bypassed in self-hosted mode or valid x402 payment)
+    let channel_type = if state.config.deployment_mode.is_self_hosted()
+        || (state.config.x402_enabled && x402_verified.is_some())
+    {
         match request.channel_type {
             ChannelType::Email => "email",
             ChannelType::Webhook => "webhook",
             ChannelType::Slack => "slack",
+            ChannelType::Pagerduty => "pagerduty",
+            ChannelType::Opsgenie => "opsgenie",
         }
     } else {
-        let tier_str = OrganizationRepository::get_project_tier(&state.db, &project_id).await
+        let tier_str = OrganizationRepository::get_project_tier(&state.db, &project_id)
+            .await
             .unwrap_or_else(|_| "free".to_string());
 
+        let org_id = project.organization_id.as_deref().unwrap_or("");
+        let channel_resource = format!("/api/v1/projects/{}/channels", project_id);
         match request.channel_type {
             ChannelType::Email => {
                 if !can_access_feature(&tier_str, "email_notifications") {
-                    return Err(AppError::PaymentRequired(
-                        "Email notifications require a Pro plan or higher.".to_string(),
-                    ));
+                    return Err(crate::payments::x402_feature_response(
+                        &state,
+                        "email_notifications",
+                        &channel_resource,
+                        org_id,
+                        None,
+                        "Email notifications require a Pro plan or higher.",
+                    )
+                    .await);
                 }
                 "email"
             }
             ChannelType::Webhook => {
                 if !can_access_feature(&tier_str, "webhooks") {
-                    return Err(AppError::PaymentRequired(
-                        "Webhook notifications require a Pro plan or higher.".to_string(),
-                    ));
+                    return Err(crate::payments::x402_feature_response(
+                        &state,
+                        "webhooks",
+                        &channel_resource,
+                        org_id,
+                        None,
+                        "Webhook notifications require a Pro plan or higher.",
+                    )
+                    .await);
                 }
                 "webhook"
             }
             ChannelType::Slack => "slack",
+            ChannelType::Pagerduty => {
+                if !can_access_feature(&tier_str, "pagerduty") {
+                    return Err(crate::payments::x402_feature_response(
+                        &state,
+                        "pagerduty",
+                        &channel_resource,
+                        org_id,
+                        None,
+                        "PagerDuty integration requires a Pro plan or higher.",
+                    )
+                    .await);
+                }
+                "pagerduty"
+            }
+            ChannelType::Opsgenie => {
+                if !can_access_feature(&tier_str, "opsgenie") {
+                    return Err(crate::payments::x402_feature_response(
+                        &state,
+                        "opsgenie",
+                        &channel_resource,
+                        org_id,
+                        None,
+                        "OpsGenie integration requires a Team plan or higher.",
+                    )
+                    .await);
+                }
+                "opsgenie"
+            }
         }
     };
+
+    // Validate that the config matches the channel type
+    match (&request.channel_type, &request.config) {
+        (ChannelType::Email, ChannelConfig::Email { .. }) => {}
+        (ChannelType::Webhook, ChannelConfig::Webhook { .. }) => {}
+        (ChannelType::Slack, ChannelConfig::Slack { .. }) => {}
+        (ChannelType::Pagerduty, ChannelConfig::PagerDuty { .. }) => {}
+        (ChannelType::Opsgenie, ChannelConfig::OpsGenie { .. }) => {}
+        _ => {
+            return Err(AppError::BadRequest(
+                "Channel config does not match the channel type".to_string(),
+            ));
+        }
+    }
 
     let config_json = serde_json::to_string(&request.config)
         .map_err(|e| AppError::BadRequest(format!("Invalid config: {}", e)))?;
@@ -609,8 +703,13 @@ pub async fn list_alert_logs_across_projects(
 ) -> AppResult<Json<AlertLogsAcrossProjectsResponse>> {
     // Get projects based on auth type
     let projects = match &*auth {
-        AuthIdentity::User(user) => ProjectRepository::find_by_owner(&state.db, &user.id, 100, 0).await?,
-        AuthIdentity::Agent(agent) => ProjectRepository::find_by_organization(&state.db, &agent.organization_id, 100, 0).await?,
+        AuthIdentity::User(user) => {
+            ProjectRepository::find_by_owner(&state.db, &user.id, 100, 0).await?
+        }
+        AuthIdentity::Agent(agent) => {
+            ProjectRepository::find_by_organization(&state.db, &agent.organization_id, 100, 0)
+                .await?
+        }
     };
 
     if projects.is_empty() {
@@ -666,6 +765,156 @@ pub async fn list_alert_logs_across_projects(
     Ok(Json(AlertLogsAcrossProjectsResponse { data }))
 }
 
+// ============ Alert Rule Mute/Unmute/Test ============
+
+#[derive(Debug, Deserialize)]
+pub struct MuteAlertRequest {
+    pub duration_minutes: i32,
+}
+
+/// POST /api/v1/projects/:project_id/alerts/:alert_id/mute
+pub async fn mute_alert_rule(
+    State(state): State<AppState>,
+    auth: EitherAuth,
+    Path((project_id, alert_id)): Path<(String, String)>,
+    Json(request): Json<MuteAlertRequest>,
+) -> AppResult<Json<AlertRuleResponse>> {
+    if !auth.has_permission("write") {
+        return Err(AppError::Forbidden("write permission required".to_string()));
+    }
+
+    let project = ProjectRepository::find_by_id(&state.db, &project_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Project not found".to_string()))?;
+
+    if !auth.can_access_project(&state.db, &project).await {
+        return Err(AppError::Forbidden("Access denied".to_string()));
+    }
+
+    let rule = AlertRuleRepository::find_by_id(&state.db, &alert_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Alert rule not found".to_string()))?;
+
+    if rule.project_id != project_id {
+        return Err(AppError::NotFound("Alert rule not found".to_string()));
+    }
+
+    if request.duration_minutes <= 0 {
+        return Err(AppError::BadRequest(
+            "duration_minutes must be positive".to_string(),
+        ));
+    }
+
+    let muted_until =
+        chrono::Utc::now() + chrono::Duration::minutes(request.duration_minutes as i64);
+
+    let updated =
+        AlertRuleRepository::mute(&state.db, &alert_id, muted_until, request.duration_minutes)
+            .await
+            .map_err(|e| AppError::Internal(format!("Failed to mute alert rule: {}", e)))?;
+
+    let response = AlertRuleResponse::try_from(updated)
+        .map_err(|e| AppError::Internal(format!("Failed to parse rule: {}", e)))?;
+
+    Ok(Json(response))
+}
+
+/// POST /api/v1/projects/:project_id/alerts/:alert_id/unmute
+pub async fn unmute_alert_rule(
+    State(state): State<AppState>,
+    auth: EitherAuth,
+    Path((project_id, alert_id)): Path<(String, String)>,
+) -> AppResult<Json<AlertRuleResponse>> {
+    if !auth.has_permission("write") {
+        return Err(AppError::Forbidden("write permission required".to_string()));
+    }
+
+    let project = ProjectRepository::find_by_id(&state.db, &project_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Project not found".to_string()))?;
+
+    if !auth.can_access_project(&state.db, &project).await {
+        return Err(AppError::Forbidden("Access denied".to_string()));
+    }
+
+    let rule = AlertRuleRepository::find_by_id(&state.db, &alert_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Alert rule not found".to_string()))?;
+
+    if rule.project_id != project_id {
+        return Err(AppError::NotFound("Alert rule not found".to_string()));
+    }
+
+    let updated = AlertRuleRepository::unmute(&state.db, &alert_id)
+        .await
+        .map_err(|e| AppError::Internal(format!("Failed to unmute alert rule: {}", e)))?;
+
+    let response = AlertRuleResponse::try_from(updated)
+        .map_err(|e| AppError::Internal(format!("Failed to parse rule: {}", e)))?;
+
+    Ok(Json(response))
+}
+
+/// POST /api/v1/projects/:project_id/alerts/:alert_id/test
+pub async fn test_alert_rule(
+    State(state): State<AppState>,
+    auth: EitherAuth,
+    Path((project_id, alert_id)): Path<(String, String)>,
+) -> AppResult<Json<serde_json::Value>> {
+    if !auth.has_permission("write") {
+        return Err(AppError::Forbidden("write permission required".to_string()));
+    }
+
+    let project = ProjectRepository::find_by_id(&state.db, &project_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Project not found".to_string()))?;
+
+    if !auth.can_access_project(&state.db, &project).await {
+        return Err(AppError::Forbidden("Access denied".to_string()));
+    }
+
+    let rule = AlertRuleRepository::find_by_id(&state.db, &alert_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Alert rule not found".to_string()))?;
+
+    if rule.project_id != project_id {
+        return Err(AppError::NotFound("Alert rule not found".to_string()));
+    }
+
+    let channel_ids: Vec<String> = serde_json::from_str(&rule.actions)
+        .map_err(|e| AppError::Internal(format!("Failed to parse channel IDs: {}", e)))?;
+
+    let notification_service = crate::services::notifications::NotificationService::new().await;
+
+    let mut sent_count = 0;
+    let mut errors = Vec::new();
+
+    for channel_id in &channel_ids {
+        let channel = match NotificationChannelRepository::find_by_id(&state.db, channel_id).await {
+            Ok(Some(c)) if c.is_active => c,
+            Ok(Some(_)) => continue,
+            Ok(None) => continue,
+            Err(_) => continue,
+        };
+
+        match notification_service.send_test(&channel).await {
+            Ok(_) => sent_count += 1,
+            Err(e) => errors.push(format!("{}: {}", channel.name, e)),
+        }
+    }
+
+    if !errors.is_empty() {
+        Ok(Json(serde_json::json!({
+            "message": format!("Test sent to {} channels, {} failed", sent_count, errors.len()),
+            "errors": errors,
+        })))
+    } else {
+        Ok(Json(serde_json::json!({
+            "message": format!("Test notification sent to {} channels", sent_count),
+        })))
+    }
+}
+
 /// POST /api/v1/projects/:project_id/channels/:channel_id/test
 pub async fn test_channel(
     State(state): State<AppState>,
@@ -701,5 +950,7 @@ pub async fn test_channel(
         .await
         .map_err(|e| AppError::Internal(format!("Failed to send test: {}", e)))?;
 
-    Ok(Json(serde_json::json!({ "message": "Test notification sent" })))
+    Ok(Json(
+        serde_json::json!({ "message": "Test notification sent" }),
+    ))
 }
