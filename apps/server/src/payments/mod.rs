@@ -65,10 +65,10 @@ pub async fn verify_and_apply_payment(
         }
     }
 
-    // 5. Mark consumed
+    // 5. Mark consumed, recording the verified tx_hash for audit
     state
         .payment_store
-        .mark_consumed(&payment.nonce)
+        .mark_consumed(&payment.nonce, &proof.tx_hash)
         .await
         .map_err(|e| AppError::Internal(format!("DB error: {}", e)))?;
 

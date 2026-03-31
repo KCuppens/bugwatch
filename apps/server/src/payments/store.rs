@@ -122,21 +122,11 @@ impl PaymentStore {
         .await
     }
 
-    pub async fn mark_verified(&self, nonce: &str, tx_hash: &str) -> Result<(), sqlx::Error> {
+    pub async fn mark_consumed(&self, nonce: &str, tx_hash: &str) -> Result<(), sqlx::Error> {
         sqlx::query(
-            "UPDATE agent_payments SET status = 'verified', tx_hash = $1, verified_at = NOW() WHERE nonce = $2",
+            "UPDATE agent_payments SET status = 'consumed', consumed_at = NOW(), tx_hash = $1 WHERE nonce = $2",
         )
         .bind(tx_hash)
-        .bind(nonce)
-        .execute(&self.pool)
-        .await?;
-        Ok(())
-    }
-
-    pub async fn mark_consumed(&self, nonce: &str) -> Result<(), sqlx::Error> {
-        sqlx::query(
-            "UPDATE agent_payments SET status = 'consumed', consumed_at = NOW() WHERE nonce = $1",
-        )
         .bind(nonce)
         .execute(&self.pool)
         .await?;
