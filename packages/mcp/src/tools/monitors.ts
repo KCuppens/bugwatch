@@ -1,4 +1,4 @@
-import { BugwatchClient } from "../client.js";
+import { BugwatchClient, PaymentRequiredError } from "../client.js";
 
 export const monitorToolDefinitions = [
   {
@@ -27,8 +27,7 @@ export const monitorToolDefinitions = [
         },
         interval_seconds: {
           type: "number",
-          description:
-            "Check interval in seconds (default: 60). Minimum 30 seconds.",
+          description: "Check interval in seconds (default: 60). Minimum 30 seconds.",
         },
       },
       required: ["projectId", "name", "url"],
@@ -45,11 +44,18 @@ export async function handleMonitorTool(
     switch (toolName) {
       case "create_monitor": {
         const projectId = args.projectId as string;
+        const intervalSeconds = (args.interval_seconds as number) || 60;
+        if (intervalSeconds < 30) {
+          return {
+            content: [{ type: "text", text: "Error: interval_seconds must be at least 30 seconds." }],
+            isError: true,
+          };
+        }
         const result = await client.createMonitor(projectId, {
           name: args.name as string,
           url: args.url as string,
           method: (args.method as string) || "GET",
-          interval_seconds: (args.interval_seconds as number) || 60,
+          interval_seconds: intervalSeconds,
         });
         return {
           content: [
@@ -68,6 +74,25 @@ export async function handleMonitorTool(
         };
     }
   } catch (error) {
+    if (error instanceof PaymentRequiredError) {
+      return {
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              {
+                error: "payment_required",
+                message: error.message,
+                payment: error.x402,
+              },
+              null,
+              2
+            ),
+          },
+        ],
+      };
+    }
     const message = error instanceof Error ? error.message : String(error);
     return {
       content: [{ type: "text", text: `Error: ${message}` }],

@@ -1,4 +1,4 @@
-import { BugwatchClient } from "../client.js";
+import { BugwatchClient, PaymentRequiredError } from "../client.js";
 
 export const commentToolDefinitions = [
   {
@@ -37,11 +37,7 @@ export async function handleCommentTool(
         const projectId = args.projectId as string;
         const issueId = args.issueId as string;
         const commentContent = args.content as string;
-        const result = await client.addComment(
-          projectId,
-          issueId,
-          commentContent
-        );
+        const result = await client.addComment(projectId, issueId, commentContent);
         return {
           content: [
             {
@@ -59,6 +55,25 @@ export async function handleCommentTool(
         };
     }
   } catch (error) {
+    if (error instanceof PaymentRequiredError) {
+      return {
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              {
+                error: "payment_required",
+                message: error.message,
+                payment: error.x402,
+              },
+              null,
+              2
+            ),
+          },
+        ],
+      };
+    }
     const message = error instanceof Error ? error.message : String(error);
     return {
       content: [{ type: "text", text: `Error: ${message}` }],

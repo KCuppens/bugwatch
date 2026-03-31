@@ -1,10 +1,9 @@
-import { BugwatchClient } from "../client.js";
+import { BugwatchClient, PaymentRequiredError } from "../client.js";
 
 export const alertToolDefinitions = [
   {
     name: "create_alert_rule",
-    description:
-      "Create a new alert rule for a project. Alert rules define conditions that trigger notifications.",
+    description: "Create a new alert rule for a project. Alert rules define conditions that trigger notifications.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -18,8 +17,7 @@ export const alertToolDefinitions = [
         },
         condition: {
           type: "string",
-          description:
-            'The condition that triggers the alert (e.g., "new_error", "error_spike", "monitor_down")',
+          description: 'The condition that triggers the alert (e.g., "new_error", "error_spike", "monitor_down")',
         },
         channel_ids: {
           type: "array",
@@ -63,6 +61,25 @@ export async function handleAlertTool(
         };
     }
   } catch (error) {
+    if (error instanceof PaymentRequiredError) {
+      return {
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              {
+                error: "payment_required",
+                message: error.message,
+                payment: error.x402,
+              },
+              null,
+              2
+            ),
+          },
+        ],
+      };
+    }
     const message = error instanceof Error ? error.message : String(error);
     return {
       content: [{ type: "text", text: `Error: ${message}` }],

@@ -1,9 +1,4 @@
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import {
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
-} from "@modelcontextprotocol/sdk/types.js";
-import { BugwatchClient } from "../client.js";
+import { BugwatchClient, PaymentRequiredError } from "../client.js";
 
 export const issueToolDefinitions = [
   {
@@ -73,8 +68,7 @@ export const issueToolDefinitions = [
   },
   {
     name: "get_issue_frequency",
-    description:
-      "Get the event frequency data for an issue over time. Useful for understanding trends and spikes.",
+    description: "Get the event frequency data for an issue over time. Useful for understanding trends and spikes.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -106,11 +100,7 @@ export async function handleIssueTool(
         const level = args.level as string | undefined;
 
         // Always use the search endpoint which supports text + filters
-        const result = await client.searchIssues(
-          projectId,
-          query || "",
-          { status, level }
-        );
+        const result = await client.searchIssues(projectId, query || "", { status, level });
 
         return {
           content: [
@@ -190,6 +180,25 @@ export async function handleIssueTool(
         };
     }
   } catch (error) {
+    if (error instanceof PaymentRequiredError) {
+      return {
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              {
+                error: "payment_required",
+                message: error.message,
+                payment: error.x402,
+              },
+              null,
+              2
+            ),
+          },
+        ],
+      };
+    }
     const message = error instanceof Error ? error.message : String(error);
     return {
       content: [{ type: "text", text: `Error: ${message}` }],
