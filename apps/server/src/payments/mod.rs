@@ -208,32 +208,23 @@ pub async fn x402_feature_response(
         &nonce,
     );
     let amount = crate::payments::challenge::PaymentPricing::for_feature(feature) as i64;
-    // Store the challenge in background (non-blocking)
-    let store = state.payment_store.clone();
-    let nonce_clone = nonce.clone();
-    let org_id_owned = org_id.to_string();
-    let resource_owned = resource.to_string();
-    let feature_owned = feature.to_string();
-    let agent_key_id_owned = agent_key_id.map(|s| s.to_string());
-    tokio::spawn(async move {
-        if let Err(e) = store
-            .create_feature_challenge(
-                &nonce_clone,
-                &org_id_owned,
-                agent_key_id_owned.as_deref(),
-                &resource_owned,
-                &feature_owned,
-                amount,
-                300,
-            )
-            .await
-        {
-            tracing::warn!("Failed to store x402 challenge: {}", e);
+    match state
+        .payment_store
+        .create_feature_challenge(&nonce, org_id, agent_key_id, resource, feature, amount, 300)
+        .await
+    {
+        Ok(_) => crate::AppError::PaymentRequiredWithChallenge {
+            message: error_msg.to_string(),
+            challenge: serde_json::json!(challenge),
+        },
+        Err(e) => {
+            tracing::warn!(
+                "Failed to persist x402 challenge for nonce {}: {}",
+                nonce,
+                e
+            );
+            crate::AppError::PaymentRequired(error_msg.to_string())
         }
-    });
-    crate::AppError::PaymentRequiredWithChallenge {
-        message: error_msg.to_string(),
-        challenge: serde_json::json!(challenge),
     }
 }
 

@@ -142,32 +142,39 @@ pub async fn ingest_segment(
                         &tier_str,
                         &nonce,
                     );
-                    let store = state.payment_store.clone();
-                    let nonce_c = nonce.clone();
-                    let org_id_c = org_id.clone();
-                    let tier_str_c = tier_str.clone();
-                    tokio::spawn(async move {
-                        let _ = store
-                            .create_capacity_challenge(
-                                &nonce_c,
-                                &org_id_c,
-                                None,
-                                "/api/v1/replay/segments",
+                    match state
+                        .payment_store
+                        .create_capacity_challenge(
+                            &nonce,
+                            &org_id,
+                            None,
+                            "/api/v1/replay/segments",
+                            "storage_bytes",
+                            segment_quantity,
+                            crate::payments::challenge::PaymentPricing::for_capacity_grant(
                                 "storage_bytes",
+                                &tier_str,
                                 segment_quantity,
-                                crate::payments::challenge::PaymentPricing::for_capacity_grant(
-                                    "storage_bytes",
-                                    &tier_str_c,
-                                    segment_quantity,
-                                ) as i64,
-                                300,
-                            )
-                            .await;
-                    });
-                    return Err(AppError::PaymentRequiredWithChallenge {
-                        message: msg,
-                        challenge: serde_json::json!(challenge),
-                    });
+                            ) as i64,
+                            300,
+                        )
+                        .await
+                    {
+                        Ok(_) => {
+                            return Err(AppError::PaymentRequiredWithChallenge {
+                                message: msg,
+                                challenge: serde_json::json!(challenge),
+                            })
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                "Failed to persist x402 challenge for nonce {}: {}",
+                                nonce,
+                                e
+                            );
+                            return Err(AppError::PaymentRequired(msg));
+                        }
+                    }
                 }
                 return Err(AppError::PaymentRequired(msg));
             }

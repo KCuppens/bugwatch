@@ -7,63 +7,19 @@ use tracing::warn;
 
 use crate::{
     api::{PaginatedResponse, PaginationMeta, PaginationParams},
-    auth::{EitherAuth, AuthIdentity},
+    auth::{AuthIdentity, EitherAuth},
     billing::tiers::{get_tier_limits, Tier},
     db::{
         models::{Monitor, MonitorCheck, MonitorIncident},
-        repositories::{MonitorCheckRepository, MonitorIncidentRepository, MonitorRepository, OrganizationRepository, ProjectRepository},
+        repositories::{
+            MonitorCheckRepository, MonitorIncidentRepository, MonitorRepository,
+            OrganizationRepository, ProjectRepository,
+        },
     },
     AppError, AppResult, AppState,
 };
 
-/// Validate that a monitor URL is safe (no SSRF to internal networks)
-fn validate_monitor_url(url_str: &str) -> Result<(), crate::AppError> {
-    let parsed = url::Url::parse(url_str)
-        .map_err(|_| crate::AppError::BadRequest("Invalid URL format".to_string()))?;
-
-    // Require http or https scheme
-    match parsed.scheme() {
-        "http" | "https" => {}
-        _ => return Err(crate::AppError::BadRequest("URL must use http or https scheme".to_string())),
-    }
-
-    // Get the host
-    let host = parsed.host_str()
-        .ok_or_else(|| crate::AppError::BadRequest("URL must have a host".to_string()))?;
-
-    // Block localhost and loopback
-    let blocked_hosts = ["localhost", "127.0.0.1", "0.0.0.0", "[::1]", "[::]"];
-    if blocked_hosts.iter().any(|&h| host.eq_ignore_ascii_case(h)) {
-        return Err(crate::AppError::BadRequest("URL cannot target localhost or loopback addresses".to_string()));
-    }
-
-    // Try to parse as IP and block private/reserved ranges
-    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
-        let is_blocked = match ip {
-            std::net::IpAddr::V4(ipv4) => {
-                ipv4.is_loopback()           // 127.0.0.0/8
-                || ipv4.is_private()         // 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16
-                || ipv4.is_link_local()      // 169.254.0.0/16
-                || ipv4.is_unspecified()     // 0.0.0.0
-                || ipv4.octets()[0] == 169 && ipv4.octets()[1] == 254  // link-local / cloud metadata
-            }
-            std::net::IpAddr::V6(ipv6) => {
-                ipv6.is_loopback()
-                || ipv6.is_unspecified()
-            }
-        };
-        if is_blocked {
-            return Err(crate::AppError::BadRequest("URL cannot target private, loopback, or link-local addresses".to_string()));
-        }
-    }
-
-    // Block well-known cloud metadata endpoints
-    if host == "169.254.169.254" || host == "metadata.google.internal" {
-        return Err(crate::AppError::BadRequest("URL cannot target cloud metadata endpoints".to_string()));
-    }
-
-    Ok(())
-}
+use crate::utils::validate_monitor_url;
 
 /// Request to create a monitor
 #[derive(Debug, Deserialize)]
@@ -164,14 +120,23 @@ pub async fn list_across_projects(
 ) -> AppResult<Json<MonitorsAcrossProjectsResponse>> {
     // Get all user's projects
     let projects = match &*auth {
-        AuthIdentity::User(user) => ProjectRepository::find_by_owner(&state.db, &user.id, 100, 0).await?,
-        AuthIdentity::Agent(agent) => ProjectRepository::find_by_organization(&state.db, &agent.organization_id, 100, 0).await?,
+        AuthIdentity::User(user) => {
+            ProjectRepository::find_by_owner(&state.db, &user.id, 100, 0).await?
+        }
+        AuthIdentity::Agent(agent) => {
+            ProjectRepository::find_by_organization(&state.db, &agent.organization_id, 100, 0)
+                .await?
+        }
     };
 
     if projects.is_empty() {
         return Ok(Json(MonitorsAcrossProjectsResponse {
             data: vec![],
-            summary: MonitorsSummary { total: 0, up: 0, down: 0 },
+            summary: MonitorsSummary {
+                total: 0,
+                up: 0,
+                down: 0,
+            },
         }));
     }
 
@@ -239,7 +204,11 @@ pub async fn list_across_projects(
 
     Ok(Json(MonitorsAcrossProjectsResponse {
         data: monitor_responses,
-        summary: MonitorsSummary { total, up: up_count, down: down_count },
+        summary: MonitorsSummary {
+            total,
+            up: up_count,
+            down: down_count,
+        },
     }))
 }
 
@@ -264,8 +233,13 @@ pub async fn create(
     }
 
     // Enforce monitor limit based on tier (counted across all org projects)
-    let tier_str = OrganizationRepository::get_project_tier(&state.db, &project_id).await
-        .unwrap_or_else(|_| "free".to_string());
+    let monitor_org = OrganizationRepository::find_by_project_id(&state.db, &project_id)
+        .await
+        .unwrap_or(None);
+    let tier_str = monitor_org
+        .as_ref()
+        .map(|o| o.tier.clone())
+        .unwrap_or_else(|| "free".to_string());
     let tier = Tier::from_str(&tier_str);
     let limits = get_tier_limits(tier);
     if limits.monitor_limit >= 0 {
@@ -273,22 +247,81 @@ pub async fn create(
             AuthIdentity::User(user) => user.id.clone(),
             AuthIdentity::Agent(_) => project.owner_id.clone(),
         };
-        let current_count = MonitorRepository::count_by_owner(&state.db, &owner_id).await
+        let current_count = MonitorRepository::count_by_owner(&state.db, &owner_id)
+            .await
             .map_err(|e| AppError::Internal(format!("Failed to count monitors: {}", e)))?;
-        if current_count >= limits.monitor_limit as i64 {
-            return Err(AppError::PaymentRequired(format!(
-                "Monitor limit reached ({}/{}). Upgrade your plan to add more monitors.",
-                current_count, limits.monitor_limit
-            )));
+        let x402_extra_monitors = monitor_org
+            .as_ref()
+            .map(|o| o.x402_extra_monitors as i64)
+            .unwrap_or(0);
+        let effective_limit = limits.monitor_limit as i64 + x402_extra_monitors;
+        if current_count >= effective_limit {
+            let msg = format!(
+                "Monitor limit reached ({}/{}). Upgrade your plan or pay to add a monitor slot.",
+                current_count, effective_limit
+            );
+            let org_id = monitor_org
+                .as_ref()
+                .map(|o| o.id.clone())
+                .unwrap_or_default();
+            let resource = format!("/api/v1/projects/{}/monitors", project_id);
+            if state.config.x402_enabled && !state.config.deployment_mode.is_self_hosted() {
+                let nonce = uuid::Uuid::new_v4().to_string();
+                let challenge = crate::payments::challenge::build_capacity_challenge(
+                    &state.config.x402_wallet_address,
+                    &state.config.x402_usdc_address,
+                    &resource,
+                    "monitor",
+                    1,
+                    &tier_str,
+                    &nonce,
+                );
+                match state
+                    .payment_store
+                    .create_capacity_challenge(
+                        &nonce,
+                        &org_id,
+                        None,
+                        &resource,
+                        "monitor",
+                        1,
+                        crate::payments::challenge::PaymentPricing::for_capacity_grant(
+                            "monitor", &tier_str, 1,
+                        ) as i64,
+                        300,
+                    )
+                    .await
+                {
+                    Ok(_) => {
+                        return Err(AppError::PaymentRequiredWithChallenge {
+                            message: msg,
+                            challenge: serde_json::json!(challenge),
+                        })
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "Failed to persist x402 challenge for nonce {}: {}",
+                            nonce,
+                            e
+                        );
+                        return Err(AppError::PaymentRequired(msg));
+                    }
+                }
+            }
+            return Err(AppError::PaymentRequired(msg));
         }
     }
 
     // Input length validation
     if request.name.len() > 200 {
-        return Err(AppError::BadRequest("Monitor name too long (max 200 characters)".to_string()));
+        return Err(AppError::BadRequest(
+            "Monitor name too long (max 200 characters)".to_string(),
+        ));
     }
     if request.url.len() > 2048 {
-        return Err(AppError::BadRequest("Monitor URL too long (max 2048 characters)".to_string()));
+        return Err(AppError::BadRequest(
+            "Monitor URL too long (max 2048 characters)".to_string(),
+        ));
     }
 
     // Validate URL (scheme + SSRF protection)
@@ -296,7 +329,9 @@ pub async fn create(
 
     // Validate interval (minimum 30 seconds)
     if request.interval_seconds < 30 {
-        return Err(AppError::BadRequest("Interval must be at least 30 seconds".to_string()));
+        return Err(AppError::BadRequest(
+            "Interval must be at least 30 seconds".to_string(),
+        ));
     }
 
     let headers_str = serde_json::to_string(&request.headers)
@@ -341,9 +376,10 @@ pub async fn list(
         return Err(AppError::Forbidden("Access denied".to_string()));
     }
 
-    let (monitors, total) = MonitorRepository::list_by_project(&state.db, &project_id, params.page, params.per_page)
-        .await
-        .map_err(|e| AppError::Internal(format!("Failed to list monitors: {}", e)))?;
+    let (monitors, total) =
+        MonitorRepository::list_by_project(&state.db, &project_id, params.page, params.per_page)
+            .await
+            .map_err(|e| AppError::Internal(format!("Failed to list monitors: {}", e)))?;
 
     // Fetch stats for each monitor
     let mut monitor_responses = Vec::with_capacity(monitors.len());
@@ -362,7 +398,10 @@ pub async fn list(
                 (None, None)
             }
             Err(e) => {
-                warn!("Failed to get uptime stats for monitor {}: {}", monitor.id, e);
+                warn!(
+                    "Failed to get uptime stats for monitor {}: {}",
+                    monitor.id, e
+                );
                 (None, None)
             }
         };
@@ -481,12 +520,16 @@ pub async fn update(
     // Input length validation
     if let Some(ref name) = request.name {
         if name.len() > 200 {
-            return Err(AppError::BadRequest("Monitor name too long (max 200 characters)".to_string()));
+            return Err(AppError::BadRequest(
+                "Monitor name too long (max 200 characters)".to_string(),
+            ));
         }
     }
     if let Some(ref url) = request.url {
         if url.len() > 2048 {
-            return Err(AppError::BadRequest("Monitor URL too long (max 2048 characters)".to_string()));
+            return Err(AppError::BadRequest(
+                "Monitor URL too long (max 2048 characters)".to_string(),
+            ));
         }
     }
 
@@ -498,7 +541,9 @@ pub async fn update(
     // Validate interval if provided
     if let Some(interval) = request.interval_seconds {
         if interval < 30 {
-            return Err(AppError::BadRequest("Interval must be at least 30 seconds".to_string()));
+            return Err(AppError::BadRequest(
+                "Interval must be at least 30 seconds".to_string(),
+            ));
         }
     }
 
@@ -583,7 +628,9 @@ pub async fn delete(
         .await
         .map_err(|e| AppError::Internal(format!("Failed to delete monitor: {}", e)))?;
 
-    Ok(Json(serde_json::json!({ "message": "Monitor deleted successfully" })))
+    Ok(Json(
+        serde_json::json!({ "message": "Monitor deleted successfully" }),
+    ))
 }
 
 /// GET /api/v1/projects/:project_id/monitors/:monitor_id/checks
