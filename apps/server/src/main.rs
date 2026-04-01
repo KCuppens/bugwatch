@@ -271,6 +271,7 @@ fn create_app(state: AppState) -> Router {
                 HeaderName::from_static("x-bugwatch-sdk"),
                 HeaderName::from_static("x-bugwatch-sdk-version"),
                 HeaderName::from_static("x-bugwatch-agent"),
+                HeaderName::from_static("x-payment"),
             ])
             .allow_credentials(false)
     } else if state.config.allowed_origins.is_empty() {
@@ -297,6 +298,7 @@ fn create_app(state: AppState) -> Router {
                 HeaderName::from_static("x-bugwatch-sdk"),
                 HeaderName::from_static("x-bugwatch-sdk-version"),
                 HeaderName::from_static("x-bugwatch-agent"),
+                HeaderName::from_static("x-payment"),
             ])
             .allow_credentials(true)
     } else {
@@ -326,6 +328,7 @@ fn create_app(state: AppState) -> Router {
                 HeaderName::from_static("x-bugwatch-sdk"),
                 HeaderName::from_static("x-bugwatch-sdk-version"),
                 HeaderName::from_static("x-bugwatch-agent"),
+                HeaderName::from_static("x-payment"),
             ])
             .allow_credentials(true)
     };
