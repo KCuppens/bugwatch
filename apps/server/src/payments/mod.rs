@@ -135,70 +135,7 @@ pub async fn verify_and_apply_payment(
     Ok(payment.payment_type)
 }
 
-/// Atomically increments org's x402 capacity column. Retention capped at 365 days.
-pub async fn apply_capacity_grant(
-    db: &sqlx::PgPool,
-    org_id: &str,
-    grant_type: &str,
-    quantity: i64,
-) -> Result<(), AppError> {
-    let qty_i32 = i32::try_from(quantity).map_err(|_| {
-        AppError::Internal("Grant quantity exceeds maximum allowed value".to_string())
-    })?;
-
-    match grant_type {
-        "project" => {
-            sqlx::query(
-                "UPDATE organizations SET x402_extra_projects = LEAST(x402_extra_projects + $1, 50) WHERE id = $2"
-            )
-            .bind(qty_i32)
-            .bind(org_id)
-            .execute(db)
-            .await
-            .map_err(|e| AppError::Internal(format!("DB error: {}", e)))?;
-        }
-        "monitor" => {
-            sqlx::query(
-                "UPDATE organizations SET x402_extra_monitors = LEAST(x402_extra_monitors + $1, 100) WHERE id = $2"
-            )
-            .bind(qty_i32)
-            .bind(org_id)
-            .execute(db)
-            .await
-            .map_err(|e| AppError::Internal(format!("DB error: {}", e)))?;
-        }
-        "storage_bytes" => {
-            sqlx::query(
-                "UPDATE organizations SET x402_extra_storage_bytes = x402_extra_storage_bytes + $1 WHERE id = $2"
-            )
-            .bind(quantity)
-            .bind(org_id)
-            .execute(db)
-            .await
-            .map_err(|e| AppError::Internal(format!("DB error: {}", e)))?;
-        }
-        "retention_days" => {
-            // Cap at 365 total
-            sqlx::query(
-                "UPDATE organizations SET x402_extra_retention_days = LEAST(x402_extra_retention_days + $1, 365) WHERE id = $2"
-            )
-            .bind(qty_i32)
-            .bind(org_id)
-            .execute(db)
-            .await
-            .map_err(|e| AppError::Internal(format!("DB error: {}", e)))?;
-        }
-        _ => {
-            return Err(AppError::Internal(format!(
-                "Unknown grant_type: {}",
-                grant_type
-            )))
-        }
-    }
-    Ok(())
-}
-
-/// Like `apply_capacity_grant` but runs inside an existing sqlx transaction.
+/// Atomically increments org's x402 capacity column inside an existing sqlx transaction.
 pub async fn apply_capacity_grant_in_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     org_id: &str,

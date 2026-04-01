@@ -229,6 +229,10 @@ pub fn can_access_feature(tier: &str, feature: &str) -> bool {
         "sso" => limits.features.sso,
         "audit_logs" => limits.features.audit_logs,
         "custom_domain" => limits.features.custom_domain,
+        // API access (agent keys, MCP, OpenAPI) — requires Pro+ (same gate as server_monitoring)
+        "api_access" => limits.features.server_monitoring,
+        // Advanced alerting (multi-condition rules, escalation chains) — requires Team+ (same gate as opsgenie)
+        "advanced_alerting" => limits.features.opsgenie,
         _ => false,
     }
 }
