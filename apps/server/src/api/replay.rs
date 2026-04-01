@@ -124,10 +124,14 @@ pub async fn ingest_segment(
             let effective_storage = limits.replay_storage_bytes + x402_extra_storage;
 
             if current_usage.0 >= effective_storage {
-                let org_id = replay_org
-                    .as_ref()
-                    .map(|o| o.id.clone())
-                    .unwrap_or_default();
+                let org_id = match replay_org.as_ref().map(|o| o.id.clone()) {
+                    Some(id) if !id.is_empty() => id,
+                    _ => {
+                        return Err(AppError::PaymentRequired(
+                            "Resource limit reached. Upgrade your plan.".to_string(),
+                        ))
+                    }
+                };
                 let segment_quantity = 1_048_576i64; // 1MB default segment estimate
                 let msg = "Replay storage limit exceeded. Upgrade your plan or pay to add storage."
                     .to_string();

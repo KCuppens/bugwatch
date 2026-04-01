@@ -54,10 +54,11 @@ impl OnChainVerifier {
         // Topic[0] = keccak256("Transfer(address,address,uint256)")
         // = 0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef
         let transfer_topic = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
-        let expected_to_padded = format!(
-            "0x000000000000000000000000{}",
-            &expected_to[2..].to_lowercase()
-        );
+        let addr_without_prefix = expected_to
+            .strip_prefix("0x")
+            .or_else(|| expected_to.strip_prefix("0X"))
+            .unwrap_or(expected_to);
+        let expected_to_padded = format!("0x{:0>64}", addr_without_prefix.to_lowercase());
 
         let logs = receipt
             .get("logs")

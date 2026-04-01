@@ -260,10 +260,14 @@ pub async fn create(
                 "Monitor limit reached ({}/{}). Upgrade your plan or pay to add a monitor slot.",
                 current_count, effective_limit
             );
-            let org_id = monitor_org
-                .as_ref()
-                .map(|o| o.id.clone())
-                .unwrap_or_default();
+            let org_id = match monitor_org.as_ref().map(|o| o.id.clone()) {
+                Some(id) if !id.is_empty() => id,
+                _ => {
+                    return Err(AppError::PaymentRequired(
+                        "Resource limit reached. Upgrade your plan.".to_string(),
+                    ))
+                }
+            };
             let resource = format!("/api/v1/projects/{}/monitors", project_id);
             if state.config.x402_enabled && !state.config.deployment_mode.is_self_hosted() {
                 let nonce = uuid::Uuid::new_v4().to_string();

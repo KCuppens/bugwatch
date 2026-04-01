@@ -161,7 +161,14 @@ pub async fn create(
                 .as_ref()
                 .map(|o| o.tier.clone())
                 .unwrap_or_else(|| "free".to_string());
-            let org_id = org.as_ref().map(|o| o.id.clone()).unwrap_or_default();
+            let org_id = match org.as_ref().map(|o| o.id.clone()) {
+                Some(id) if !id.is_empty() => id,
+                _ => {
+                    return Err(AppError::PaymentRequired(
+                        "Resource limit reached. Upgrade your plan.".to_string(),
+                    ))
+                }
+            };
             if state.config.x402_enabled && !state.config.deployment_mode.is_self_hosted() {
                 let nonce = uuid::Uuid::new_v4().to_string();
                 let challenge = crate::payments::challenge::build_capacity_challenge(
