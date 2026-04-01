@@ -6,13 +6,14 @@ use uuid::Uuid;
 pub struct EventRepository;
 
 impl EventRepository {
+    /// Insert an event, returning None if a duplicate event_id already exists.
     pub async fn create(
         pool: &DbPool,
         issue_id: &str,
         event_id: &str,
         timestamp: DateTime<Utc>,
         payload: &str,
-    ) -> Result<Event> {
+    ) -> Result<Option<Event>> {
         let id = Uuid::new_v4().to_string();
         let now = Utc::now();
 
@@ -20,6 +21,7 @@ impl EventRepository {
             r#"
             INSERT INTO events (id, issue_id, event_id, timestamp, payload, processed_at)
             VALUES ($1, $2, $3, $4, $5, $6)
+            ON CONFLICT (event_id) DO NOTHING
             RETURNING *
             "#,
         )
@@ -29,7 +31,7 @@ impl EventRepository {
         .bind(timestamp)
         .bind(payload)
         .bind(now)
-        .fetch_one(pool)
+        .fetch_optional(pool)
         .await
         .map_err(Into::into)
     }
@@ -104,12 +106,24 @@ impl EventRepository {
         Ok(count > 0)
     }
 
-    /// Cleanup old events to prevent database bloat
-    pub async fn cleanup_old_events(pool: &DbPool, days: i32) -> Result<u64> {
+    /// Cleanup old events to prevent database bloat.
+    /// Each organization's effective retention is `base_days + o.x402_extra_retention_days`,
+    /// so orgs that paid for extended retention via x402 micropayments keep their events longer.
+    pub async fn cleanup_old_events(pool: &DbPool, base_days: i32) -> Result<u64> {
         let result = sqlx::query(
-            "DELETE FROM events WHERE timestamp < NOW() - INTERVAL '1 day' * $1",
+            r#"
+            DELETE FROM events
+            WHERE id IN (
+                SELECT e.id
+                FROM events e
+                JOIN issues i ON e.issue_id = i.id
+                JOIN projects p ON i.project_id = p.id
+                JOIN organizations o ON p.organization_id = o.id
+                WHERE e.created_at < NOW() - make_interval(days => $1 + o.x402_extra_retention_days)
+            )
+            "#,
         )
-        .bind(days)
+        .bind(base_days)
         .execute(pool)
         .await?;
 

@@ -122,17 +122,6 @@ impl PaymentStore {
         .await
     }
 
-    pub async fn mark_consumed(&self, nonce: &str, tx_hash: &str) -> Result<(), sqlx::Error> {
-        sqlx::query(
-            "UPDATE agent_payments SET status = 'consumed', consumed_at = NOW(), tx_hash = $1 WHERE nonce = $2",
-        )
-        .bind(tx_hash)
-        .bind(nonce)
-        .execute(&self.pool)
-        .await?;
-        Ok(())
-    }
-
     pub async fn expire_old(&self) -> Result<u64, sqlx::Error> {
         let result = sqlx::query(
             "UPDATE agent_payments SET status = 'expired' WHERE status IN ('pending', 'verified') AND expires_at < NOW()",

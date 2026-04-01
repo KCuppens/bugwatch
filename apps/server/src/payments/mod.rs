@@ -93,12 +93,14 @@ pub async fn verify_and_apply_payment(
     .execute(&mut *db_tx)
     .await
     .map_err(|e| {
-        let msg = e.to_string();
-        if msg.contains("idx_agent_payments_tx_hash") || msg.to_lowercase().contains("unique") {
-            AppError::Unauthorized("Transaction hash already used for another payment".to_string())
-        } else {
-            AppError::Internal(format!("DB error: {}", e))
+        if let sqlx::Error::Database(ref db_err) = e {
+            if db_err.code().as_deref() == Some("23505") {
+                return AppError::Unauthorized(
+                    "Transaction hash already used for another payment".to_string(),
+                );
+            }
         }
+        AppError::Internal(format!("DB error: {}", e))
     })?;
 
     db_tx
