@@ -28,6 +28,7 @@ pub async fn verify_and_apply_payment(
     state: &AppState,
     proof: &PaymentProof,
     org_id: &str,
+    request_path: &str,
 ) -> Result<String, AppError> {
     // 1. Atomically claim the pending nonce (sets status = 'verified', checks expiry in SQL)
     let payment = state
@@ -42,6 +43,13 @@ pub async fn verify_and_apply_payment(
     if payment.organization_id != org_id {
         return Err(AppError::Unauthorized(
             "Payment nonce belongs to different organization".to_string(),
+        ));
+    }
+
+    // Check that the payment nonce was issued for this resource
+    if !payment.resource.is_empty() && payment.resource != request_path {
+        return Err(AppError::Unauthorized(
+            "Payment challenge was issued for a different resource".to_string(),
         ));
     }
 
@@ -103,10 +111,26 @@ pub async fn verify_and_apply_payment(
         AppError::Internal(format!("DB error: {}", e))
     })?;
 
-    db_tx
-        .commit()
-        .await
-        .map_err(|e| AppError::Internal(format!("DB error: {}", e)))?;
+    if let Err(e) = db_tx.commit().await {
+        // The transaction rolled back — capacity was NOT granted but on-chain payment is real.
+        // Log enough info for manual operator recovery.
+        tracing::error!(
+            nonce = %payment.nonce,
+            tx_hash = %proof.tx_hash,
+            org_id = %org_id,
+            payment_type = %payment.payment_type,
+            grant_type = ?payment.grant_type,
+            grant_quantity = ?payment.grant_quantity,
+            error = %e,
+            "CRITICAL: x402 payment verified on-chain but DB commit failed. \
+             Manual recovery required: apply capacity grant for this org."
+        );
+        return Err(AppError::Internal(
+            "Payment was confirmed on-chain but could not be recorded. \
+             Please contact support with your transaction hash for manual recovery."
+                .to_string(),
+        ));
+    }
 
     Ok(payment.payment_type)
 }
@@ -252,9 +276,11 @@ pub async fn x402_payment_middleware(
                     // Try to find org_id from request headers (X-API-Key agent auth)
                     // We look it up from the DB via the API key
                     // DB lookup only happens after X-Payment header is present AND decoded successfully
+                    let request_path = req.uri().path().to_string();
                     let org_id = get_org_id_from_request(&state, &req).await;
                     if let Some(org_id) = org_id {
-                        match verify_and_apply_payment(&state, &proof, &org_id).await {
+                        match verify_and_apply_payment(&state, &proof, &org_id, &request_path).await
+                        {
                             Ok(payment_type) if payment_type == "feature_access" => {
                                 // Feature payment verified: bypass tier checks
                                 // Add a flag to request extensions so tier_guard can detect bypass
