@@ -335,7 +335,7 @@ pub async fn list_recordings(
                 return Err(crate::payments::x402_feature_response(
                     &state,
                     features::SESSION_REPLAY,
-                    "/api/v1/projects/{project_id}/replay",
+                    &format!("/api/v1/projects/{}/replay", project_id),
                     &org.id,
                     None,
                     &format!(
@@ -390,7 +390,7 @@ pub async fn get_recording(
                 return Err(crate::payments::x402_feature_response(
                     &state,
                     features::SESSION_REPLAY,
-                    "/api/v1/projects/{project_id}/replay",
+                    &format!("/api/v1/projects/{}/replay", project_id),
                     &org.id,
                     None,
                     &format!(
@@ -443,7 +443,7 @@ pub async fn get_segments(
                 return Err(crate::payments::x402_feature_response(
                     &state,
                     features::SESSION_REPLAY,
-                    "/api/v1/projects/{project_id}/replay",
+                    &format!("/api/v1/projects/{}/replay", project_id),
                     &org.id,
                     None,
                     &format!(
@@ -508,7 +508,7 @@ pub async fn get_issue_replay(
                 return Err(crate::payments::x402_feature_response(
                     &state,
                     features::SESSION_REPLAY,
-                    "/api/v1/projects/{project_id}/replay",
+                    &format!("/api/v1/projects/{}/replay", project_id),
                     &org.id,
                     None,
                     &format!(
