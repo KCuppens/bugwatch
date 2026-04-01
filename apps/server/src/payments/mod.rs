@@ -56,19 +56,53 @@ pub async fn verify_and_apply_payment(
                 .map_err(|_| AppError::Internal("Invalid payment amount in DB".to_string()))?,
         )
         .await
-        .map_err(|e| AppError::PaymentRequired(format!("Payment verification failed: {}", e)))?;
+        .map_err(|e| {
+            tracing::warn!(
+                "x402 on-chain verification failed for nonce {}: {}",
+                payment.nonce,
+                e
+            );
+            AppError::PaymentRequired(
+                "Payment verification failed. Ensure the transaction is confirmed on Base mainnet."
+                    .to_string(),
+            )
+        })?;
 
-    // 4. For capacity grants: atomically increment org quota
+    // 3. Begin DB transaction: capacity grant + mark_consumed are atomic.
+    // If mark_consumed fails (e.g. tx_hash unique constraint), the grant rolls back too.
+    let mut db_tx = state
+        .db
+        .begin()
+        .await
+        .map_err(|e| AppError::Internal(format!("DB error: {}", e)))?;
+
+    // 4. For capacity grants: atomically increment org quota inside the transaction
     if payment.payment_type == "capacity_grant" {
         if let (Some(grant_type), Some(quantity)) = (&payment.grant_type, payment.grant_quantity) {
-            apply_capacity_grant(&state.db, org_id, grant_type, quantity).await?;
+            apply_capacity_grant_in_tx(&mut db_tx, org_id, grant_type, quantity).await?;
         }
     }
 
-    // 5. Mark consumed, recording the verified tx_hash for audit
-    state
-        .payment_store
-        .mark_consumed(&payment.nonce, &proof.tx_hash)
+    // 5. Mark consumed inside the same transaction, recording the verified tx_hash for audit.
+    // The UNIQUE index on tx_hash prevents the same on-chain tx from satisfying two nonces.
+    sqlx::query(
+        "UPDATE agent_payments SET status = 'consumed', consumed_at = NOW(), tx_hash = $1 WHERE nonce = $2",
+    )
+    .bind(&proof.tx_hash)
+    .bind(&payment.nonce)
+    .execute(&mut *db_tx)
+    .await
+    .map_err(|e| {
+        let msg = e.to_string();
+        if msg.contains("idx_agent_payments_tx_hash") || msg.to_lowercase().contains("unique") {
+            AppError::Unauthorized("Transaction hash already used for another payment".to_string())
+        } else {
+            AppError::Internal(format!("DB error: {}", e))
+        }
+    })?;
+
+    db_tx
+        .commit()
         .await
         .map_err(|e| AppError::Internal(format!("DB error: {}", e)))?;
 
@@ -125,6 +159,68 @@ pub async fn apply_capacity_grant(
             .bind(qty_i32)
             .bind(org_id)
             .execute(db)
+            .await
+            .map_err(|e| AppError::Internal(format!("DB error: {}", e)))?;
+        }
+        _ => {
+            return Err(AppError::Internal(format!(
+                "Unknown grant_type: {}",
+                grant_type
+            )))
+        }
+    }
+    Ok(())
+}
+
+/// Like `apply_capacity_grant` but runs inside an existing sqlx transaction.
+pub async fn apply_capacity_grant_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org_id: &str,
+    grant_type: &str,
+    quantity: i64,
+) -> Result<(), AppError> {
+    let qty_i32 = i32::try_from(quantity).map_err(|_| {
+        AppError::Internal("Grant quantity exceeds maximum allowed value".to_string())
+    })?;
+
+    match grant_type {
+        "project" => {
+            sqlx::query(
+                "UPDATE organizations SET x402_extra_projects = LEAST(x402_extra_projects + $1, 50) WHERE id = $2"
+            )
+            .bind(qty_i32)
+            .bind(org_id)
+            .execute(&mut **tx)
+            .await
+            .map_err(|e| AppError::Internal(format!("DB error: {}", e)))?;
+        }
+        "monitor" => {
+            sqlx::query(
+                "UPDATE organizations SET x402_extra_monitors = LEAST(x402_extra_monitors + $1, 100) WHERE id = $2"
+            )
+            .bind(qty_i32)
+            .bind(org_id)
+            .execute(&mut **tx)
+            .await
+            .map_err(|e| AppError::Internal(format!("DB error: {}", e)))?;
+        }
+        "storage_bytes" => {
+            sqlx::query(
+                "UPDATE organizations SET x402_extra_storage_bytes = x402_extra_storage_bytes + $1 WHERE id = $2"
+            )
+            .bind(quantity)
+            .bind(org_id)
+            .execute(&mut **tx)
+            .await
+            .map_err(|e| AppError::Internal(format!("DB error: {}", e)))?;
+        }
+        "retention_days" => {
+            sqlx::query(
+                "UPDATE organizations SET x402_extra_retention_days = LEAST(x402_extra_retention_days + $1, 365) WHERE id = $2"
+            )
+            .bind(qty_i32)
+            .bind(org_id)
+            .execute(&mut **tx)
             .await
             .map_err(|e| AppError::Internal(format!("DB error: {}", e)))?;
         }

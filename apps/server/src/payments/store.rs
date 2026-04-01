@@ -135,7 +135,7 @@ impl PaymentStore {
 
     pub async fn expire_old(&self) -> Result<u64, sqlx::Error> {
         let result = sqlx::query(
-            "UPDATE agent_payments SET status = 'expired' WHERE status = 'pending' AND expires_at < NOW()",
+            "UPDATE agent_payments SET status = 'expired' WHERE status IN ('pending', 'verified') AND expires_at < NOW()",
         )
         .execute(&self.pool)
         .await?;
