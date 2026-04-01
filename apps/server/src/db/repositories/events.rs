@@ -119,7 +119,7 @@ impl EventRepository {
                 JOIN issues i ON e.issue_id = i.id
                 JOIN projects p ON i.project_id = p.id
                 JOIN organizations o ON p.organization_id = o.id
-                WHERE e.created_at < NOW() - make_interval(days => $1 + o.x402_extra_retention_days)
+                WHERE e.timestamp < NOW() - make_interval(days => $1 + o.x402_extra_retention_days)
             )
             "#,
         )
