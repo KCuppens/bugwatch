@@ -16,6 +16,11 @@ pub fn verify_password(password: &str, hash: &str) -> AppResult<bool> {
 
 /// Validate password requirements
 pub fn validate_password(password: &str) -> AppResult<()> {
+    if password.len() > 128 {
+        return Err(AppError::Validation(
+            "Password must be at most 128 characters".to_string(),
+        ));
+    }
     if password.len() < 8 {
         return Err(AppError::Validation(
             "Password must be at least 8 characters".to_string(),

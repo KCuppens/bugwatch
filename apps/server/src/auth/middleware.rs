@@ -33,18 +33,28 @@ impl FromRequestParts<AppState> for AuthUser {
         // Use state directly since we have AppState
         let app_state = state;
 
-        // Extract Authorization header
-        let auth_header = parts
+        // Extract token: prefer Authorization header, fall back to httpOnly cookie.
+        let token_from_header = parts
             .headers
             .get(AUTHORIZATION)
-            .ok_or_else(|| AppError::Unauthorized("Missing Authorization header".to_string()))?
-            .to_str()
-            .map_err(|_| AppError::Unauthorized("Invalid Authorization header".to_string()))?;
+            .and_then(|v| v.to_str().ok())
+            .and_then(|h| h.strip_prefix("Bearer "));
 
-        // Extract Bearer token
-        let token = auth_header
-            .strip_prefix("Bearer ")
-            .ok_or_else(|| AppError::Unauthorized("Invalid Authorization format".to_string()))?;
+        let token_from_cookie = || -> Option<&str> {
+            parts
+                .headers
+                .get(axum::http::header::COOKIE)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|cookies| {
+                    cookies
+                        .split(';')
+                        .find_map(|c| c.trim().strip_prefix("access_token="))
+                })
+        };
+
+        let token = token_from_header
+            .or_else(token_from_cookie)
+            .ok_or_else(|| AppError::Unauthorized("Missing authentication".to_string()))?;
 
         // Validate token
         let claims = validate_access_token(token, &app_state.config.jwt_secret)?;

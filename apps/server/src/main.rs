@@ -251,9 +251,17 @@ fn create_app(state: AppState) -> Router {
     let cors = if state.config.allowed_origins.is_empty()
         && state.config.environment == "development"
     {
-        // Development only: allow all origins
+        // Development: allow the frontend origin with credentials (for httpOnly cookies).
+        // Can't use Any with allow_credentials(true), so derive from app_url or default.
+        let dev_origin = state
+            .config
+            .app_url
+            .replace("/api", "")
+            .trim_end_matches('/')
+            .parse::<HeaderValue>()
+            .unwrap_or_else(|_| "http://localhost:3001".parse().unwrap());
         CorsLayer::new()
-            .allow_origin(Any)
+            .allow_origin(dev_origin)
             .allow_methods([
                 Method::GET,
                 Method::POST,
@@ -273,7 +281,7 @@ fn create_app(state: AppState) -> Router {
                 HeaderName::from_static("x-bugwatch-agent"),
                 HeaderName::from_static("x-payment"),
             ])
-            .allow_credentials(false)
+            .allow_credentials(true)
     } else if state.config.allowed_origins.is_empty() {
         // Non-development with no origins configured: restrictive default
         tracing::warn!("No ALLOWED_ORIGINS configured in non-development mode. CORS will reject cross-origin requests.");

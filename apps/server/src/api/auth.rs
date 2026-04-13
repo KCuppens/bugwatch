@@ -1,4 +1,8 @@
-use axum::{extract::State, http::HeaderMap, Json};
+use axum::{
+    extract::State,
+    http::{header, HeaderMap, HeaderValue},
+    Json,
+};
 use chrono::{Duration, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -11,6 +15,44 @@ use crate::{
     db::repositories::{OrganizationRepository, SessionRepository, UserRepository},
     AppError, AppResult, AppState,
 };
+
+/// Build Set-Cookie headers for httpOnly token cookies.
+/// SameSite=Strict prevents CSRF. The refresh cookie is scoped to `/api/v1/auth`
+/// so it's never sent on normal API calls.
+fn build_auth_cookies(
+    access_token: &str,
+    refresh_token: &str,
+    access_max_age: i64,
+    refresh_max_age: i64,
+    secure: bool,
+) -> Vec<HeaderValue> {
+    let secure_flag = if secure { "; Secure" } else { "" };
+    vec![
+        HeaderValue::from_str(&format!(
+            "access_token={access_token}; HttpOnly; SameSite=Strict; Path=/{secure_flag}; Max-Age={access_max_age}"
+        ))
+        .unwrap_or_else(|_| HeaderValue::from_static("")),
+        HeaderValue::from_str(&format!(
+            "refresh_token={refresh_token}; HttpOnly; SameSite=Strict; Path=/api/v1/auth{secure_flag}; Max-Age={refresh_max_age}"
+        ))
+        .unwrap_or_else(|_| HeaderValue::from_static("")),
+    ]
+}
+
+/// Build Set-Cookie headers that clear auth cookies (for logout).
+fn build_clear_cookies(secure: bool) -> Vec<HeaderValue> {
+    let secure_flag = if secure { "; Secure" } else { "" };
+    vec![
+        HeaderValue::from_str(&format!(
+            "access_token=; HttpOnly; SameSite=Strict; Path=/{secure_flag}; Max-Age=0"
+        ))
+        .unwrap_or_else(|_| HeaderValue::from_static("")),
+        HeaderValue::from_str(&format!(
+            "refresh_token=; HttpOnly; SameSite=Strict; Path=/api/v1/auth{secure_flag}; Max-Age=0"
+        ))
+        .unwrap_or_else(|_| HeaderValue::from_static("")),
+    ]
+}
 
 /// Extract client IP from request headers (X-Forwarded-For or fallback)
 fn extract_client_ip(headers: &HeaderMap) -> String {
@@ -114,7 +156,7 @@ pub async fn signup(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(req): Json<SignupRequest>,
-) -> AppResult<Json<AuthResponse>> {
+) -> AppResult<(HeaderMap, Json<AuthResponse>)> {
     // Rate limit per IP
     check_auth_rate_limit(&state, &headers)?;
 
@@ -140,15 +182,20 @@ pub async fn signup(
         .await
         .map_err(|e| AppError::Internal(format!("Failed to create user: {}", e)))?;
 
-    // Create session
+    // Create session with client context
     let session_expires = Utc::now() + Duration::seconds(state.config.jwt_refresh_expiration);
+    let client_ip = extract_client_ip(&headers);
+    let user_agent = headers
+        .get("user-agent")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
     let session = SessionRepository::create(
         &state.db,
         &user.id,
         &user.id, // Temporary token placeholder
         session_expires,
-        None,
-        None,
+        Some(&client_ip),
+        user_agent.as_deref(),
     )
     .await
     .map_err(|e| AppError::Internal(format!("Failed to create session: {}", e)))?;
@@ -169,17 +216,32 @@ pub async fn signup(
 
     tracing::info!("New user registered: {}", user.email);
 
-    Ok(Json(AuthResponse {
-        data: AuthData {
-            user: UserResponse {
-                id: user.id,
-                email: user.email,
-                name: user.name,
-                created_at: user.created_at.to_rfc3339(),
+    let secure = state.config.app_url.starts_with("https");
+    let mut response_headers = HeaderMap::new();
+    for cookie in build_auth_cookies(
+        &tokens.access_token,
+        &tokens.refresh_token,
+        state.config.jwt_access_expiration,
+        state.config.jwt_refresh_expiration,
+        secure,
+    ) {
+        response_headers.append(header::SET_COOKIE, cookie);
+    }
+
+    Ok((
+        response_headers,
+        Json(AuthResponse {
+            data: AuthData {
+                user: UserResponse {
+                    id: user.id,
+                    email: user.email,
+                    name: user.name,
+                    created_at: user.created_at.to_rfc3339(),
+                },
+                tokens: tokens.into(),
             },
-            tokens: tokens.into(),
-        },
-    }))
+        }),
+    ))
 }
 
 /// POST /api/v1/auth/login
@@ -187,7 +249,7 @@ pub async fn login(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(req): Json<LoginRequest>,
-) -> AppResult<Json<AuthResponse>> {
+) -> AppResult<(HeaderMap, Json<AuthResponse>)> {
     // Rate limit per IP
     check_auth_rate_limit(&state, &headers)?;
 
@@ -219,12 +281,23 @@ pub async fn login(
     // Reset failed attempts on successful login
     UserRepository::reset_failed_attempts(&state.db, &user.id).await?;
 
-    // Create session
+    // Create session with client IP and User-Agent for security auditing
     let session_expires = Utc::now() + Duration::seconds(state.config.jwt_refresh_expiration);
-    let session =
-        SessionRepository::create(&state.db, &user.id, &user.id, session_expires, None, None)
-            .await
-            .map_err(|e| AppError::Internal(format!("Failed to create session: {}", e)))?;
+    let client_ip = extract_client_ip(&headers);
+    let user_agent = headers
+        .get("user-agent")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+    let session = SessionRepository::create(
+        &state.db,
+        &user.id,
+        &user.id,
+        session_expires,
+        Some(&client_ip),
+        user_agent.as_deref(),
+    )
+    .await
+    .map_err(|e| AppError::Internal(format!("Failed to create session: {}", e)))?;
 
     // Generate tokens
     let tokens = generate_tokens(
@@ -242,31 +315,53 @@ pub async fn login(
 
     tracing::info!("User logged in: {}", user.email);
 
-    Ok(Json(AuthResponse {
-        data: AuthData {
-            user: UserResponse {
-                id: user.id,
-                email: user.email,
-                name: user.name,
-                created_at: user.created_at.to_rfc3339(),
+    let secure = state.config.app_url.starts_with("https");
+    let mut response_headers = HeaderMap::new();
+    for cookie in build_auth_cookies(
+        &tokens.access_token,
+        &tokens.refresh_token,
+        state.config.jwt_access_expiration,
+        state.config.jwt_refresh_expiration,
+        secure,
+    ) {
+        response_headers.append(header::SET_COOKIE, cookie);
+    }
+
+    Ok((
+        response_headers,
+        Json(AuthResponse {
+            data: AuthData {
+                user: UserResponse {
+                    id: user.id,
+                    email: user.email,
+                    name: user.name,
+                    created_at: user.created_at.to_rfc3339(),
+                },
+                tokens: tokens.into(),
             },
-            tokens: tokens.into(),
-        },
-    }))
+        }),
+    ))
 }
 
 /// POST /api/v1/auth/logout
 pub async fn logout(
     State(state): State<AppState>,
     user: AuthUser,
-) -> AppResult<Json<serde_json::Value>> {
+) -> AppResult<(HeaderMap, Json<serde_json::Value>)> {
     // Delete all sessions for user (logout from all devices)
     SessionRepository::delete_by_user(&state.db, &user.id).await?;
 
     tracing::info!("User logged out: {}", user.email);
 
-    Ok(Json(
-        serde_json::json!({ "data": { "message": "Logged out successfully" } }),
+    let secure = state.config.app_url.starts_with("https");
+    let mut response_headers = HeaderMap::new();
+    for cookie in build_clear_cookies(secure) {
+        response_headers.append(header::SET_COOKIE, cookie);
+    }
+
+    Ok((
+        response_headers,
+        Json(serde_json::json!({ "data": { "message": "Logged out successfully" } })),
     ))
 }
 
@@ -275,7 +370,7 @@ pub async fn refresh(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(req): Json<RefreshRequest>,
-) -> AppResult<Json<RefreshResponse>> {
+) -> AppResult<(HeaderMap, Json<RefreshResponse>)> {
     // Rate limit per IP
     check_auth_rate_limit(&state, &headers)?;
 
@@ -301,15 +396,20 @@ pub async fn refresh(
     // Delete old session
     SessionRepository::delete(&state.db, &session_id).await?;
 
-    // Create new session
+    // Create new session with client context
     let new_session_expires = Utc::now() + Duration::seconds(state.config.jwt_refresh_expiration);
+    let refresh_ip = extract_client_ip(&headers);
+    let refresh_ua = headers
+        .get("user-agent")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
     let new_session = SessionRepository::create(
         &state.db,
         &claims.sub,
         &claims.sub,
         new_session_expires,
-        None,
-        None,
+        Some(&refresh_ip),
+        refresh_ua.as_deref(),
     )
     .await
     .map_err(|e| AppError::Internal(format!("Failed to create session: {}", e)))?;
@@ -328,13 +428,28 @@ pub async fn refresh(
         .await
         .map_err(|e| AppError::Internal(format!("Failed to update session token: {}", e)))?;
 
-    Ok(Json(RefreshResponse {
-        data: RefreshData {
-            access_token: tokens.access_token,
-            refresh_token: tokens.refresh_token,
-            expires_in: tokens.expires_in,
-        },
-    }))
+    let secure = state.config.app_url.starts_with("https");
+    let mut response_headers = HeaderMap::new();
+    for cookie in build_auth_cookies(
+        &tokens.access_token,
+        &tokens.refresh_token,
+        state.config.jwt_access_expiration,
+        state.config.jwt_refresh_expiration,
+        secure,
+    ) {
+        response_headers.append(header::SET_COOKIE, cookie);
+    }
+
+    Ok((
+        response_headers,
+        Json(RefreshResponse {
+            data: RefreshData {
+                access_token: tokens.access_token,
+                refresh_token: tokens.refresh_token,
+                expires_in: tokens.expires_in,
+            },
+        }),
+    ))
 }
 
 #[derive(Debug, Serialize)]

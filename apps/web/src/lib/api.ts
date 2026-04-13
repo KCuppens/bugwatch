@@ -100,6 +100,7 @@ export async function refreshTokens(): Promise<boolean> {
         headers: {
           "Content-Type": "application/json",
         },
+        credentials: "include",
         body: JSON.stringify({ refresh_token: refreshToken }),
       });
 
@@ -194,21 +195,25 @@ async function fetchWithAuth(
     ...(options.headers || {}),
   };
 
-  let response = await fetch(url, { ...options, headers });
+  // Include credentials so httpOnly cookies are sent automatically.
+  // The Authorization header is still set as a fallback for SSR / CLI / agents.
+  let response = await fetch(url, { ...options, headers, credentials: "include" });
 
-  // If 401 and we have a refresh token, try to refresh and retry
+  // If 401 and we have a refresh token (localStorage or cookie), try to refresh and retry
   if (response.status === 401) {
     const hasRefreshToken = typeof window !== "undefined" && localStorage.getItem("refresh_token");
-    if (hasRefreshToken) {
+    // Always attempt refresh — even without a localStorage token, the httpOnly
+    // refresh cookie may be present.
+    if (hasRefreshToken || typeof window !== "undefined") {
       const refreshed = await refreshTokens();
       if (refreshed) {
-        // Retry with new token
+        // Retry with new token (headers may have updated from localStorage)
         const newHeaders = {
           "Content-Type": "application/json",
           ...getAuthHeaders(),
           ...(options.headers || {}),
         };
-        response = await fetch(url, { ...options, headers: newHeaders });
+        response = await fetch(url, { ...options, headers: newHeaders, credentials: "include" });
       }
     }
   }

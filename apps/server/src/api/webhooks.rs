@@ -121,6 +121,20 @@ fn verify_stripe_signature(payload: &[u8], signature_header: &str, secret: &str)
         return false;
     }
 
+    // Reject replayed webhooks older than 5 minutes
+    if let Ok(ts) = timestamp.parse::<i64>() {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+        if (now - ts).abs() > 300 {
+            tracing::warn!("Stripe webhook rejected: timestamp too old ({ts})");
+            return false;
+        }
+    } else {
+        return false;
+    }
+
     // Build the signed payload
     let signed_payload = format!("{}.{}", timestamp, String::from_utf8_lossy(payload));
 
