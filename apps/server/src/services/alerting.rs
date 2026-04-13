@@ -145,7 +145,7 @@ impl AlertingService {
 
                 self.send_alert(&rule.id, &rule.actions, &payload).await;
             } else {
-                info!(
+                tracing::debug!(
                     "Alert rule '{}' does not match (condition: {:?})",
                     rule.name, condition
                 );
@@ -162,7 +162,7 @@ impl AlertingService {
         monitor: &Monitor,
         error_message: Option<&str>,
     ) -> Result<()> {
-        info!(
+        tracing::debug!(
             "on_monitor_down triggered for monitor '{}' ({})",
             monitor.name, monitor.id
         );
@@ -170,13 +170,13 @@ impl AlertingService {
         let project = match ProjectRepository::find_by_id(&self.pool, project_id).await? {
             Some(p) => p,
             None => {
-                info!("Project {} not found, skipping alerts", project_id);
+                tracing::debug!("Project {} not found, skipping alerts", project_id);
                 return Ok(());
             }
         };
 
         let rules = AlertRuleRepository::list_active_by_project(&self.pool, project_id).await?;
-        info!(
+        tracing::debug!(
             "Found {} active alert rules for project {}",
             rules.len(),
             project_id
@@ -200,7 +200,7 @@ impl AlertingService {
             };
 
             if matches {
-                info!("Alert rule '{}' matches monitor_down condition", rule.name);
+                tracing::debug!("Alert rule '{}' matches monitor_down condition", rule.name);
                 let message = match error_message {
                     Some(e) => format!("{} is DOWN: {}", monitor.name, e),
                     None => format!("{} is DOWN", monitor.name),
@@ -227,7 +227,7 @@ impl AlertingService {
 
                 self.send_alert(&rule.id, &rule.actions, &payload).await;
             } else {
-                info!(
+                tracing::debug!(
                     "Alert rule '{}' does not match (condition type: {:?})",
                     rule.name, condition
                 );

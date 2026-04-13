@@ -157,6 +157,7 @@ impl ProjectRepository {
             .bind(id)
             .execute(pool)
             .await?;
+        project_cache().remove(id);
         Ok(new_key)
     }
 
@@ -181,6 +182,7 @@ impl ProjectRepository {
             .bind(id)
             .execute(pool)
             .await?;
+        project_cache().remove(id);
         Ok(())
     }
 
@@ -189,6 +191,7 @@ impl ProjectRepository {
             .bind(id)
             .execute(pool)
             .await?;
+        project_cache().remove(id);
         Ok(())
     }
 }

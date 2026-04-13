@@ -73,15 +73,14 @@ impl OrganizationRepository {
             }
         }
 
-        // Single query: prefer owned org, fall back to membership.
-        // Collapses the old two-query pattern (check owned, then check member).
+        // Single query: find org where user is owner OR member.
+        // ORDER BY (owner_id = $1) DESC ensures owned orgs sort first (TRUE > FALSE).
         let result = sqlx::query_as::<_, Organization>(
             r#"
-            SELECT * FROM organizations WHERE owner_id = $1
-            UNION ALL
-            SELECT o.* FROM organizations o
-            JOIN organization_members om ON o.id = om.organization_id
-            WHERE om.user_id = $1
+            SELECT * FROM organizations
+            WHERE owner_id = $1
+               OR id IN (SELECT organization_id FROM organization_members WHERE user_id = $1)
+            ORDER BY (owner_id = $1) DESC
             LIMIT 1
             "#,
         )
@@ -96,15 +95,18 @@ impl OrganizationRepository {
     /// Update organization name
     pub async fn update_name(pool: &DbPool, id: &str, name: &str) -> Result<Organization> {
         let now = chrono::Utc::now();
-        sqlx::query_as::<_, Organization>(
+        let result = sqlx::query_as::<_, Organization>(
             "UPDATE organizations SET name = $1, updated_at = $2 WHERE id = $3 RETURNING *",
         )
         .bind(name)
         .bind(&now)
         .bind(id)
         .fetch_one(pool)
-        .await
-        .map_err(Into::into)
+        .await?;
+        // Org cache is keyed by user_id; clear all entries since we only have org_id here.
+        // Mutations are rare so a full clear is fine.
+        org_user_cache().clear();
+        Ok(result)
     }
 
     /// Update subscription details (called from Stripe webhook)
@@ -121,7 +123,7 @@ impl OrganizationRepository {
         cancel_at_period_end: bool,
     ) -> Result<Organization> {
         let now = chrono::Utc::now();
-        sqlx::query_as::<_, Organization>(
+        let result = sqlx::query_as::<_, Organization>(
             r#"
             UPDATE organizations SET
                 tier = $1,
@@ -148,8 +150,9 @@ impl OrganizationRepository {
         .bind(&now)
         .bind(id)
         .fetch_one(pool)
-        .await
-        .map_err(Into::into)
+        .await?;
+        org_user_cache().clear();
+        Ok(result)
     }
 
     /// Set Stripe customer ID
