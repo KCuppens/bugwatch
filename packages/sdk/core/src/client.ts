@@ -160,6 +160,7 @@ export class Bugwatch implements BugwatchClient {
 
     // Sample rate check
     if (Math.random() > (this.options.sampleRate || 1.0)) {
+      try { this.options.onDropped?.("", "sample_rate"); } catch { /* */ }
       return "";
     }
 
@@ -191,6 +192,7 @@ export class Bugwatch implements BugwatchClient {
       if (this.options.debug) {
         console.log("[Bugwatch] Event dropped by beforeSend");
       }
+      try { this.options.onDropped?.(event.event_id, "before_send"); } catch { /* */ }
       return "";
     }
 

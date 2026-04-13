@@ -102,6 +102,12 @@ let lazyInitWarned = false;
  * ```
  */
 export function init(options?: Partial<import("./types").BugwatchOptions>): import("./client").Bugwatch {
+  // Prevent silent double-init — return existing client with a warning
+  if (globalClient) {
+    console.warn("[Bugwatch] init() called twice. Returning existing client. Call reset() first to re-initialize.");
+    return globalClient;
+  }
+
   // Merge env config with explicit options (explicit takes precedence)
   const envConfig = getEnvConfig();
   const mergedOptions = { ...envConfig, ...options };

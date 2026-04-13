@@ -60,6 +60,19 @@ async function main() {
   const serverResources = buildServerResourceHandlers(client);
   const alertResources = buildAlertResourceHandlers(client);
 
+  // Cache project list to avoid a network round-trip on every resource listing.
+  let projectListCache: { data: Awaited<ReturnType<typeof client.listProjects>>["data"]; ts: number } | null = null;
+  const PROJECT_LIST_TTL_MS = 60_000;
+
+  async function getCachedProjects() {
+    if (projectListCache && Date.now() - projectListCache.ts < PROJECT_LIST_TTL_MS) {
+      return projectListCache.data;
+    }
+    const res = await client.listProjects(1, 100);
+    projectListCache = { data: res.data, ts: Date.now() };
+    return res.data;
+  }
+
   server.setRequestHandler(ListResourcesRequestSchema, async () => {
     const resources = [
       {
@@ -72,8 +85,8 @@ async function main() {
 
     // Dynamically list per-project resources
     try {
-      const projectsResponse = await client.listProjects(1, 100);
-      for (const project of projectsResponse.data) {
+      const projects = await getCachedProjects();
+      for (const project of projects) {
         resources.push(
           {
             uri: `bugwatch://projects/${project.id}`,

@@ -299,25 +299,23 @@ export async function onRequestError(
 /**
  * Sanitize headers to remove sensitive information
  */
+const SENSITIVE_HEADER_KEYS = new Set([
+  "authorization",
+  "cookie",
+  "x-api-key",
+  "x-auth-token",
+  "x-csrf-token",
+]);
+
 function sanitizeHeaders(
   headers: Record<string, string>
 ): Record<string, string> {
-  const sensitiveKeys = [
-    "authorization",
-    "cookie",
-    "x-api-key",
-    "x-auth-token",
-    "x-csrf-token",
-  ];
-
   const sanitized: Record<string, string> = {};
 
   for (const [key, value] of Object.entries(headers)) {
-    if (sensitiveKeys.includes(key.toLowerCase())) {
-      sanitized[key] = "[Filtered]";
-    } else {
-      sanitized[key] = value;
-    }
+    sanitized[key] = SENSITIVE_HEADER_KEYS.has(key.toLowerCase())
+      ? "[Filtered]"
+      : value;
   }
 
   return sanitized;

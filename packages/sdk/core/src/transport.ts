@@ -120,7 +120,10 @@ export class HttpTransport implements Transport {
           // Re-send via the standard path, but skip persistent queue on failure
           // to avoid an infinite re-queue loop.
           await this.sendWithRetry(event, 0, /* persistOnFailure */ false).catch(() => undefined);
-          await new Promise((r) => setTimeout(r, DRAIN_RATE_DELAY_MS));
+          await new Promise((r) => {
+            const t = setTimeout(r, DRAIN_RATE_DELAY_MS);
+            if (typeof t === "object" && "unref" in t) (t as NodeJS.Timeout).unref();
+          });
         }
       } finally {
         this.drainPromise = null;
@@ -134,6 +137,7 @@ export class HttpTransport implements Transport {
       if (this.debug) {
         console.warn("[Bugwatch] Rate limited, dropping event:", event.event_id);
       }
+      try { this.onDropped?.(event.event_id, "rate_limited"); } catch { /* */ }
       return;
     }
 
@@ -239,6 +243,7 @@ export class HttpTransport implements Transport {
           // Queue itself failed — silent drop, never crash the host app
         }
       }
+      try { this.onDropped?.(event.event_id, "network_error"); } catch { /* */ }
       // Don't throw - we don't want SDK errors to break the application
     }
   }
@@ -275,7 +280,11 @@ export class HttpTransport implements Transport {
               "Authorization": `Bearer ${this.apiKey}`,
               "X-Bugwatch-SDK": "bugwatch-core",
             },
-            body: JSON.stringify(event),
+            body: JSON.stringify(
+              event.spans && event.spans.length > 200
+                ? { ...event, spans: event.spans.slice(0, 200) }
+                : event
+            ),
             ...(controller && { signal: controller.signal }),
           });
 

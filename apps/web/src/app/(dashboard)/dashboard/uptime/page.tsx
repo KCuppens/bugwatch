@@ -405,7 +405,9 @@ export default function UptimePage() {
       }
     }
 
-    interval = setInterval(fetchMonitors, 30000);
+    if (!document.hidden) {
+      interval = setInterval(fetchMonitors, 30000);
+    }
     document.addEventListener("visibilitychange", handleVisibility);
 
     return () => {
