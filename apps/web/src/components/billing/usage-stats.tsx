@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Activity, Zap, Bot, AlertTriangle } from 'lucide-react';
+import { Activity, Zap, AlertTriangle } from 'lucide-react';
 import { billingApi, type UsageRecord } from '@/lib/api';
 import { getTierRateLimit, type Tier } from '@/hooks/use-feature';
 
@@ -54,10 +54,6 @@ export function UsageStats({ tier }: UsageStatsProps) {
   const eventsLimit = getTierRateLimit(tier) * 60 * 24 * 30; // Monthly estimate
   const eventsUsed = getUsageByMetric('events');
   const eventsPercent = Math.min((eventsUsed / eventsLimit) * 100, 100);
-
-  const aiFixesIncluded = tier === 'free' ? 0 : tier === 'pro' ? 10 : tier === 'team' ? 50 : 100;
-  const aiFixesUsed = getUsageByMetric('ai_fixes');
-  const aiFixesPercent = aiFixesIncluded > 0 ? Math.min((aiFixesUsed / aiFixesIncluded) * 100, 100) : 0;
 
   if (loading) {
     return (
@@ -119,27 +115,6 @@ export function UsageStats({ tier }: UsageStatsProps) {
           <Progress value={eventsPercent} className="h-2" />
           <p className="text-xs text-muted-foreground">
             Rate limit: {getTierRateLimit(tier).toLocaleString()} events/minute
-          </p>
-        </div>
-
-        {/* AI Fixes */}
-        <div className="space-y-2">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Bot className="h-4 w-4 text-purple-500" />
-              <span className="text-sm font-medium">AI Fixes Used</span>
-            </div>
-            <span className="text-sm text-muted-foreground">
-              {aiFixesUsed} / {aiFixesIncluded > 0 ? aiFixesIncluded : 'Pay as you go'}
-            </span>
-          </div>
-          {aiFixesIncluded > 0 && (
-            <Progress value={aiFixesPercent} className="h-2" />
-          )}
-          <p className="text-xs text-muted-foreground">
-            {aiFixesIncluded > 0
-              ? `${aiFixesIncluded} included per month, then $1.50 each`
-              : '$1.50 per AI fix (buy credits to use)'}
           </p>
         </div>
 

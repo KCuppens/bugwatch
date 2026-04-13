@@ -8,9 +8,7 @@ use sha2::Sha256;
 use tracing::{error, info, warn};
 
 use crate::{
-    db::repositories::{
-        BillingEventRepository, CreditPurchaseRepository, OrganizationRepository, UserRepository,
-    },
+    db::repositories::{BillingEventRepository, OrganizationRepository},
     AppState,
 };
 
@@ -21,17 +19,19 @@ pub async fn stripe_webhook(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    let webhook_secret = state
-        .config
-        .stripe_webhook_secret
-        .as_ref()
-        .ok_or((StatusCode::INTERNAL_SERVER_ERROR, "Webhook secret not configured".to_string()))?;
+    let webhook_secret = state.config.stripe_webhook_secret.as_ref().ok_or((
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "Webhook secret not configured".to_string(),
+    ))?;
 
     // Get Stripe signature header
     let signature = headers
         .get("stripe-signature")
         .and_then(|v| v.to_str().ok())
-        .ok_or((StatusCode::BAD_REQUEST, "Missing Stripe signature".to_string()))?;
+        .ok_or((
+            StatusCode::BAD_REQUEST,
+            "Missing Stripe signature".to_string(),
+        ))?;
 
     // Verify webhook signature
     if !verify_stripe_signature(&body, signature, webhook_secret) {
@@ -42,8 +42,28 @@ pub async fn stripe_webhook(
     let payload: serde_json::Value = serde_json::from_slice(&body)
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid JSON: {}", e)))?;
 
-    let event_type = payload["type"].as_str().unwrap_or("unknown");
-    let event_id = payload["id"].as_str().unwrap_or("unknown");
+    let event_type = payload["type"].as_str().ok_or((
+        StatusCode::BAD_REQUEST,
+        "Missing event type in webhook payload".to_string(),
+    ))?;
+    let event_id = payload["id"].as_str().ok_or((
+        StatusCode::BAD_REQUEST,
+        "Missing event ID in webhook payload".to_string(),
+    ))?;
+
+    // Basic schema validation
+    if !event_id.starts_with("evt_") {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Invalid event ID format".to_string(),
+        ));
+    }
+    if !event_type.contains('.') {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Invalid event type format".to_string(),
+        ));
+    }
 
     info!("Received Stripe webhook: {} ({})", event_type, event_id);
 
@@ -71,9 +91,6 @@ pub async fn stripe_webhook(
         }
         "customer.subscription.deleted" => {
             handle_subscription_deleted(&state, &payload).await?;
-        }
-        "payment_intent.succeeded" => {
-            handle_payment_intent_succeeded(&state, &payload).await?;
         }
         _ => {
             warn!("Unhandled webhook event type: {}", event_type);
@@ -108,12 +125,15 @@ fn verify_stripe_signature(payload: &[u8], signature_header: &str, secret: &str)
     let signed_payload = format!("{}.{}", timestamp, String::from_utf8_lossy(payload));
 
     // Compute expected signature
-    let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).expect("HMAC can take key of any size");
+    let mut mac =
+        Hmac::<Sha256>::new_from_slice(secret.as_bytes()).expect("HMAC can take key of any size");
     mac.update(signed_payload.as_bytes());
-    let expected = hex::encode(mac.finalize().into_bytes());
 
-    // Constant-time comparison
-    expected == signature
+    // Use hmac's built-in constant-time verification via subtle crate
+    match hex::decode(signature) {
+        Ok(sig_bytes) => mac.verify_slice(&sig_bytes).is_ok(),
+        Err(_) => false,
+    }
 }
 
 /// Handle checkout.session.completed - New subscription created
@@ -122,6 +142,12 @@ async fn handle_checkout_completed(
     payload: &serde_json::Value,
 ) -> Result<(), (StatusCode, String)> {
     let session = &payload["data"]["object"];
+    if session.is_null() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Missing data.object in checkout event".to_string(),
+        ));
+    }
     let customer_id = session["customer"].as_str().unwrap_or("");
     let subscription_id = session["subscription"].as_str();
 
@@ -133,14 +159,22 @@ async fn handle_checkout_completed(
     let org = OrganizationRepository::find_by_stripe_customer(&state.db, customer_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or((StatusCode::NOT_FOUND, "Organization not found for customer".to_string()))?;
+        .ok_or((
+            StatusCode::NOT_FOUND,
+            "Organization not found for customer".to_string(),
+        ))?;
 
     if let Some(sub_id) = subscription_id {
         // Fetch subscription details from Stripe to get tier and seats
         if let Some(stripe) = &state.stripe {
             let subscription = stripe::Subscription::retrieve(
                 &stripe::Client::new(state.config.stripe_secret_key.clone().unwrap_or_default()),
-                &sub_id.parse().map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Invalid subscription ID: {}", e)))?,
+                &sub_id.parse().map_err(|e| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("Invalid subscription ID: {}", e),
+                    )
+                })?,
                 &[],
             )
             .await
@@ -148,19 +182,26 @@ async fn handle_checkout_completed(
 
             // Determine tier from price ID
             let tier = determine_tier_from_subscription(&state.config, &subscription);
-            let seats = subscription.items.data.first()
+            let seats = subscription
+                .items
+                .data
+                .first()
                 .map(|item| item.quantity.unwrap_or(1) as i32)
                 .unwrap_or(1);
 
             // Get billing interval
-            let interval = subscription.items.data.first()
+            let interval = subscription
+                .items
+                .data
+                .first()
                 .and_then(|item| item.price.as_ref())
                 .and_then(|price| price.recurring.as_ref())
                 .map(|r| format!("{:?}", r.interval).to_lowercase());
 
             // Get period dates
-            let period_start = chrono::DateTime::from_timestamp(subscription.current_period_start, 0)
-                .map(|dt| dt.with_timezone(&chrono::Utc));
+            let period_start =
+                chrono::DateTime::from_timestamp(subscription.current_period_start, 0)
+                    .map(|dt| dt.with_timezone(&chrono::Utc));
             let period_end = chrono::DateTime::from_timestamp(subscription.current_period_end, 0)
                 .map(|dt| dt.with_timezone(&chrono::Utc));
 
@@ -197,6 +238,12 @@ async fn handle_invoice_paid(
     event_id: &str,
 ) -> Result<(), (StatusCode, String)> {
     let invoice = &payload["data"]["object"];
+    if invoice.is_null() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Missing data.object in invoice event".to_string(),
+        ));
+    }
     let customer_id = invoice["customer"].as_str().unwrap_or("");
     let amount_paid = invoice["amount_paid"].as_i64().unwrap_or(0) as i32;
 
@@ -205,7 +252,9 @@ async fn handle_invoice_paid(
     }
 
     // Find organization
-    if let Ok(Some(org)) = OrganizationRepository::find_by_stripe_customer(&state.db, customer_id).await {
+    if let Ok(Some(org)) =
+        OrganizationRepository::find_by_stripe_customer(&state.db, customer_id).await
+    {
         // Record billing event
         BillingEventRepository::create(
             &state.db,
@@ -232,13 +281,21 @@ async fn handle_invoice_payment_failed(
     event_id: &str,
 ) -> Result<(), (StatusCode, String)> {
     let invoice = &payload["data"]["object"];
+    if invoice.is_null() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Missing data.object in invoice event".to_string(),
+        ));
+    }
     let customer_id = invoice["customer"].as_str().unwrap_or("");
 
     if customer_id.is_empty() {
         return Ok(());
     }
 
-    if let Ok(Some(org)) = OrganizationRepository::find_by_stripe_customer(&state.db, customer_id).await {
+    if let Ok(Some(org)) =
+        OrganizationRepository::find_by_stripe_customer(&state.db, customer_id).await
+    {
         // Record billing event
         BillingEventRepository::create(
             &state.db,
@@ -266,16 +323,26 @@ async fn handle_subscription_updated(
     payload: &serde_json::Value,
 ) -> Result<(), (StatusCode, String)> {
     let subscription = &payload["data"]["object"];
+    if subscription.is_null() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Missing data.object in subscription event".to_string(),
+        ));
+    }
     let customer_id = subscription["customer"].as_str().unwrap_or("");
     let subscription_id = subscription["id"].as_str().unwrap_or("");
     let status = subscription["status"].as_str().unwrap_or("active");
-    let cancel_at_period_end = subscription["cancel_at_period_end"].as_bool().unwrap_or(false);
+    let cancel_at_period_end = subscription["cancel_at_period_end"]
+        .as_bool()
+        .unwrap_or(false);
 
     if customer_id.is_empty() {
         return Ok(());
     }
 
-    if let Ok(Some(org)) = OrganizationRepository::find_by_stripe_customer(&state.db, customer_id).await {
+    if let Ok(Some(org)) =
+        OrganizationRepository::find_by_stripe_customer(&state.db, customer_id).await
+    {
         // Get quantity (seats) from subscription items
         let seats = subscription["items"]["data"][0]["quantity"]
             .as_i64()
@@ -294,7 +361,9 @@ async fn handle_subscription_updated(
         // Determine tier
         let tier = determine_tier_from_price_id(
             &state.config,
-            subscription["items"]["data"][0]["price"]["id"].as_str().unwrap_or(""),
+            subscription["items"]["data"][0]["price"]["id"]
+                .as_str()
+                .unwrap_or(""),
         );
 
         OrganizationRepository::update_subscription(
@@ -327,13 +396,21 @@ async fn handle_subscription_deleted(
     payload: &serde_json::Value,
 ) -> Result<(), (StatusCode, String)> {
     let subscription = &payload["data"]["object"];
+    if subscription.is_null() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Missing data.object in subscription event".to_string(),
+        ));
+    }
     let customer_id = subscription["customer"].as_str().unwrap_or("");
 
     if customer_id.is_empty() {
         return Ok(());
     }
 
-    if let Ok(Some(org)) = OrganizationRepository::find_by_stripe_customer(&state.db, customer_id).await {
+    if let Ok(Some(org)) =
+        OrganizationRepository::find_by_stripe_customer(&state.db, customer_id).await
+    {
         // Downgrade to free tier
         OrganizationRepository::update_subscription(
             &state.db,
@@ -350,56 +427,24 @@ async fn handle_subscription_deleted(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-        info!("Subscription canceled for org {}, downgraded to free", org.id);
-    }
-
-    Ok(())
-}
-
-/// Handle payment_intent.succeeded - Credit purchase completed
-async fn handle_payment_intent_succeeded(
-    state: &AppState,
-    payload: &serde_json::Value,
-) -> Result<(), (StatusCode, String)> {
-    let intent = &payload["data"]["object"];
-    let payment_intent_id = intent["id"].as_str().unwrap_or("");
-
-    // Check if this is a credit purchase
-    let intent_type = intent["metadata"]["type"].as_str().unwrap_or("");
-    if intent_type != "credit_purchase" {
-        return Ok(());
-    }
-
-    // Find the credit purchase by payment intent
-    let purchase = CreditPurchaseRepository::find_by_payment_intent(&state.db, payment_intent_id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    if let Some(purchase) = purchase {
-        if purchase.status == "pending" {
-            // Complete the purchase
-            let completed = CreditPurchaseRepository::complete(&state.db, &purchase.id)
-                .await
-                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-            // Add credits to user
-            UserRepository::add_credits(&state.db, &completed.user_id, completed.credits)
-                .await
-                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-            info!(
-                "Credit purchase completed: {} credits for user {}",
-                completed.credits, completed.user_id
-            );
-        }
+        info!(
+            "Subscription canceled for org {}, downgraded to free",
+            org.id
+        );
     }
 
     Ok(())
 }
 
 /// Determine tier from Stripe subscription object
-fn determine_tier_from_subscription(config: &crate::config::Config, subscription: &stripe::Subscription) -> String {
-    let price_id = subscription.items.data.first()
+fn determine_tier_from_subscription(
+    config: &crate::config::Config,
+    subscription: &stripe::Subscription,
+) -> String {
+    let price_id = subscription
+        .items
+        .data
+        .first()
         .and_then(|item| item.price.as_ref())
         .map(|price| price.id.to_string())
         .unwrap_or_default();

@@ -1,6 +1,6 @@
 # Bugwatch Rust SDK
 
-Official Rust SDK for [Bugwatch](https://bugwatch.io) - AI-Powered Error Tracking.
+Official Rust SDK for [Bugwatch](https://bugwatch.dev) - AI-Powered Error Tracking.
 
 ## Installation
 
@@ -175,7 +175,7 @@ fn main() {
 use bugwatch::BugwatchOptions;
 
 let options = BugwatchOptions::new("your-api-key")
-    .with_endpoint("https://api.bugwatch.io")  // Custom endpoint
+    .with_endpoint("https://api.bugwatch.dev")  // Custom endpoint
     .with_environment("production")             // Environment name
     .with_release("1.0.0")                      // Release version
     .with_debug(true)                           // Enable debug logging

@@ -1,0 +1,389 @@
+---
+title: Uptime Monitors
+description: API endpoints for creating and managing uptime monitors that check the availability of your services.
+---
+
+# Uptime Monitors
+
+Uptime monitors periodically check the availability of your URLs and track response times, uptime percentage, and incidents. Monitors are scoped to projects and require a **Pro tier or higher**.
+
+## POST /projects/:project_id/monitors
+
+Create a new uptime monitor.
+
+**Authentication:** Bearer token required
+**Tier:** Pro or higher
+
+### Path Parameters
+
+| Parameter | Type | Description |
+|---|---|---|
+| `project_id` | string | Project ID |
+
+### Request Body
+
+| Field | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | string | Yes | - | Monitor name (max 200 characters) |
+| `url` | string | Yes | - | URL to monitor (http/https, max 2048 characters) |
+| `method` | string | No | `GET` | HTTP method |
+| `interval_seconds` | integer | No | `60` | Check interval (minimum 30 seconds) |
+| `timeout_ms` | integer | No | `30000` | Request timeout in milliseconds |
+| `expected_status` | integer | No | - | Expected HTTP status code (any 2xx if not set) |
+| `headers` | object | No | `{}` | Custom request headers |
+| `body` | string | No | - | Request body (for POST/PUT methods) |
+
+### URL Validation
+
+Monitor URLs are validated for safety. The following are blocked:
+- Localhost and loopback addresses (`127.0.0.1`, `::1`)
+- Private network ranges (`10.x.x.x`, `172.16-31.x.x`, `192.168.x.x`)
+- Link-local addresses (`169.254.x.x`)
+- Cloud metadata endpoints (`169.254.169.254`)
+
+### Example
+
+```bash
+curl -X POST https://api.bugwatch.dev/api/v1/projects/proj_abc123/monitors \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Production API",
+    "url": "https://api.example.com/health",
+    "method": "GET",
+    "interval_seconds": 60,
+    "timeout_ms": 10000,
+    "expected_status": 200,
+    "headers": {
+      "X-Custom-Header": "value"
+    }
+  }'
+```
+
+### Response `200 OK`
+
+```json
+{
+  "monitor": {
+    "id": "mon_abc123",
+    "project_id": "proj_abc123",
+    "name": "Production API",
+    "url": "https://api.example.com/health",
+    "method": "GET",
+    "interval_seconds": 60,
+    "timeout_ms": 10000,
+    "expected_status": 200,
+    "headers": "{\"X-Custom-Header\":\"value\"}",
+    "body": null,
+    "is_active": true,
+    "current_status": "unknown",
+    "last_checked_at": null,
+    "created_at": "2025-01-15T10:30:00Z"
+  },
+  "uptime_24h": null,
+  "avg_response_24h": null,
+  "last_error": null
+}
+```
+
+### Errors
+
+| Status | Description |
+|---|---|
+| `400` | Invalid URL, name too long, or interval less than 30 seconds |
+| `402` | Monitor limit reached for your plan, or free tier attempting to create monitors |
+| `403` | You do not own this project |
+| `404` | Project not found |
+
+---
+
+## GET /projects/:project_id/monitors
+
+List all monitors for a project with uptime statistics.
+
+**Authentication:** Bearer token required
+
+### Path Parameters
+
+| Parameter | Type | Description |
+|---|---|---|
+| `project_id` | string | Project ID |
+
+### Query Parameters
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `page` | integer | `1` | Page number |
+| `per_page` | integer | `20` | Items per page (max 100) |
+
+### Example
+
+```bash
+curl "https://api.bugwatch.dev/api/v1/projects/proj_abc123/monitors?page=1" \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+```
+
+### Response `200 OK`
+
+```json
+{
+  "data": [
+    {
+      "monitor": {
+        "id": "mon_abc123",
+        "project_id": "proj_abc123",
+        "name": "Production API",
+        "url": "https://api.example.com/health",
+        "method": "GET",
+        "interval_seconds": 60,
+        "timeout_ms": 10000,
+        "expected_status": 200,
+        "is_active": true,
+        "current_status": "up",
+        "last_checked_at": "2025-01-16T09:15:00Z",
+        "created_at": "2025-01-15T10:30:00Z"
+      },
+      "uptime_24h": 99.8,
+      "avg_response_24h": 145.2,
+      "last_error": null
+    }
+  ],
+  "pagination": {
+    "page": 1,
+    "per_page": 20,
+    "total": 3,
+    "total_pages": 1
+  }
+}
+```
+
+---
+
+## GET /projects/:project_id/monitors/:monitor_id
+
+Get detailed information about a monitor, including recent checks and incidents.
+
+**Authentication:** Bearer token required
+
+### Path Parameters
+
+| Parameter | Type | Description |
+|---|---|---|
+| `project_id` | string | Project ID |
+| `monitor_id` | string | Monitor ID |
+
+### Example
+
+```bash
+curl https://api.bugwatch.dev/api/v1/projects/proj_abc123/monitors/mon_abc123 \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+```
+
+### Response `200 OK`
+
+```json
+{
+  "monitor": {
+    "id": "mon_abc123",
+    "project_id": "proj_abc123",
+    "name": "Production API",
+    "url": "https://api.example.com/health",
+    "method": "GET",
+    "interval_seconds": 60,
+    "timeout_ms": 10000,
+    "expected_status": 200,
+    "is_active": true,
+    "current_status": "up",
+    "last_checked_at": "2025-01-16T09:15:00Z"
+  },
+  "uptime_24h": 99.8,
+  "avg_response_24h": 145.2,
+  "recent_checks": [
+    {
+      "id": "chk_001",
+      "monitor_id": "mon_abc123",
+      "status": "up",
+      "response_time_ms": 142,
+      "status_code": 200,
+      "error": null,
+      "checked_at": "2025-01-16T09:15:00Z"
+    }
+  ],
+  "recent_incidents": [
+    {
+      "id": "inc_001",
+      "monitor_id": "mon_abc123",
+      "started_at": "2025-01-14T03:22:00Z",
+      "resolved_at": "2025-01-14T03:25:00Z",
+      "duration_seconds": 180,
+      "cause": "Connection timeout"
+    }
+  ]
+}
+```
+
+---
+
+## PATCH /projects/:project_id/monitors/:monitor_id
+
+Update a monitor's configuration.
+
+**Authentication:** Bearer token required
+
+### Path Parameters
+
+| Parameter | Type | Description |
+|---|---|---|
+| `project_id` | string | Project ID |
+| `monitor_id` | string | Monitor ID |
+
+### Request Body
+
+All fields are optional. Only provided fields are updated.
+
+| Field | Type | Description |
+|---|---|---|
+| `name` | string | Monitor name (max 200 characters) |
+| `url` | string | URL to monitor |
+| `method` | string | HTTP method |
+| `interval_seconds` | integer | Check interval (minimum 30 seconds) |
+| `timeout_ms` | integer | Request timeout |
+| `expected_status` | integer | Expected HTTP status code |
+| `headers` | object | Custom request headers |
+| `body` | string | Request body |
+| `is_active` | boolean | Enable or disable the monitor |
+
+### Example
+
+```bash
+curl -X PATCH https://api.bugwatch.dev/api/v1/projects/proj_abc123/monitors/mon_abc123 \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "interval_seconds": 120,
+    "is_active": false
+  }'
+```
+
+### Response `200 OK`
+
+Returns the updated monitor object with stats.
+
+---
+
+## DELETE /projects/:project_id/monitors/:monitor_id
+
+Delete a monitor and all its check history and incidents.
+
+**Authentication:** Bearer token required
+
+### Example
+
+```bash
+curl -X DELETE https://api.bugwatch.dev/api/v1/projects/proj_abc123/monitors/mon_abc123 \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+```
+
+### Response `200 OK`
+
+```json
+{
+  "message": "Monitor deleted successfully"
+}
+```
+
+---
+
+## GET /projects/:project_id/monitors/:monitor_id/checks
+
+Get the check history for a monitor.
+
+**Authentication:** Bearer token required
+
+### Path Parameters
+
+| Parameter | Type | Description |
+|---|---|---|
+| `project_id` | string | Project ID |
+| `monitor_id` | string | Monitor ID |
+
+### Query Parameters
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `limit` | integer | `100` | Number of checks to return (max 500) |
+
+### Example
+
+```bash
+curl "https://api.bugwatch.dev/api/v1/projects/proj_abc123/monitors/mon_abc123/checks?limit=50" \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+```
+
+### Response `200 OK`
+
+Returns an array of check objects ordered by most recent first.
+
+```json
+[
+  {
+    "id": "chk_001",
+    "monitor_id": "mon_abc123",
+    "status": "up",
+    "response_time_ms": 142,
+    "status_code": 200,
+    "error": null,
+    "checked_at": "2025-01-16T09:15:00Z"
+  },
+  {
+    "id": "chk_002",
+    "monitor_id": "mon_abc123",
+    "status": "down",
+    "response_time_ms": 30000,
+    "status_code": null,
+    "error": "Connection timeout",
+    "checked_at": "2025-01-16T09:14:00Z"
+  }
+]
+```
+
+---
+
+## GET /monitors/across-projects
+
+Get a summary of all monitors across all of the authenticated user's projects.
+
+**Authentication:** Bearer token required
+
+### Example
+
+```bash
+curl https://api.bugwatch.dev/api/v1/monitors/across-projects \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+```
+
+### Response `200 OK`
+
+```json
+{
+  "data": [
+    {
+      "id": "mon_abc123",
+      "project_id": "proj_abc123",
+      "project_name": "My Web App",
+      "name": "Production API",
+      "url": "https://api.example.com/health",
+      "current_status": "up",
+      "uptime_24h": 99.8,
+      "avg_response_24h": 145.2,
+      "last_error": null,
+      "last_checked_at": "2025-01-16T09:15:00Z"
+    }
+  ],
+  "summary": {
+    "total": 5,
+    "up": 4,
+    "down": 1
+  }
+}
+```

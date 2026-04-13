@@ -1,0 +1,199 @@
+---
+title: PHP SDK
+description: Install and configure the Bugwatch PHP SDK to capture exceptions, errors, and diagnostic events from your PHP applications.
+---
+
+# PHP SDK
+
+The Bugwatch PHP SDK provides automatic and manual error capture for PHP applications. It registers error and exception handlers to catch fatal errors, uncaught exceptions, and runtime warnings, and delivers them to your Bugwatch dashboard.
+
+## Installation
+
+Install via Composer:
+
+```bash
+composer require bugwatch/bugwatch-php
+```
+
+## Quick Start
+
+Initialize the SDK as early as possible in your application's bootstrap:
+
+```php
+<?php
+
+require_once __DIR__ . '/vendor/autoload.php';
+
+use Bugwatch\Bugwatch;
+
+Bugwatch::init([
+    'api_key' => 'bw_live_xxxxx',
+    'environment' => 'production',
+    'release' => '1.0.0',
+]);
+```
+
+Or use an environment variable for the API key:
+
+```bash
+export BUGWATCH_API_KEY="bw_live_xxxxx"
+```
+
+```php
+Bugwatch::init([
+    'environment' => 'production',
+]);
+```
+
+## Automatic Capture
+
+Once initialized, the SDK automatically registers:
+
+- **Exception handler** via `set_exception_handler()` to capture uncaught exceptions
+- **Error handler** via `set_error_handler()` to capture runtime errors and warnings
+- **Shutdown handler** via `register_shutdown_function()` to capture fatal errors that bypass the error handler
+
+No additional configuration is required -- errors are captured and reported as they occur.
+
+## Manual Error Reporting
+
+### Capture an Exception
+
+Report a caught exception:
+
+```php
+try {
+    processPayment($order);
+} catch (PaymentException $e) {
+    Bugwatch::captureException($e);
+}
+```
+
+Pass additional context:
+
+```php
+try {
+    processPayment($order);
+} catch (PaymentException $e) {
+    Bugwatch::captureException($e, [
+        'tags' => ['order_id' => $order->id],
+        'extra' => ['amount' => $order->total],
+    ]);
+}
+```
+
+### Capture a Message
+
+Send informational or warning messages:
+
+```php
+Bugwatch::captureMessage('Cache miss rate above 80%', 'warning');
+```
+
+## Enriching Events
+
+### User Context
+
+Attach user information to all subsequent events:
+
+```php
+Bugwatch::setUser([
+    'id' => 'usr_123',
+    'email' => 'alice@example.com',
+    'username' => 'alice',
+]);
+```
+
+### Tags
+
+Add searchable key-value tags:
+
+```php
+Bugwatch::setTag('region', 'us-east-1');
+Bugwatch::setTag('service', 'payments');
+```
+
+### Breadcrumbs
+
+Add breadcrumbs to build an event trail:
+
+```php
+Bugwatch::addBreadcrumb([
+    'category' => 'db',
+    'message' => 'Connected to primary database',
+    'level' => 'info',
+]);
+```
+
+### Extra Data
+
+Attach arbitrary data for debugging:
+
+```php
+Bugwatch::setExtra('request_id', 'req_abc123');
+Bugwatch::setExtra('retry_count', 3);
+```
+
+## Configuration
+
+```php
+Bugwatch::init([
+    'api_key' => 'bw_live_xxxxx',
+    'environment' => 'production',
+    'release' => '1.0.0',
+    'endpoint' => 'https://ingest.bugwatch.dev',
+    'debug' => false,
+    'sample_rate' => 1.0,
+    'max_breadcrumbs' => 100,
+    'before_send' => function ($event) {
+        // Drop errors from health check endpoints
+        if (str_contains($event->request->url ?? '', '/health')) {
+            return null;
+        }
+        return $event;
+    },
+]);
+```
+
+### Options Reference
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `api_key` | `string` | -- | **Required.** Your Bugwatch project API key. |
+| `endpoint` | `string` | `https://ingest.bugwatch.dev` | Ingestion endpoint URL. |
+| `environment` | `string` | `null` | Environment name (e.g., `production`, `staging`). |
+| `release` | `string` | `null` | Release or version identifier. |
+| `debug` | `bool` | `false` | When `true`, the SDK logs diagnostics to `error_log()`. |
+| `sample_rate` | `float` | `1.0` | Fraction of events to send (between `0.0` and `1.0`). |
+| `max_breadcrumbs` | `int` | `100` | Maximum number of breadcrumbs to keep. |
+| `before_send` | `callable` | `null` | Callback invoked before an event is sent. Return `null` to drop. |
+
+## Shutdown
+
+Flush pending events before your script ends:
+
+```php
+Bugwatch::flush(5); // timeout in seconds
+Bugwatch::close();
+```
+
+<Callout type="info">
+For long-running PHP processes (daemons, queue workers), call `flush()` periodically to ensure events are delivered promptly.
+</Callout>
+
+## Environment Variables
+
+The SDK reads the following environment variables as fallback values. Explicit options always take precedence.
+
+| Variable | Maps To | Example |
+| --- | --- | --- |
+| `BUGWATCH_API_KEY` | `api_key` | `bw_live_xxxxx` |
+| `BUGWATCH_ENVIRONMENT` | `environment` | `production` |
+| `BUGWATCH_RELEASE` | `release` | `1.0.0` |
+| `BUGWATCH_DEBUG` | `debug` | `true` |
+| `BUGWATCH_ENDPOINT` | `endpoint` | `https://ingest.self-hosted.example.com` |
+
+## Next Steps
+
+- [Laravel Integration](/docs/sdks/php/laravel) -- automatic setup for Laravel applications
+- [Symfony Integration](/docs/sdks/php/symfony) -- bundle-based integration for Symfony

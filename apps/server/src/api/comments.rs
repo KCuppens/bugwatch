@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{ApiResponse, PaginationParams};
 use crate::{
-    auth::{EitherAuth, AuthIdentity},
+    auth::{AuthIdentity, EitherAuth},
     db::repositories::{CommentRepository, IssueRepository, ProjectRepository, UserRepository},
     AppError, AppResult, AppState,
 };
@@ -46,7 +46,9 @@ pub async fn list(
         .ok_or_else(|| AppError::NotFound(format!("Project {} not found", project_id)))?;
 
     if !auth.can_access_project(&state.db, &project).await {
-        return Err(AppError::Forbidden("You don't have access to this project".to_string()));
+        return Err(AppError::Forbidden(
+            "You don't have access to this project".to_string(),
+        ));
     }
 
     // Verify issue exists and belongs to project
@@ -55,14 +57,18 @@ pub async fn list(
         .ok_or_else(|| AppError::NotFound(format!("Issue {} not found", issue_id)))?;
 
     if issue.project_id != project_id {
-        return Err(AppError::NotFound(format!("Issue {} not found in project", issue_id)));
+        return Err(AppError::NotFound(format!(
+            "Issue {} not found in project",
+            issue_id
+        )));
     }
 
     let page = params.page.max(1);
     let per_page = params.per_page.min(100).max(1);
     let offset = ((page - 1) * per_page) as i64;
 
-    let comments = CommentRepository::find_by_issue(&state.db, &issue_id, per_page as i64, offset).await?;
+    let comments =
+        CommentRepository::find_by_issue(&state.db, &issue_id, per_page as i64, offset).await?;
 
     // Fetch user info for each comment
     let mut response_comments = Vec::with_capacity(comments.len());
@@ -102,7 +108,9 @@ pub async fn create(
         .ok_or_else(|| AppError::NotFound(format!("Project {} not found", project_id)))?;
 
     if !auth.can_access_project(&state.db, &project).await {
-        return Err(AppError::Forbidden("You don't have access to this project".to_string()));
+        return Err(AppError::Forbidden(
+            "You don't have access to this project".to_string(),
+        ));
     }
 
     // Verify issue exists and belongs to project
@@ -111,16 +119,23 @@ pub async fn create(
         .ok_or_else(|| AppError::NotFound(format!("Issue {} not found", issue_id)))?;
 
     if issue.project_id != project_id {
-        return Err(AppError::NotFound(format!("Issue {} not found in project", issue_id)));
+        return Err(AppError::NotFound(format!(
+            "Issue {} not found in project",
+            issue_id
+        )));
     }
 
     // Validate content
     if req.content.trim().is_empty() {
-        return Err(AppError::Validation("Comment content cannot be empty".to_string()));
+        return Err(AppError::Validation(
+            "Comment content cannot be empty".to_string(),
+        ));
     }
 
     if req.content.len() > 10000 {
-        return Err(AppError::Validation("Comment content is too long (max 10000 characters)".to_string()));
+        return Err(AppError::Validation(
+            "Comment content is too long (max 10000 characters)".to_string(),
+        ));
     }
 
     // For agents, use the agent key creator as the commenter; for users, use their ID
@@ -130,7 +145,8 @@ pub async fn create(
     };
 
     // Create comment
-    let comment = CommentRepository::create(&state.db, &issue_id, &commenter_id, &req.content).await?;
+    let comment =
+        CommentRepository::create(&state.db, &issue_id, &commenter_id, &req.content).await?;
 
     // Get user info
     let user = UserRepository::find_by_id(&state.db, &commenter_id).await?;
@@ -166,7 +182,9 @@ pub async fn update(
         .ok_or_else(|| AppError::NotFound(format!("Project {} not found", project_id)))?;
 
     if !auth.can_access_project(&state.db, &project).await {
-        return Err(AppError::Forbidden("You don't have access to this project".to_string()));
+        return Err(AppError::Forbidden(
+            "You don't have access to this project".to_string(),
+        ));
     }
 
     // Get comment
@@ -176,23 +194,32 @@ pub async fn update(
 
     // Verify comment belongs to issue
     if comment.issue_id != issue_id {
-        return Err(AppError::NotFound(format!("Comment {} not found in issue", comment_id)));
+        return Err(AppError::NotFound(format!(
+            "Comment {} not found in issue",
+            comment_id
+        )));
     }
 
     // For users, verify they own the comment; agents with write access can edit any comment in the project
     if let AuthIdentity::User(user) = &*auth {
         if comment.user_id != user.id {
-            return Err(AppError::Forbidden("You can only edit your own comments".to_string()));
+            return Err(AppError::Forbidden(
+                "You can only edit your own comments".to_string(),
+            ));
         }
     }
 
     // Validate content
     if req.content.trim().is_empty() {
-        return Err(AppError::Validation("Comment content cannot be empty".to_string()));
+        return Err(AppError::Validation(
+            "Comment content cannot be empty".to_string(),
+        ));
     }
 
     if req.content.len() > 10000 {
-        return Err(AppError::Validation("Comment content is too long (max 10000 characters)".to_string()));
+        return Err(AppError::Validation(
+            "Comment content is too long (max 10000 characters)".to_string(),
+        ));
     }
 
     // Update comment
@@ -236,7 +263,9 @@ pub async fn delete(
         .ok_or_else(|| AppError::NotFound(format!("Project {} not found", project_id)))?;
 
     if !auth.can_access_project(&state.db, &project).await {
-        return Err(AppError::Forbidden("You don't have access to this project".to_string()));
+        return Err(AppError::Forbidden(
+            "You don't have access to this project".to_string(),
+        ));
     }
 
     // Get comment
@@ -246,13 +275,18 @@ pub async fn delete(
 
     // Verify comment belongs to issue
     if comment.issue_id != issue_id {
-        return Err(AppError::NotFound(format!("Comment {} not found in issue", comment_id)));
+        return Err(AppError::NotFound(format!(
+            "Comment {} not found in issue",
+            comment_id
+        )));
     }
 
     // For users, verify they own the comment or are the project owner; agents with write can delete any
     if let AuthIdentity::User(user) = &*auth {
         if comment.user_id != user.id && project.owner_id != user.id {
-            return Err(AppError::Forbidden("You can only delete your own comments".to_string()));
+            return Err(AppError::Forbidden(
+                "You can only delete your own comments".to_string(),
+            ));
         }
     }
 

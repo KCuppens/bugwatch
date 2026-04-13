@@ -35,6 +35,13 @@ impl OnChainVerifier {
         usdc_address: &str,
         min_amount: u64,
     ) -> Result<u64, String> {
+        // Pre-validate tx_hash format: must be 0x + 64 hex chars
+        if !tx_hash.starts_with("0x") || tx_hash.len() != 66
+            || !tx_hash[2..].chars().all(|c| c.is_ascii_hexdigit())
+        {
+            return Err("Invalid transaction hash format (expected 0x + 64 hex chars)".to_string());
+        }
+
         // 1. Get transaction receipt via eth_getTransactionReceipt
         let receipt = self.eth_get_transaction_receipt(tx_hash).await?;
 

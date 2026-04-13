@@ -91,7 +91,9 @@ pub async fn create(
     let org = OrganizationRepository::find_by_user(&state.db, &auth_user.id)
         .await?
         .ok_or_else(|| {
-            AppError::BadRequest("You must belong to an organization to create agent keys".to_string())
+            AppError::BadRequest(
+                "You must belong to an organization to create agent keys".to_string(),
+            )
         })?;
 
     // Only org owner can create agent keys
@@ -157,8 +159,7 @@ pub async fn list(
     let response: Vec<AgentKeyResponse> = keys
         .into_iter()
         .map(|k| {
-            let permissions: Vec<String> =
-                serde_json::from_str(&k.permissions).unwrap_or_default();
+            let permissions: Vec<String> = serde_json::from_str(&k.permissions).unwrap_or_default();
             AgentKeyResponse {
                 id: k.id,
                 organization_id: k.organization_id,

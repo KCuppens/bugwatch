@@ -1,0 +1,179 @@
+---
+title: Docker Compose
+description: Deploy Bugwatch using Docker Compose with the API server, web app, and PostgreSQL database in a single command.
+---
+
+# Docker Compose Setup
+
+Docker Compose is the fastest way to deploy a self-hosted Bugwatch instance. It runs the API server, web app, and PostgreSQL database as a coordinated set of containers.
+
+## Prerequisites
+
+- **Docker** 20.10+
+- **Docker Compose** v2.0+
+- A machine with at least **2 GB RAM** and **10 GB disk**
+
+<Callout type="warn">
+Always set a strong `JWT_SECRET` (minimum 32 characters) before deploying to production. Use `openssl rand -hex 32` to generate one.
+</Callout>
+
+## Quick Start
+
+1. **Clone the repository:**
+
+```bash
+git clone https://github.com/KCuppens/bugwatch.git
+cd bugwatch
+```
+
+2. **Create an environment file:**
+
+```bash
+cp .env.example .env
+```
+
+3. **Edit the `.env` file** with your settings:
+
+```bash
+# Required
+DATABASE_URL=postgresql://bugwatch:bugwatch@postgres:5432/bugwatch
+JWT_SECRET=your-secure-random-secret-here
+CORS_ORIGINS=http://localhost:3000
+
+# Web app
+NEXT_PUBLIC_API_URL=http://localhost:8080
+NEXT_PUBLIC_SITE_URL=http://localhost:3000
+```
+
+4. **Start the services:**
+
+```bash
+docker compose up -d
+```
+
+5. **Run database migrations:**
+
+```bash
+docker compose exec api bugwatch-server migrate
+```
+
+6. **Open the dashboard** at [http://localhost:3000](http://localhost:3000) and create your admin account.
+
+## Sample docker-compose.yml
+
+```yaml
+version: "3.8"
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: apps/server/Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      - DATABASE_URL=postgresql://bugwatch:bugwatch@postgres:5432/bugwatch
+      - JWT_SECRET=${JWT_SECRET}
+      - CORS_ORIGINS=${CORS_ORIGINS}
+      - SMTP_HOST=${SMTP_HOST:-}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USERNAME=${SMTP_USERNAME:-}
+      - SMTP_PASSWORD=${SMTP_PASSWORD:-}
+      - SMTP_FROM=${SMTP_FROM:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:8080}
+      - NEXT_PUBLIC_SITE_URL=${NEXT_PUBLIC_SITE_URL:-http://localhost:3000}
+    depends_on:
+      - api
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:15-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=bugwatch
+      - POSTGRES_PASSWORD=bugwatch
+      - POSTGRES_DB=bugwatch
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bugwatch"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+```
+
+## Production Considerations
+
+### Use a Reverse Proxy
+
+For production deployments, place Nginx or Caddy in front of the web and API services to handle TLS termination:
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name bugwatch.yourcompany.com;
+
+    ssl_certificate /etc/ssl/certs/bugwatch.pem;
+    ssl_certificate_key /etc/ssl/private/bugwatch.key;
+
+    location / {
+        proxy_pass http://localhost:3000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+}
+
+server {
+    listen 443 ssl;
+    server_name api.bugwatch.yourcompany.com;
+
+    ssl_certificate /etc/ssl/certs/bugwatch.pem;
+    ssl_certificate_key /etc/ssl/private/bugwatch.key;
+
+    location / {
+        proxy_pass http://localhost:8080;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+}
+```
+
+### Secure Credentials
+
+- Generate a strong `JWT_SECRET` (at least 32 characters): `openssl rand -hex 32`
+- Change the default PostgreSQL password
+- Use secrets management (Docker secrets, Vault, etc.) in production
+
+### Persistent Data
+
+<Callout type="info">
+PostgreSQL data is persisted in a Docker volume. Back up regularly with `docker exec bugwatch-postgres pg_dump -U bugwatch bugwatch > backup.sql`.
+</Callout>
+
+The `pgdata` volume ensures your database survives container restarts. For production, consider:
+
+- Regular database backups with `pg_dump`
+- Volume backups to external storage
+- Running PostgreSQL as a managed service (RDS, Cloud SQL) for high availability
+
+## Next Steps
+
+- [Configuration](/docs/self-hosting/configuration) -- full environment variables reference
+- [Upgrading](/docs/self-hosting/upgrading) -- keep your instance up to date

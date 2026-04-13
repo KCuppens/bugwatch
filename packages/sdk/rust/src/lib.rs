@@ -1,6 +1,6 @@
 //! # Bugwatch Rust SDK
 //!
-//! Official Rust SDK for [Bugwatch](https://bugwatch.io) - AI-Powered Error Tracking.
+//! Official Rust SDK for [Bugwatch](https://bugwatch.dev) - AI-Powered Error Tracking.
 //!
 //! ## Quick Start
 //!

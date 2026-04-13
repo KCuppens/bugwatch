@@ -1,4 +1,4 @@
-use axum::{extract::State, Json};
+use axum::{extract::State, http::HeaderMap, Json};
 use chrono::{Duration, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -11,6 +11,37 @@ use crate::{
     db::repositories::{OrganizationRepository, SessionRepository, UserRepository},
     AppError, AppResult, AppState,
 };
+
+/// Extract client IP from request headers (X-Forwarded-For or fallback)
+fn extract_client_ip(headers: &HeaderMap) -> String {
+    headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.split(',').next())
+        .map(|s| s.trim().to_string())
+        .or_else(|| {
+            headers
+                .get("x-real-ip")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string())
+        })
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+/// Check auth rate limit (10 attempts/minute per IP)
+fn check_auth_rate_limit(state: &AppState, headers: &HeaderMap) -> AppResult<()> {
+    let ip = extract_client_ip(headers);
+    let key = format!("auth:{}", ip);
+    let result = state.rate_limiter.check(&key, 10);
+    if !result.allowed {
+        return Err(AppError::RateLimitExceeded {
+            retry_after_secs: result.retry_after_secs.unwrap_or(60),
+            limit: result.limit,
+            remaining: result.remaining,
+        });
+    }
+    Ok(())
+}
 
 #[derive(Debug, Deserialize)]
 pub struct SignupRequest {
@@ -76,14 +107,17 @@ pub struct UserResponse {
     pub email: String,
     pub name: Option<String>,
     pub created_at: String,
-    pub credits: i32,
 }
 
 /// POST /api/v1/auth/signup
 pub async fn signup(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(req): Json<SignupRequest>,
 ) -> AppResult<Json<AuthResponse>> {
+    // Rate limit per IP
+    check_auth_rate_limit(&state, &headers)?;
+
     // Validate email
     validate_email(&req.email)?;
 
@@ -128,6 +162,11 @@ pub async fn signup(
         state.config.jwt_refresh_expiration,
     )?;
 
+    // Update session with real refresh token hash
+    SessionRepository::update_token_hash(&state.db, &session.id, &tokens.refresh_token)
+        .await
+        .map_err(|e| AppError::Internal(format!("Failed to update session token: {}", e)))?;
+
     tracing::info!("New user registered: {}", user.email);
 
     Ok(Json(AuthResponse {
@@ -137,7 +176,6 @@ pub async fn signup(
                 email: user.email,
                 name: user.name,
                 created_at: user.created_at.to_rfc3339(),
-                credits: user.credits,
             },
             tokens: tokens.into(),
         },
@@ -147,8 +185,12 @@ pub async fn signup(
 /// POST /api/v1/auth/login
 pub async fn login(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(req): Json<LoginRequest>,
 ) -> AppResult<Json<AuthResponse>> {
+    // Rate limit per IP
+    check_auth_rate_limit(&state, &headers)?;
+
     // Find user by email
     let user = UserRepository::find_by_email(&state.db, &req.email)
         .await?
@@ -169,7 +211,9 @@ pub async fn login(
     if !is_valid {
         // Increment failed attempts
         UserRepository::increment_failed_attempts(&state.db, &user.id).await?;
-        return Err(AppError::Unauthorized("Invalid email or password".to_string()));
+        return Err(AppError::Unauthorized(
+            "Invalid email or password".to_string(),
+        ));
     }
 
     // Reset failed attempts on successful login
@@ -177,16 +221,10 @@ pub async fn login(
 
     // Create session
     let session_expires = Utc::now() + Duration::seconds(state.config.jwt_refresh_expiration);
-    let session = SessionRepository::create(
-        &state.db,
-        &user.id,
-        &user.id,
-        session_expires,
-        None,
-        None,
-    )
-    .await
-    .map_err(|e| AppError::Internal(format!("Failed to create session: {}", e)))?;
+    let session =
+        SessionRepository::create(&state.db, &user.id, &user.id, session_expires, None, None)
+            .await
+            .map_err(|e| AppError::Internal(format!("Failed to create session: {}", e)))?;
 
     // Generate tokens
     let tokens = generate_tokens(
@@ -197,6 +235,11 @@ pub async fn login(
         state.config.jwt_refresh_expiration,
     )?;
 
+    // Update session with real refresh token hash
+    SessionRepository::update_token_hash(&state.db, &session.id, &tokens.refresh_token)
+        .await
+        .map_err(|e| AppError::Internal(format!("Failed to update session token: {}", e)))?;
+
     tracing::info!("User logged in: {}", user.email);
 
     Ok(Json(AuthResponse {
@@ -206,7 +249,6 @@ pub async fn login(
                 email: user.email,
                 name: user.name,
                 created_at: user.created_at.to_rfc3339(),
-                credits: user.credits,
             },
             tokens: tokens.into(),
         },
@@ -223,14 +265,20 @@ pub async fn logout(
 
     tracing::info!("User logged out: {}", user.email);
 
-    Ok(Json(serde_json::json!({ "data": { "message": "Logged out successfully" } })))
+    Ok(Json(
+        serde_json::json!({ "data": { "message": "Logged out successfully" } }),
+    ))
 }
 
 /// POST /api/v1/auth/refresh
 pub async fn refresh(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(req): Json<RefreshRequest>,
 ) -> AppResult<Json<RefreshResponse>> {
+    // Rate limit per IP
+    check_auth_rate_limit(&state, &headers)?;
+
     // Validate refresh token
     let claims = validate_refresh_token(&req.refresh_token, &state.config.jwt_secret)?;
 
@@ -275,6 +323,11 @@ pub async fn refresh(
         state.config.jwt_refresh_expiration,
     )?;
 
+    // Update session with real refresh token hash
+    SessionRepository::update_token_hash(&state.db, &new_session.id, &tokens.refresh_token)
+        .await
+        .map_err(|e| AppError::Internal(format!("Failed to update session token: {}", e)))?;
+
     Ok(Json(RefreshResponse {
         data: RefreshData {
             access_token: tokens.access_token,
@@ -302,7 +355,6 @@ pub struct MeData {
     pub email: String,
     pub name: Option<String>,
     pub created_at: String,
-    pub credits: i32,
     pub organization: Option<OrganizationInfo>,
 }
 
@@ -312,10 +364,7 @@ pub struct MeResponse {
 }
 
 /// GET /api/v1/auth/me
-pub async fn me(
-    user: AuthUser,
-    State(state): State<AppState>,
-) -> AppResult<Json<MeResponse>> {
+pub async fn me(user: AuthUser, State(state): State<AppState>) -> AppResult<Json<MeResponse>> {
     // Fetch organization for user
     let organization = OrganizationRepository::find_by_user(&state.db, &user.id)
         .await
@@ -338,8 +387,84 @@ pub async fn me(
             email: user.email.clone(),
             name: user.name.clone(),
             created_at: user.created_at.to_rfc3339(),
-            credits: user.credits,
             organization,
         },
     }))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateProfileRequest {
+    pub name: Option<String>,
+}
+
+/// PATCH /api/v1/auth/me
+pub async fn update_profile(
+    user: AuthUser,
+    State(state): State<AppState>,
+    Json(req): Json<UpdateProfileRequest>,
+) -> AppResult<Json<serde_json::Value>> {
+    if let Some(ref name) = req.name {
+        if name.trim().is_empty() {
+            return Err(AppError::Validation("Name cannot be empty".to_string()));
+        }
+        if name.len() > 100 {
+            return Err(AppError::Validation(
+                "Name too long (max 100 characters)".to_string(),
+            ));
+        }
+        UserRepository::update_name(&state.db, &user.id, name.trim())
+            .await
+            .map_err(|e| AppError::Internal(format!("Failed to update profile: {}", e)))?;
+    }
+
+    tracing::info!("User profile updated: {}", user.email);
+
+    Ok(Json(
+        serde_json::json!({ "data": { "message": "Profile updated successfully" } }),
+    ))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ChangePasswordRequest {
+    pub current_password: String,
+    pub new_password: String,
+}
+
+/// POST /api/v1/auth/change-password
+pub async fn change_password(
+    user: AuthUser,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<ChangePasswordRequest>,
+) -> AppResult<Json<serde_json::Value>> {
+    // Rate limit per IP
+    check_auth_rate_limit(&state, &headers)?;
+
+    // Get user with password hash
+    let db_user = UserRepository::find_by_id(&state.db, &user.id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("User not found".to_string()))?;
+
+    // Verify current password
+    let is_valid = verify_password(&req.current_password, &db_user.password_hash)?;
+    if !is_valid {
+        return Err(AppError::Unauthorized(
+            "Current password is incorrect".to_string(),
+        ));
+    }
+
+    // Validate new password
+    validate_password(&req.new_password)?;
+
+    // Hash and update
+    let new_hash = hash_password(&req.new_password)?;
+    UserRepository::update_password(&state.db, &user.id, &new_hash)
+        .await
+        .map_err(|e| AppError::Internal(format!("Failed to update password: {}", e)))?;
+
+    tracing::info!("User password changed: {}", user.email);
+
+    Ok(Json(
+        serde_json::json!({ "data": { "message": "Password changed successfully" } }),
+    ))
 }

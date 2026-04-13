@@ -1,0 +1,575 @@
+---
+title: Alerts
+description: API endpoints for configuring alert rules, notification channels, and viewing alert logs.
+---
+
+# Alerts
+
+The alerting system lets you define rules that trigger notifications when specific conditions are met. Rules are connected to notification channels (email, Slack, webhook) that deliver the alerts.
+
+## Alert Rules
+
+### POST /projects/:project_id/alerts
+
+Create a new alert rule.
+
+**Authentication:** Bearer token required
+
+### Path Parameters
+
+| Parameter | Type | Description |
+|---|---|---|
+| `project_id` | string | Project ID |
+
+### Request Body
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `name` | string | Yes | Alert rule name |
+| `condition` | object | Yes | Trigger condition (see condition types below) |
+| `channel_ids` | string[] | Yes | IDs of notification channels to notify |
+
+### Condition Types
+
+Each condition is a JSON object with a `type` field and type-specific parameters.
+
+#### `new_issue`
+
+Triggers when a new issue is created in the project.
+
+```json
+{
+  "type": "new_issue",
+  "level": "error"
+}
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `level` | string | No | Minimum severity: `error`, `warning`, or `fatal`. Omit for all levels. |
+
+#### `issue_frequency`
+
+Triggers when an issue's event count exceeds a threshold within a time window.
+
+```json
+{
+  "type": "issue_frequency",
+  "threshold": 100,
+  "window_minutes": 60
+}
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `threshold` | integer | Yes | Event count threshold |
+| `window_minutes` | integer | Yes | Time window in minutes |
+
+#### `monitor_down`
+
+Triggers when an uptime monitor goes down.
+
+```json
+{
+  "type": "monitor_down",
+  "monitor_id": "mon_abc123"
+}
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `monitor_id` | string | No | Specific monitor ID, or omit for all monitors |
+
+#### `monitor_recovery`
+
+Triggers when an uptime monitor recovers from a down state.
+
+```json
+{
+  "type": "monitor_recovery",
+  "monitor_id": "mon_abc123"
+}
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `monitor_id` | string | No | Specific monitor ID, or omit for all monitors |
+
+#### `server_cpu_high` (Pro+)
+
+Triggers when server CPU usage exceeds a threshold.
+
+```json
+{
+  "type": "server_cpu_high",
+  "threshold_percent": 90.0,
+  "server_id": "srv_db_abc123"
+}
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `threshold_percent` | float | Yes | CPU usage threshold (0-100) |
+| `server_id` | string | No | Specific server ID, or omit for all servers |
+
+#### `server_memory_high` (Pro+)
+
+Triggers when server memory usage exceeds a threshold.
+
+```json
+{
+  "type": "server_memory_high",
+  "threshold_percent": 85.0,
+  "server_id": null
+}
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `threshold_percent` | float | Yes | Memory usage threshold (0-100) |
+| `server_id` | string | No | Specific server ID, or omit for all servers |
+
+#### `server_disk_high` (Pro+)
+
+Triggers when disk usage exceeds a threshold.
+
+```json
+{
+  "type": "server_disk_high",
+  "threshold_percent": 90.0,
+  "mount": "/",
+  "server_id": null
+}
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `threshold_percent` | float | Yes | Disk usage threshold (0-100) |
+| `mount` | string | No | Specific mount point to monitor |
+| `server_id` | string | No | Specific server ID, or omit for all servers |
+
+#### `server_offline` (Pro+)
+
+Triggers when a server stops reporting metrics.
+
+```json
+{
+  "type": "server_offline",
+  "missing_minutes": 5,
+  "server_id": null
+}
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `missing_minutes` | integer | No | Minutes of silence before alerting (default: 5) |
+| `server_id` | string | No | Specific server ID, or omit for all servers |
+
+### Example
+
+```bash
+curl -X POST https://api.bugwatch.dev/api/v1/projects/proj_abc123/alerts \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Critical errors alert",
+    "condition": {
+      "type": "new_issue",
+      "level": "error"
+    },
+    "channel_ids": ["ch_slack_001", "ch_email_002"]
+  }'
+```
+
+### Response `200 OK`
+
+```json
+{
+  "id": "alert_abc123",
+  "project_id": "proj_abc123",
+  "name": "Critical errors alert",
+  "condition": {
+    "type": "new_issue",
+    "level": "error"
+  },
+  "channel_ids": ["ch_slack_001", "ch_email_002"],
+  "is_active": true,
+  "created_at": "2025-01-15T10:30:00Z"
+}
+```
+
+### Errors
+
+| Status | Description |
+|---|---|
+| `402` | Server alert conditions require Pro plan or higher |
+| `403` | You do not own this project |
+| `404` | Project not found |
+
+---
+
+### GET /projects/:project_id/alerts
+
+List all alert rules for a project.
+
+**Authentication:** Bearer token required
+
+### Example
+
+```bash
+curl https://api.bugwatch.dev/api/v1/projects/proj_abc123/alerts \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+```
+
+### Response `200 OK`
+
+Returns an array of alert rule objects.
+
+```json
+[
+  {
+    "id": "alert_abc123",
+    "project_id": "proj_abc123",
+    "name": "Critical errors alert",
+    "condition": {
+      "type": "new_issue",
+      "level": "error"
+    },
+    "channel_ids": ["ch_slack_001"],
+    "is_active": true,
+    "created_at": "2025-01-15T10:30:00Z"
+  }
+]
+```
+
+---
+
+### PATCH /projects/:project_id/alerts/:alert_id
+
+Update an alert rule.
+
+**Authentication:** Bearer token required
+
+### Request Body
+
+All fields are optional. Only provided fields are updated.
+
+| Field | Type | Description |
+|---|---|---|
+| `name` | string | Alert rule name |
+| `condition` | object | Trigger condition |
+| `channel_ids` | string[] | Notification channel IDs |
+| `is_active` | boolean | Enable or disable the rule |
+
+### Example
+
+```bash
+curl -X PATCH https://api.bugwatch.dev/api/v1/projects/proj_abc123/alerts/alert_abc123 \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "is_active": false
+  }'
+```
+
+### Response `200 OK`
+
+Returns the updated alert rule object.
+
+---
+
+### DELETE /projects/:project_id/alerts/:alert_id
+
+Delete an alert rule.
+
+**Authentication:** Bearer token required
+
+### Example
+
+```bash
+curl -X DELETE https://api.bugwatch.dev/api/v1/projects/proj_abc123/alerts/alert_abc123 \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+```
+
+### Response `200 OK`
+
+```json
+{
+  "message": "Alert rule deleted"
+}
+```
+
+---
+
+## Notification Channels
+
+### POST /projects/:project_id/channels
+
+Create a notification channel.
+
+**Authentication:** Bearer token required
+
+### Request Body
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `name` | string | Yes | Channel name |
+| `channel_type` | string | Yes | Channel type: `email`, `webhook`, or `slack` |
+| `config` | object | Yes | Channel-specific configuration (see below) |
+
+### Channel Configurations
+
+#### Email (Pro+)
+
+```json
+{
+  "channel_type": "email",
+  "config": {
+    "recipients": ["alerts@example.com", "oncall@example.com"]
+  }
+}
+```
+
+#### Webhook (Pro+)
+
+```json
+{
+  "channel_type": "webhook",
+  "config": {
+    "url": "https://your-server.com/webhooks/bugwatch",
+    "secret": "optional_signing_secret"
+  }
+}
+```
+
+#### Slack
+
+```json
+{
+  "channel_type": "slack",
+  "config": {
+    "webhook_url": "https://hooks.slack.com/services/T.../B.../xxx",
+    "channel": "#alerts"
+  }
+}
+```
+
+### Example
+
+```bash
+curl -X POST https://api.bugwatch.dev/api/v1/projects/proj_abc123/channels \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Slack Alerts",
+    "channel_type": "slack",
+    "config": {
+      "webhook_url": "https://hooks.slack.com/services/T.../B.../xxx",
+      "channel": "#engineering-alerts"
+    }
+  }'
+```
+
+### Response `200 OK`
+
+```json
+{
+  "id": "ch_slack_001",
+  "project_id": "proj_abc123",
+  "name": "Slack Alerts",
+  "channel_type": "slack",
+  "config": {
+    "webhook_url": "https://hooks.slack.com/services/T.../B.../xxx",
+    "channel": "#engineering-alerts"
+  },
+  "is_active": true,
+  "created_at": "2025-01-15T10:30:00Z"
+}
+```
+
+### Errors
+
+| Status | Description |
+|---|---|
+| `402` | Email and webhook channels require Pro plan or higher |
+| `403` | You do not own this project |
+
+---
+
+### GET /projects/:project_id/channels
+
+List all notification channels for a project.
+
+**Authentication:** Bearer token required
+
+### Example
+
+```bash
+curl https://api.bugwatch.dev/api/v1/projects/proj_abc123/channels \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+```
+
+### Response `200 OK`
+
+Returns an array of channel objects.
+
+---
+
+### PATCH /projects/:project_id/channels/:channel_id
+
+Update a notification channel.
+
+**Authentication:** Bearer token required
+
+### Request Body
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `name` | string | No | Channel name |
+| `config` | object | No | Channel configuration |
+| `is_active` | boolean | No | Enable or disable the channel |
+
+### Example
+
+```bash
+curl -X PATCH https://api.bugwatch.dev/api/v1/projects/proj_abc123/channels/ch_slack_001 \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Updated Slack Channel",
+    "is_active": true
+  }'
+```
+
+---
+
+### DELETE /projects/:project_id/channels/:channel_id
+
+Delete a notification channel.
+
+**Authentication:** Bearer token required
+
+### Example
+
+```bash
+curl -X DELETE https://api.bugwatch.dev/api/v1/projects/proj_abc123/channels/ch_slack_001 \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+```
+
+### Response `200 OK`
+
+```json
+{
+  "message": "Channel deleted"
+}
+```
+
+---
+
+### POST /projects/:project_id/channels/:channel_id/test
+
+Send a test notification through a channel to verify it is configured correctly.
+
+**Authentication:** Bearer token required
+
+### Example
+
+```bash
+curl -X POST https://api.bugwatch.dev/api/v1/projects/proj_abc123/channels/ch_slack_001/test \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+```
+
+### Response `200 OK`
+
+```json
+{
+  "message": "Test notification sent"
+}
+```
+
+---
+
+## Alert Logs
+
+### GET /projects/:project_id/alerts/logs
+
+Get the alert log for a project, showing recent alert triggers and their delivery status.
+
+**Authentication:** Bearer token required
+
+### Query Parameters
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `limit` | integer | `50` | Number of logs to return (max 100) |
+
+### Example
+
+```bash
+curl "https://api.bugwatch.dev/api/v1/projects/proj_abc123/alerts/logs?limit=20" \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+```
+
+### Response `200 OK`
+
+Returns an array of alert log entries.
+
+```json
+[
+  {
+    "id": "log_001",
+    "alert_rule_id": "alert_abc123",
+    "trigger_type": "new_issue",
+    "trigger_id": "iss_def456",
+    "status": "sent",
+    "message": "New error issue: TypeError in Dashboard.tsx",
+    "error_message": null,
+    "created_at": "2025-01-16T09:15:00Z",
+    "sent_at": "2025-01-16T09:15:01Z"
+  }
+]
+```
+
+---
+
+### GET /alerts/across-projects
+
+Get alert logs across all of the authenticated user's projects, enriched with project and rule names.
+
+**Authentication:** Bearer token required
+
+### Query Parameters
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `limit` | integer | `10` | Number of logs to return (max 100) |
+
+### Example
+
+```bash
+curl "https://api.bugwatch.dev/api/v1/alerts/across-projects?limit=10" \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+```
+
+### Response `200 OK`
+
+```json
+{
+  "data": [
+    {
+      "id": "log_001",
+      "alert_rule_id": "alert_abc123",
+      "rule_name": "Critical errors alert",
+      "project_id": "proj_abc123",
+      "project_name": "My Web App",
+      "trigger_type": "new_issue",
+      "trigger_id": "iss_def456",
+      "status": "sent",
+      "message": "New error issue: TypeError in Dashboard.tsx",
+      "error_message": null,
+      "created_at": "2025-01-16T09:15:00Z",
+      "sent_at": "2025-01-16T09:15:01Z"
+    }
+  ]
+}
+```

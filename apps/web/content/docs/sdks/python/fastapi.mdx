@@ -1,0 +1,189 @@
+---
+title: FastAPI Integration
+description: Integrate the Bugwatch Python SDK with FastAPI to automatically capture async request errors, attach request context, and monitor your FastAPI application.
+---
+
+# FastAPI Integration
+
+The Bugwatch FastAPI integration is built for async-first Python web applications. It hooks into FastAPI's middleware layer to capture unhandled exceptions and enrich error reports with request context -- all without blocking the event loop.
+
+## Installation
+
+Install the SDK with the FastAPI extras:
+
+```bash
+pip install bugwatch-sdk[fastapi]
+```
+
+## Quick Start
+
+Initialize Bugwatch and wrap your FastAPI app:
+
+```python
+from fastapi import FastAPI
+from bugwatch.integrations.fastapi import BugwatchFastAPI
+
+app = FastAPI()
+
+BugwatchFastAPI(app, api_key="your-api-key", environment="production")
+```
+
+Or initialize the SDK separately and use an environment variable:
+
+```bash
+export BUGWATCH_API_KEY="your-api-key"
+```
+
+```python
+import bugwatch
+from fastapi import FastAPI
+from bugwatch.integrations.fastapi import BugwatchFastAPI
+
+bugwatch.init(environment="production", release="1.0.0")
+
+app = FastAPI()
+BugwatchFastAPI(app)
+```
+
+## What Gets Captured Automatically
+
+Once the integration is active, the SDK captures:
+
+- **Unhandled exceptions** raised inside route handlers, dependencies, and middleware
+- **Request context** including the full URL, HTTP method, headers, query parameters, and path parameters
+- **Async-safe reporting** -- events are sent without blocking the event loop
+
+## Async Support
+
+The FastAPI integration is fully async-aware. Event delivery uses non-blocking I/O so your application's throughput is not affected:
+
+```python
+from fastapi import FastAPI
+from bugwatch.integrations.fastapi import BugwatchFastAPI
+import bugwatch
+
+app = FastAPI()
+BugwatchFastAPI(app, api_key="your-api-key")
+
+@app.get("/users/{user_id}")
+async def get_user(user_id: str):
+    user = await fetch_user(user_id)
+    if not user:
+        bugwatch.capture_message(f"User not found: {user_id}", level="warning")
+        raise HTTPException(status_code=404, detail="User not found")
+    return user
+```
+
+## Manual Reporting in Routes
+
+Report handled exceptions from your async route handlers:
+
+```python
+import bugwatch
+from fastapi import APIRouter
+
+router = APIRouter()
+
+@router.post("/api/orders")
+async def create_order(order: OrderCreate):
+    try:
+        result = await process_order(order)
+        return {"status": "ok", "order_id": result.id}
+    except InventoryError as e:
+        bugwatch.capture_exception(e)
+        return {"status": "error", "message": "Item out of stock"}
+```
+
+## Adding Context
+
+### User Context via Dependencies
+
+Use FastAPI's dependency injection to set user context on every request:
+
+```python
+import bugwatch
+from fastapi import Depends, Request
+
+async def set_bugwatch_user(request: Request):
+    user = request.state.user
+    if user:
+        bugwatch.set_user({
+            "id": user.id,
+            "email": user.email,
+            "username": user.username,
+        })
+
+@app.get("/dashboard", dependencies=[Depends(set_bugwatch_user)])
+async def dashboard():
+    return {"message": "Welcome"}
+```
+
+### Breadcrumbs
+
+```python
+import bugwatch
+
+@app.middleware("http")
+async def breadcrumb_middleware(request: Request, call_next):
+    bugwatch.add_breadcrumb(
+        category="http",
+        message=f"{request.method} {request.url.path}",
+        level="info",
+    )
+    response = await call_next(request)
+    return response
+```
+
+### Tags
+
+```python
+import bugwatch
+
+@app.middleware("http")
+async def tag_middleware(request: Request, call_next):
+    bugwatch.set_tag("path", request.url.path)
+    bugwatch.set_tag("method", request.method)
+    response = await call_next(request)
+    return response
+```
+
+## Exception Handlers
+
+The integration works alongside FastAPI's exception handlers:
+
+```python
+from fastapi import Request
+from fastapi.responses import JSONResponse
+import bugwatch
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    bugwatch.capture_exception(exc)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error"},
+    )
+```
+
+## Lifespan Events
+
+Flush pending events when the application shuts down using FastAPI's lifespan:
+
+```python
+from contextlib import asynccontextmanager
+from fastapi import FastAPI
+import bugwatch
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    yield
+    bugwatch.flush(timeout=5)
+    bugwatch.close()
+
+app = FastAPI(lifespan=lifespan)
+```
+
+## Next Steps
+
+- [Python SDK Overview](/docs/sdks/python) -- core SDK functions and configuration
+- [Celery Integration](/docs/sdks/python/celery) -- capture background task failures alongside your FastAPI app

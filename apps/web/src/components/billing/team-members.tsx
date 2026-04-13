@@ -33,6 +33,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { MoreVertical, UserPlus, Loader2, Trash2, Shield, AlertTriangle } from 'lucide-react';
 import { billingApi, type OrganizationMember } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
+import { toast } from 'sonner';
 
 interface TeamMembersProps {
   isOwner: boolean;
@@ -76,20 +77,25 @@ export function TeamMembers({ isOwner }: TeamMembersProps) {
       setInviteRole('member');
       setInviteOpen(false);
       fetchMembers();
+      toast.success('Invitation sent');
     } catch (err) {
       console.error('Failed to invite member:', err);
+      toast.error('Failed to invite member');
     } finally {
       setInviting(false);
     }
   };
 
   const handleRemove = async (userId: string) => {
+    if (!window.confirm('Remove this team member?')) return;
     setActionLoading(userId);
     try {
       await billingApi.removeMember(userId);
       fetchMembers();
+      toast.success('Team member removed');
     } catch (err) {
       console.error('Failed to remove member:', err);
+      toast.error('Failed to remove member');
     } finally {
       setActionLoading(null);
     }
@@ -192,6 +198,7 @@ export function TeamMembers({ isOwner }: TeamMembersProps) {
                     </DialogDescription>
                   </DialogHeader>
                   <div className="grid gap-4 py-4">
+                    <p className="text-xs text-muted-foreground">Adding a team member may increase your subscription cost.</p>
                     <div className="grid gap-2">
                       <Label htmlFor="email">Email address</Label>
                       <Input
@@ -269,7 +276,7 @@ export function TeamMembers({ isOwner }: TeamMembersProps) {
                   {isOwner && !isOwnerMember && !isCurrentUser && (
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
-                        <Button variant="ghost" size="icon" disabled={actionLoading === member.member.user_id}>
+                        <Button variant="ghost" size="icon" aria-label="Member options" disabled={actionLoading === member.member.user_id}>
                           {actionLoading === member.member.user_id ? (
                             <Loader2 className="h-4 w-4 animate-spin" />
                           ) : (

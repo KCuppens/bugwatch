@@ -1,0 +1,196 @@
+---
+title: Echo Integration
+description: Integrate the Bugwatch Go SDK with the Echo web framework to automatically capture panics, attach request context, and monitor your Echo application.
+---
+
+# Echo Integration
+
+The Bugwatch Echo integration provides middleware that automatically recovers from panics, captures errors returned from handlers, and attaches full request context to every event.
+
+## Installation
+
+```bash
+go get github.com/KCuppens/bugwatch-go
+```
+
+The Echo middleware is included in the main `bugwatch-go` package -- no additional dependencies are required.
+
+## Quick Start
+
+```go
+package main
+
+import (
+	"github.com/labstack/echo/v4"
+	"github.com/KCuppens/bugwatch-go"
+	bugwatchecho "github.com/KCuppens/bugwatch-go/echo"
+)
+
+func main() {
+	bugwatch.Init(bugwatch.Options{
+		APIKey:      "bw_live_xxxxx",
+		Environment: "production",
+	})
+	defer bugwatch.Flush(5 * time.Second)
+
+	e := echo.New()
+
+	// Add Bugwatch middleware
+	e.Use(bugwatchecho.Middleware())
+
+	e.GET("/", func(c echo.Context) error {
+		return c.JSON(200, map[string]string{"status": "ok"})
+	})
+
+	e.Start(":8080")
+}
+```
+
+## What Gets Captured Automatically
+
+Once the middleware is added, the SDK captures:
+
+- **Panics** raised during request handling, with full stack traces
+- **Errors returned from handlers** -- Echo handlers return errors instead of panicking, and the middleware captures these automatically
+- **Request context** including URL, HTTP method, headers, query parameters, and client IP
+- **Route information** including the matched Echo route pattern
+
+## Error Capture Behavior
+
+Echo's handler pattern returns errors rather than panicking. The Bugwatch middleware intercepts errors returned from your handlers and reports them before passing them to Echo's HTTP error handler:
+
+```go
+e.GET("/api/users/:id", func(c echo.Context) error {
+	user, err := getUser(c.Param("id"))
+	if err != nil {
+		// This error is automatically captured by the middleware
+		return echo.NewHTTPError(500, "Failed to fetch user").SetInternal(err)
+	}
+	return c.JSON(200, user)
+})
+```
+
+<Callout type="info">
+The middleware captures the internal error (the original `err`) rather than the HTTP error wrapper, giving you the most useful stack trace and error message in your dashboard.
+</Callout>
+
+## User Extraction
+
+Pass an `ExtractUser` option to automatically associate errors with the current user:
+
+```go
+e.Use(bugwatchecho.Middleware(bugwatchecho.Options{
+	ExtractUser: func(c echo.Context) *bugwatch.User {
+		token := c.Get("user")
+		if token == nil {
+			return nil
+		}
+		claims := token.(*jwt.Token).Claims
+		return &bugwatch.User{
+			ID:    claims.Subject,
+			Email: claims.Email,
+		}
+	},
+}))
+```
+
+## Filtering Errors
+
+Not all returned errors should be reported. Use `ShouldCapture` to control which errors are sent to Bugwatch:
+
+```go
+e.Use(bugwatchecho.Middleware(bugwatchecho.Options{
+	ShouldCapture: func(c echo.Context, err error) bool {
+		// Don't report 4xx client errors
+		if he, ok := err.(*echo.HTTPError); ok && he.Code < 500 {
+			return false
+		}
+		return true
+	},
+}))
+```
+
+## Manual Capture in Handlers
+
+You can capture errors manually without returning them:
+
+```go
+e.POST("/api/webhooks", func(c echo.Context) error {
+	if err := processWebhook(c.Request().Body); err != nil {
+		bugwatch.CaptureException(err)
+		// Continue processing -- don't fail the webhook
+	}
+	return c.NoContent(200)
+})
+```
+
+## Attaching Context Per Request
+
+Use `bugwatchecho.SetTag` within a handler to enrich the current request scope:
+
+```go
+e.GET("/api/projects/:id", func(c echo.Context) error {
+	bugwatchecho.SetTag(c, "project_id", c.Param("id"))
+
+	project, err := getProject(c.Param("id"))
+	if err != nil {
+		return echo.NewHTTPError(404, "Project not found")
+	}
+	return c.JSON(200, project)
+})
+```
+
+## Full Example
+
+```go
+package main
+
+import (
+	"time"
+
+	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v4/middleware"
+	"github.com/KCuppens/bugwatch-go"
+	bugwatchecho "github.com/KCuppens/bugwatch-go/echo"
+)
+
+func main() {
+	bugwatch.Init(bugwatch.Options{
+		APIKey:      "bw_live_xxxxx",
+		Environment: "production",
+		Release:     "1.2.0",
+	})
+	defer bugwatch.Flush(5 * time.Second)
+
+	e := echo.New()
+	e.Use(middleware.Logger())
+	e.Use(bugwatchecho.Middleware(bugwatchecho.Options{
+		ShouldCapture: func(c echo.Context, err error) bool {
+			if he, ok := err.(*echo.HTTPError); ok && he.Code < 500 {
+				return false
+			}
+			return true
+		},
+	}))
+
+	e.GET("/health", func(c echo.Context) error {
+		return c.JSON(200, map[string]string{"status": "healthy"})
+	})
+
+	e.GET("/api/users/:id", func(c echo.Context) error {
+		bugwatchecho.SetTag(c, "user_id", c.Param("id"))
+		user, err := getUser(c.Param("id"))
+		if err != nil {
+			return echo.NewHTTPError(500, "Internal server error").SetInternal(err)
+		}
+		return c.JSON(200, user)
+	})
+
+	e.Start(":8080")
+}
+```
+
+## Next Steps
+
+- [Go SDK Overview](/docs/sdks/go) -- core SDK functions and configuration
+- [Gin Integration](/docs/sdks/go/gin) -- middleware for the Gin web framework

@@ -1,0 +1,250 @@
+---
+title: "@bugwatch/node"
+description: Bugwatch SDK for Node.js. Automatically captures uncaught exceptions and unhandled promise rejections with graceful shutdown support.
+---
+
+# @bugwatch/node
+
+`@bugwatch/node` extends `@bugwatch/core` with Node.js-specific error capture. It hooks into process-level events to catch uncaught exceptions and unhandled promise rejections, and provides middleware helpers for Express integration.
+
+## Installation
+
+```bash
+npm install @bugwatch/node
+```
+
+```bash
+yarn add @bugwatch/node
+```
+
+```bash
+pnpm add @bugwatch/node
+```
+
+## Quick Start
+
+The fastest way to get started is the `setup()` one-liner. Call it at the very top of your application entry point, before importing anything else.
+
+```js
+import { setup } from "@bugwatch/node";
+
+setup({
+  apiKey: "bw_live_xxxxx",
+  environment: "production",
+});
+
+// Your application code here
+```
+
+`setup()` calls `init()` from `@bugwatch/core` and registers process-level error handlers in a single step.
+
+## What Gets Captured Automatically
+
+Once `setup()` is called, the SDK automatically captures:
+
+- **Uncaught exceptions** -- any error that crashes the process is captured at `fatal` level and flushed before the process exits
+- **Unhandled promise rejections** -- rejected promises without a `.catch()` handler are captured at `error` level
+
+```js
+// Both of these are captured automatically after setup()
+setTimeout(() => {
+  throw new Error("Uncaught exception");
+}, 1000);
+
+Promise.reject(new Error("Unhandled rejection"));
+```
+
+## Configuration
+
+`setup()` accepts all `@bugwatch/core` options plus the following Node.js-specific settings.
+
+```js
+import { setup } from "@bugwatch/node";
+
+setup({
+  apiKey: "bw_live_xxxxx",
+
+  // Node.js-specific options
+  captureUncaughtExceptions: true,
+  captureUnhandledRejections: true,
+  exitOnUncaughtException: true,
+  shutdownTimeout: 2000,
+});
+```
+
+### Options Reference
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `captureUncaughtExceptions` | `boolean` | `true` | Register a handler for `process.on('uncaughtException')`. |
+| `captureUnhandledRejections` | `boolean` | `true` | Register a handler for `process.on('unhandledRejection')`. |
+| `exitOnUncaughtException` | `boolean` | `true` | Exit the process after capturing an uncaught exception. Set to `false` if you handle process recovery yourself. |
+| `shutdownTimeout` | `number` | `2000` | Maximum time in milliseconds to wait for events to flush before the process exits. |
+
+All [`@bugwatch/core` options](/docs/sdks/javascript/core#configuration) are also supported.
+
+## Graceful Shutdown
+
+When an uncaught exception occurs and `exitOnUncaughtException` is `true` (the default), the SDK:
+
+1. Captures the error at `fatal` level
+2. Calls `flush()` to send all pending events
+3. Waits up to `shutdownTimeout` milliseconds (default: 2 seconds)
+4. Exits the process with code `1`
+
+This ensures your fatal errors are delivered to Bugwatch before the process terminates.
+
+```js
+// Manually trigger a graceful shutdown
+import { flush } from "@bugwatch/node";
+
+process.on("SIGTERM", async () => {
+  await flush();
+  process.exit(0);
+});
+```
+
+## Express Integration
+
+The Node.js SDK includes Express-specific helpers. For more advanced Express features, see the dedicated [`@bugwatch/express`](/docs/sdks/javascript/express) package.
+
+### expressRequestHandler
+
+Add request context (URL, method, headers, user IP) to every captured event. Place this middleware before your routes.
+
+```js
+import express from "express";
+import { setup, expressRequestHandler } from "@bugwatch/node";
+
+setup({ apiKey: "bw_live_xxxxx" });
+
+const app = express();
+
+// Add request context to all events
+app.use(expressRequestHandler());
+```
+
+### expressErrorHandler
+
+Capture errors that propagate through the Express middleware chain. Place this after all your routes and other middleware.
+
+```js
+import { expressErrorHandler } from "@bugwatch/node";
+
+// Your routes here
+app.get("/api/data", (req, res) => {
+  // ...
+});
+
+// Capture Express errors
+app.use(expressErrorHandler());
+
+app.listen(3000);
+```
+
+### Full Express Example
+
+```js
+import express from "express";
+import { setup, expressRequestHandler, expressErrorHandler } from "@bugwatch/node";
+
+setup({
+  apiKey: "bw_live_xxxxx",
+  environment: "production",
+});
+
+const app = express();
+
+// Request handler goes first
+app.use(expressRequestHandler());
+
+app.get("/", (req, res) => {
+  res.send("Hello, world!");
+});
+
+app.get("/error", (req, res) => {
+  throw new Error("Something broke");
+});
+
+// Error handler goes last
+app.use(expressErrorHandler());
+
+app.listen(3000, () => {
+  console.log("Server listening on port 3000");
+});
+```
+
+## Async Wrapping
+
+Use `wrapAsync()` to catch errors in async route handlers and forward them to Express error handling.
+
+```js
+import { wrapAsync } from "@bugwatch/node";
+
+app.get(
+  "/api/users/:id",
+  wrapAsync(async (req, res) => {
+    const user = await db.users.findById(req.params.id);
+    if (!user) {
+      throw new Error("User not found");
+    }
+    res.json(user);
+  })
+);
+```
+
+Without `wrapAsync`, rejected promises in async handlers are swallowed by Express and never reach the error handler.
+
+## Console Integration
+
+The `ConsoleIntegration` patches `console.warn` and `console.error` to automatically create breadcrumbs. When an error is captured later, the console output leading up to it is included as context.
+
+```js
+import { setup, ConsoleIntegration } from "@bugwatch/node";
+
+setup({
+  apiKey: "bw_live_xxxxx",
+  integrations: [new ConsoleIntegration()],
+});
+
+// These will appear as breadcrumbs in your error events
+console.warn("Cache miss for key: user_12345");
+console.error("Database connection pool exhausted");
+```
+
+## Manual Capture
+
+All `@bugwatch/core` APIs are re-exported from `@bugwatch/node` for convenience.
+
+```js
+import {
+  captureException,
+  captureMessage,
+  setUser,
+  setTag,
+  addBreadcrumb,
+} from "@bugwatch/node";
+
+setUser({ id: "usr_12345", email: "alice@example.com" });
+setTag("service", "payment-processor");
+
+addBreadcrumb({
+  category: "payment",
+  message: "Processing charge",
+  data: { amount: 49.99, currency: "USD" },
+});
+
+try {
+  await processPayment(order);
+} catch (error) {
+  captureException(error, {
+    tags: { orderId: order.id },
+  });
+}
+```
+
+## Next Steps
+
+- [Express SDK](/docs/sdks/javascript/express) -- advanced Express integration with per-route wrapping and user extraction
+- [Fastify SDK](/docs/sdks/javascript/fastify) -- plugin-based integration for Fastify servers
+- [Core SDK](/docs/sdks/javascript/core) -- full API reference for the underlying SDK

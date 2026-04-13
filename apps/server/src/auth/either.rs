@@ -1,8 +1,4 @@
-use axum::{
-    async_trait,
-    extract::FromRequestParts,
-    http::request::Parts,
-};
+use axum::{async_trait, extract::FromRequestParts, http::request::Parts};
 
 use crate::{
     auth::{agent::AgentAuth, middleware::AuthUser},
@@ -163,8 +159,14 @@ mod tests {
     #[test]
     fn agent_with_read_permission() {
         let identity = AuthIdentity::Agent(make_agent(vec!["read".to_string()]));
-        assert!(identity.has_permission("read"), "Agent with read permission should have read access");
-        assert!(!identity.has_permission("write"), "Agent with only read permission should not have write access");
+        assert!(
+            identity.has_permission("read"),
+            "Agent with read permission should have read access"
+        );
+        assert!(
+            !identity.has_permission("write"),
+            "Agent with only read permission should not have write access"
+        );
     }
 
     #[test]
@@ -173,7 +175,10 @@ mod tests {
         assert!(identity.has_permission("read"), "Admin should imply read");
         assert!(identity.has_permission("write"), "Admin should imply write");
         assert!(identity.has_permission("admin"), "Admin should imply admin");
-        assert!(identity.has_permission("anything"), "Admin should imply any permission");
+        assert!(
+            identity.has_permission("anything"),
+            "Admin should imply any permission"
+        );
     }
 
     #[test]

@@ -1,0 +1,305 @@
+---
+title: Authentication
+description: API endpoints for user registration, login, logout, token refresh, and profile management.
+---
+
+# Authentication
+
+The authentication endpoints handle user registration, login, session management, and profile updates. All endpoints except signup and login require a valid Bearer token.
+
+## POST /auth/signup
+
+Register a new user account.
+
+**Authentication:** None required
+
+### Request Body
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `email` | string | Yes | Valid email address |
+| `password` | string | Yes | Password (minimum 8 characters, must include uppercase, lowercase, and number) |
+| `name` | string | No | Display name |
+
+### Example
+
+```bash
+curl -X POST https://api.bugwatch.dev/api/v1/auth/signup \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "dev@example.com",
+    "password": "SecurePass123",
+    "name": "Jane Developer"
+  }'
+```
+
+### Response `200 OK`
+
+```json
+{
+  "data": {
+    "user": {
+      "id": "usr_abc123",
+      "email": "dev@example.com",
+      "name": "Jane Developer",
+      "created_at": "2025-01-15T10:30:00Z"
+    },
+    "tokens": {
+      "access_token": "eyJhbGciOiJIUzI1NiIs...",
+      "refresh_token": "eyJhbGciOiJIUzI1NiIs...",
+      "expires_in": 3600
+    }
+  }
+}
+```
+
+### Errors
+
+| Status | Description |
+|---|---|
+| `400` | Invalid email format or password does not meet requirements |
+| `409` | Email is already registered |
+
+---
+
+## POST /auth/login
+
+Authenticate an existing user and receive tokens.
+
+**Authentication:** None required
+
+### Request Body
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `email` | string | Yes | Registered email address |
+| `password` | string | Yes | Account password |
+
+### Example
+
+```bash
+curl -X POST https://api.bugwatch.dev/api/v1/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "dev@example.com",
+    "password": "SecurePass123"
+  }'
+```
+
+### Response `200 OK`
+
+```json
+{
+  "data": {
+    "user": {
+      "id": "usr_abc123",
+      "email": "dev@example.com",
+      "name": "Jane Developer",
+      "created_at": "2025-01-15T10:30:00Z"
+    },
+    "tokens": {
+      "access_token": "eyJhbGciOiJIUzI1NiIs...",
+      "refresh_token": "eyJhbGciOiJIUzI1NiIs...",
+      "expires_in": 3600
+    }
+  }
+}
+```
+
+### Errors
+
+| Status | Description |
+|---|---|
+| `401` | Invalid email or password, or account is temporarily locked |
+
+---
+
+## POST /auth/logout
+
+Log out the current user. Invalidates all sessions across all devices.
+
+**Authentication:** Bearer token required
+
+### Example
+
+```bash
+curl -X POST https://api.bugwatch.dev/api/v1/auth/logout \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+```
+
+### Response `200 OK`
+
+```json
+{
+  "data": {
+    "message": "Logged out successfully"
+  }
+}
+```
+
+---
+
+## POST /auth/refresh
+
+Exchange a refresh token for a new token pair. The old refresh token is invalidated (rotation).
+
+**Authentication:** None required (uses refresh token in body)
+
+### Request Body
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `refresh_token` | string | Yes | Valid refresh token from login or previous refresh |
+
+### Example
+
+```bash
+curl -X POST https://api.bugwatch.dev/api/v1/auth/refresh \
+  -H "Content-Type: application/json" \
+  -d '{
+    "refresh_token": "eyJhbGciOiJIUzI1NiIs..."
+  }'
+```
+
+### Response `200 OK`
+
+```json
+{
+  "data": {
+    "access_token": "eyJhbGciOiJIUzI1NiIs...",
+    "refresh_token": "eyJhbGciOiJIUzI1NiIs...",
+    "expires_in": 3600
+  }
+}
+```
+
+### Errors
+
+| Status | Description |
+|---|---|
+| `401` | Invalid or expired refresh token, or session not found |
+
+---
+
+## GET /auth/me
+
+Get the current authenticated user's profile, including organization details if they belong to one.
+
+**Authentication:** Bearer token required
+
+### Example
+
+```bash
+curl https://api.bugwatch.dev/api/v1/auth/me \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+```
+
+### Response `200 OK`
+
+```json
+{
+  "data": {
+    "id": "usr_abc123",
+    "email": "dev@example.com",
+    "name": "Jane Developer",
+    "created_at": "2025-01-15T10:30:00Z",
+    "organization": {
+      "id": "org_xyz789",
+      "name": "Acme Corp",
+      "slug": "acme-corp-a1b2c3d4",
+      "tier": "pro",
+      "seats": 5,
+      "subscription_status": "active",
+      "current_period_end": "2025-02-15T10:30:00Z",
+      "cancel_at_period_end": false
+    }
+  }
+}
+```
+
+The `organization` field is `null` if the user has not joined or created an organization.
+
+---
+
+## PATCH /auth/me
+
+Update the current user's profile.
+
+**Authentication:** Bearer token required
+
+### Request Body
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `name` | string | No | New display name (max 100 characters, cannot be empty) |
+
+### Example
+
+```bash
+curl -X PATCH https://api.bugwatch.dev/api/v1/auth/me \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Jane Smith"
+  }'
+```
+
+### Response `200 OK`
+
+```json
+{
+  "data": {
+    "message": "Profile updated successfully"
+  }
+}
+```
+
+### Errors
+
+| Status | Description |
+|---|---|
+| `400` | Name is empty or exceeds 100 characters |
+
+---
+
+## POST /auth/change-password
+
+Change the current user's password. Requires the current password for verification.
+
+**Authentication:** Bearer token required
+
+### Request Body
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `current_password` | string | Yes | Current account password |
+| `new_password` | string | Yes | New password (must meet password requirements) |
+
+### Example
+
+```bash
+curl -X POST https://api.bugwatch.dev/api/v1/auth/change-password \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "current_password": "SecurePass123",
+    "new_password": "EvenMoreSecure456"
+  }'
+```
+
+### Response `200 OK`
+
+```json
+{
+  "data": {
+    "message": "Password changed successfully"
+  }
+}
+```
+
+### Errors
+
+| Status | Description |
+|---|---|
+| `400` | New password does not meet requirements |
+| `401` | Current password is incorrect |

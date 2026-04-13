@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { DollarSign, Users, Calendar, AlertCircle } from 'lucide-react';
 import { billingApi, type BillingDashboard as BillingDashboardType } from '@/lib/api';
+import { toast } from 'sonner';
 
 export function BillingDashboard() {
   const [dashboard, setDashboard] = useState<BillingDashboardType | null>(null);
@@ -17,6 +18,7 @@ export function BillingDashboard() {
         setDashboard(data);
       } catch (error) {
         console.error('Failed to load billing dashboard:', error);
+        toast.error('Failed to load billing dashboard');
       } finally {
         setLoading(false);
       }
@@ -59,7 +61,21 @@ export function BillingDashboard() {
   }
 
   if (!dashboard) {
-    return null;
+    return (
+      <div className="flex items-center gap-3 p-4 rounded-lg border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-950/20 text-red-800 dark:text-red-200">
+        <AlertCircle className="h-5 w-5 shrink-0" />
+        <div className="flex-1">
+          <p className="text-sm font-medium">Failed to load billing dashboard</p>
+          <p className="text-xs mt-0.5 opacity-80">Please try refreshing the page.</p>
+        </div>
+        <button
+          onClick={() => window.location.reload()}
+          className="text-sm font-medium hover:underline shrink-0"
+        >
+          Retry
+        </button>
+      </div>
+    );
   }
 
   return (
@@ -87,7 +103,7 @@ export function BillingDashboard() {
             <CardTitle className="text-sm font-medium">Current Plan</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold capitalize">{dashboard.current_tier}</div>
+            <div className="font-display text-2xl font-semibold capitalize">{dashboard.current_tier}</div>
             <p className="text-xs text-muted-foreground">
               Active subscription
             </p>
@@ -100,7 +116,7 @@ export function BillingDashboard() {
             <DollarSign className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{formatCurrency(dashboard.monthly_cost_cents)}</div>
+            <div className="font-display text-2xl font-semibold tabular-nums">{formatCurrency(dashboard.monthly_cost_cents)}</div>
             <p className="text-xs text-muted-foreground">
               Per month
             </p>
@@ -113,7 +129,7 @@ export function BillingDashboard() {
             <Users className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">
+            <div className="font-display text-2xl font-semibold tabular-nums">
               {dashboard.seats_used} / {dashboard.seats_total}
             </div>
             <p className="text-xs text-muted-foreground">
@@ -128,12 +144,22 @@ export function BillingDashboard() {
             <Calendar className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-sm font-bold">
-              {formatDate(dashboard.billing_period_start)}
-            </div>
-            <p className="text-xs text-muted-foreground">
-              to {formatDate(dashboard.billing_period_end)}
-            </p>
+            {dashboard.billing_period_start ? (
+              <>
+                <div className="text-sm font-bold">
+                  {formatDate(dashboard.billing_period_start)}
+                </div>
+                {dashboard.billing_period_end && (
+                  <p className="text-xs text-muted-foreground">
+                    to {formatDate(dashboard.billing_period_end)}
+                  </p>
+                )}
+              </>
+            ) : (
+              <div className="text-sm text-muted-foreground">
+                No active billing period
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>

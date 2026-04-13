@@ -99,6 +99,11 @@ function normalizeFilename(filename: string): string {
   return normalized;
 }
 
+// Combined internal-pattern regex, compiled once at module load. One test()
+// call per frame instead of walking an 8-element array.
+const INTERNAL_FRAME_PATTERN =
+  /(?:webpack\/(?:runtime|bootstrap)|turbopack|__next|next\/dist|react-dom|react\/cjs|scheduler)/;
+
 /**
  * Determine if a frame is from the application code (not a library)
  */
@@ -122,25 +127,7 @@ function isInAppFrame(filename: string): boolean {
     return false;
   }
 
-  // Common bundler/framework internals
-  const internalPatterns = [
-    /webpack\/runtime/,
-    /webpack\/bootstrap/,
-    /turbopack/,
-    /__next/,
-    /next\/dist/,
-    /react-dom/,
-    /react\/cjs/,
-    /scheduler/,
-  ];
-
-  for (const pattern of internalPatterns) {
-    if (pattern.test(filename)) {
-      return false;
-    }
-  }
-
-  return true;
+  return !INTERNAL_FRAME_PATTERN.test(filename);
 }
 
 /**

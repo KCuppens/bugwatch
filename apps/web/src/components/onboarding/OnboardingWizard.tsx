@@ -38,6 +38,8 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
   const [project, setProject] = useState<Project | null>(null);
 
   const handleStepClick = (step: number) => {
+    // Prevent going back before step 4 once project is created
+    if (project && step < 4) return;
     if (step < currentStep) {
       setCurrentStep(step);
     }
@@ -86,6 +88,8 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
   };
 
   const goBack = () => {
+    // Prevent going back before step 4 once project is created
+    if (project && currentStep <= 4) return;
     if (currentStep > 1) {
       setCurrentStep(currentStep - 1);
     }
@@ -96,8 +100,8 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
       <div className="mx-auto max-w-4xl px-4 py-8">
         {/* Header */}
         <div className="mb-8 text-center">
-          <h1 className="text-3xl font-bold">Create New Project</h1>
-          <p className="mt-2 text-muted-foreground">
+          <h1 className="font-display text-display-md">Create New Project</h1>
+          <p className="mt-3 text-body-lg text-muted-foreground">
             Set up error tracking for your application in minutes
           </p>
         </div>
@@ -123,7 +127,7 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
           <CardContent className="p-8">
             {isCreating ? (
               <div className="flex flex-col items-center justify-center py-12">
-                <Loader2 className="h-12 w-12 animate-spin text-primary" />
+                <Loader2 className="h-12 w-12 animate-spin text-accent-2" />
                 <p className="mt-4 text-muted-foreground">
                   Creating your project...
                 </p>
@@ -164,6 +168,7 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
                     apiKey={project.api_key}
                     onNext={handleInstallationNext}
                     onBack={goBack}
+                    backDisabled={!!project}
                   />
                 )}
                 {currentStep === 5 && project && platform && framework && (
@@ -174,6 +179,7 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
                     apiKey={project.api_key}
                     onComplete={handleComplete}
                     onBack={goBack}
+                    backDisabled={!!project}
                   />
                 )}
               </>

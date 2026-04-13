@@ -24,6 +24,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { ConfirmDialog } from "@/components/confirm-dialog";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Activity,
@@ -39,6 +40,7 @@ import {
   Trash2,
   ChevronDown,
   ChevronUp,
+  Check,
 } from "lucide-react";
 import {
   monitorsApi,
@@ -349,6 +351,7 @@ export default function UptimePage() {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
   const [expandedMonitorId, setExpandedMonitorId] = useState<string | null>(null);
+  const [selectedMonitors, setSelectedMonitors] = useState<Set<string>>(new Set());
 
   // Delete confirmation state
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
@@ -363,14 +366,14 @@ export default function UptimePage() {
     interval_seconds: 60,
   });
 
-  const fetchMonitors = useCallback(async () => {
+  const fetchMonitors = useCallback(async (showLoading = false) => {
     if (!selectedProject) {
       setMonitors([]);
       setIsLoading(false);
       return;
     }
 
-    setIsLoading(true);
+    if (showLoading) setIsLoading(true);
     try {
       const response = await monitorsApi.list(selectedProject.id);
       setMonitors(response.data);
@@ -384,14 +387,31 @@ export default function UptimePage() {
 
   // Fetch monitors when selected project changes
   useEffect(() => {
-    fetchMonitors();
+    fetchMonitors(true);
   }, [fetchMonitors]);
 
   // Auto-refresh every 30s
   useEffect(() => {
     if (!selectedProject) return;
-    const interval = setInterval(fetchMonitors, 30000);
-    return () => clearInterval(interval);
+
+    let interval: ReturnType<typeof setInterval> | null = null;
+
+    function handleVisibility() {
+      if (document.hidden) {
+        if (interval) { clearInterval(interval); interval = null; }
+      } else {
+        fetchMonitors();
+        interval = setInterval(fetchMonitors, 30000);
+      }
+    }
+
+    interval = setInterval(fetchMonitors, 30000);
+    document.addEventListener("visibilitychange", handleVisibility);
+
+    return () => {
+      if (interval) clearInterval(interval);
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
   }, [selectedProject, fetchMonitors]);
 
   async function handleCreateMonitor() {
@@ -459,6 +479,59 @@ export default function UptimePage() {
     }
   }
 
+  const toggleMonitorSelection = (id: string) => {
+    const newSelected = new Set(selectedMonitors);
+    if (newSelected.has(id)) newSelected.delete(id);
+    else newSelected.add(id);
+    setSelectedMonitors(newSelected);
+  };
+
+  async function handleBulkPause() {
+    if (!selectedProject) return;
+    const ids = Array.from(selectedMonitors);
+    for (const id of ids) {
+      const monitor = monitors.find(m => m.id === id);
+      if (monitor?.is_active) {
+        try {
+          const response = await monitorsApi.update(selectedProject.id, id, { is_active: false });
+          setMonitors(prev => prev.map(m => m.id === id ? response : m));
+        } catch { /* ignore */ }
+      }
+    }
+    setSelectedMonitors(new Set());
+    toast.success(`${ids.length} monitors paused`);
+  }
+
+  async function handleBulkResume() {
+    if (!selectedProject) return;
+    const ids = Array.from(selectedMonitors);
+    for (const id of ids) {
+      const monitor = monitors.find(m => m.id === id);
+      if (!monitor?.is_active) {
+        try {
+          const response = await monitorsApi.update(selectedProject.id, id, { is_active: true });
+          setMonitors(prev => prev.map(m => m.id === id ? response : m));
+        } catch { /* ignore */ }
+      }
+    }
+    setSelectedMonitors(new Set());
+    toast.success(`${ids.length} monitors resumed`);
+  }
+
+  async function handleBulkDelete() {
+    if (!selectedProject) return;
+    if (!window.confirm(`Delete ${selectedMonitors.size} monitors? This cannot be undone.`)) return;
+    const ids = Array.from(selectedMonitors);
+    for (const id of ids) {
+      try {
+        await monitorsApi.delete(selectedProject.id, id);
+        setMonitors(prev => prev.filter(m => m.id !== id));
+      } catch { /* ignore */ }
+    }
+    setSelectedMonitors(new Set());
+    toast.success(`${ids.length} monitors deleted`);
+  }
+
   // Calculate stats
   const activeMonitors = monitors.filter((m) => m.is_active).length;
   const upMonitors = monitors.filter((m) => m.current_status === "up").length;
@@ -476,8 +549,8 @@ export default function UptimePage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold">Uptime Monitoring</h1>
-          <p className="text-muted-foreground">
+          <h1 className="font-display text-heading-lg">Uptime Monitoring</h1>
+          <p className="text-body-sm text-muted-foreground mt-1">
             Monitor your endpoints and get alerted when they go down
           </p>
         </div>
@@ -498,8 +571,8 @@ export default function UptimePage() {
               <CardContent className="flex items-center gap-3 p-4">
                 <Activity className="h-4 w-4 text-muted-foreground" />
                 <div>
-                  <p className="text-2xl font-bold">{activeMonitors}</p>
-                  <p className="text-xs text-muted-foreground">Active Monitors</p>
+                  <p className="font-display text-2xl font-semibold tabular-nums">{activeMonitors}</p>
+                  <p className="text-caption uppercase tracking-wide text-muted-foreground">Active Monitors</p>
                 </div>
               </CardContent>
             </Card>
@@ -507,10 +580,10 @@ export default function UptimePage() {
               <CardContent className="flex items-center gap-3 p-4">
                 <CheckCircle className="h-4 w-4 text-bug" />
                 <div>
-                  <p className="text-2xl font-bold">
+                  <p className="font-display text-2xl font-semibold tabular-nums">
                     {avgUptime !== null ? `${avgUptime.toFixed(1)}%` : "-"}
                   </p>
-                  <p className="text-xs text-muted-foreground">Overall Uptime (24h)</p>
+                  <p className="text-caption uppercase tracking-wide text-muted-foreground">Overall Uptime (24h)</p>
                 </div>
               </CardContent>
             </Card>
@@ -518,10 +591,10 @@ export default function UptimePage() {
               <CardContent className="flex items-center gap-3 p-4">
                 <Clock className="h-4 w-4 text-muted-foreground" />
                 <div>
-                  <p className="text-2xl font-bold">
+                  <p className="font-display text-2xl font-semibold tabular-nums">
                     {avgResponse !== null ? `${Math.round(avgResponse)}ms` : "-"}
                   </p>
-                  <p className="text-xs text-muted-foreground">Avg Response (24h)</p>
+                  <p className="text-caption uppercase tracking-wide text-muted-foreground">Avg Response (24h)</p>
                 </div>
               </CardContent>
             </Card>
@@ -529,32 +602,54 @@ export default function UptimePage() {
               <CardContent className="flex items-center gap-3 p-4">
                 <Globe className="h-4 w-4 text-muted-foreground" />
                 <div>
-                  <p className="text-2xl font-bold">{upMonitors}/{monitors.length}</p>
-                  <p className="text-xs text-muted-foreground">Currently Up</p>
+                  <p className="font-display text-2xl font-semibold tabular-nums">{upMonitors}/{monitors.length}</p>
+                  <p className="text-caption uppercase tracking-wide text-muted-foreground">Currently Up</p>
                 </div>
               </CardContent>
             </Card>
           </div>
 
+          {/* Bulk Actions Bar */}
+          {selectedMonitors.size > 0 && (
+            <div className="flex items-center gap-3 px-4 py-2 rounded-lg bg-accent-2/5 border border-accent-2/20">
+              <span className="text-sm font-medium">{selectedMonitors.size} selected</span>
+              <div className="flex items-center gap-2">
+                <Button size="sm" variant="outline" className="h-7 text-xs" onClick={handleBulkPause}>
+                  <Pause className="h-3 w-3 mr-1" />
+                  Pause
+                </Button>
+                <Button size="sm" variant="outline" className="h-7 text-xs" onClick={handleBulkResume}>
+                  <Play className="h-3 w-3 mr-1" />
+                  Resume
+                </Button>
+                <Button size="sm" variant="outline" className="h-7 text-xs text-destructive" onClick={handleBulkDelete}>
+                  <Trash2 className="h-3 w-3 mr-1" />
+                  Delete
+                </Button>
+                <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setSelectedMonitors(new Set())}>
+                  Clear
+                </Button>
+              </div>
+            </div>
+          )}
+
           {/* Monitor List */}
           {monitors.length === 0 ? (
             <Card>
-              <CardContent className="flex flex-col items-center justify-center py-16">
-                <div className="rounded-full bg-muted p-4">
-                  <Activity className="h-8 w-8 text-muted-foreground" />
-                </div>
-                <h3 className="mt-4 text-lg font-medium">No monitors yet</h3>
-                <p className="mt-2 max-w-md text-center text-muted-foreground">
-                  {selectedProject
+              <CardContent className="p-0">
+                <EmptyState
+                  icon={<Activity />}
+                  title="No monitors yet"
+                  description={selectedProject
                     ? "Add your first uptime monitor to start tracking the availability of your websites and APIs."
                     : "Select a project from the sidebar to view and create monitors."}
-                </p>
-                {selectedProject && (
-                  <Button className="mt-6" onClick={() => setShowCreateModal(true)}>
-                    <Plus className="mr-2 h-4 w-4" />
-                    Create Your First Monitor
-                  </Button>
-                )}
+                  action={selectedProject ? (
+                    <Button onClick={() => setShowCreateModal(true)}>
+                      <Plus className="mr-2 h-4 w-4" />
+                      Create Your First Monitor
+                    </Button>
+                  ) : undefined}
+                />
               </CardContent>
             </Card>
           ) : (
@@ -571,6 +666,14 @@ export default function UptimePage() {
                         }
                       >
                         <div className="flex items-center gap-4">
+                          <button
+                            onClick={(e) => { e.stopPropagation(); toggleMonitorSelection(monitor.id); }}
+                            className={`w-4 h-4 rounded border-2 flex items-center justify-center transition-all shrink-0 ${
+                              selectedMonitors.has(monitor.id) ? 'bg-accent-2 border-accent-2' : 'border-muted-foreground/30 hover:border-accent-2/50'
+                            }`}
+                          >
+                            {selectedMonitors.has(monitor.id) && <Check className="h-3 w-3 text-accent-2-foreground" />}
+                          </button>
                           <div
                             className={`rounded-full p-2 ${
                               monitor.current_status === "up"

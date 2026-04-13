@@ -7,6 +7,7 @@ import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { CreditCard, Plus, Trash2, Check, Loader2 } from 'lucide-react';
 import { billingApi, type PaymentMethod } from '@/lib/api';
+import { isValidHttpUrl } from '@/lib/url-utils';
 
 interface PaymentMethodsProps {
   isOwner: boolean;
@@ -70,6 +71,7 @@ export function PaymentMethods({ isOwner }: PaymentMethodsProps) {
       await billingApi.createSetupIntent();
       // For now, redirect to Stripe's hosted page via billing portal
       const portalResponse = await billingApi.createPortal(window.location.href);
+      if (!isValidHttpUrl(portalResponse.portal_url)) return;
       window.location.href = portalResponse.portal_url;
     } catch (error) {
       console.error('Failed to add payment method:', error);

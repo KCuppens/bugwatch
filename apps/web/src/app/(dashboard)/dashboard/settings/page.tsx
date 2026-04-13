@@ -14,15 +14,16 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
-import { User, Bell, CreditCard, Shield, CheckCircle, XCircle, Lock, Smartphone, Monitor } from "lucide-react";
+import { User, Bell, CreditCard, Shield, CheckCircle, XCircle, Lock, Smartphone, Monitor, Plug } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { toast } from "sonner";
-import { billingApi, type Organization, type Subscription, type VerifyCheckoutResponse } from "@/lib/api";
-import { PlanCard, PricingTable, UsageStats, TeamMembers, CreditPurchase, Invoices, PaymentMethods, BillingDashboard, SeatManagement } from "@/components/billing";
-import { useTier, type Tier } from "@/hooks/use-feature";
+import { authApi, billingApi, ApiError, type Organization, type Subscription, type VerifyCheckoutResponse } from "@/lib/api";
+import { PlanCard, PricingTable, UsageStats, TeamMembers, Invoices, PaymentMethods, BillingDashboard, SeatManagement } from "@/components/billing";
+import { IntegrationSettings } from "@/components/integrations";
+import { useTier, useFeature, isSelfHosted, type Tier } from "@/hooks/use-feature";
 
-type Tab = "profile" | "notifications" | "billing" | "security";
+type Tab = "profile" | "notifications" | "billing" | "security" | "integrations";
 
 export default function SettingsPage() {
   const { user, refreshUser } = useAuth();
@@ -30,7 +31,7 @@ export default function SettingsPage() {
   const searchParams = useSearchParams();
 
   const tabParam = searchParams.get("tab") as Tab | null;
-  const activeTab: Tab = tabParam && ["profile", "notifications", "billing", "security"].includes(tabParam)
+  const activeTab: Tab = tabParam && ["profile", "notifications", "billing", "security", "integrations"].includes(tabParam)
     ? tabParam
     : "profile";
 
@@ -39,6 +40,8 @@ export default function SettingsPage() {
   const sessionId = searchParams.get("session_id");
 
   const [name, setName] = useState(user?.name || "");
+  const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
+  const [savedLabel, setSavedLabel] = useState<string>("");
   const [verifying, setVerifying] = useState(false);
   const [verificationResult, setVerificationResult] = useState<VerifyCheckoutResponse | null>(null);
   const [verificationError, setVerificationError] = useState<string | null>(null);
@@ -54,7 +57,9 @@ export default function SettingsPage() {
     try {
       const stored = localStorage.getItem("bugwatch-notification-prefs");
       if (stored) return JSON.parse(stored);
-    } catch {}
+    } catch (e) {
+      console.warn("Failed to parse notification preferences from localStorage:", e);
+    }
     return { emailDigest: true, inAppBadges: true, criticalAlerts: true, weeklyReport: false, quietHoursEnabled: false };
   });
 
@@ -69,6 +74,7 @@ export default function SettingsPage() {
   const [membersCount, setMembersCount] = useState(1);
 
   const { tier } = useTier();
+  const hasIntegrations = useFeature("github");
 
   const setActiveTab = (tab: Tab) => {
     const params = new URLSearchParams(searchParams.toString());
@@ -80,9 +86,9 @@ export default function SettingsPage() {
     router.push(`/dashboard/settings?${params.toString()}`);
   };
 
-  // Fetch billing data when on billing tab
+  // Fetch billing data when on billing tab (SaaS only)
   useEffect(() => {
-    if (activeTab !== "billing") return;
+    if (activeTab !== "billing" || isSelfHosted()) return;
 
     async function fetchBillingData() {
       setBillingLoading(true);
@@ -105,9 +111,9 @@ export default function SettingsPage() {
     fetchBillingData();
   }, [activeTab]);
 
-  // Verify checkout session and refresh user data after successful checkout
+  // Verify checkout session and refresh user data after successful checkout (SaaS only)
   useEffect(() => {
-    if (success !== "true") return;
+    if (success !== "true" || isSelfHosted()) return;
 
     // Prevent duplicate verification attempts
     if (verificationAttemptedRef.current) return;
@@ -166,11 +172,43 @@ export default function SettingsPage() {
 
   async function handleSave() {
     setIsSaving(true);
-    // TODO: Call API to update user
-    await new Promise((resolve) => setTimeout(resolve, 500));
-    setIsSaving(false);
-    toast.success("Profile updated", { description: "Your changes have been saved." });
+    try {
+      await authApi.updateProfile({ name: name.trim() });
+      await refreshUser();
+      setLastSavedAt(new Date());
+      setSavedLabel("Saved just now");
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : "Failed to save profile";
+      toast.error(message);
+    } finally {
+      setIsSaving(false);
+    }
   }
+
+  // Autosave profile name — debounce 800ms after last change
+  useEffect(() => {
+    if (!user || !name.trim() || name.trim() === (user.name || "")) return;
+    const handle = setTimeout(() => {
+      void handleSave();
+    }, 800);
+    return () => clearTimeout(handle);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [name]);
+
+  // Ghost text ticker — "Saved Ns ago"
+  useEffect(() => {
+    if (!lastSavedAt) return;
+    const tick = () => {
+      const secs = Math.floor((Date.now() - lastSavedAt.getTime()) / 1000);
+      if (secs < 5) setSavedLabel("Saved just now");
+      else if (secs < 60) setSavedLabel(`Saved ${secs}s ago`);
+      else if (secs < 3600) setSavedLabel(`Saved ${Math.floor(secs / 60)}m ago`);
+      else setSavedLabel(`Saved ${Math.floor(secs / 3600)}h ago`);
+    };
+    tick();
+    const i = setInterval(tick, 5000);
+    return () => clearInterval(i);
+  }, [lastSavedAt]);
 
   function updateNotifPref(key: string, value: boolean) {
     const updated = { ...notifPrefs, [key]: value };
@@ -179,7 +217,7 @@ export default function SettingsPage() {
     toast.success("Notification preference updated");
   }
 
-  function handlePasswordChange() {
+  async function handlePasswordChange() {
     if (newPassword !== confirmPassword) {
       toast.error("Passwords don't match");
       return;
@@ -188,12 +226,17 @@ export default function SettingsPage() {
       toast.error("Password must be at least 8 characters");
       return;
     }
-    // TODO: Call API to change password
-    toast.info("Password change coming soon", { description: "Backend integration is in progress." });
-    setPasswordDialogOpen(false);
-    setCurrentPassword("");
-    setNewPassword("");
-    setConfirmPassword("");
+    try {
+      await authApi.changePassword(currentPassword, newPassword);
+      toast.success("Password changed successfully");
+      setPasswordDialogOpen(false);
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmPassword("");
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : "Failed to change password";
+      toast.error(message);
+    }
   }
 
   const handleRefreshBilling = async () => {
@@ -218,7 +261,8 @@ export default function SettingsPage() {
   const tabs = [
     { id: "profile" as Tab, label: "Profile", icon: User },
     { id: "notifications" as Tab, label: "Notifications", icon: Bell },
-    { id: "billing" as Tab, label: "Billing", icon: CreditCard },
+    ...(!isSelfHosted() ? [{ id: "billing" as Tab, label: "Billing", icon: CreditCard }] : []),
+    ...(hasIntegrations ? [{ id: "integrations" as Tab, label: "Integrations", icon: Plug }] : []),
     { id: "security" as Tab, label: "Security", icon: Shield },
   ];
 
@@ -226,20 +270,20 @@ export default function SettingsPage() {
     <div className="space-y-6">
       {/* Header */}
       <div>
-        <h1 className="text-2xl font-bold">Settings</h1>
-        <p className="text-muted-foreground">
+        <h1 className="font-display text-heading-lg">Settings</h1>
+        <p className="text-body-sm text-muted-foreground mt-1">
           Manage your account and preferences
         </p>
       </div>
 
       {/* Success/Canceled Messages */}
-      {success === "true" && verifying && (
+      {!isSelfHosted() && success === "true" && verifying && (
         <div className="flex items-center gap-2 p-4 rounded-lg bg-blue-50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-800 text-blue-800 dark:text-blue-200">
           <div className="h-5 w-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
           <span>Verifying your subscription...</span>
         </div>
       )}
-      {success === "true" && !verifying && !verificationError && (
+      {!isSelfHosted() && success === "true" && !verifying && !verificationError && (
         <div className="flex items-center gap-2 p-4 rounded-lg bg-green-50 dark:bg-green-950/20 border border-green-200 dark:border-green-800 text-green-800 dark:text-green-200">
           <CheckCircle className="h-5 w-5" />
           <span>
@@ -249,13 +293,13 @@ export default function SettingsPage() {
           </span>
         </div>
       )}
-      {verificationError && (
+      {!isSelfHosted() && verificationError && (
         <div className="flex items-center gap-2 p-4 rounded-lg bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-200">
           <XCircle className="h-5 w-5" />
           <span>{verificationError}</span>
         </div>
       )}
-      {canceled === "true" && (
+      {!isSelfHosted() && canceled === "true" && (
         <div className="flex items-center gap-2 p-4 rounded-lg bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-200">
           <XCircle className="h-5 w-5" />
           <span>Checkout was canceled. No changes were made.</span>
@@ -263,13 +307,14 @@ export default function SettingsPage() {
       )}
 
       {/* Navigation */}
-      <div className="flex gap-2 border-b pb-4">
+      <div className="flex gap-2 border-b border-border-subtle pb-4 overflow-x-auto scrollbar-hide -mx-1 px-1">
         {tabs.map((tab) => (
           <Button
             key={tab.id}
             variant={activeTab === tab.id ? "secondary" : "ghost"}
             size="sm"
             onClick={() => setActiveTab(tab.id)}
+            className="shrink-0"
           >
             <tab.icon className="mr-2 h-4 w-4" />
             {tab.label}
@@ -301,9 +346,16 @@ export default function SettingsPage() {
                 Contact support to change your email
               </p>
             </div>
-            <Button onClick={handleSave} disabled={isSaving}>
-              {isSaving ? "Saving..." : "Save Changes"}
-            </Button>
+            <div className="flex items-center gap-3">
+              <Button onClick={handleSave} disabled={isSaving}>
+                {isSaving ? "Saving..." : "Save Changes"}
+              </Button>
+              {savedLabel && (
+                <span className="text-caption text-muted-foreground tabular-nums">
+                  {isSaving ? "Saving…" : savedLabel}
+                </span>
+              )}
+            </div>
           </CardContent>
         </Card>
       )}
@@ -384,7 +436,7 @@ export default function SettingsPage() {
         </div>
       )}
 
-      {activeTab === "billing" && (
+      {activeTab === "billing" && !isSelfHosted() && (
         <div className="space-y-6">
           {billingLoading ? (
             <>
@@ -458,11 +510,13 @@ export default function SettingsPage() {
                 <Invoices />
               )}
 
-              {/* AI Fix Credits */}
-              <CreditPurchase currentCredits={user?.credits ?? 0} />
             </>
           )}
         </div>
+      )}
+
+      {activeTab === "integrations" && hasIntegrations && (
+        <IntegrationSettings />
       )}
 
       {activeTab === "security" && (
@@ -506,8 +560,8 @@ export default function SettingsPage() {
                     <p className="text-xs text-muted-foreground">Not configured</p>
                   </div>
                 </div>
-                <Button variant="outline" onClick={() => toast.info("2FA coming soon", { description: "This feature is currently in development." })}>
-                  Enable 2FA
+                <Button variant="outline" disabled className="opacity-60">
+                  Enable 2FA (Coming Soon)
                 </Button>
               </div>
             </CardContent>

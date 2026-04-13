@@ -1,4 +1,4 @@
-use axum::{routing::get, routing::post, routing::patch, routing::delete, Json, Router};
+use axum::{routing::delete, routing::get, routing::patch, routing::post, Json, Router};
 use serde::{Deserialize, Serialize};
 
 use crate::AppState;
@@ -9,10 +9,13 @@ pub mod auth;
 pub mod billing;
 pub mod comments;
 pub mod events;
+pub mod integrations;
 pub mod issues;
 pub mod metrics;
 pub mod monitors;
+pub mod performance;
 pub mod projects;
+pub mod replay;
 #[cfg(feature = "saas")]
 pub mod webhooks;
 
@@ -31,14 +34,13 @@ pub fn router() -> Router<AppState> {
             get(agent_keys::list).post(agent_keys::create),
         )
         .route("/agent-keys/:key_id", delete(agent_keys::revoke))
-        .route(
-            "/agent-keys/:key_id/audit-log",
-            get(agent_keys::audit_log),
-        )
+        .route("/agent-keys/:key_id/audit-log", get(agent_keys::audit_log))
         // OpenAPI spec
         .route("/openapi.yaml", get(serve_openapi_spec))
         // Event ingestion
         .route("/events", post(events::ingest))
+        // Transaction ingestion (performance monitoring)
+        .route("/transactions", post(performance::ingest_transaction))
         // Server metrics ingestion (agent pushes here)
         .route("/metrics", post(metrics::ingest_metrics))
         // Projects
@@ -57,9 +59,18 @@ pub fn router() -> Router<AppState> {
         .route("/projects/:id/verify", get(projects::verify_events))
         // Cross-project routes (must come before project-specific routes)
         .route("/issues/across-projects", get(issues::list_across_projects))
-        .route("/issues/stats/by-project", get(issues::get_stats_by_project))
-        .route("/alerts/across-projects", get(alerts::list_alert_logs_across_projects))
-        .route("/monitors/across-projects", get(monitors::list_across_projects))
+        .route(
+            "/issues/stats/by-project",
+            get(issues::get_stats_by_project),
+        )
+        .route(
+            "/alerts/across-projects",
+            get(alerts::list_alert_logs_across_projects),
+        )
+        .route(
+            "/monitors/across-projects",
+            get(monitors::list_across_projects),
+        )
         // Issues - specific routes MUST come before parameterized :issue_id route
         .route("/projects/:project_id/issues", get(issues::list))
         .route("/projects/:project_id/issues/_search", post(issues::search))
@@ -108,10 +119,7 @@ pub fn router() -> Router<AppState> {
             get(monitors::list_checks),
         )
         // Server monitoring
-        .route(
-            "/projects/:project_id/servers",
-            get(metrics::list_servers),
-        )
+        .route("/projects/:project_id/servers", get(metrics::list_servers))
         .route(
             "/projects/:project_id/servers/status",
             get(metrics::servers_status),
@@ -123,6 +131,19 @@ pub fn router() -> Router<AppState> {
         .route(
             "/projects/:project_id/servers/:server_id/metrics/latest",
             get(metrics::get_latest_metrics),
+        )
+        // Performance monitoring
+        .route(
+            "/projects/:project_id/performance/summary",
+            get(performance::get_summary),
+        )
+        .route(
+            "/projects/:project_id/performance/transactions",
+            get(performance::list_transactions),
+        )
+        .route(
+            "/projects/:project_id/performance/charts",
+            get(performance::get_charts),
         )
         // Alerts
         .route(
@@ -137,6 +158,18 @@ pub fn router() -> Router<AppState> {
             "/projects/:project_id/alerts/:alert_id",
             patch(alerts::update_alert_rule).delete(alerts::delete_alert_rule),
         )
+        .route(
+            "/projects/:project_id/alerts/:alert_id/mute",
+            post(alerts::mute_alert_rule),
+        )
+        .route(
+            "/projects/:project_id/alerts/:alert_id/unmute",
+            post(alerts::unmute_alert_rule),
+        )
+        .route(
+            "/projects/:project_id/alerts/:alert_id/test",
+            post(alerts::test_alert_rule),
+        )
         // Notification Channels
         .route(
             "/projects/:project_id/channels",
@@ -150,6 +183,49 @@ pub fn router() -> Router<AppState> {
             "/projects/:project_id/channels/:channel_id/test",
             post(alerts::test_channel),
         )
+        // Session Replay (SDK ingestion - API key auth)
+        .route("/replay/segments", post(replay::ingest_segment))
+        .route("/replay/finish", post(replay::finish_recording))
+        // Session Replay (dashboard - user auth, tier gated)
+        .route("/projects/:project_id/replay", get(replay::list_recordings))
+        .route(
+            "/projects/:project_id/replay/:recording_id",
+            get(replay::get_recording),
+        )
+        .route(
+            "/projects/:project_id/replay/:recording_id/segments",
+            get(replay::get_segments),
+        )
+        .route(
+            "/projects/:project_id/issues/:issue_id/replay",
+            get(replay::get_issue_replay),
+        )
+        // Integrations
+        .route("/integrations", get(integrations::list_integrations))
+        .route(
+            "/integrations/oauth/:provider/authorize",
+            get(integrations::oauth_authorize),
+        )
+        .route(
+            "/integrations/oauth/:provider/callback",
+            get(integrations::oauth_callback),
+        )
+        .route(
+            "/integrations/:integration_id",
+            delete(integrations::delete_integration),
+        )
+        .route(
+            "/projects/:project_id/issues/:issue_id/links",
+            get(integrations::list_issue_links).post(integrations::create_issue_link),
+        )
+        .route(
+            "/projects/:project_id/issues/:issue_id/links/:link_id",
+            delete(integrations::delete_issue_link),
+        )
+        // Integration webhooks (no auth)
+        .route("/webhooks/github", post(integrations::github_webhook))
+        .route("/webhooks/jira", post(integrations::jira_webhook))
+        .route("/webhooks/linear", post(integrations::linear_webhook))
         // Organization routes (always available)
         .route(
             "/organization",
@@ -178,13 +254,19 @@ pub fn router() -> Router<AppState> {
         .route("/billing/cancel", post(billing::cancel_subscription))
         // Plan changes
         .route("/billing/change-plan", post(billing::change_plan))
-        .route("/billing/preview-change", post(billing::preview_plan_change))
+        .route(
+            "/billing/preview-change",
+            post(billing::preview_plan_change),
+        )
         .route("/billing/seats", post(billing::update_seats))
         // Invoices
         .route("/billing/invoices", get(billing::list_invoices))
         .route("/billing/invoices/:invoice_id", get(billing::get_invoice))
         // Payment methods
-        .route("/billing/payment-methods", get(billing::list_payment_methods))
+        .route(
+            "/billing/payment-methods",
+            get(billing::list_payment_methods),
+        )
         .route("/billing/setup-intent", post(billing::create_setup_intent))
         .route(
             "/billing/payment-methods/default",
@@ -214,8 +296,8 @@ pub fn router() -> Router<AppState> {
 
 /// Serve OpenAPI 3.1 specification
 async fn serve_openapi_spec() -> axum::response::Response {
-    use axum::response::IntoResponse;
     use axum::http::{header, StatusCode};
+    use axum::response::IntoResponse;
     (
         StatusCode::OK,
         [(header::CONTENT_TYPE, "application/yaml")],

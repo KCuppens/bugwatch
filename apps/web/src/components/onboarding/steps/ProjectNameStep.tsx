@@ -21,7 +21,7 @@ export function ProjectNameStep({
   return (
     <div className="space-y-8">
       <div className="space-y-2 text-center">
-        <h2 className="text-2xl font-bold">Name Your Project</h2>
+        <h2 className="font-display text-heading-lg">Name Your Project</h2>
         <p className="text-muted-foreground">
           Give your project a name to help you identify it later
         </p>

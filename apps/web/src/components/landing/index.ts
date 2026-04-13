@@ -2,6 +2,7 @@ export { Header } from "./Header";
 export { Hero } from "./Hero";
 export { SocialProof } from "./SocialProof";
 export { ProblemSection } from "./ProblemSection";
+export { HowItWorks } from "./HowItWorks";
 export { FeaturesGrid } from "./FeaturesGrid";
 export { SdkSection } from "./SdkSection";
 export { OpenSourceSection } from "./OpenSourceSection";

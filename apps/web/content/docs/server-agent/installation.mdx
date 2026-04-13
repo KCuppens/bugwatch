@@ -1,0 +1,89 @@
+---
+title: Installation
+description: Install the Bugwatch server agent on your Linux host with a single curl command. The installer sets up a systemd service that begins reporting metrics immediately.
+---
+
+# Installing the Server Agent
+
+The server agent installs with a single command and begins reporting metrics within seconds.
+
+## Quick Install
+
+Run the following command on your server, replacing `YOUR_API_KEY` with your project's API key:
+
+```bash
+curl -sSL https://install.bugwatch.dev | bash -s -- --api-key YOUR_API_KEY
+```
+
+The installer will:
+
+1. Download the latest agent binary to `/usr/local/bin/bugwatch-agent`
+2. Create a configuration file at `/etc/bugwatch/agent.conf`
+3. Register and start a systemd service (or fall back to a cron job)
+4. Send an initial metrics payload to verify connectivity
+
+## Installer Options
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--api-key` | **(Required)** Your Bugwatch project API key | -- |
+| `--endpoint` | API endpoint URL (for self-hosted instances) | `https://api.bugwatch.dev` |
+| `--interval` | Reporting interval in seconds | `60` |
+
+### Examples
+
+**Self-hosted instance:**
+
+```bash
+curl -sSL https://install.bugwatch.dev | bash -s -- \
+  --api-key bw_live_xxxxx \
+  --endpoint https://bugwatch.yourcompany.com
+```
+
+**Custom reporting interval (every 30 seconds):**
+
+```bash
+curl -sSL https://install.bugwatch.dev | bash -s -- \
+  --api-key bw_live_xxxxx \
+  --interval 30
+```
+
+## Verifying the Installation
+
+After installation, verify the agent is running:
+
+```bash
+systemctl status bugwatch-agent
+```
+
+You should see output indicating the service is **active (running)**. Within one reporting interval, metrics will appear on the **Server** tab of your Bugwatch dashboard.
+
+## Supported Platforms
+
+| Distribution | Versions | Init System |
+|-------------|----------|-------------|
+| Ubuntu | 18.04+ | systemd |
+| Debian | 10+ | systemd |
+| CentOS / RHEL | 7+ | systemd |
+| Amazon Linux | 2, 2023 | systemd |
+| Alpine | 3.14+ | cron fallback |
+
+The agent binary is statically compiled and has no external runtime dependencies.
+
+## Uninstalling
+
+To remove the agent:
+
+```bash
+sudo systemctl stop bugwatch-agent
+sudo systemctl disable bugwatch-agent
+sudo rm /usr/local/bin/bugwatch-agent
+sudo rm -rf /etc/bugwatch
+sudo rm /etc/systemd/system/bugwatch-agent.service
+sudo systemctl daemon-reload
+```
+
+## Next Steps
+
+- [Configuration](/docs/server-agent/configuration) -- customize reporting behavior and enable Docker monitoring
+- [Troubleshooting](/docs/server-agent/troubleshooting) -- resolve common installation and connectivity issues

@@ -1,0 +1,338 @@
+---
+title: Projects
+description: API endpoints for creating, managing, and configuring projects in Bugwatch.
+---
+
+# Projects
+
+Projects are the top-level container for error tracking in Bugwatch. Each project has its own API key, issues, monitors, and alert rules. Project limits depend on your subscription tier.
+
+## GET /projects
+
+List all projects owned by the authenticated user.
+
+**Authentication:** Bearer token required
+
+### Query Parameters
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `page` | integer | `1` | Page number |
+| `per_page` | integer | `20` | Items per page (max 100) |
+
+### Example
+
+```bash
+curl https://api.bugwatch.dev/api/v1/projects?page=1&per_page=10 \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+```
+
+### Response `200 OK`
+
+```json
+{
+  "data": [
+    {
+      "id": "proj_abc123",
+      "name": "My Web App",
+      "slug": "my-web-app-a1b2c3d4",
+      "api_key": "bw_live_xxxxxxxxxxxx",
+      "owner_id": "usr_abc123",
+      "created_at": "2025-01-15T10:30:00Z",
+      "platform": "javascript",
+      "framework": "nextjs",
+      "onboarding_completed_at": "2025-01-15T11:00:00Z"
+    }
+  ],
+  "pagination": {
+    "page": 1,
+    "per_page": 10,
+    "total": 3,
+    "total_pages": 1
+  }
+}
+```
+
+---
+
+## POST /projects
+
+Create a new project. The number of projects you can create depends on your subscription tier.
+
+**Authentication:** Bearer token required
+
+### Request Body
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `name` | string | Yes | Project name (max 100 characters) |
+| `platform` | string | No | Platform identifier (e.g., `javascript`, `python`, `node`, `rust`) |
+| `framework` | string | No | Framework identifier (e.g., `nextjs`, `react`, `django`, `express`) |
+
+### Example
+
+```bash
+curl -X POST https://api.bugwatch.dev/api/v1/projects \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "My Web App",
+    "platform": "javascript",
+    "framework": "nextjs"
+  }'
+```
+
+### Response `200 OK`
+
+```json
+{
+  "data": {
+    "id": "proj_abc123",
+    "name": "My Web App",
+    "slug": "my-web-app-a1b2c3d4",
+    "api_key": "bw_live_xxxxxxxxxxxx",
+    "owner_id": "usr_abc123",
+    "created_at": "2025-01-15T10:30:00Z",
+    "platform": "javascript",
+    "framework": "nextjs",
+    "onboarding_completed_at": null
+  }
+}
+```
+
+### Errors
+
+| Status | Description |
+|---|---|
+| `400` | Project name is empty or exceeds 100 characters |
+| `402` | Project limit reached for your current plan |
+
+---
+
+## GET /projects/:id
+
+Get details of a specific project.
+
+**Authentication:** Bearer token required
+
+### Path Parameters
+
+| Parameter | Type | Description |
+|---|---|---|
+| `id` | string | Project ID |
+
+### Example
+
+```bash
+curl https://api.bugwatch.dev/api/v1/projects/proj_abc123 \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+```
+
+### Response `200 OK`
+
+```json
+{
+  "data": {
+    "id": "proj_abc123",
+    "name": "My Web App",
+    "slug": "my-web-app-a1b2c3d4",
+    "api_key": "bw_live_xxxxxxxxxxxx",
+    "owner_id": "usr_abc123",
+    "created_at": "2025-01-15T10:30:00Z",
+    "platform": "javascript",
+    "framework": "nextjs",
+    "onboarding_completed_at": "2025-01-15T11:00:00Z"
+  }
+}
+```
+
+### Errors
+
+| Status | Description |
+|---|---|
+| `403` | You do not own this project |
+| `404` | Project not found |
+
+---
+
+## PATCH /projects/:id
+
+Update a project's name, platform, or framework.
+
+**Authentication:** Bearer token required
+
+### Path Parameters
+
+| Parameter | Type | Description |
+|---|---|---|
+| `id` | string | Project ID |
+
+### Request Body
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `name` | string | No | New project name (max 100 characters) |
+| `platform` | string | No | New platform identifier |
+| `framework` | string | No | New framework identifier |
+
+### Example
+
+```bash
+curl -X PATCH https://api.bugwatch.dev/api/v1/projects/proj_abc123 \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "My Updated App",
+    "framework": "remix"
+  }'
+```
+
+### Response `200 OK`
+
+Returns the updated project object in the same format as `GET /projects/:id`.
+
+### Errors
+
+| Status | Description |
+|---|---|
+| `400` | Name is empty or exceeds 100 characters |
+| `403` | You do not own this project |
+| `404` | Project not found |
+
+---
+
+## DELETE /projects/:id
+
+Permanently delete a project and all associated data (issues, events, monitors, alerts).
+
+**Authentication:** Bearer token required
+
+### Path Parameters
+
+| Parameter | Type | Description |
+|---|---|---|
+| `id` | string | Project ID |
+
+### Example
+
+```bash
+curl -X DELETE https://api.bugwatch.dev/api/v1/projects/proj_abc123 \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+```
+
+### Response `200 OK`
+
+```json
+{
+  "data": {
+    "message": "Project deleted successfully"
+  }
+}
+```
+
+### Errors
+
+| Status | Description |
+|---|---|
+| `403` | You do not own this project |
+| `404` | Project not found |
+
+---
+
+## POST /projects/:id/keys
+
+Rotate the project's API key. The old key is immediately invalidated. You will need to update all SDKs and integrations with the new key.
+
+**Authentication:** Bearer token required
+
+### Path Parameters
+
+| Parameter | Type | Description |
+|---|---|---|
+| `id` | string | Project ID |
+
+### Example
+
+```bash
+curl -X POST https://api.bugwatch.dev/api/v1/projects/proj_abc123/keys \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+```
+
+### Response `200 OK`
+
+Returns the updated project object with the new `api_key` value.
+
+```json
+{
+  "data": {
+    "id": "proj_abc123",
+    "name": "My Web App",
+    "slug": "my-web-app-a1b2c3d4",
+    "api_key": "bw_live_new_key_here",
+    "owner_id": "usr_abc123",
+    "created_at": "2025-01-15T10:30:00Z",
+    "platform": "javascript",
+    "framework": "nextjs",
+    "onboarding_completed_at": "2025-01-15T11:00:00Z"
+  }
+}
+```
+
+---
+
+## POST /projects/:id/onboarding/complete
+
+Mark the project's onboarding as complete. This sets the `onboarding_completed_at` timestamp and hides the onboarding wizard in the dashboard.
+
+**Authentication:** Bearer token required
+
+### Path Parameters
+
+| Parameter | Type | Description |
+|---|---|---|
+| `id` | string | Project ID |
+
+### Example
+
+```bash
+curl -X POST https://api.bugwatch.dev/api/v1/projects/proj_abc123/onboarding/complete \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+```
+
+### Response `200 OK`
+
+Returns the updated project object with `onboarding_completed_at` set.
+
+---
+
+## GET /projects/:id/verify
+
+Check whether a project has received any events. Used during onboarding to verify SDK installation.
+
+**Authentication:** Bearer token required
+
+### Path Parameters
+
+| Parameter | Type | Description |
+|---|---|---|
+| `id` | string | Project ID |
+
+### Example
+
+```bash
+curl https://api.bugwatch.dev/api/v1/projects/proj_abc123/verify \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+```
+
+### Response `200 OK`
+
+```json
+{
+  "data": {
+    "status": "success",
+    "event_count": 3
+  }
+}
+```
+
+The `status` field is `"success"` if events have been received, or `"waiting"` if no events have arrived yet.

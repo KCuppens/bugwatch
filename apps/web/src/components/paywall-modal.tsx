@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, Fragment } from 'react';
+import { useState, useEffect, Fragment } from 'react';
 import {
   Dialog,
   DialogContent,
@@ -12,7 +12,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Check, X, Crown, Sparkles, Loader2 } from 'lucide-react';
 import { usePaywall } from '@/lib/paywall-context';
-import { useTier, getTierDisplayName, getFeatureTier, type Tier } from '@/hooks/use-feature';
+import { useTier, getTierDisplayName, getFeatureTier, isSelfHosted, type Tier } from '@/hooks/use-feature';
 import {
   TIER_PRICING,
   FEATURE_COMPARISON,
@@ -20,15 +20,17 @@ import {
   getAnnualSavings,
 } from '@/lib/pricing-data';
 import { billingApi } from '@/lib/api';
+import { isValidHttpUrl } from '@/lib/url-utils';
 import { cn } from '@/lib/utils';
 
 // Feature name mapping for display
 const FEATURE_DISPLAY_NAMES: Record<string, string> = {
+  slack: 'Slack Notifications',
   webhooks: 'Webhook Alerts',
   pagerduty: 'PagerDuty Integration',
+  email_notifications: 'Email Notifications',
+  server_monitoring: 'Server Monitoring',
   opsgenie: 'OpsGenie Integration',
-  slack_advanced: 'Advanced Slack Features',
-  slack: 'Slack Integration',
   session_replay: 'Session Replay',
   performance_monitoring: 'Performance Monitoring',
   jira: 'Jira Integration',
@@ -51,6 +53,17 @@ export function PaywallModal() {
   const [loadingTier, setLoadingTier] = useState<Tier | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // Clear state when modal closes
+  useEffect(() => {
+    if (!isOpen) {
+      setError(null);
+      setLoadingTier(null);
+    }
+  }, [isOpen]);
+
+  // Don't render paywall in self-hosted mode
+  if (isSelfHosted()) return null;
+
   // Determine which tier to highlight based on trigger
   const recommendedTier = targetTier || (triggerFeature ? getFeatureTier(triggerFeature) : 'pro');
   const annualSavings = getAnnualSavings('pro');
@@ -66,6 +79,7 @@ export function PaywallModal() {
         `${window.location.origin}/dashboard/settings?tab=billing&success=true&session_id={CHECKOUT_SESSION_ID}`,
         `${window.location.origin}/dashboard/settings?tab=billing&canceled=true`
       );
+      if (!isValidHttpUrl(response.checkout_url)) return;
       window.location.href = response.checkout_url;
     } catch (err) {
       console.error('Failed to create checkout:', err);
@@ -206,7 +220,7 @@ export function PaywallModal() {
 
                 <div className="mb-4">
                   <div className="flex items-baseline gap-1">
-                    <span className="text-3xl font-bold">${price}</span>
+                    <span className="font-display text-3xl font-semibold tabular-nums">${price}</span>
                     <span className="text-muted-foreground text-sm">
                       /seat/mo
                     </span>

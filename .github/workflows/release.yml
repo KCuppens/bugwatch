@@ -34,7 +34,7 @@ jobs:
           ERRORS=0
 
           # Check npm packages
-          for pkg in packages/sdk/core packages/sdk/node packages/sdk/react packages/sdk/nextjs packages/cli; do
+          for pkg in packages/sdk/core packages/sdk/node packages/sdk/express packages/sdk/fastify packages/sdk/react packages/sdk/nextjs packages/cli; do
             PKG_VERSION=$(node -p "require('./$pkg/package.json').version")
             if [ "$PKG_VERSION" != "$VERSION" ]; then
               echo "❌ $pkg: expected $VERSION, got $PKG_VERSION"
@@ -106,6 +106,18 @@ jobs:
       - name: Publish @bugwatch/node
         run: npm publish --access public
         working-directory: packages/sdk/node
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Publish @bugwatch/express
+        run: npm publish --access public
+        working-directory: packages/sdk/express
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Publish @bugwatch/fastify
+        run: npm publish --access public
+        working-directory: packages/sdk/fastify
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
@@ -221,6 +233,8 @@ jobs:
             ### npm
             - [@bugwatch/core](https://www.npmjs.com/package/@bugwatch/core)
             - [@bugwatch/node](https://www.npmjs.com/package/@bugwatch/node)
+            - [@bugwatch/express](https://www.npmjs.com/package/@bugwatch/express)
+            - [@bugwatch/fastify](https://www.npmjs.com/package/@bugwatch/fastify)
             - [@bugwatch/react](https://www.npmjs.com/package/@bugwatch/react)
             - [@bugwatch/nextjs](https://www.npmjs.com/package/@bugwatch/nextjs)
             - [@bugwatch/cli](https://www.npmjs.com/package/@bugwatch/cli)

@@ -1,0 +1,515 @@
+---
+title: Troubleshooting
+description: Diagnose and resolve common issues with the Bugwatch server agent, including startup failures, missing data, permission errors, high CPU usage, and network connectivity problems.
+---
+
+# Troubleshooting the Server Agent
+
+This guide covers the most common issues you may encounter with the Bugwatch server agent and provides step-by-step instructions to resolve them.
+
+## Quick Diagnostic Check
+
+Before diving into specific issues, run the built-in diagnostic command. It validates the config file, tests API connectivity, checks permissions, and reports the agent version:
+
+```bash
+bugwatch-agent --check
+```
+
+Example output:
+
+```
+Bugwatch Agent v1.2.0 — Diagnostic Check
+-----------------------------------------
+Config file:    /etc/bugwatch/agent.toml ... OK
+API key:        bw_live_***xxxxx ... OK (valid format)
+Endpoint:       https://api.bugwatch.dev ... OK (reachable, 200)
+Hostname:       web-prod-01
+Collectors:     cpu, memory, disk, network
+Docker socket:  /var/run/docker.sock ... SKIP (docker not enabled)
+Permissions:    /proc ... OK | /sys ... OK
+Log level:      info
+Interval:       60s
+-----------------------------------------
+All checks passed.
+```
+
+<Callout type="info">
+Running `bugwatch-agent --check` does not start the agent. It is safe to run at any time, even while the agent is already running.
+</Callout>
+
+## Log Locations
+
+The agent can write logs to two locations depending on your setup:
+
+| Location | Description |
+|----------|-------------|
+| `/var/log/bugwatch/agent.log` | File-based log output (if file logging is enabled) |
+| systemd journal | Default log destination when running as a systemd service |
+
+### Viewing Logs via journalctl
+
+```bash
+# View the most recent 50 log lines
+sudo journalctl -u bugwatch-agent --no-pager -n 50
+
+# Follow logs in real time
+sudo journalctl -u bugwatch-agent -f
+
+# View logs from the last hour
+sudo journalctl -u bugwatch-agent --since "1 hour ago"
+
+# Filter for errors only
+sudo journalctl -u bugwatch-agent --since "1 hour ago" | grep -i error
+```
+
+### Viewing the Log File
+
+If file logging is enabled, you can read the log directly:
+
+```bash
+# View the last 100 lines
+tail -100 /var/log/bugwatch/agent.log
+
+# Follow in real time
+tail -f /var/log/bugwatch/agent.log
+```
+
+<Callout type="info">
+To get more detailed logs, set `log_level = "debug"` in `/etc/bugwatch/agent.toml` (or `BUGWATCH_LOG_LEVEL=debug` as an environment variable) and restart the agent. Remember to set it back to `"info"` once you have finished debugging, as `debug` and `trace` levels produce a high volume of output.
+</Callout>
+
+## Management Commands
+
+Use these systemd commands to manage the agent:
+
+```bash
+# Check agent status
+sudo systemctl status bugwatch-agent
+
+# Start the agent
+sudo systemctl start bugwatch-agent
+
+# Stop the agent
+sudo systemctl stop bugwatch-agent
+
+# Restart the agent
+sudo systemctl restart bugwatch-agent
+
+# Enable agent to start on boot
+sudo systemctl enable bugwatch-agent
+
+# Disable agent from starting on boot
+sudo systemctl disable bugwatch-agent
+```
+
+## Agent Won't Start
+
+**Symptoms:** `systemctl status bugwatch-agent` shows `inactive (dead)` or `failed`.
+
+### Step 1: Check the Service Status
+
+```bash
+sudo systemctl status bugwatch-agent
+```
+
+Look for the `Active` line. If it says `failed`, note the exit code and reason.
+
+### Step 2: Read the Logs
+
+```bash
+sudo journalctl -u bugwatch-agent -n 30 --no-pager
+```
+
+### Step 3: Identify the Cause
+
+**Missing or invalid API key:**
+
+The agent requires a valid `api_key` to start. Verify it is set:
+
+```bash
+grep api_key /etc/bugwatch/agent.toml
+```
+
+The key should start with `bw_live_` or `bw_test_`. If it is missing, add it to the config file or set the `BUGWATCH_API_KEY` environment variable.
+
+**Config file syntax error:**
+
+The config file must be valid TOML. Common mistakes include missing quotes around string values or malformed arrays. Validate the file:
+
+```bash
+bugwatch-agent --check
+```
+
+If the config is invalid, the diagnostic output will point to the specific error.
+
+**Binary not found or not executable:**
+
+Confirm the agent binary exists and is executable:
+
+```bash
+ls -la /usr/local/bin/bugwatch-agent
+```
+
+If missing, re-run the installation script:
+
+```bash
+curl -sSL https://install.bugwatch.dev | bash -s -- --api-key YOUR_API_KEY
+```
+
+**Incorrect file permissions on config:**
+
+The config file should be owned by root and readable by the agent:
+
+```bash
+ls -la /etc/bugwatch/agent.toml
+# Expected: -rw------- 1 root root
+```
+
+Fix permissions if needed:
+
+```bash
+sudo chmod 600 /etc/bugwatch/agent.toml
+sudo chown root:root /etc/bugwatch/agent.toml
+```
+
+**Port or socket conflict:**
+
+If the logs mention "address already in use," another instance of the agent may be running:
+
+```bash
+ps aux | grep bugwatch-agent
+```
+
+Kill any stale processes and try starting again.
+
+## No Data Appearing in Dashboard
+
+**Symptoms:** The agent is running (`systemctl status` shows `active (running)`) but no metrics appear on the **Server** tab.
+
+### Step 1: Verify the API Key
+
+Ensure the API key in your agent config matches the project you are viewing in the dashboard:
+
+```bash
+grep api_key /etc/bugwatch/agent.toml
+```
+
+Compare this with the API key shown in your project settings in the Bugwatch dashboard. A mismatch (e.g., using a key from a different project, or a test key instead of a live key) is one of the most common causes.
+
+### Step 2: Verify the Endpoint
+
+For self-hosted deployments, confirm the endpoint is correct:
+
+```bash
+grep endpoint /etc/bugwatch/agent.toml
+```
+
+The endpoint should point to your Bugwatch API, not the web dashboard URL.
+
+### Step 3: Test Network Connectivity
+
+Check that the agent can reach the API:
+
+```bash
+curl -v https://api.bugwatch.dev/health
+```
+
+You should receive a `200 OK` response. If the connection times out or is refused, continue to the network connectivity section below.
+
+### Step 4: Check Firewall Rules
+
+Ensure outbound HTTPS traffic on port 443 is allowed:
+
+```bash
+# iptables
+sudo iptables -L -n | grep 443
+
+# ufw
+sudo ufw status
+
+# firewalld
+sudo firewall-cmd --list-all
+```
+
+If port 443 is blocked, add a rule to allow it:
+
+```bash
+# ufw
+sudo ufw allow out 443/tcp
+
+# firewalld
+sudo firewall-cmd --permanent --add-port=443/tcp
+sudo firewall-cmd --reload
+```
+
+### Step 5: Check for Error Responses in Logs
+
+```bash
+sudo journalctl -u bugwatch-agent --since "10 minutes ago" | grep -iE "error|failed|rejected|401|403"
+```
+
+Common error responses:
+
+| Status Code | Meaning | Fix |
+|-------------|---------|-----|
+| `401 Unauthorized` | Invalid API key | Check and correct the `api_key` value |
+| `403 Forbidden` | API key does not have permission | Ensure you are using a key for the correct project |
+| `404 Not Found` | Incorrect endpoint URL | Verify the `endpoint` value |
+| `429 Too Many Requests` | Rate limited | Increase the reporting `interval` |
+| `5xx` | Server-side error | Check [status.bugwatch.dev](https://status.bugwatch.dev) for outages |
+
+## High CPU Usage
+
+The agent is designed to be lightweight, typically using under 10 MB of RAM and negligible CPU. If you observe high resource usage:
+
+### Increase the Reporting Interval
+
+Very short intervals cause more frequent metric collection cycles:
+
+```toml
+# Change from aggressive polling
+interval = 10
+
+# To a more moderate interval
+interval = 60
+```
+
+### Disable Unused Collectors
+
+Each collector adds overhead. If you do not need all of them, disable the ones you can skip:
+
+```toml
+# Only collect CPU and memory (skip disk, network, docker)
+collectors = ["cpu", "memory"]
+```
+
+### Check Docker Container Count
+
+Monitoring a large number of Docker containers (hundreds or more) increases collection time. If you have many containers, consider increasing the interval or disabling Docker monitoring if it is not needed.
+
+### Update to the Latest Version
+
+Performance improvements are included in newer releases. Re-running the installer upgrades the agent binary in place:
+
+```bash
+curl -sSL https://install.bugwatch.dev | bash -s -- --api-key YOUR_API_KEY
+```
+
+## Permission Errors
+
+**Symptoms:** Logs show `permission denied` errors for specific paths or sockets.
+
+### Disk Access Permissions
+
+The agent reads system information from `/proc` and `/sys`. The default systemd service runs as root, which should have access. If you are running the agent as a non-root user, ensure it has read access:
+
+```bash
+# Check which user the service runs as
+sudo systemctl show bugwatch-agent -p User
+
+# If running as a non-root user, verify access
+sudo -u bugwatch cat /proc/stat
+sudo -u bugwatch cat /sys/class/block/sda/stat
+```
+
+For disk monitoring, the agent needs read access to mount point metadata. If certain mount points show permission errors, check that the agent user can access them:
+
+```bash
+sudo -u bugwatch df -h
+```
+
+### Docker Socket Permissions
+
+If Docker monitoring is enabled, the agent needs access to the Docker daemon socket:
+
+```bash
+ls -la /var/run/docker.sock
+```
+
+The socket is typically owned by `root:docker`. Add the agent user to the `docker` group:
+
+```bash
+sudo usermod -aG docker bugwatch
+sudo systemctl restart bugwatch-agent
+```
+
+<Callout type="warn">
+Adding a user to the `docker` group grants that user root-equivalent access to the Docker daemon. This is acceptable for the Bugwatch agent since it only reads container metrics, but be aware of the security implications.
+</Callout>
+
+For rootless Docker, the socket path differs:
+
+```toml
+docker_socket = "/run/user/1000/docker.sock"
+```
+
+### Log Directory Permissions
+
+If file logging is enabled, ensure the log directory exists and is writable:
+
+```bash
+sudo mkdir -p /var/log/bugwatch
+sudo chown bugwatch:bugwatch /var/log/bugwatch
+sudo chmod 755 /var/log/bugwatch
+```
+
+## Network Connectivity Issues
+
+### Proxy Configuration
+
+If your server routes traffic through an HTTP proxy, configure it in the systemd service:
+
+```bash
+sudo systemctl edit bugwatch-agent
+```
+
+Add the proxy settings:
+
+```ini
+[Service]
+Environment="HTTPS_PROXY=http://proxy.yourcompany.com:3128"
+Environment="HTTP_PROXY=http://proxy.yourcompany.com:3128"
+Environment="NO_PROXY=localhost,127.0.0.1"
+```
+
+Then reload and restart:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart bugwatch-agent
+```
+
+### TLS Certificate Issues
+
+If the agent logs show TLS or certificate errors:
+
+**Self-signed certificates (self-hosted deployments):**
+
+If your self-hosted Bugwatch instance uses a self-signed or internal CA certificate, you need to make it available to the agent. Add the CA certificate to the system trust store:
+
+```bash
+# Debian/Ubuntu
+sudo cp your-ca.crt /usr/local/share/ca-certificates/
+sudo update-ca-certificates
+
+# RHEL/CentOS/Fedora
+sudo cp your-ca.crt /etc/pki/ca-trust/source/anchors/
+sudo update-ca-trust
+```
+
+Then restart the agent:
+
+```bash
+sudo systemctl restart bugwatch-agent
+```
+
+**Expired certificates:**
+
+Check the certificate of the endpoint:
+
+```bash
+echo | openssl s_client -connect api.bugwatch.dev:443 2>/dev/null | openssl x509 -noout -dates
+```
+
+If the certificate is expired on a self-hosted instance, renew it.
+
+**Outdated CA bundle:**
+
+On older systems, the CA certificate bundle may be out of date:
+
+```bash
+# Debian/Ubuntu
+sudo apt update && sudo apt install -y ca-certificates
+
+# RHEL/CentOS
+sudo yum update -y ca-certificates
+```
+
+### DNS Resolution
+
+If the agent cannot resolve the endpoint hostname:
+
+```bash
+nslookup api.bugwatch.dev
+# or
+dig api.bugwatch.dev
+```
+
+If DNS fails, check `/etc/resolv.conf` or try setting a public DNS server temporarily to verify.
+
+## Agent Running but Stale Data
+
+**Symptoms:** Metrics stop updating even though `systemctl status` shows the agent as running.
+
+This can happen if the agent encounters a transient error and enters a backoff state, or if the network dropped temporarily.
+
+**Fix:** Restart the agent:
+
+```bash
+sudo systemctl restart bugwatch-agent
+```
+
+If the issue persists:
+
+1. Check for network interruptions in the logs
+2. Verify the API endpoint is reachable: `curl -s https://api.bugwatch.dev/health`
+3. Enable `debug` logging to see detailed request/response information
+4. Run `bugwatch-agent --check` to validate the full configuration
+
+## Uninstalling the Agent
+
+If you need to remove the agent completely:
+
+```bash
+sudo systemctl stop bugwatch-agent
+sudo systemctl disable bugwatch-agent
+sudo rm /etc/systemd/system/bugwatch-agent.service
+sudo systemctl daemon-reload
+sudo rm /usr/local/bin/bugwatch-agent
+sudo rm -rf /etc/bugwatch
+sudo rm -rf /var/log/bugwatch
+```
+
+## Reporting Issues
+
+If none of the above resolves your issue, please report it so we can help:
+
+1. **Run the diagnostic check** and save the output:
+
+```bash
+bugwatch-agent --check > bugwatch-diagnostic.txt 2>&1
+```
+
+2. **Collect recent logs:**
+
+```bash
+sudo journalctl -u bugwatch-agent --since "1 hour ago" > bugwatch-agent.log
+```
+
+3. **Note your agent version:**
+
+```bash
+bugwatch-agent --version
+```
+
+4. **Note your operating system:**
+
+```bash
+cat /etc/os-release
+uname -r
+```
+
+5. **Open an issue** on [GitHub](https://github.com/KCuppens/bugwatch/issues) with:
+   - The diagnostic output
+   - Agent logs (redact your API key)
+   - Agent version
+   - Operating system and kernel version
+   - A description of the issue and when it started
+
+<Callout type="info">
+When sharing logs publicly, always redact your API key. Replace `bw_live_xxxxx` with `bw_live_***REDACTED***`.
+</Callout>
+
+## Next Steps
+
+- [Configuration](/docs/server-agent/configuration) -- review all available configuration options

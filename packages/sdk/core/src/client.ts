@@ -2,6 +2,7 @@ import type {
   BugwatchOptions,
   BugwatchClient,
   ErrorEvent,
+  PerformanceEvent,
   Breadcrumb,
   UserContext,
   Transport,
@@ -12,6 +13,8 @@ import { HttpTransport, NoopTransport } from "./transport";
 import { parseStackTrace, extractErrorInfo } from "./stacktrace";
 import { fingerprintFromException } from "./fingerprint";
 import { getMergedContext } from "./context";
+import { Transaction } from "./performance";
+import { scrubEvent } from "./scrubbing";
 
 /**
  * Ring buffer for efficient breadcrumb storage.
@@ -98,6 +101,7 @@ export class Bugwatch implements BugwatchClient {
   private tags: Record<string, string> = {};
   private extra: Record<string, unknown> = {};
   private user: UserContext | null = null;
+  private sessionId: string | null = null;
   private integrations: Integration[] = [];
   private initialized = false;
 
@@ -164,7 +168,10 @@ export class Bugwatch implements BugwatchClient {
       return "";
     }
 
-    const event = this.createEventFromError(error, context);
+    const rawEvent = this.createEventFromError(error, context);
+
+    // Apply PII scrubbing before beforeSend so users can override
+    const event = scrubEvent(rawEvent, this.options.sanitize);
 
     // Run beforeSend hook with error handling
     let processedEvent: import("./types").ErrorEvent | null = event;
@@ -206,10 +213,11 @@ export class Bugwatch implements BugwatchClient {
       return "";
     }
 
-    const event = this.createEvent({
+    const rawEvent = this.createEvent({
       message,
       level,
     });
+    const event = scrubEvent(rawEvent, this.options.sanitize);
 
     // Run beforeSend hook with error handling
     let processedEvent: import("./types").ErrorEvent | null = event;
@@ -240,10 +248,29 @@ export class Bugwatch implements BugwatchClient {
    * Add a breadcrumb
    */
   addBreadcrumb(breadcrumb: Omit<Breadcrumb, "timestamp">): void {
-    const crumb: Breadcrumb = {
+    let crumb: Breadcrumb = {
       ...breadcrumb,
       timestamp: new Date().toISOString(),
     };
+
+    // Run beforeBreadcrumb hook with error handling — return null to drop
+    if (this.options.beforeBreadcrumb) {
+      try {
+        const result = this.options.beforeBreadcrumb(crumb);
+        if (result === null) {
+          if (this.options.debug) {
+            console.log("[Bugwatch] Breadcrumb dropped by beforeBreadcrumb");
+          }
+          return;
+        }
+        crumb = result;
+      } catch (err) {
+        if (this.options.debug) {
+          console.error("[Bugwatch] beforeBreadcrumb threw an error:", err);
+        }
+        // Continue with original crumb if hook throws
+      }
+    }
 
     // Ring buffer automatically handles max size
     this.breadcrumbs.push(crumb);
@@ -268,6 +295,13 @@ export class Bugwatch implements BugwatchClient {
    */
   setExtra(key: string, value: unknown): void {
     this.extra[key] = value;
+  }
+
+  /**
+   * Set session ID for linking events to session replay recordings
+   */
+  setSessionId(sessionId: string): void {
+    this.sessionId = sessionId;
   }
 
   /**
@@ -337,6 +371,11 @@ export class Bugwatch implements BugwatchClient {
       event.user = { ...mergedContext.user, ...partial.user };
     }
 
+    // Attach session ID if set (for session replay linking)
+    if (this.sessionId) {
+      event.session_id = this.sessionId;
+    }
+
     // Generate fingerprint if exception exists
     if (event.exception) {
       const fingerprint = fingerprintFromException(event.exception);
@@ -385,6 +424,38 @@ export class Bugwatch implements BugwatchClient {
       return "edge";
     }
     return "javascript";
+  }
+
+  /**
+   * Start a new performance transaction.
+   * Call .finish() on the returned Transaction to send it to the server.
+   */
+  startTransaction(name: string, op: string): Transaction {
+    const onFinish = (event: PerformanceEvent) => {
+      if (!this.initialized) return;
+      if (!this.options.enablePerformance) return;
+
+      // Sample rate check for traces
+      const tracesSampleRate = this.options.tracesSampleRate ?? 1.0;
+      if (Math.random() > tracesSampleRate) return;
+
+      // Send via transport
+      const transport = this.transport as HttpTransport;
+      if (transport.sendTransaction) {
+        transport.sendTransaction(event).catch(() => {
+          // Errors are logged by transport
+        });
+      }
+    };
+
+    return new Transaction(
+      name,
+      op,
+      onFinish,
+      this.options.environment,
+      this.options.release,
+      this.options.experimentalPerformance === true,
+    );
   }
 
   /**

@@ -1,81 +1,108 @@
-import { Infinity, Bot, Zap, GitFork, Server, Bell } from "lucide-react";
+import { Infinity, Activity, Zap, GitFork, Server, Bell } from "lucide-react";
+import { FadeUp, StaggerContainer, StaggerItem } from "./motion";
 
 export function FeaturesGrid() {
   return (
-    <section className="container mx-auto px-4 py-24">
-      <div className="text-center max-w-2xl mx-auto mb-16">
-        <h2 className="text-3xl sm:text-4xl font-bold mb-4">
-          Everything you need.{" "}
-          <span className="text-accent">Nothing you don't.</span>
-        </h2>
-        <p className="text-lg text-muted-foreground">
-          Powerful error tracking without the complexity or the bill shock.
-        </p>
-      </div>
+    <section className="container mx-auto px-4 py-20 md:py-28">
+      <FadeUp>
+        <div className="text-center max-w-2xl mx-auto mb-16">
+          <h2 className="font-display text-display-md md:text-display-lg mb-4">
+            Everything you need.{" "}
+            <span className="text-accent">Nothing you don't.</span>
+          </h2>
+          <p className="text-body-lg text-muted-foreground">
+            Powerful error tracking without the complexity or the bill shock.
+          </p>
+        </div>
+      </FadeUp>
 
       {/* Bento Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 max-w-5xl mx-auto">
+      <StaggerContainer className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6 max-w-5xl mx-auto">
         {/* Large card - spans 2 columns */}
-        <div className="md:col-span-2 md:row-span-2 p-8 rounded-2xl glass-card border-accent/20 hover:border-accent/40 transition-colors">
-          <Infinity className="h-12 w-12 mb-6 text-accent" />
-          <h3 className="text-2xl font-bold mb-3">Unlimited Errors</h3>
-          <p className="text-muted-foreground text-lg">
-            No event limits. No throttling. Track every error without worrying about caps or surprise bills.
-          </p>
-          <div className="mt-8 p-4 rounded-xl bg-white/[0.02] border border-white/10">
-            <div className="flex items-center justify-between text-sm">
-              <span className="text-muted-foreground">Errors this month</span>
-              <span className="font-mono font-bold text-accent">1,247,832</span>
-            </div>
-            <div className="flex items-center justify-between text-sm mt-2">
-              <span className="text-muted-foreground">Your cost</span>
-              <span className="font-mono font-bold">$29/mo</span>
+        <StaggerItem className="md:col-span-2 md:row-span-2">
+          <div className="p-8 h-full elev-2 border-accent/20 card-hover transform-gpu">
+            <span className="inline-flex h-12 w-12 items-center justify-center rounded-xl bg-accent/15 text-accent mb-6">
+              <Infinity className="h-6 w-6" strokeWidth={1.75} />
+            </span>
+            <h3 className="text-heading-md mb-3">Unlimited Errors</h3>
+            <p className="text-body-lg text-muted-foreground">
+              No event limits. No throttling. Track every error without worrying about caps or surprise bills.
+            </p>
+            <div className="mt-8 p-4 rounded-xl bg-surface-3 border border-border-subtle">
+              <div className="flex items-center justify-between text-body-sm">
+                <span className="text-muted-foreground">Errors this month</span>
+                <span className="font-mono font-bold text-accent tabular-nums">1,247,832</span>
+              </div>
+              <div className="flex items-center justify-between text-body-sm mt-2">
+                <span className="text-muted-foreground">Your cost</span>
+                <span className="font-mono font-bold tabular-nums">$29/mo</span>
+              </div>
             </div>
           </div>
-        </div>
+        </StaggerItem>
 
         {/* Medium cards */}
-        <div className="p-6 rounded-2xl glass-card hover:border-white/20 transition-colors">
-          <Bot className="h-10 w-10 mb-4 text-accent" />
-          <h3 className="text-xl font-semibold mb-2">AI-Powered Fixes</h3>
-          <p className="text-muted-foreground text-sm">
-            Claude analyzes your errors and suggests actual code fixes. One click to understand the root cause.
-          </p>
-        </div>
+        <StaggerItem>
+          <div className="p-6 h-full elev-1 card-hover transform-gpu">
+            <span className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-accent-2/10 text-accent-2 mb-4">
+              <Activity className="h-5 w-5" strokeWidth={1.75} />
+            </span>
+            <h3 className="text-heading-sm mb-2">Server Monitoring</h3>
+            <p className="text-muted-foreground text-body-sm">
+              Track CPU, memory, and disk usage. Get alerted before your servers hit critical thresholds.
+            </p>
+          </div>
+        </StaggerItem>
 
-        <div className="p-6 rounded-2xl glass-card hover:border-white/20 transition-colors">
-          <Zap className="h-10 w-10 mb-4 text-accent" />
-          <h3 className="text-xl font-semibold mb-2">Zero-Config SDK</h3>
-          <p className="text-muted-foreground text-sm">
-            One import. Auto-detects your framework. Start tracking errors in under 60 seconds.
-          </p>
-        </div>
+        <StaggerItem>
+          <div className="p-6 h-full elev-1 card-hover transform-gpu">
+            <span className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-accent-2/10 text-accent-2 mb-4">
+              <Zap className="h-5 w-5" strokeWidth={1.75} />
+            </span>
+            <h3 className="text-heading-sm mb-2">Zero-Config SDK</h3>
+            <p className="text-muted-foreground text-body-sm">
+              One import. Auto-detects your framework. Start tracking errors in under 60 seconds.
+            </p>
+          </div>
+        </StaggerItem>
 
         {/* Small cards row */}
-        <div className="p-6 rounded-2xl glass-card hover:border-white/20 transition-colors">
-          <GitFork className="h-8 w-8 mb-3 text-accent" />
-          <h3 className="text-lg font-semibold mb-1">Open Source</h3>
-          <p className="text-muted-foreground text-sm">
-            MIT licensed. Read the code. Fork it. No vendor lock-in.
-          </p>
-        </div>
+        <StaggerItem>
+          <div className="p-6 h-full elev-1 card-hover transform-gpu">
+            <span className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-accent-2/10 text-accent-2 mb-4">
+              <GitFork className="h-5 w-5" strokeWidth={1.75} />
+            </span>
+            <h3 className="text-heading-sm mb-1">Open Source</h3>
+            <p className="text-muted-foreground text-body-sm">
+              MIT licensed. Read the code. Fork it. No vendor lock-in.
+            </p>
+          </div>
+        </StaggerItem>
 
-        <div className="p-6 rounded-2xl glass-card hover:border-white/20 transition-colors">
-          <Server className="h-8 w-8 mb-3 text-accent" />
-          <h3 className="text-lg font-semibold mb-1">Self-Host Option</h3>
-          <p className="text-muted-foreground text-sm">
-            Single binary. Run on your own servers.
-          </p>
-        </div>
+        <StaggerItem>
+          <div className="p-6 h-full elev-1 card-hover transform-gpu">
+            <span className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-accent-2/10 text-accent-2 mb-4">
+              <Server className="h-5 w-5" strokeWidth={1.75} />
+            </span>
+            <h3 className="text-heading-sm mb-1">Self-Host Option</h3>
+            <p className="text-muted-foreground text-body-sm">
+              Single binary. Run on your own servers.
+            </p>
+          </div>
+        </StaggerItem>
 
-        <div className="p-6 rounded-2xl glass-card hover:border-white/20 transition-colors">
-          <Bell className="h-8 w-8 mb-3 text-accent" />
-          <h3 className="text-lg font-semibold mb-1">Smart Alerts</h3>
-          <p className="text-muted-foreground text-sm">
-            PagerDuty, Slack, Discord, webhooks.
-          </p>
-        </div>
-      </div>
+        <StaggerItem>
+          <div className="p-6 h-full elev-1 card-hover transform-gpu">
+            <span className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-accent-2/10 text-accent-2 mb-4">
+              <Bell className="h-5 w-5" strokeWidth={1.75} />
+            </span>
+            <h3 className="text-heading-sm mb-1">Smart Alerts</h3>
+            <p className="text-muted-foreground text-body-sm">
+              PagerDuty, Slack, Discord, webhooks.
+            </p>
+          </div>
+        </StaggerItem>
+      </StaggerContainer>
     </section>
   );
 }

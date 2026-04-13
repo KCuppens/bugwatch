@@ -48,22 +48,22 @@ export function FrameworkCard({
       className={cn(
         "group relative flex flex-col items-start rounded-xl border-2 p-5 text-left transition-all duration-200 hover:scale-[1.02]",
         selected
-          ? "border-primary bg-primary/5 ring-2 ring-primary ring-offset-2"
-          : "border-border hover:border-primary/50 bg-card"
+          ? "border-accent-2 bg-accent-2/5 ring-2 ring-accent-2/30 ring-offset-2"
+          : "border-border-subtle hover:border-accent-2/40 bg-surface-2"
       )}
     >
       <div
         className={cn(
           "mb-3 transition-colors",
           selected
-            ? "text-primary"
+            ? "text-accent-2"
             : "text-muted-foreground group-hover:text-foreground"
         )}
       >
         {FrameworkIcons[framework.id] || <Layers className="h-8 w-8" />}
       </div>
-      <h3 className="text-base font-semibold">{framework.name}</h3>
-      <p className="mt-1 text-sm text-muted-foreground">
+      <h3 className="font-semibold">{framework.name}</h3>
+      <p className="mt-1 text-body-sm text-muted-foreground">
         {framework.description}
       </p>
       <code className="mt-3 rounded bg-muted px-2 py-1 text-xs text-muted-foreground">

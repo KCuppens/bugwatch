@@ -13,7 +13,6 @@ import {
   TrendingUp,
   Zap,
   Check,
-  MoreHorizontal,
   ChevronRight,
   Activity,
   Clock,
@@ -22,7 +21,15 @@ import {
   Bookmark,
   Sparkles,
   X,
+  Keyboard,
 } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
 import { issuesApi, type Issue, type Facets } from "@/lib/api";
 import { ENVIRONMENT_COLORS } from "@/lib/search";
 import { useProject } from "@/lib/project-context";
@@ -121,6 +128,39 @@ export default function DashboardPage() {
   const [showSaveSearch, setShowSaveSearch] = useState(false);
   const [saveSearchName, setSaveSearchName] = useState("");
   const [currentSearchQuery, setCurrentSearchQuery] = useState("");
+  const [showShortcutsHelp, setShowShortcutsHelp] = useState(false);
+  const [renderCap, setRenderCap] = useState(100);
+  const [density, setDensity] = useState<"compact" | "comfortable">(() => {
+    if (typeof window === "undefined") return "comfortable";
+    return (localStorage.getItem("bugwatch:issues-density") as "compact" | "comfortable") || "comfortable";
+  });
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      localStorage.setItem("bugwatch:issues-density", density);
+    }
+  }, [density]);
+
+  // Restore filters from sessionStorage on mount
+  useEffect(() => {
+    if (!selectedProject) return;
+    const key = `bugwatch:filters:${selectedProject.id}`;
+    try {
+      const stored = sessionStorage.getItem(key);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (parsed.activeFilter) setActiveFilter(parsed.activeFilter);
+        if (parsed.sortBy) setSortBy(parsed.sortBy);
+      }
+    } catch { /* ignore parse errors */ }
+  }, [selectedProject]);
+
+  // Save filters to sessionStorage when they change
+  useEffect(() => {
+    if (!selectedProject) return;
+    const key = `bugwatch:filters:${selectedProject.id}`;
+    sessionStorage.setItem(key, JSON.stringify({ activeFilter, sortBy }));
+  }, [selectedProject, activeFilter, sortBy]);
 
   // Use search results if available, otherwise use all issues
   const displayIssues = useMemo(() => {
@@ -179,7 +219,7 @@ export default function DashboardPage() {
     }
   }, [displayIssues, selectedProject]);
 
-  // Keyboard navigation
+  // Keyboard navigation (j/k/Enter/x/r/m/e/? — full triage)
   const { focusedIndex, setFocusedIndex, containerRef } = useListKeyboardNavigation({
     itemCount: displayIssues.length,
     onOpen: (index) => {
@@ -193,10 +233,18 @@ export default function DashboardPage() {
       if (issue) toggleIssueSelection(issue.id);
     },
     onFocusSearch: () => {
-      // IssueSearchBar handles "/" focus internally
       const searchInput = document.querySelector<HTMLInputElement>('[data-search-input]');
       searchInput?.focus();
     },
+    onResolve: (index) => {
+      const issue = displayIssues[index];
+      if (issue) void handleResolve(issue.id);
+    },
+    onIgnore: (index) => {
+      const issue = displayIssues[index];
+      if (issue) void handleIgnore(issue.id);
+    },
+    onShowHelp: () => setShowShortcutsHelp(true),
     isEnabled: !showSaveSearch,
   });
 
@@ -244,9 +292,11 @@ export default function DashboardPage() {
   useEffect(() => {
     if (!isLive || !selectedProject) return;
 
-    const interval = setInterval(async () => {
+    let interval: ReturnType<typeof setInterval> | null = null;
+
+    async function pollIssues() {
       try {
-        const response = await issuesApi.list(selectedProject.id);
+        const response = await issuesApi.list(selectedProject!.id);
         const newIds = new Set(response.data.map(i => i.id));
         const addedIds = new Set<string>();
 
@@ -260,6 +310,28 @@ export default function DashboardPage() {
           setNewIssueIds(addedIds);
           // Clear animation class after animation completes
           setTimeout(() => setNewIssueIds(new Set()), 600);
+
+          // Toast notification for new issues
+          const newIssues = response.data.filter(i => addedIds.has(i.id));
+          const hasCritical = newIssues.some(i => i.level === "fatal" || i.level === "error");
+          if (hasCritical) {
+            const critical = newIssues.find(i => i.level === "fatal" || i.level === "error");
+            toast.error("New critical error", {
+              description: critical?.title,
+              action: critical ? {
+                label: "View",
+                onClick: () => router.push(`/dashboard/issues/${critical.id}?project=${selectedProject?.id}`),
+              } : undefined,
+            });
+          } else {
+            toast(`${addedIds.size} new issue${addedIds.size > 1 ? "s" : ""}` );
+          }
+
+          // Flash browser tab title
+          const originalTitle = document.title;
+          document.title = `(${addedIds.size}) Bugwatch`;
+          const onFocus = () => { document.title = originalTitle; window.removeEventListener("focus", onFocus); };
+          window.addEventListener("focus", onFocus);
         }
 
         previousIssueIdsRef.current = newIds;
@@ -267,9 +339,29 @@ export default function DashboardPage() {
       } catch {
         // Silent fail for polling
       }
-    }, 10000);
+    }
 
-    return () => clearInterval(interval);
+    const POLL_INTERVAL_MS = 30000;
+
+    function handleVisibility() {
+      if (document.hidden) {
+        if (interval) { clearInterval(interval); interval = null; }
+      } else {
+        pollIssues();
+        if (!interval) interval = setInterval(pollIssues, POLL_INTERVAL_MS);
+      }
+    }
+
+    // Only start polling if the tab is actually visible on mount.
+    if (!document.hidden) {
+      interval = setInterval(pollIssues, POLL_INTERVAL_MS);
+    }
+    document.addEventListener("visibilitychange", handleVisibility);
+
+    return () => {
+      if (interval) clearInterval(interval);
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
   }, [isLive, selectedProject]);
 
   const toggleIssueSelection = (id: string) => {
@@ -281,6 +373,37 @@ export default function DashboardPage() {
     }
     setSelectedIssues(newSelected);
   };
+
+  // Ignore with undo (single)
+  const handleIgnore = useCallback(async (issueId: string) => {
+    if (!selectedProject) return;
+    const issue = issues.find(i => i.id === issueId);
+    if (!issue) return;
+    const previousStatus = issue.status;
+
+    setIssues(prev => prev.map(i => i.id === issueId ? { ...i, status: "ignored" } : i));
+
+    toast.success("Issue ignored", {
+      action: {
+        label: "Undo",
+        onClick: async () => {
+          setIssues(prev => prev.map(i => i.id === issueId ? { ...i, status: previousStatus } : i));
+          try {
+            await issuesApi.update(selectedProject.id, issueId, previousStatus);
+          } catch {
+            toast.error("Failed to undo ignore");
+          }
+        },
+      },
+    });
+
+    try {
+      await issuesApi.update(selectedProject.id, issueId, "ignored");
+    } catch {
+      setIssues(prev => prev.map(i => i.id === issueId ? { ...i, status: previousStatus } : i));
+      toast.error("Failed to ignore issue");
+    }
+  }, [selectedProject, issues]);
 
   // Resolve with undo
   const handleResolve = useCallback(async (issueId: string) => {
@@ -318,9 +441,14 @@ export default function DashboardPage() {
   const handleBulkResolve = useCallback(async () => {
     if (!selectedProject || selectedIssues.size === 0) return;
     const ids = Array.from(selectedIssues);
-    const previousStates = new Map(issues.filter(i => ids.includes(i.id)).map(i => [i.id, i.status]));
+    let previousStates = new Map<string, string>();
 
-    setIssues(prev => prev.map(i => ids.includes(i.id) ? { ...i, status: "resolved" } : i));
+    setIssues(prev => {
+      previousStates = new Map(
+        prev.filter(i => ids.includes(i.id)).map(i => [i.id, i.status])
+      );
+      return prev.map(i => ids.includes(i.id) ? { ...i, status: "resolved" } : i);
+    });
     setSelectedIssues(new Set());
 
     toast.success(`${ids.length} issues resolved`, {
@@ -344,15 +472,20 @@ export default function DashboardPage() {
     for (const id of ids) {
       try { await issuesApi.update(selectedProject.id, id, "resolved"); } catch { /* */ }
     }
-  }, [selectedProject, selectedIssues, issues]);
+  }, [selectedProject, selectedIssues]);
 
   // Bulk ignore
   const handleBulkIgnore = useCallback(async () => {
     if (!selectedProject || selectedIssues.size === 0) return;
     const ids = Array.from(selectedIssues);
-    const previousStates = new Map(issues.filter(i => ids.includes(i.id)).map(i => [i.id, i.status]));
+    let previousStates = new Map<string, string>();
 
-    setIssues(prev => prev.map(i => ids.includes(i.id) ? { ...i, status: "ignored" } : i));
+    setIssues(prev => {
+      previousStates = new Map(
+        prev.filter(i => ids.includes(i.id)).map(i => [i.id, i.status])
+      );
+      return prev.map(i => ids.includes(i.id) ? { ...i, status: "ignored" } : i);
+    });
     setSelectedIssues(new Set());
 
     toast.success(`${ids.length} issues ignored`, {
@@ -376,7 +509,7 @@ export default function DashboardPage() {
     for (const id of ids) {
       try { await issuesApi.update(selectedProject.id, id, "ignored"); } catch { /* */ }
     }
-  }, [selectedProject, selectedIssues, issues]);
+  }, [selectedProject, selectedIssues]);
 
   // Save search
   const handleSaveSearch = () => {
@@ -395,10 +528,10 @@ export default function DashboardPage() {
     return (
       <div className="flex items-center justify-center min-h-[600px]">
         <div className="text-center max-w-md">
-          <div className="mx-auto w-16 h-16 rounded-2xl bg-gradient-to-br from-primary/20 to-primary/5 flex items-center justify-center mb-6">
-            <Bug className="h-8 w-8 text-primary" />
+          <div className="mx-auto w-16 h-16 rounded-2xl bg-gradient-to-br from-accent-2/20 to-accent-2/5 flex items-center justify-center mb-6">
+            <Bug className="h-8 w-8 text-accent-2" />
           </div>
-          <h2 className="text-2xl font-semibold mb-2">No projects yet</h2>
+          <h2 className="font-display text-heading-lg mb-2">No projects yet</h2>
           <p className="text-muted-foreground mb-6">
             Create your first project to start tracking errors in your application.
           </p>
@@ -418,7 +551,7 @@ export default function DashboardPage() {
       {/* Compact Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-4">
-          <h1 className="text-xl font-semibold">Issues</h1>
+          <h1 className="font-display text-heading-lg">Issues</h1>
           {selectedProject && (
             <span className="text-sm text-muted-foreground">
               {selectedProject.name}
@@ -426,6 +559,45 @@ export default function DashboardPage() {
           )}
         </div>
         <div className="flex items-center gap-2">
+          {/* Density toggle */}
+          <div className="flex items-center rounded-lg border border-border-subtle bg-surface-2 p-0.5">
+            <button
+              type="button"
+              onClick={() => setDensity("comfortable")}
+              aria-label="Comfortable density"
+              aria-pressed={density === "comfortable"}
+              className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors ${
+                density === "comfortable"
+                  ? "bg-accent-2/12 text-accent-2"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              Comfortable
+            </button>
+            <button
+              type="button"
+              onClick={() => setDensity("compact")}
+              aria-label="Compact density"
+              aria-pressed={density === "compact"}
+              className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors ${
+                density === "compact"
+                  ? "bg-accent-2/12 text-accent-2"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              Compact
+            </button>
+          </div>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-muted-foreground"
+            onClick={() => setShowShortcutsHelp(true)}
+            aria-label="Keyboard shortcuts"
+            title="Keyboard shortcuts (?)"
+          >
+            <Keyboard className="h-4 w-4" />
+          </Button>
           <Button
             variant="ghost"
             size="sm"
@@ -439,13 +611,51 @@ export default function DashboardPage() {
         </div>
       </div>
 
+      {/* Shortcuts help dialog */}
+      <Dialog open={showShortcutsHelp} onOpenChange={setShowShortcutsHelp}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Keyboard shortcuts</DialogTitle>
+            <DialogDescription>
+              Navigate and triage issues without the mouse.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2 text-body-sm">
+            {[
+              { keys: ["j", "↓"], label: "Move focus down" },
+              { keys: ["k", "↑"], label: "Move focus up" },
+              { keys: ["Enter"], label: "Open issue" },
+              { keys: ["x"], label: "Toggle select" },
+              { keys: ["r"], label: "Resolve" },
+              { keys: ["m", "e"], label: "Ignore" },
+              { keys: ["/"], label: "Focus search" },
+              { keys: ["?"], label: "Show this help" },
+            ].map(({ keys, label }) => (
+              <div key={label} className="flex items-center justify-between py-1.5">
+                <span className="text-muted-foreground">{label}</span>
+                <span className="flex items-center gap-1">
+                  {keys.map((k) => (
+                    <kbd
+                      key={k}
+                      className="inline-flex h-6 min-w-[1.5rem] items-center justify-center rounded border border-border-subtle bg-surface-3 px-1.5 font-mono text-[11px] font-medium text-foreground"
+                    >
+                      {k}
+                    </kbd>
+                  ))}
+                </span>
+              </div>
+            ))}
+          </div>
+        </DialogContent>
+      </Dialog>
+
       {/* Stats Row */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <div className="group relative overflow-hidden rounded-xl border bg-card p-4 transition-all hover:shadow-lg hover:shadow-primary/5 hover:border-primary/20">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="group relative overflow-hidden rounded-xl border bg-card p-4 transition-all hover:shadow-lg hover:shadow-accent-2/5 hover:border-accent-2/20 card-hover">
           <div className="flex items-center justify-between">
             <div>
               <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Unresolved</p>
-              <p className="text-2xl font-bold mt-1">{stats.unresolved}</p>
+              <p className="font-display text-3xl font-semibold mt-1 tabular-nums tracking-tight">{stats.unresolved}</p>
             </div>
             <div className={`p-2 rounded-lg ${stats.unresolved > 0 ? 'bg-orange-500/10' : 'bg-bug/10'}`}>
               <AlertCircle className={`h-5 w-5 ${stats.unresolved > 0 ? 'text-orange-500' : 'text-bug'}`} />
@@ -459,11 +669,11 @@ export default function DashboardPage() {
           )}
         </div>
 
-        <div className="group relative overflow-hidden rounded-xl border bg-card p-4 transition-all hover:shadow-lg hover:shadow-primary/5 hover:border-primary/20">
+        <div className="group relative overflow-hidden rounded-xl border bg-card p-4 transition-all hover:shadow-lg hover:shadow-accent-2/5 hover:border-accent-2/20 card-hover">
           <div className="flex items-center justify-between">
             <div>
               <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Events (24h)</p>
-              <p className="text-2xl font-bold mt-1">{stats.events.toLocaleString()}</p>
+              <p className="font-display text-3xl font-semibold mt-1 tabular-nums tracking-tight">{stats.events.toLocaleString()}</p>
             </div>
             <div className="p-2 rounded-lg bg-blue-500/10">
               <TrendingUp className="h-5 w-5 text-blue-500" />
@@ -476,11 +686,11 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        <div className="group relative overflow-hidden rounded-xl border bg-card p-4 transition-all hover:shadow-lg hover:shadow-primary/5 hover:border-primary/20">
+        <div className="group relative overflow-hidden rounded-xl border bg-card p-4 transition-all hover:shadow-lg hover:shadow-accent-2/5 hover:border-accent-2/20 card-hover">
           <div className="flex items-center justify-between">
             <div>
               <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Users Affected</p>
-              <p className="text-2xl font-bold mt-1">{stats.users.toLocaleString()}</p>
+              <p className="font-display text-3xl font-semibold mt-1 tabular-nums tracking-tight">{stats.users.toLocaleString()}</p>
             </div>
             <div className="p-2 rounded-lg bg-purple-500/10">
               <Users className="h-5 w-5 text-purple-500" />
@@ -488,11 +698,11 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        <div className="group relative overflow-hidden rounded-xl border bg-card p-4 transition-all hover:shadow-lg hover:shadow-primary/5 hover:border-primary/20">
+        <div className="group relative overflow-hidden rounded-xl border bg-card p-4 transition-all hover:shadow-lg hover:shadow-accent-2/5 hover:border-accent-2/20 card-hover">
           <div className="flex items-center justify-between">
             <div>
               <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Last 24h</p>
-              <p className="text-2xl font-bold mt-1">{stats.recentCount}</p>
+              <p className="font-display text-3xl font-semibold mt-1 tabular-nums tracking-tight">{stats.recentCount}</p>
             </div>
             <div className="p-2 rounded-lg bg-emerald-500/10">
               <Clock className="h-5 w-5 text-emerald-500" />
@@ -544,8 +754,8 @@ export default function DashboardPage() {
               }}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap border transition-all ${
                 activeFilter === filter.id
-                  ? "bg-primary text-primary-foreground border-primary"
-                  : "bg-card text-muted-foreground border-border hover:border-primary/30 hover:text-foreground"
+                  ? "bg-accent-2 text-accent-2-foreground border-accent-2"
+                  : "bg-card text-muted-foreground border-border hover:border-accent-2/30 hover:text-foreground"
               }`}
             >
               <FilterIcon className="h-3 w-3" />
@@ -580,8 +790,8 @@ export default function DashboardPage() {
             }}
             className={`group flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap border transition-all ${
               activeFilter === search.id
-                ? "bg-primary text-primary-foreground border-primary"
-                : "bg-card text-muted-foreground border-border hover:border-primary/30 hover:text-foreground"
+                ? "bg-accent-2 text-accent-2-foreground border-accent-2"
+                : "bg-card text-muted-foreground border-border hover:border-accent-2/30 hover:text-foreground"
             }`}
           >
             <Bookmark className="h-3 w-3" />
@@ -602,7 +812,7 @@ export default function DashboardPage() {
         {currentSearchQuery && (
           <button
             onClick={() => setShowSaveSearch(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap border border-dashed border-primary/30 text-primary hover:bg-primary/5 transition-all"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap border border-dashed border-accent-2/30 text-accent-2 hover:bg-accent-2/5 transition-all"
           >
             <Bookmark className="h-3 w-3" />
             Save Search
@@ -613,7 +823,7 @@ export default function DashboardPage() {
       {/* Save Search Mini Dialog */}
       {showSaveSearch && (
         <div className="flex items-center gap-2 px-3 py-2 rounded-lg border bg-card animate-fade-in-up">
-          <Bookmark className="h-4 w-4 text-primary shrink-0" />
+          <Bookmark className="h-4 w-4 text-accent-2 shrink-0" />
           <input
             autoFocus
             type="text"
@@ -630,7 +840,7 @@ export default function DashboardPage() {
 
       {/* Bulk Actions Bar */}
       {selectedIssues.size > 0 && (
-        <div className="flex items-center gap-3 px-4 py-2 rounded-lg bg-primary/5 border border-primary/20 animate-fade-in-up">
+        <div className="flex items-center gap-3 px-4 py-2 rounded-lg bg-accent-2/5 border border-accent-2/20 animate-fade-in-up">
           <span className="text-sm font-medium">{selectedIssues.size} selected</span>
           <div className="flex items-center gap-2">
             <Button size="sm" variant="outline" className="h-7 text-xs" onClick={handleBulkResolve}>
@@ -688,7 +898,7 @@ export default function DashboardPage() {
               </div>
             )
           ) : (
-            displayIssues.map((issue, index) => {
+            displayIssues.slice(0, renderCap).map((issue, index) => {
               const config = levelConfig[issue.level as keyof typeof levelConfig] || levelConfig.error;
               const Icon = config.icon;
               const isHovered = hoveredIssue === issue.id;
@@ -706,7 +916,7 @@ export default function DashboardPage() {
                   className={`group relative flex items-center gap-4 rounded-lg border-l-4 ${config.border} bg-card transition-all duration-200
                     ${isHovered && isSevere ? `shadow-lg ${config.glow}` : isHovered ? 'shadow-md' : 'hover:bg-muted/30'}
                     ${isFocused ? `ring-2 ${config.focusRing}` : ''}
-                    ${isSelected ? 'ring-2 ring-primary/30 bg-primary/5' : ''}
+                    ${isSelected ? 'ring-2 ring-accent-2/30 bg-accent-2/5' : ''}
                     ${issue.status === "resolved" ? "opacity-50" : ""}
                     ${isNew ? "animate-slide-in-new" : ""}
                   `}
@@ -719,27 +929,28 @@ export default function DashboardPage() {
                     <button
                       onClick={(e) => { e.stopPropagation(); toggleIssueSelection(issue.id); }}
                       className={`w-4 h-4 rounded border-2 flex items-center justify-center transition-all
-                        ${isSelected ? 'bg-primary border-primary' : 'border-muted-foreground/30 hover:border-primary/50'}
+                        ${isSelected ? 'bg-accent-2 border-accent-2' : 'border-muted-foreground/30 hover:border-accent-2/50'}
                       `}
                     >
-                      {isSelected && <Check className="h-3 w-3 text-primary-foreground" />}
+                      {isSelected && <Check className="h-3 w-3 text-accent-2-foreground" />}
                     </button>
                   </div>
 
                   {/* Main Content */}
                   <Link
                     href={`/dashboard/issues/${issue.id}?project=${selectedProject?.id}`}
-                    className="flex-1 flex items-center gap-4 py-3 pr-4"
+                    className={`flex-1 flex items-center gap-4 pr-4 ${density === "compact" ? "py-2" : "py-3.5"}`}
                   >
                     {/* Icon */}
                     <div className={`shrink-0 p-2 rounded-lg ${config.bg} transition-transform group-hover:scale-110`}>
-                      <Icon className={`h-4 w-4 ${config.color}`} />
+                      <Icon className={`h-4 w-4 ${config.color}`} aria-hidden="true" />
+                      <span className="sr-only">{issue.level} severity</span>
                     </div>
 
                     {/* Title & Meta */}
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
-                        <p className="font-medium text-sm truncate">{issue.title}</p>
+                        <p className="font-medium text-[15px] tracking-tight truncate">{issue.title}</p>
                         {issue.environment && issue.environment !== "production" && (
                           <span className={`shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-medium ${
                             (ENVIRONMENT_COLORS[issue.environment] ?? ENVIRONMENT_COLORS.production)!.bg
@@ -769,8 +980,8 @@ export default function DashboardPage() {
                       </div>
                     </div>
 
-                    {/* Sparkline + Time + Actions */}
-                    <div className="flex items-center gap-3 shrink-0">
+                    {/* Sparkline + Time + Actions (hidden on mobile) */}
+                    <div className="hidden sm:flex items-center gap-3 shrink-0">
                       {/* Sparkline - hide on hover when showing actions */}
                       <div className={`transition-opacity ${isHovered && issue.status !== "resolved" ? 'opacity-0 w-0 overflow-hidden' : 'opacity-100 w-auto'}`}>
                         <Sparkline data={sparkData} width={56} height={16} showTrend={true} />
@@ -805,9 +1016,6 @@ export default function DashboardPage() {
                             <Check className="h-3 w-3 mr-1" />
                             Resolve
                           </Button>
-                          <Button size="sm" variant="ghost" className="h-7 w-7 p-0">
-                            <MoreHorizontal className="h-4 w-4" />
-                          </Button>
                         </div>
                       )}
 
@@ -826,10 +1034,19 @@ export default function DashboardPage() {
 
       {/* Load More */}
       {displayIssues.length > 0 && (
-        <div className="flex justify-center pt-4">
-          <Button variant="outline" className="text-muted-foreground">
-            Load more issues
-          </Button>
+        <div className="flex flex-col items-center gap-2 pt-4">
+          <p className="text-body-sm text-muted-foreground tabular-nums">
+            Showing {Math.min(renderCap, displayIssues.length)} of {displayIssues.length} issues
+          </p>
+          {displayIssues.length > renderCap && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setRenderCap((n) => n + 100)}
+            >
+              Load 100 more
+            </Button>
+          )}
         </div>
       )}
 

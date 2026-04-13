@@ -191,8 +191,7 @@ export function useSearch({
       return;
     }
 
-    // Track if this effect is still mounted
-    let isCancelled = false;
+    const controller = new AbortController();
 
     const search = async () => {
       setIsLoading(true);
@@ -205,21 +204,17 @@ export function useSearch({
           sort: parsed.sort
             ? { field: parsed.sort.field, direction: parsed.sort.direction }
             : undefined,
-        });
+        }, { signal: controller.signal });
 
-        // Only update state if not cancelled
-        if (!isCancelled) {
-          setResults(response.data);
-          setFacets(response.facets);
-        }
+        setResults(response.data);
+        setFacets(response.facets);
       } catch (err) {
-        // Only update state if not cancelled and not an abort error
-        if (!isCancelled) {
-          console.error("Search failed:", err);
-          setError("Search failed. Please try again.");
-        }
+        // Ignore AbortError - expected when effect cleanup runs
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        console.error("Search failed:", err);
+        setError("Search failed. Please try again.");
       } finally {
-        if (!isCancelled) {
+        if (!controller.signal.aborted) {
           setIsLoading(false);
         }
       }
@@ -227,9 +222,8 @@ export function useSearch({
 
     search();
 
-    // Cleanup function to prevent state updates after unmount
     return () => {
-      isCancelled = true;
+      controller.abort();
     };
   }, [projectId, debouncedQuery, convertFilters]);
 

@@ -1,0 +1,94 @@
+---
+title: Create a Project
+description: Learn how to create a project in Bugwatch and obtain the API key you need to initialize your SDK.
+---
+
+# Create a Project
+
+A **project** in Bugwatch represents a single application or service you want to monitor. Each project has its own API key, error stream, alert rules, and team permissions. Most teams create one project per deployable unit (e.g., one for the frontend, one for the API, one for a background worker).
+
+## Creating Your First Project
+
+1. Log in to your Bugwatch dashboard at [bugwatch.dev/dashboard](https://bugwatch.dev/dashboard) (or your self-hosted URL)
+2. Click the **New Project** button in the sidebar or on the dashboard home page
+3. Enter a **project name** -- use something descriptive like `web-app`, `api-server`, or `payment-service`
+4. Click **Create**
+
+Your project is now ready. You will be redirected to the project's setup page with your API key displayed.
+
+## Your API Key
+
+Every project gets a unique API key that the SDK uses to route errors to the correct project. API keys follow the format:
+
+```
+bw_live_xxxxx
+```
+
+### Where to Find It
+
+You can always retrieve your API key by navigating to:
+
+**Dashboard > Project Settings > API Keys**
+
+### Keeping It Safe
+
+Your API key identifies your project but should still be treated as sensitive:
+
+- **Do not commit it to version control.** Use environment variables instead.
+- Store it in `.env` files locally, and in your hosting provider's secret management in production.
+
+```bash
+# .env
+BUGWATCH_API_KEY=bw_live_xxxxx
+```
+
+```js
+// Reference from environment
+import { init } from "@bugwatch/nextjs";
+
+init({
+  apiKey: process.env.BUGWATCH_API_KEY,
+});
+```
+
+```python
+import os
+import bugwatch
+
+bugwatch.init(api_key=os.environ["BUGWATCH_API_KEY"])
+```
+
+### Rotating an API Key
+
+If you suspect a key has been compromised:
+
+1. Go to **Dashboard > Project Settings > API Keys**
+2. Click **Regenerate Key**
+3. Update the key in all deployed environments
+4. The old key is invalidated immediately
+
+## Project Settings
+
+After creation, you can configure the following from the project settings page:
+
+| Setting | Description |
+|---------|-------------|
+| **Name** | Display name shown in the sidebar and dashboard |
+| **Environment filtering** | Separate errors by `production`, `staging`, `development` |
+| **Alert rules** | Configure when and where notifications are sent |
+| **Team access** | Invite members and assign roles |
+| **Rate limits** | Control the maximum number of events ingested per minute |
+
+## Multiple Projects
+
+There is no hard limit on the number of projects you can create. Common setups include:
+
+- **By service** -- one project per microservice or deployable
+- **By platform** -- separate projects for web, mobile, and backend
+- **By team** -- each team owns their own project
+
+All projects are visible from the dashboard sidebar, and you can switch between them with a single click.
+
+## Next Steps
+
+Now that your project is created and you have your API key, [install an SDK](/docs/sdks) for your framework and then [verify your integration](/docs/getting-started/verify-integration).

@@ -1,6 +1,6 @@
 import { init as init$1 } from '@bugwatch/node';
 import { setUser, setTag, setExtra, getClient, captureMessage, captureException, addBreadcrumb, init as init$2, isBrowserExtensionError } from '@bugwatch/core';
-import { useEffect, Component } from 'react';
+import { useMemo, useEffect, Component } from 'react';
 import { jsx, jsxs } from 'react/jsx-runtime';
 
 var __defProp = Object.defineProperty;
@@ -314,13 +314,22 @@ function setupConsoleBreadcrumbs() {
     error: console.error,
     debug: console.debug
   };
+  let inBreadcrumb = false;
   const wrap = (method, level) => {
     console[method] = (...args) => {
-      addBreadcrumb({
-        category: "console",
-        message: args.map(String).join(" "),
-        level
-      });
+      if (!inBreadcrumb) {
+        inBreadcrumb = true;
+        try {
+          addBreadcrumb({
+            category: "console",
+            message: args.map(String).join(" "),
+            level
+          });
+        } catch {
+        } finally {
+          inBreadcrumb = false;
+        }
+      }
       originalConsole[method](...args);
     };
   };
@@ -402,8 +411,13 @@ function setupFetchInstrumentation(options) {
   const sdkEndpoint = options.endpoint || "https://api.bugwatch.dev";
   const sdkEventUrl = `${sdkEndpoint}/api/v1/events`;
   window.fetch = async function(input, init2) {
-    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-    const method = init2?.method || "GET";
+    let url;
+    try {
+      url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url || String(input);
+    } catch {
+      return originalFetch.call(window, input, init2);
+    }
+    const method = init2?.method || (typeof input !== "string" && !(input instanceof URL) ? input.method : "GET") || "GET";
     if (url.startsWith(sdkEventUrl)) {
       return originalFetch.call(window, input, init2);
     }
@@ -501,6 +515,10 @@ function BugwatchProvider({
   options,
   children
 }) {
+  const optionsKey = useMemo(
+    () => options ? JSON.stringify(options) : "",
+    [options]
+  );
   useEffect(() => {
     const envConfig = getEnvConfig();
     const mergedOptions = { ...DEFAULT_CLIENT_OPTIONS, ...envConfig, ...options };
@@ -511,7 +529,10 @@ function BugwatchProvider({
       return;
     }
     initClient(mergedOptions);
-  }, [options]);
+    return () => {
+      closeClient();
+    };
+  }, [optionsKey]);
   return /* @__PURE__ */ jsx(BugwatchErrorBoundary, { children });
 }
 var DEFAULT_CLIENT_OPTIONS, isClientInitialized, clientCleanupFunctions, BugwatchErrorBoundary;

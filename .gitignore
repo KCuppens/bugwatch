@@ -42,6 +42,18 @@ test-results/
 Cargo.lock
 *.rs.bk
 
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+.venv/
+venv/
+
 # SQLite
 *.db
 *.db-journal

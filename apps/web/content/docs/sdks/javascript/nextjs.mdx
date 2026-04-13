@@ -1,0 +1,279 @@
+---
+title: "@bugwatch/nextjs"
+description: Full-stack error tracking for Next.js. Captures errors on the server, in API routes, and in the browser with zero-config setup.
+---
+
+# @bugwatch/nextjs
+
+`@bugwatch/nextjs` provides full-stack error tracking for Next.js applications. It wraps your Next.js configuration, injects error handling on both client and server, and captures build-time errors -- all with minimal setup.
+
+<Callout type="info">
+The Next.js SDK automatically captures both server-side and client-side errors. You need both `instrumentation.ts` (server) and `BugwatchProvider` (client) for full coverage.
+</Callout>
+
+## Installation
+
+```bash
+npm install @bugwatch/nextjs
+```
+
+```bash
+yarn add @bugwatch/nextjs
+```
+
+```bash
+pnpm add @bugwatch/nextjs
+```
+
+## Quick Start
+
+### 1. Wrap your Next.js config
+
+Use `withBugwatch()` in your `next.config.ts` (or `next.config.js`) to enable server-side error capture and build-time instrumentation.
+
+```ts
+// next.config.ts
+import { withBugwatch } from "@bugwatch/nextjs";
+
+const nextConfig = {
+  // your existing Next.js config
+};
+
+export default withBugwatch({
+  apiKey: "bw_live_xxxxx",
+})(nextConfig);
+```
+
+### 2. Add the client provider
+
+Wrap your root layout (App Router) or `_app` (Pages Router) with `<BugwatchProvider>` to capture client-side errors.
+
+**App Router (`app/layout.tsx`)**
+
+```tsx
+import { BugwatchProvider } from "@bugwatch/nextjs/client";
+
+export default function RootLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  return (
+    <html lang="en">
+      <body>
+        <BugwatchProvider
+          options={{
+            apiKey: "bw_live_xxxxx",
+            environment: process.env.NODE_ENV,
+          }}
+        >
+          {children}
+        </BugwatchProvider>
+      </body>
+    </html>
+  );
+}
+```
+
+**Pages Router (`pages/_app.tsx`)**
+
+```tsx
+import { BugwatchProvider } from "@bugwatch/nextjs/client";
+import type { AppProps } from "next/app";
+
+export default function App({ Component, pageProps }: AppProps) {
+  return (
+    <BugwatchProvider options={{ apiKey: "bw_live_xxxxx" }}>
+      <Component {...pageProps} />
+    </BugwatchProvider>
+  );
+}
+```
+
+### 3. Register instrumentation
+
+Create an `instrumentation.ts` file at the root of your project to enable server-side error capture in the Node.js runtime.
+
+<Callout type="warn">
+Make sure `instrumentation.ts` is in your project root (next to `package.json`), not inside the `app/` directory.
+</Callout>
+
+```ts
+// instrumentation.ts
+import { registerBugwatch } from "@bugwatch/nextjs";
+
+export function register() {
+  registerBugwatch({
+    apiKey: "bw_live_xxxxx",
+    environment: process.env.NODE_ENV,
+  });
+}
+```
+
+## What Gets Captured Automatically
+
+Once configured, the SDK captures errors across your entire Next.js stack:
+
+| Source | How | Level |
+| --- | --- | --- |
+| Server-side exceptions | Via `instrumentation.ts` and `withBugwatch()` | `error` |
+| API route errors | Automatic wrapping of `app/api` and `pages/api` handlers | `error` |
+| Client-side errors | `window.onerror` and unhandled promise rejections via `<BugwatchProvider>` | `error` |
+| Build-time errors | Captured during `next build` via the config wrapper | `fatal` |
+
+## SSR Wrappers (Pages Router)
+
+For Pages Router projects, wrap your data-fetching functions to capture errors that occur during server-side rendering.
+
+### withBugwatchServerSideProps
+
+Wraps `getServerSideProps` to capture errors and attach request context.
+
+```tsx
+import { withBugwatchServerSideProps } from "@bugwatch/nextjs";
+
+export const getServerSideProps = withBugwatchServerSideProps(
+  async (context) => {
+    const data = await fetchData(context.params.id);
+    return { props: { data } };
+  }
+);
+
+export default function Page({ data }) {
+  return <div>{data.title}</div>;
+}
+```
+
+### withBugwatchStaticProps
+
+Wraps `getStaticProps` for error capture during static generation.
+
+```tsx
+import { withBugwatchStaticProps } from "@bugwatch/nextjs";
+
+export const getStaticProps = withBugwatchStaticProps(async () => {
+  const posts = await fetchAllPosts();
+  return { props: { posts }, revalidate: 60 };
+});
+
+export default function Blog({ posts }) {
+  return (
+    <ul>
+      {posts.map((post) => (
+        <li key={post.id}>{post.title}</li>
+      ))}
+    </ul>
+  );
+}
+```
+
+### withBugwatchApi
+
+Wraps Pages Router API routes for error capture and request context.
+
+```ts
+// pages/api/users.ts
+import { withBugwatchApi } from "@bugwatch/nextjs";
+import type { NextApiRequest, NextApiResponse } from "next";
+
+export default withBugwatchApi(
+  async (req: NextApiRequest, res: NextApiResponse) => {
+    const users = await db.users.findAll();
+    res.status(200).json(users);
+  }
+);
+```
+
+## Client-Side Usage
+
+Inside components wrapped by `<BugwatchProvider>`, you can access the SDK via hooks (re-exported from `@bugwatch/react`).
+
+```tsx
+"use client";
+
+import { useBugwatch } from "@bugwatch/nextjs/client";
+
+export function CheckoutButton() {
+  const { captureException, addBreadcrumb } = useBugwatch();
+
+  const handleClick = async () => {
+    addBreadcrumb({
+      category: "checkout",
+      message: "User clicked checkout",
+    });
+
+    try {
+      await processCheckout();
+    } catch (error) {
+      captureException(error, {
+        tags: { page: "checkout" },
+      });
+    }
+  };
+
+  return <button onClick={handleClick}>Complete Purchase</button>;
+}
+```
+
+## Configuration Options
+
+The `withBugwatch()` config wrapper and `registerBugwatch()` accept all [`@bugwatch/core` options](/docs/sdks/javascript/core#configuration) plus:
+
+```ts
+withBugwatch({
+  apiKey: "bw_live_xxxxx",
+  environment: "production",
+  release: "1.4.0",
+
+  // Automatically set the release from NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA
+  // when deployed on Vercel (enabled by default)
+  autoDetectRelease: true,
+});
+```
+
+The `<BugwatchProvider>` accepts all [`@bugwatch/react` options](/docs/sdks/javascript/react#configuration).
+
+## Environment Variables
+
+You can configure the SDK entirely via environment variables, which is useful for platform-based deployments like Vercel.
+
+```bash
+# .env.local
+BUGWATCH_API_KEY=bw_live_xxxxx
+BUGWATCH_ENVIRONMENT=production
+BUGWATCH_RELEASE=1.4.0
+NEXT_PUBLIC_BUGWATCH_API_KEY=bw_live_xxxxx
+```
+
+Use `NEXT_PUBLIC_BUGWATCH_API_KEY` for client-side configuration and `BUGWATCH_API_KEY` for server-side.
+
+## Error Boundary (App Router)
+
+For App Router projects, create an `error.tsx` file to catch rendering errors at the route segment level. Bugwatch captures these automatically, but a custom error boundary lets you show a user-friendly fallback.
+
+```tsx
+// app/error.tsx
+"use client";
+
+export default function Error({
+  error,
+  reset,
+}: {
+  error: Error & { digest?: string };
+  reset: () => void;
+}) {
+  // The error is already captured by Bugwatch automatically
+  return (
+    <div>
+      <h2>Something went wrong</h2>
+      <button onClick={reset}>Try again</button>
+    </div>
+  );
+}
+```
+
+## Next Steps
+
+- [React SDK](/docs/sdks/javascript/react) -- error boundaries, hooks, and provider options
+- [Node.js SDK](/docs/sdks/javascript/node) -- process-level error capture details
+- [Core SDK](/docs/sdks/javascript/core) -- full API reference

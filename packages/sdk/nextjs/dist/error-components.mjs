@@ -44,8 +44,10 @@ var styles = {
 function BugwatchError({ error, reset }) {
   useEffect(() => {
     captureException(error, {
-      tags: { mechanism: "app-router-error-boundary" },
-      extra: { digest: error.digest }
+      tags: {
+        mechanism: "app-router-error-boundary",
+        ...error.digest && { "next.digest": error.digest }
+      }
     });
   }, [error]);
   return /* @__PURE__ */ jsxs("div", { style: styles.container, children: [
@@ -70,8 +72,10 @@ function BugwatchError({ error, reset }) {
 function BugwatchGlobalError({ error, reset }) {
   useEffect(() => {
     captureException(error, {
-      tags: { mechanism: "global-error-boundary" },
-      extra: { digest: error.digest }
+      tags: {
+        mechanism: "global-error-boundary",
+        ...error.digest && { "next.digest": error.digest }
+      }
     });
   }, [error]);
   return /* @__PURE__ */ jsx("html", { lang: "en", children: /* @__PURE__ */ jsx("body", { children: /* @__PURE__ */ jsxs(
@@ -116,8 +120,11 @@ function CustomBugwatchError({
 }) {
   useEffect(() => {
     captureException(error, {
-      tags: { mechanism: "custom-error-boundary", ...tags },
-      extra: { digest: error.digest }
+      tags: {
+        mechanism: "custom-error-boundary",
+        ...error.digest && { "next.digest": error.digest },
+        ...tags
+      }
     });
   }, [error, tags]);
   return /* @__PURE__ */ jsxs("div", { style: { ...styles.container, ...containerStyle }, children: [

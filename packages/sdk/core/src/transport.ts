@@ -1,10 +1,12 @@
-import type { ErrorEvent, Transport, BugwatchOptions } from "./types";
+import type { ErrorEvent, PerformanceEvent, Transport, BugwatchOptions } from "./types";
+import { createPersistentQueue, type PersistentQueue } from "./persistent-queue";
 
 const DEFAULT_ENDPOINT = "https://api.bugwatch.dev";
 const DEFAULT_TIMEOUT_MS = 10000;
 const MAX_PAYLOAD_BYTES = 512 * 1024; // 512 KB
 const MAX_RETRIES = 2;
 const BASE_RETRY_DELAY_MS = 500;
+const DRAIN_RATE_DELAY_MS = 200; // 5 events/sec on drain to avoid thundering herd
 
 /**
  * Safely serialize a value to JSON, handling circular references.
@@ -86,12 +88,42 @@ export class HttpTransport implements Transport {
   private timeoutMs: number;
   private inFlightRequests: Set<Promise<void>> = new Set();
   private rateLimitedUntil: number = 0;
+  private persistentQueue: PersistentQueue;
+  private drainPromise: Promise<void> | null = null;
 
   constructor(options: BugwatchOptions) {
     this.endpoint = options.endpoint || DEFAULT_ENDPOINT;
     this.apiKey = options.apiKey;
     this.debug = options.debug || false;
     this.timeoutMs = DEFAULT_TIMEOUT_MS;
+    this.persistentQueue = createPersistentQueue(options.offline);
+    // Drain on init — fire and forget. Failures are silent.
+    this.drainPersistentQueue();
+  }
+
+  /**
+   * Drain queued events from previous sessions / network outages.
+   * Rate-limited to avoid thundering herd on a freshly recovered connection.
+   */
+  private drainPersistentQueue(): void {
+    if (this.drainPromise) return;
+    this.drainPromise = (async () => {
+      try {
+        const events = await this.persistentQueue.drain();
+        if (events.length === 0) return;
+        if (this.debug) {
+          console.log(`[Bugwatch] Draining ${events.length} queued event(s)`);
+        }
+        for (const event of events) {
+          // Re-send via the standard path, but skip persistent queue on failure
+          // to avoid an infinite re-queue loop.
+          await this.sendWithRetry(event, 0, /* persistOnFailure */ false).catch(() => undefined);
+          await new Promise((r) => setTimeout(r, DRAIN_RATE_DELAY_MS));
+        }
+      } finally {
+        this.drainPromise = null;
+      }
+    })();
   }
 
   async send(event: ErrorEvent): Promise<void> {
@@ -114,7 +146,7 @@ export class HttpTransport implements Transport {
     });
   }
 
-  private async sendWithRetry(event: ErrorEvent, attempt = 0): Promise<void> {
+  private async sendWithRetry(event: ErrorEvent, attempt = 0, persistOnFailure = true): Promise<void> {
     const url = `${this.endpoint}/api/v1/events`;
 
     if (this.debug && attempt === 0) {
@@ -184,7 +216,7 @@ export class HttpTransport implements Transport {
       if (attempt < MAX_RETRIES) {
         const delay = BASE_RETRY_DELAY_MS * Math.pow(2, attempt) + Math.random() * 200;
         await new Promise((resolve) => setTimeout(resolve, delay));
-        return this.sendWithRetry(event, attempt + 1);
+        return this.sendWithRetry(event, attempt + 1, persistOnFailure);
       }
 
       if (this.debug) {
@@ -193,8 +225,88 @@ export class HttpTransport implements Transport {
           : "[Bugwatch] Transport error:";
         console.error(message, error);
       }
+
+      // Network failure after all retries — persist for next session if enabled
+      if (persistOnFailure) {
+        try {
+          const ok = await this.persistentQueue.enqueue(event);
+          if (ok && this.debug) {
+            console.log("[Bugwatch] Event persisted to offline queue:", event.event_id);
+          }
+        } catch {
+          // Queue itself failed — silent drop, never crash the host app
+        }
+      }
       // Don't throw - we don't want SDK errors to break the application
     }
+  }
+
+  /**
+   * Send a performance transaction to the API.
+   */
+  async sendTransaction(event: PerformanceEvent): Promise<void> {
+    if (Date.now() < this.rateLimitedUntil) {
+      if (this.debug) {
+        console.warn("[Bugwatch] Rate limited, dropping transaction:", event.transaction_name);
+      }
+      return;
+    }
+
+    const promise = (async () => {
+      const url = `${this.endpoint}/api/v1/transactions`;
+
+      if (this.debug) {
+        console.log("[Bugwatch] Sending transaction:", event.transaction_name);
+      }
+
+      try {
+        const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+        const timeoutId = controller
+          ? setTimeout(() => controller.abort(), this.timeoutMs)
+          : null;
+
+        try {
+          const response = await this.fetch(url, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": `Bearer ${this.apiKey}`,
+              "X-Bugwatch-SDK": "bugwatch-core",
+            },
+            body: JSON.stringify(event),
+            ...(controller && { signal: controller.signal }),
+          });
+
+          if (!response.ok) {
+            if (response.status === 429) {
+              const retryAfter = response.headers.get("Retry-After");
+              const parsed = retryAfter ? parseInt(retryAfter, 10) : NaN;
+              const backoffMs = !isNaN(parsed) && parsed > 0 ? parsed * 1000 : 60_000;
+              this.rateLimitedUntil = Date.now() + backoffMs;
+            }
+            if (this.debug) {
+              console.error("[Bugwatch] Failed to send transaction:", response.status);
+            }
+            return;
+          }
+
+          if (this.debug) {
+            console.log("[Bugwatch] Transaction sent successfully:", event.transaction_name);
+          }
+        } finally {
+          if (timeoutId !== null) {
+            clearTimeout(timeoutId);
+          }
+        }
+      } catch (error) {
+        if (this.debug) {
+          console.error("[Bugwatch] Transport error sending transaction:", error);
+        }
+      }
+    })();
+    this.inFlightRequests.add(promise);
+    promise.finally(() => this.inFlightRequests.delete(promise));
+    await promise;
   }
 
   /**

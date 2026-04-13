@@ -1,0 +1,391 @@
+---
+title: Data Model
+description: Reference for the key database entities in Bugwatch, including users, organizations, projects, issues, events, monitors, alerts, server metrics, and billing.
+---
+
+# Data Model
+
+Bugwatch stores all application data in PostgreSQL. This page documents the key entities, their relationships, and the conventions used across the schema.
+
+## Conventions
+
+Before diving into individual tables, here are the patterns used consistently throughout the database:
+
+- **UUID primary keys** -- every table uses a string UUID as its `id` column, generated with `uuid::Uuid::new_v4()`.
+- **Timestamps** -- all tables include a `created_at` column (UTC). Tables that track activity also include `updated_at`, `first_seen`, `last_seen`, or domain-specific timestamps like `checked_at` and `recorded_at`.
+- **String enums** -- status fields (`tier`, `role`, `level`, `status`) are stored as strings rather than PostgreSQL enums, allowing the application layer to handle validation and making schema migrations simpler.
+- **JSON columns** -- flexible fields like `settings`, `condition`, `actions`, `config`, `payload`, `disks_json`, `processes_json`, and `docker_json` are stored as JSON strings.
+- **Foreign keys** -- relationships are enforced via UUID foreign key columns (e.g., `project_id`, `organization_id`, `user_id`).
+
+## Entity Relationship Overview
+
+```
+  User ──────────────┐
+    │                 │
+    │ owns            │ member of
+    │                 │
+    ▼                 ▼
+  Organization ◄── OrganizationMember
+    │
+    │ has many
+    ▼
+  Project ──────────────────────────────────────────┐
+    │                                                │
+    ├── has many ──► Issue ──── has many ──► Event   │
+    │                  │                             │
+    │                  └── has many ──► IssueComment │
+    │                                                │
+    ├── has many ──► Monitor                         │
+    │                  │                             │
+    │                  ├── has many ──► MonitorCheck  │
+    │                  └── has many ──► MonitorIncident
+    │                                                │
+    ├── has many ──► Server ── has many ──► ServerMetric
+    │                                                │
+    ├── has many ──► AlertRule                        │
+    │                  │                             │
+    │                  └── has many ──► AlertLog      │
+    │                                                │
+    └── has many ──► NotificationChannel              │
+                                                     │
+  Organization ── has many ──► UsageRecord            │
+               ── has many ──► BillingEvent           │
+```
+
+## Identity and Access
+
+### users
+
+Represents a person who can log in to Bugwatch.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | UUID | Primary key |
+| `email` | string | Unique email address |
+| `password_hash` | string | Argon2-hashed password (never serialized to API responses) |
+| `name` | string (nullable) | Display name |
+| `email_verified` | boolean | Whether the email has been confirmed |
+| `failed_login_attempts` | integer | Counter for brute-force protection |
+| `locked_until` | timestamp (nullable) | Account lockout expiration |
+| `created_at` | timestamp | Account creation time |
+
+<Callout>
+The `password_hash` field is annotated with `#[serde(skip_serializing)]` in the Rust model, ensuring it is never leaked in API responses.
+</Callout>
+
+### organizations
+
+A billing and membership boundary. Each organization has its own subscription tier, Stripe integration, and set of projects.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | UUID | Primary key |
+| `name` | string | Organization name |
+| `slug` | string | URL-friendly identifier |
+| `owner_id` | UUID | FK to `users` -- the organization creator |
+| `tier` | string | Subscription tier (`free`, `pro`, `team`, `enterprise`) |
+| `stripe_customer_id` | string (nullable) | Stripe customer ID |
+| `stripe_subscription_id` | string (nullable) | Active Stripe subscription ID |
+| `subscription_status` | string | Current status (`active`, `past_due`, `canceled`, etc.) |
+| `seats` | integer | Number of seats in the subscription |
+| `billing_interval` | string (nullable) | `monthly` or `yearly` |
+| `current_period_start` | timestamp (nullable) | Start of the current billing period |
+| `current_period_end` | timestamp (nullable) | End of the current billing period |
+| `cancel_at_period_end` | boolean | Whether to cancel at period end |
+| `payment_failed_at` | timestamp (nullable) | When the last payment failure occurred |
+| `grace_period_ends` | timestamp (nullable) | Deadline before downgrade on payment failure |
+| `tax_id` | string (nullable) | VAT/tax identifier |
+| `tax_exempt` | boolean (nullable) | Tax exemption status |
+| `billing_country` | string (nullable) | Country for tax calculation |
+| `billing_address` | string (nullable) | Full billing address |
+| `created_at` | timestamp | Creation time |
+| `updated_at` | timestamp | Last modification time |
+
+### organization_members
+
+Join table linking users to organizations with a role.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | UUID | Primary key |
+| `organization_id` | UUID | FK to `organizations` |
+| `user_id` | UUID | FK to `users` |
+| `role` | string | Member role (`owner`, `admin`, `member`) |
+| `created_at` | timestamp | When the member was added |
+
+### sessions
+
+Active authentication sessions for logged-in users.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | UUID | Primary key |
+| `user_id` | UUID | FK to `users` |
+| `token_hash` | string | SHA-256 hash of the session token |
+| `expires_at` | timestamp | Session expiration time |
+| `ip_address` | string (nullable) | Client IP at session creation |
+| `user_agent` | string (nullable) | Client user agent string |
+| `created_at` | timestamp | Session creation time |
+
+## Projects and Error Tracking
+
+### projects
+
+A container for issues, monitors, and servers. Typically maps to one deployable application or service.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | UUID | Primary key |
+| `name` | string | Project name |
+| `slug` | string | URL-friendly identifier |
+| `api_key` | string | SDK authentication key (prefixed `bw_live_`) |
+| `owner_id` | UUID | FK to `users` |
+| `organization_id` | UUID (nullable) | FK to `organizations` |
+| `tier` | string | Inherited subscription tier |
+| `platform` | string (nullable) | Detected platform (e.g., `node`, `browser`) |
+| `framework` | string (nullable) | Detected framework (e.g., `nextjs`, `express`) |
+| `settings` | JSON string | Project-specific configuration |
+| `onboarding_completed_at` | timestamp (nullable) | When setup wizard was completed |
+| `created_at` | timestamp | Creation time |
+
+### issues
+
+A unique error identified by its fingerprint. Multiple events belong to the same issue.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | UUID | Primary key |
+| `project_id` | UUID | FK to `projects` |
+| `fingerprint` | string | SHA-256 hash for deduplication (unique per project) |
+| `title` | string | Error type and message (e.g., `TypeError: Cannot read...`) |
+| `level` | string | Severity (`debug`, `info`, `warning`, `error`, `fatal`) |
+| `status` | string | Lifecycle status (`unresolved`, `resolved`, `ignored`) |
+| `environment` | string | Most recent environment (e.g., `production`) |
+| `count` | bigint | Total number of occurrences |
+| `user_count` | bigint | Number of distinct affected users |
+| `first_seen` | timestamp | First occurrence |
+| `last_seen` | timestamp | Most recent occurrence |
+
+<Callout>
+A unique index on `(project_id, fingerprint)` enables the atomic upsert used by the [event pipeline](/docs/architecture/event-pipeline). This index also ensures fast lookups during ingestion.
+</Callout>
+
+### events
+
+A single occurrence of an error. Contains the full serialized payload from the SDK.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | UUID | Primary key |
+| `issue_id` | UUID | FK to `issues` |
+| `event_id` | string | Client-generated UUID (for deduplication) |
+| `timestamp` | timestamp | When the error occurred (from the SDK) |
+| `payload` | JSON string | Full event data: stack trace, breadcrumbs, context, tags, user info |
+| `processed_at` | timestamp | When the server processed the event |
+
+<Callout>
+The `payload` column stores the complete SDK event as a JSON string rather than in separate columns. This keeps the schema flexible as new SDK fields are added and avoids costly schema migrations.
+</Callout>
+
+### issue_comments
+
+User-added comments on issues for team collaboration.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | UUID | Primary key |
+| `issue_id` | UUID | FK to `issues` |
+| `user_id` | UUID | FK to `users` |
+| `content` | string | Comment body |
+| `created_at` | timestamp | Creation time |
+| `updated_at` | timestamp | Last edit time |
+
+## Uptime Monitoring
+
+### monitors
+
+An uptime monitor that periodically checks a URL for availability.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | UUID | Primary key |
+| `project_id` | UUID | FK to `projects` |
+| `name` | string | Human-readable monitor name |
+| `url` | string | URL to check |
+| `method` | string | HTTP method (`GET`, `HEAD`, `POST`) |
+| `interval_seconds` | integer | Check frequency |
+| `timeout_ms` | integer | Request timeout in milliseconds |
+| `expected_status` | integer (nullable) | Expected HTTP status code |
+| `headers` | JSON string | Custom headers to send with checks |
+| `body` | string (nullable) | Request body for POST checks |
+| `is_active` | boolean | Whether the monitor is running |
+| `current_status` | string | Current status (`up`, `down`, `unknown`) |
+| `last_checked_at` | timestamp (nullable) | Most recent check time |
+| `created_at` | timestamp | Creation time |
+
+### monitor_checks
+
+A single check result for a monitor.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | UUID | Primary key |
+| `monitor_id` | UUID | FK to `monitors` |
+| `status` | string | Check result (`up`, `down`) |
+| `response_time_ms` | integer (nullable) | Response latency in milliseconds |
+| `status_code` | integer (nullable) | HTTP status code received |
+| `error_message` | string (nullable) | Error details if the check failed |
+| `checked_at` | timestamp | When the check was performed |
+
+### monitor_incidents
+
+Represents a period of downtime for a monitor, from the first failing check until recovery.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | UUID | Primary key |
+| `monitor_id` | UUID | FK to `monitors` |
+| `started_at` | timestamp | When the monitor went down |
+| `resolved_at` | timestamp (nullable) | When the monitor recovered (null if ongoing) |
+| `cause` | string (nullable) | Reason for the downtime |
+| `created_at` | timestamp | Record creation time |
+
+## Server Metrics
+
+### servers
+
+A host machine reporting metrics via the Bugwatch server agent.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | UUID | Primary key (internal) |
+| `project_id` | UUID | FK to `projects` |
+| `server_id` | string | Agent-provided unique identifier |
+| `hostname` | string | Server hostname |
+| `os` | string (nullable) | Operating system |
+| `kernel` | string (nullable) | Kernel version |
+| `is_active` | boolean | Whether the server is still reporting |
+| `first_seen` | timestamp | First metric report |
+| `last_seen` | timestamp | Most recent metric report |
+
+### server_metrics
+
+A single metrics snapshot from a server agent, recorded at regular intervals.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | UUID | Primary key |
+| `server_db_id` | UUID | FK to `servers` |
+| `cpu_usage_percent` | float (nullable) | CPU utilization percentage |
+| `load_avg_1` | float (nullable) | 1-minute load average |
+| `load_avg_5` | float (nullable) | 5-minute load average |
+| `load_avg_15` | float (nullable) | 15-minute load average |
+| `mem_total_bytes` | bigint (nullable) | Total memory in bytes |
+| `mem_used_bytes` | bigint (nullable) | Memory used in bytes |
+| `mem_available_bytes` | bigint (nullable) | Memory available in bytes |
+| `mem_usage_percent` | float (nullable) | Memory utilization percentage |
+| `swap_total_bytes` | bigint (nullable) | Total swap in bytes |
+| `swap_used_bytes` | bigint (nullable) | Swap used in bytes |
+| `net_rx_bytes_per_sec` | bigint (nullable) | Network receive rate |
+| `net_tx_bytes_per_sec` | bigint (nullable) | Network transmit rate |
+| `uptime_seconds` | bigint (nullable) | Host uptime in seconds |
+| `disks_json` | JSON string (nullable) | Per-disk usage breakdown |
+| `processes_json` | JSON string (nullable) | Top processes by resource usage |
+| `docker_json` | JSON string (nullable) | Docker container metrics |
+| `recorded_at` | timestamp | When the metrics were collected |
+
+## Alerting
+
+### alert_rules
+
+A condition that triggers notifications when matched. Each rule belongs to a project and references one or more notification channels.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | UUID | Primary key |
+| `project_id` | UUID | FK to `projects` |
+| `name` | string | Human-readable rule name |
+| `condition` | JSON string | Condition type and parameters (e.g., `{"type": "new_issue", "level": "error"}`) |
+| `actions` | JSON string | Array of notification channel IDs to dispatch to |
+| `is_active` | boolean | Whether the rule is enabled |
+| `created_at` | timestamp | Creation time |
+
+### notification_channels
+
+A destination for alert notifications. Each channel is configured with type-specific settings.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | UUID | Primary key |
+| `project_id` | UUID | FK to `projects` |
+| `name` | string | Channel name |
+| `channel_type` | string | Type: `email`, `slack`, or `webhook` |
+| `config` | JSON string | Type-specific config (e.g., `{"recipients": ["team@example.com"]}` for email, `{"url": "https://hooks.slack.com/..."}` for Slack) |
+| `is_active` | boolean | Whether the channel is enabled |
+| `created_at` | timestamp | Creation time |
+
+### alert_logs
+
+An audit log of every alert notification attempt, used for debugging delivery and preventing duplicate notifications.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | UUID | Primary key |
+| `alert_rule_id` | UUID | FK to `alert_rules` |
+| `channel_id` | UUID (nullable) | FK to `notification_channels` |
+| `trigger_type` | string | What triggered the alert (e.g., `new_issue`, `issue_frequency`) |
+| `trigger_id` | string (nullable) | ID of the triggering entity (issue ID, monitor ID) |
+| `status` | string | Delivery status (`sent`, `failed`) |
+| `message` | string | Alert message content |
+| `error_message` | string (nullable) | Error details if delivery failed |
+| `created_at` | timestamp | When the alert was triggered |
+| `sent_at` | timestamp (nullable) | When the notification was delivered |
+
+### email_rate_limits
+
+Prevents notification floods by tracking the last time an email was sent for a specific issue/channel combination.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | UUID | Primary key |
+| `project_id` | UUID | FK to `projects` |
+| `issue_fingerprint` | string | The issue fingerprint being rate-limited |
+| `channel_id` | UUID | FK to `notification_channels` |
+| `last_sent_at` | timestamp | When the last notification was sent |
+| `created_at` | timestamp | Record creation time |
+
+## Billing
+
+### usage_records
+
+Tracks metered usage per organization per billing period.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | UUID | Primary key |
+| `organization_id` | UUID | FK to `organizations` |
+| `metric` | string | Usage metric name (e.g., `events`, `monitors`) |
+| `count` | integer | Usage count for the period |
+| `period_start` | timestamp | Billing period start |
+| `period_end` | timestamp | Billing period end |
+| `created_at` | timestamp | Record creation time |
+
+### billing_events
+
+Audit log of billing-related events from Stripe webhooks.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | UUID | Primary key |
+| `organization_id` | UUID | FK to `organizations` |
+| `event_type` | string | Event type (e.g., `invoice.paid`, `subscription.updated`) |
+| `stripe_event_id` | string (nullable) | Stripe event ID for idempotency |
+| `amount_cents` | integer (nullable) | Transaction amount in cents |
+| `currency` | string (nullable) | Currency code (e.g., `usd`) |
+| `metadata` | JSON string (nullable) | Additional event data |
+| `created_at` | timestamp | When the event was recorded |
+
+## Next Steps
+
+- [Event Pipeline](/docs/architecture/event-pipeline) -- how events flow through the system
+- [Alert Rules](/docs/alerting/alert-rules) -- configure alert conditions and notification channels

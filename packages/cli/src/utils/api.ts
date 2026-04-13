@@ -24,7 +24,10 @@ export async function loadConfig(): Promise<Config | null> {
   try {
     const content = await fs.readFile(CONFIG_PATH, "utf-8");
     return JSON.parse(content) as Config;
-  } catch {
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      console.warn(`Warning: Config file at ${CONFIG_PATH} contains invalid JSON. Ignoring.`);
+    }
     return null;
   }
 }

@@ -6,7 +6,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    db::repositories::{EventRepository, IssueRepository, ProjectRepository},
+    db::repositories::{EventRepository, IssueRepository, ProjectRepository, ReplayRepository},
     processing::fingerprint::{generate_fingerprint, generate_title},
     AppError, AppResult, AppState,
 };
@@ -69,6 +69,9 @@ pub struct ErrorEvent {
 
     /// Runtime info
     pub runtime: Option<RuntimeInfo>,
+
+    /// Session ID for linking to session replay
+    pub session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -164,7 +167,7 @@ pub struct IngestResponse {
 pub async fn ingest(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(event): Json<ErrorEvent>,
+    Json(mut event): Json<ErrorEvent>,
 ) -> AppResult<(StatusCode, Json<IngestResponse>)> {
     tracing::info!("Event ingest request received");
 
@@ -178,7 +181,15 @@ pub async fn ingest(
         .ok_or_else(|| AppError::Unauthorized("Invalid API key".to_string()))?;
 
     // 3. Check rate limit (tier is looked up from organization)
-    let rate_limit_result = state.rate_limiter.check_with_tier_lookup(&api_key, &state.db).await;
+    let rate_limit_result = state
+        .rate_limiter
+        .check_with_tier_lookup(
+            &api_key,
+            &state.db,
+            state.config.deployment_mode,
+            state.config.rate_limit_per_minute,
+        )
+        .await;
 
     if !rate_limit_result.allowed {
         tracing::warn!(
@@ -194,22 +205,12 @@ pub async fn ingest(
         });
     }
 
-    tracing::info!("Processing event {} for project {} ({})", event.event_id, project.name, project.id);
-
-    // 4. Check for duplicate event
-    if EventRepository::find_by_event_id(&state.db, &event.event_id)
-        .await?
-        .is_some()
-    {
-        // Idempotent - return success for duplicate
-        return Ok((
-            StatusCode::ACCEPTED,
-            Json(IngestResponse {
-                id: event.event_id,
-                status: "duplicate".to_string(),
-            }),
-        ));
-    }
+    tracing::info!(
+        "Processing event {} for project {} ({})",
+        event.event_id,
+        project.name,
+        project.id
+    );
 
     // 4b. Deduplicate client-side error boundary events when onRequestError
     //     already captured the same server error with full details.
@@ -224,9 +225,10 @@ pub async fn ingest(
         );
         if is_error_boundary {
             if let Some(digest) = tags.get("next.digest") {
-                let has_server_event = EventRepository::has_recent_event_with_digest(
-                    &state.db, &project.id, digest
-                ).await.unwrap_or(false);
+                let has_server_event =
+                    EventRepository::has_recent_event_with_digest(&state.db, &project.id, digest)
+                        .await
+                        .unwrap_or(false);
 
                 if has_server_event {
                     tracing::debug!(
@@ -245,7 +247,20 @@ pub async fn ingest(
         }
     }
 
-    // 5. Generate fingerprint and title
+    // 5. Unminify React production errors in exception value (server-side)
+    if let Some(ref mut exc) = event.exception {
+        let unminified = crate::processing::fingerprint::unminify_react_error(&exc.value);
+        if unminified != exc.value {
+            tracing::debug!(
+                "Unminified React error: {} -> {}",
+                &exc.value[..exc.value.len().min(60)],
+                &unminified[..unminified.len().min(60)]
+            );
+            exc.value = unminified;
+        }
+    }
+
+    // 6. Generate fingerprint and title
     let (fingerprint, title) = if let Some(ref exc) = event.exception {
         let fp = generate_fingerprint(exc);
         let t = generate_title(exc);
@@ -298,23 +313,73 @@ pub async fn ingest(
         .map(|dt| dt.with_timezone(&chrono::Utc))
         .unwrap_or_else(|_| chrono::Utc::now());
 
-    EventRepository::create(&state.db, &issue.id, &event.event_id, timestamp, &payload)
-        .await?;
+    let inserted =
+        EventRepository::create(&state.db, &issue.id, &event.event_id, timestamp, &payload).await?;
 
-    // 9. Evaluate alert rules (async, non-blocking)
+    // Duplicate event_id (race condition or retry) — return idempotent success
+    if inserted.is_none() {
+        return Ok((
+            StatusCode::ACCEPTED,
+            Json(IngestResponse {
+                id: event.event_id,
+                status: "duplicate".to_string(),
+            }),
+        ));
+    }
+
+    let created_event = inserted.unwrap();
+
+    // Link event to session recording if session_id is present
+    let session_id_value = event.session_id.as_deref().or_else(|| {
+        event
+            .tags
+            .as_ref()
+            .and_then(|t| t.get("session_id").map(|s| s.as_str()))
+    });
+    if let Some(session_id) = session_id_value {
+        if let Ok(Some(recording)) =
+            ReplayRepository::find_by_session_id(&state.db, &project.id, session_id).await
+        {
+            let _ = sqlx::query("UPDATE events SET session_recording_id = $1 WHERE id = $2")
+                .bind(&recording.id)
+                .bind(&created_event.id)
+                .execute(&state.db)
+                .await;
+        }
+    }
+
+    // 9. Evaluate alert rules (async, non-blocking, with backpressure)
     if is_new {
-        tracing::info!("New issue created - triggering alert evaluation for issue {}", issue.id);
+        tracing::info!(
+            "New issue created - triggering alert evaluation for issue {}",
+            issue.id
+        );
         let alerting = state.alerting_service.clone();
         let project_id = project.id.clone();
         let issue_clone = issue.clone();
+        let semaphore = state.alert_semaphore.clone();
 
-        tokio::spawn(async move {
-            if let Err(e) = alerting.on_new_issue(&project_id, &issue_clone).await {
-                tracing::error!("Failed to trigger new issue alert: {}", e);
+        match semaphore.try_acquire_owned() {
+            Ok(permit) => {
+                tokio::spawn(async move {
+                    let _permit = permit;
+                    if let Err(e) = alerting.on_new_issue(&project_id, &issue_clone).await {
+                        tracing::error!("Failed to trigger new issue alert: {}", e);
+                    }
+                });
             }
-        });
+            Err(_) => {
+                tracing::warn!(
+                    "Alert semaphore full — skipping alert evaluation for issue {}",
+                    issue.id
+                );
+            }
+        }
     } else {
-        tracing::info!("Issue {} already exists (fingerprint match) - no alert triggered", issue.id);
+        tracing::info!(
+            "Issue {} already exists (fingerprint match) - no alert triggered",
+            issue.id
+        );
     }
 
     Ok((

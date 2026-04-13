@@ -1,0 +1,209 @@
+---
+title: Blocking Rust
+description: Use the Bugwatch Rust SDK with a synchronous blocking API for CLI tools, scripts, and applications that do not use an async runtime.
+---
+
+# Blocking Rust
+
+The Bugwatch Rust SDK provides a synchronous blocking API for applications that do not use an async runtime. This is ideal for CLI tools, build scripts, data pipelines, and any Rust code that runs on a single thread or uses blocking I/O.
+
+## Installation
+
+Enable the `blocking` feature in your `Cargo.toml`:
+
+```toml
+[dependencies]
+bugwatch = { version = "0.1", features = ["blocking"] }
+```
+
+If you only need the blocking API:
+
+```toml
+[dependencies]
+bugwatch = { version = "0.1", default-features = false, features = ["blocking"] }
+```
+
+## Quick Start
+
+Initialize the client and use synchronous methods:
+
+```rust
+use bugwatch::{BugwatchClient, BugwatchOptions};
+
+fn main() {
+    let client = BugwatchClient::init(BugwatchOptions {
+        api_key: "your-api-key".to_string(),
+        environment: Some("production".to_string()),
+        release: Some("1.0.0".to_string()),
+        ..Default::default()
+    });
+
+    bugwatch::install_panic_hook(&client);
+
+    if let Err(e) = run() {
+        bugwatch::capture_error(&client, &*e);
+    }
+
+    client.flush(std::time::Duration::from_secs(5));
+}
+```
+
+## Blocking Error Capture
+
+Use `capture_error` to report errors synchronously. The call blocks until the event is queued for delivery:
+
+```rust
+fn process_file(path: &str, client: &bugwatch::BugwatchClient) {
+    match std::fs::read_to_string(path) {
+        Ok(content) => process(content),
+        Err(e) => {
+            bugwatch::capture_error(client, &e);
+            eprintln!("Failed to read {}: {}", path, e);
+        }
+    }
+}
+```
+
+## Blocking Message Capture
+
+Send messages synchronously:
+
+```rust
+use bugwatch::Level;
+
+bugwatch::capture_message(&client, "Migration completed successfully", Level::Info);
+```
+
+## CLI Tool Example
+
+A complete example for a CLI application:
+
+```rust
+use bugwatch::{BugwatchClient, BugwatchOptions, Level};
+use std::process;
+
+fn main() {
+    let client = BugwatchClient::init(BugwatchOptions {
+        api_key: std::env::var("BUGWATCH_API_KEY")
+            .expect("BUGWATCH_API_KEY must be set"),
+        environment: Some("production".to_string()),
+        release: Some(env!("CARGO_PKG_VERSION").to_string()),
+        ..Default::default()
+    });
+
+    bugwatch::install_panic_hook(&client);
+
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() < 2 {
+        eprintln!("Usage: mytool <input>");
+        process::exit(1);
+    }
+
+    client.add_breadcrumb(bugwatch::Breadcrumb {
+        category: Some("cli".to_string()),
+        message: Some(format!("Processing input: {}", args[1])),
+        level: Level::Info,
+        ..Default::default()
+    });
+
+    match run_tool(&args[1]) {
+        Ok(()) => {
+            bugwatch::capture_message(&client, "Tool completed", Level::Info);
+        }
+        Err(e) => {
+            bugwatch::capture_error(&client, &*e);
+            eprintln!("Error: {}", e);
+            client.flush(std::time::Duration::from_secs(5));
+            process::exit(1);
+        }
+    }
+
+    client.flush(std::time::Duration::from_secs(5));
+}
+```
+
+## Data Pipeline Example
+
+Capture errors at each stage of a data pipeline:
+
+```rust
+use bugwatch::{BugwatchClient, Level};
+
+fn run_pipeline(client: &BugwatchClient) -> Result<(), Box<dyn std::error::Error>> {
+    client.add_breadcrumb(bugwatch::Breadcrumb {
+        category: Some("pipeline".to_string()),
+        message: Some("Starting extraction".to_string()),
+        level: Level::Info,
+        ..Default::default()
+    });
+    let data = extract()?;
+
+    client.add_breadcrumb(bugwatch::Breadcrumb {
+        category: Some("pipeline".to_string()),
+        message: Some(format!("Extracted {} records", data.len())),
+        level: Level::Info,
+        ..Default::default()
+    });
+    let transformed = transform(data)?;
+
+    client.add_breadcrumb(bugwatch::Breadcrumb {
+        category: Some("pipeline".to_string()),
+        message: Some("Loading into destination".to_string()),
+        level: Level::Info,
+        ..Default::default()
+    });
+    load(transformed)?;
+
+    Ok(())
+}
+```
+
+## Thread Safety
+
+The `BugwatchClient` is `Send + Sync` and can be safely shared across threads using `Arc`:
+
+```rust
+use std::sync::Arc;
+use std::thread;
+
+let client = Arc::new(BugwatchClient::init(/* ... */));
+
+let handles: Vec<_> = (0..4).map(|i| {
+    let client = Arc::clone(&client);
+    thread::spawn(move || {
+        if let Err(e) = do_work(i) {
+            bugwatch::capture_error(&client, &*e);
+        }
+    })
+}).collect();
+
+for handle in handles {
+    handle.join().unwrap();
+}
+
+client.flush(std::time::Duration::from_secs(5));
+```
+
+## Flush and Shutdown
+
+Always flush before the process exits:
+
+```rust
+// Blocks until all events are sent or the timeout expires
+client.flush(std::time::Duration::from_secs(5));
+```
+
+For long-running processes, flush periodically:
+
+```rust
+loop {
+    process_batch();
+    client.flush(std::time::Duration::from_secs(2));
+    std::thread::sleep(std::time::Duration::from_secs(60));
+}
+```
+
+## Next Steps
+
+- [Rust SDK Overview](/docs/sdks/rust) -- full API reference and configuration options
+- [Async Rust](/docs/sdks/rust/async) -- non-blocking error capture for async applications

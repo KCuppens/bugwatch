@@ -1,0 +1,153 @@
+---
+title: Flask Integration
+description: Integrate the Bugwatch Python SDK with Flask to automatically capture request errors, attach request context, and monitor your Flask application.
+---
+
+# Flask Integration
+
+The Bugwatch Flask integration wraps your Flask application to automatically capture unhandled exceptions and enrich error reports with request context such as the URL, HTTP method, headers, and form data.
+
+## Installation
+
+Install the SDK with the Flask extras:
+
+```bash
+pip install bugwatch-sdk[flask]
+```
+
+## Quick Start
+
+Initialize Bugwatch and wrap your Flask app:
+
+```python
+from flask import Flask
+from bugwatch.integrations.flask import BugwatchFlask
+
+app = Flask(__name__)
+
+BugwatchFlask(app, api_key="your-api-key", environment="production")
+```
+
+Or initialize the SDK separately and use an environment variable:
+
+```bash
+export BUGWATCH_API_KEY="your-api-key"
+```
+
+```python
+import bugwatch
+from flask import Flask
+from bugwatch.integrations.flask import BugwatchFlask
+
+bugwatch.init(environment="production", release="1.0.0")
+
+app = Flask(__name__)
+BugwatchFlask(app)
+```
+
+## What Gets Captured Automatically
+
+Once the integration is active, the SDK captures:
+
+- **Unhandled exceptions** raised inside route handlers and middleware
+- **Request context** including the full URL, HTTP method, headers, query string, and form data
+- **HTTP status** for 500-level responses
+
+## Application Factory Pattern
+
+If you use Flask's application factory pattern, initialize Bugwatch inside your factory function:
+
+```python
+import bugwatch
+from flask import Flask
+from bugwatch.integrations.flask import BugwatchFlask
+
+def create_app():
+    app = Flask(__name__)
+    app.config.from_object("config.ProductionConfig")
+
+    bugwatch.init(
+        api_key=app.config["BUGWATCH_API_KEY"],
+        environment=app.config["FLASK_ENV"],
+        release=app.config.get("RELEASE", "unknown"),
+    )
+    BugwatchFlask(app)
+
+    register_blueprints(app)
+    return app
+```
+
+## Manual Reporting in Routes
+
+Report handled exceptions inside your route handlers:
+
+```python
+import bugwatch
+from flask import jsonify
+
+@app.route("/api/charge", methods=["POST"])
+def charge():
+    try:
+        result = process_payment(request.json)
+        return jsonify({"status": "ok", "charge_id": result.id})
+    except PaymentError as e:
+        bugwatch.capture_exception(e)
+        return jsonify({"status": "error", "message": str(e)}), 400
+```
+
+## Adding Context
+
+### Breadcrumbs
+
+```python
+import bugwatch
+
+@app.before_request
+def add_request_breadcrumb():
+    bugwatch.add_breadcrumb(
+        category="http",
+        message=f"{request.method} {request.path}",
+        level="info",
+    )
+```
+
+### User Context
+
+```python
+import bugwatch
+from flask import g
+
+@app.before_request
+def set_bugwatch_user():
+    if hasattr(g, "current_user") and g.current_user:
+        bugwatch.set_user({
+            "id": g.current_user.id,
+            "email": g.current_user.email,
+        })
+```
+
+### Tags
+
+```python
+import bugwatch
+
+@app.before_request
+def set_bugwatch_tags():
+    bugwatch.set_tag("endpoint", request.endpoint or "unknown")
+```
+
+## Error Handlers
+
+The integration works alongside Flask's error handlers. If you register a custom error handler, you can still capture the exception manually:
+
+```python
+@app.errorhandler(500)
+def handle_500(error):
+    bugwatch.capture_exception(error)
+    return jsonify({"error": "Internal server error"}), 500
+```
+
+## Next Steps
+
+- [Python SDK Overview](/docs/sdks/python) -- core SDK functions and configuration
+- [Celery Integration](/docs/sdks/python/celery) -- capture background task failures in your Flask-Celery stack

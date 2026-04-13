@@ -122,6 +122,19 @@ impl PaymentStore {
         .await
     }
 
+    /// Rolls a nonce back from 'verified' to 'pending', allowing retry.
+    /// Called when org_id check or on-chain verification fails after claim_pending succeeded.
+    pub async fn unclaim(&self, nonce: &str) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "UPDATE agent_payments SET status = 'pending', verified_at = NULL \
+             WHERE nonce = $1 AND status = 'verified'",
+        )
+        .bind(nonce)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     pub async fn expire_old(&self) -> Result<u64, sqlx::Error> {
         let result = sqlx::query(
             "UPDATE agent_payments SET status = 'expired' WHERE status IN ('pending', 'verified') AND expires_at < NOW()",

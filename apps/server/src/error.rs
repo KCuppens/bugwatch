@@ -31,6 +31,12 @@ pub enum AppError {
     #[error("Payment required: {0}")]
     PaymentRequired(String),
 
+    #[error("Payment required: {message}")]
+    PaymentRequiredWithChallenge {
+        message: String,
+        challenge: serde_json::Value,
+    },
+
     #[error("Rate limit exceeded")]
     RateLimitExceeded {
         retry_after_secs: u32,
@@ -64,64 +70,100 @@ struct ErrorBody {
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
-        let (status, code, message, rate_limit_info) = match &self {
-            AppError::NotFound(msg) => (StatusCode::NOT_FOUND, "not_found", msg.clone(), None),
-            AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, "bad_request", msg.clone(), None),
-            AppError::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, "unauthorized", msg.clone(), None),
-            AppError::Forbidden(msg) => (StatusCode::FORBIDDEN, "forbidden", msg.clone(), None),
-            AppError::Conflict(msg) => (StatusCode::CONFLICT, "conflict", msg.clone(), None),
-            AppError::PaymentRequired(msg) => (StatusCode::PAYMENT_REQUIRED, "payment_required", msg.clone(), None),
-            AppError::RateLimitExceeded { retry_after_secs, limit, remaining } => (
-                StatusCode::TOO_MANY_REQUESTS,
-                "rate_limit_exceeded",
-                format!("Rate limit exceeded. Try again in {} seconds.", retry_after_secs),
-                Some((*retry_after_secs, *limit, *remaining)),
-            ),
-            AppError::Internal(msg) => {
+        // PaymentRequiredWithChallenge has a different response shape — handle via full match
+        match self {
+            AppError::PaymentRequiredWithChallenge { message, challenge } => {
+                return (
+                    StatusCode::PAYMENT_REQUIRED,
+                    Json(serde_json::json!({
+                        "error": {
+                            "code": "payment_required",
+                            "message": message,
+                        },
+                        "x402": challenge,
+                    })),
+                )
+                    .into_response();
+            }
+            AppError::RateLimitExceeded {
+                retry_after_secs,
+                limit,
+                remaining,
+            } => {
+                let body = ErrorResponse {
+                    error: ErrorBody {
+                        code: "rate_limit_exceeded".to_string(),
+                        message: format!(
+                            "Rate limit exceeded. Try again in {} seconds.",
+                            retry_after_secs
+                        ),
+                    },
+                };
+                let mut response = (StatusCode::TOO_MANY_REQUESTS, Json(body)).into_response();
+                let headers = response.headers_mut();
+                if let Ok(val) = retry_after_secs.to_string().parse() {
+                    headers.insert(header::RETRY_AFTER, val);
+                }
+                if let Ok(val) = limit.to_string().parse() {
+                    headers.insert("X-RateLimit-Limit", val);
+                }
+                if let Ok(val) = remaining.to_string().parse() {
+                    headers.insert("X-RateLimit-Remaining", val);
+                }
+                return response;
+            }
+            AppError::Internal(ref msg) => {
                 tracing::error!("Internal error: {}", msg);
-                // Capture to BugWatch for self-monitoring
-                capture_message(
-                    &format!("Internal error: {}", msg),
-                    Level::Error,
-                );
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "internal_error",
-                    "An internal error occurred".to_string(),
-                    None,
-                )
+                capture_message(&format!("Internal error: {}", msg), Level::Error);
             }
-            AppError::Database(e) => {
+            AppError::Database(ref e) => {
                 tracing::error!("Database error: {}", e);
-                // Capture to BugWatch for self-monitoring
-                capture_message(
-                    &format!("Database error: {}", e),
-                    Level::Error,
-                );
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "database_error",
-                    "A database error occurred".to_string(),
-                    None,
-                )
+                capture_message(&format!("Database error: {}", e), Level::Error);
             }
-            AppError::Validation(msg) => {
-                tracing::warn!("Validation error (422): {}", msg);
-                (StatusCode::UNPROCESSABLE_ENTITY, "validation_error", msg.clone(), None)
-            }
-            AppError::Anyhow(e) => {
+            AppError::Anyhow(ref e) => {
                 tracing::error!("Anyhow error: {}", e);
-                // Capture to BugWatch for self-monitoring
-                capture_message(
-                    &format!("Anyhow error: {}", e),
-                    Level::Error,
-                );
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "internal_error",
-                    "An internal error occurred".to_string(),
-                    None,
-                )
+                capture_message(&format!("Anyhow error: {}", e), Level::Error);
+            }
+            AppError::Validation(ref msg) => {
+                tracing::warn!("Validation error (422): {}", msg);
+            }
+            _ => {}
+        }
+
+        let (status, code, message) = match &self {
+            AppError::NotFound(msg) => (StatusCode::NOT_FOUND, "not_found", msg.clone()),
+            AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, "bad_request", msg.clone()),
+            AppError::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, "unauthorized", msg.clone()),
+            AppError::Forbidden(msg) => (StatusCode::FORBIDDEN, "forbidden", msg.clone()),
+            AppError::Conflict(msg) => (StatusCode::CONFLICT, "conflict", msg.clone()),
+            AppError::PaymentRequired(msg) => (
+                StatusCode::PAYMENT_REQUIRED,
+                "payment_required",
+                msg.clone(),
+            ),
+            AppError::Internal(_) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "An internal error occurred".to_string(),
+            ),
+            AppError::Database(_) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "database_error",
+                "A database error occurred".to_string(),
+            ),
+            AppError::Validation(msg) => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "validation_error",
+                msg.clone(),
+            ),
+            AppError::Anyhow(_) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "An internal error occurred".to_string(),
+            ),
+            // Already handled above via early return:
+            AppError::PaymentRequiredWithChallenge { .. } | AppError::RateLimitExceeded { .. } => {
+                unreachable!()
             }
         };
 
@@ -132,22 +174,6 @@ impl IntoResponse for AppError {
             },
         };
 
-        let mut response = (status, Json(body)).into_response();
-
-        // Add rate limit headers if this is a rate limit error
-        if let Some((retry_after, limit, remaining)) = rate_limit_info {
-            let headers = response.headers_mut();
-            if let Ok(val) = retry_after.to_string().parse() {
-                headers.insert(header::RETRY_AFTER, val);
-            }
-            if let Ok(val) = limit.to_string().parse() {
-                headers.insert("X-RateLimit-Limit", val);
-            }
-            if let Ok(val) = remaining.to_string().parse() {
-                headers.insert("X-RateLimit-Remaining", val);
-            }
-        }
-
-        response
+        (status, Json(body)).into_response()
     }
 }

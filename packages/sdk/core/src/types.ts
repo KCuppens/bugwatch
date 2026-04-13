@@ -22,8 +22,50 @@ export interface BugwatchOptions {
   user?: UserContext;
   /** Before send hook - return null to drop the event */
   beforeSend?: (event: ErrorEvent) => ErrorEvent | null;
+  /** Before breadcrumb hook - return null to drop the breadcrumb */
+  beforeBreadcrumb?: (breadcrumb: Breadcrumb) => Breadcrumb | null;
   /** Patterns to ignore (matches against error message) */
   ignoreErrors?: (string | RegExp)[];
+  /**
+   * @experimental Performance monitoring is experimental and the API may change.
+   * Set `experimentalPerformance: true` to enable.
+   */
+  enablePerformance?: boolean;
+  /**
+   * @experimental Opt in to experimental performance monitoring. Without this flag
+   * `Transaction.finish()` is a no-op.
+   */
+  experimentalPerformance?: boolean;
+  /** Sample rate for transactions (0.0 to 1.0) */
+  tracesSampleRate?: number;
+  /** PII scrubbing config — automatically masks sensitive values in events */
+  sanitize?: SanitizeOptions;
+  /** Offline event queue config — persists events when network is unavailable */
+  offline?: OfflineOptions;
+}
+
+/**
+ * PII scrubbing configuration
+ */
+export interface SanitizeOptions {
+  /** Master switch (default: true) */
+  enabled?: boolean;
+  /** Additional sensitive key substrings to mask (case-insensitive). Merged with defaults. */
+  sensitiveKeys?: string[];
+  /** If true, also masks email addresses (default: false — many legit error reports include emails) */
+  scrubEmails?: boolean;
+  /** Additional regex patterns matched against string values */
+  customPatterns?: RegExp[];
+}
+
+/**
+ * Offline event queue configuration
+ */
+export interface OfflineOptions {
+  /** Master switch (default: true in browser, false in Node) */
+  enabled?: boolean;
+  /** Maximum events to persist (default: 100, oldest evicted) */
+  maxEvents?: number;
 }
 
 /**
@@ -133,6 +175,8 @@ export interface ErrorEvent {
   sdk?: SdkInfo;
   /** Runtime information */
   runtime?: RuntimeInfo;
+  /** Session ID for linking to session replay */
+  session_id?: string;
 }
 
 /**
@@ -181,4 +225,41 @@ export interface BugwatchClient {
    * This flushes any pending events and closes the transport.
    */
   close(): Promise<void>;
+}
+
+/**
+ * Performance event payload sent to the API
+ */
+export interface PerformanceEvent {
+  transaction_name: string;
+  trace_id: string;
+  span_id: string;
+  parent_span_id?: string;
+  op: string;
+  description?: string;
+  status: string;
+  duration_ms: number;
+  started_at: string;
+  finished_at: string;
+  environment?: string;
+  release?: string;
+  tags?: Record<string, string>;
+  data?: Record<string, unknown>;
+  user_id?: string;
+  spans: SpanData[];
+}
+
+/**
+ * Span data within a performance transaction
+ */
+export interface SpanData {
+  span_id: string;
+  parent_span_id?: string;
+  op: string;
+  description?: string;
+  status: string;
+  duration_ms: number;
+  started_at: string;
+  finished_at: string;
+  data?: Record<string, unknown>;
 }

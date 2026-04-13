@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { useParams, useSearchParams } from "next/navigation";
+import { useParams, useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import {
@@ -18,7 +18,6 @@ import {
   TrendingUp,
   Tag,
   ChevronRight,
-  Sparkles,
   CheckCircle,
   XCircle,
   Copy,
@@ -39,58 +38,21 @@ import {
   Trash2,
   Edit3,
   ArrowRightLeft,
+  GitBranch,
+  Video,
 } from "lucide-react";
-import { issuesApi, aiFixApi, type IssueDetail, type AiFix, type BreadcrumbDetail, type EventDetail, type FrequencyData, type ImpactData, type IssueComment } from "@/lib/api";
+import { issuesApi, integrationsApi, replayApi, type IssueDetail, type BreadcrumbDetail, type EventDetail, type FrequencyData, type ImpactData, type IssueComment, type IssueLinkInfo, type SessionRecording } from "@/lib/api";
 import { ENVIRONMENT_COLORS } from "@/lib/search";
-import { useAuth } from "@/lib/auth-context";
-import { useTier } from "@/hooks/use-feature";
-import { Badge } from "@/components/ui/badge";
+
+
+
 import { StackFrame } from "@/components/issue-detail/StackFrame";
 import { IssueNavigation } from "@/components/issue-detail/IssueNavigation";
 import { IssueDetailSkeleton } from "@/components/skeletons/issue-detail-skeleton";
+import { CreateIssueDialog, LinkedIssues } from "@/components/integrations";
+import { useFeature } from "@/hooks/use-feature";
 import { toast } from "sonner";
 
-// Mock data fallback
-const mockIssue: IssueDetail = {
-  id: "1", project_id: "1", fingerprint: "abc123def456",
-  title: "TypeError: Cannot read property 'map' of undefined",
-  level: "error", status: "unresolved", count: 142, user_count: 23, environment: "production",
-  first_seen: "2024-01-12T10:30:00Z", last_seen: "2024-01-15T14:22:00Z",
-  exception: {
-    type: "TypeError", value: "Cannot read property 'map' of undefined",
-    stacktrace: [
-      { filename: "src/components/UserList.tsx", function: "UserList", lineno: 45, colno: 23,
-        context_line: "    return users.map((user) => (",
-        pre_context: ["  const { users } = props;", "", "  // Render the list of users"],
-        post_context: ["      <UserCard key={user.id} user={user} />", "    ));", "  };"],
-        in_app: true },
-      { filename: "src/pages/dashboard.tsx", function: "Dashboard", lineno: 78, colno: 12,
-        context_line: "      <UserList users={data?.users} />",
-        pre_context: ["    return (", '      <div className="container">'],
-        post_context: ["      </div>", "    );"],
-        in_app: true },
-      { filename: "node_modules/react-dom/cjs/react-dom.development.js", function: "renderWithHooks",
-        lineno: 14985, colno: 18, in_app: false },
-    ],
-  },
-  recent_events: [
-    { id: "evt1", timestamp: "2024-01-15T14:22:00Z", user_id: "usr_abc123", release: "v1.2.3" },
-    { id: "evt2", timestamp: "2024-01-15T14:07:00Z", user_id: "usr_def456", release: "v1.2.3" },
-    { id: "evt3", timestamp: "2024-01-15T13:52:00Z", release: "v1.2.3" },
-  ],
-  tags: { browser: "Chrome 120", os: "macOS 14.2", url: "/dashboard", user_id: "usr_abc123" },
-  breadcrumbs: [
-    { timestamp: "2024-01-15T14:22:01Z", type: "navigation", category: "navigation", message: "Navigated to /dashboard", level: "info" },
-    { timestamp: "2024-01-15T14:22:02Z", type: "http", category: "xhr", message: "GET /api/users - 200", level: "info" },
-    { timestamp: "2024-01-15T14:22:03Z", type: "console", category: "console", message: "Data loaded successfully", level: "info" },
-    { timestamp: "2024-01-15T14:22:03Z", type: "error", category: "error", message: "TypeError: Cannot read property 'map' of undefined", level: "error" },
-  ],
-  request: { url: "http://localhost:3000/dashboard", method: "GET",
-    headers: { "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)", "Accept": "text/html", "Accept-Language": "en-US,en;q=0.9" },
-    query_string: "tab=overview" },
-  user: { id: "usr_abc123", email: "john@example.com", username: "johndoe", ip_address: "192.168.1.100" },
-  extra: { component: "UserList", render_count: 3, last_action: "refresh_data" },
-};
 
 function formatRelativeTime(dateString: string): string {
   const date = new Date(dateString);
@@ -118,28 +80,36 @@ function getBreadcrumbIcon(type: string, category: string) {
 export default function IssueDetailPage() {
   const params = useParams();
   const searchParams = useSearchParams();
+  const router = useRouter();
   const issueId = params.id as string;
   const projectId = searchParams.get("project");
 
-  const { user } = useAuth();
-  const { isPro } = useTier();
-  const userCredits = user?.credits ?? 0;
 
   // Core state
   const [issue, setIssue] = useState<IssueDetail | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<"debug" | "timeline" | "context">("debug");
+  const [activeTab, setActiveTab] = useState<"debug" | "timeline" | "context">(() => {
+    const tab = searchParams.get("tab");
+    if (tab === "timeline" || tab === "context") return tab;
+    return "debug";
+  });
+
+  // Sync tab to URL so refresh/back preserves context
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    if (activeTab === "debug") {
+      url.searchParams.delete("tab");
+    } else {
+      url.searchParams.set("tab", activeTab);
+    }
+    window.history.replaceState(null, "", url.toString());
+  }, [activeTab]);
   const [expandedFrames, setExpandedFrames] = useState<Set<number>>(new Set([0]));
+  const [showAppOnly, setShowAppOnly] = useState(false);
   const [isResolving, setIsResolving] = useState(false);
   const [isIgnoring, setIsIgnoring] = useState(false);
-
-  // AI Fix state (inline, not modal)
-  const [showAiFix, setShowAiFix] = useState(false);
-  const [aiFix, setAiFix] = useState<AiFix | null>(null);
-  const [aiFixLoading, setAiFixLoading] = useState(false);
-  const [aiFixError, setAiFixError] = useState<string | null>(null);
-  const [aiCreditsRemaining, setAiCreditsRemaining] = useState<number | null>(null);
 
   // Event inspector
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
@@ -167,13 +137,22 @@ export default function IssueDetailPage() {
   const [editingContent, setEditingContent] = useState("");
   const [showAllComments, setShowAllComments] = useState(false);
 
+  // Linked issues
+  const [linkedIssues, setLinkedIssues] = useState<IssueLinkInfo[]>([]);
+  const [createIssueOpen, setCreateIssueOpen] = useState(false);
+  const hasIntegrations = useFeature("github");
+
+  // Session replay
+  const [issueReplay, setIssueReplay] = useState<SessionRecording | null>(null);
+  const hasReplay = useFeature("session_replay");
+
   // Auto-resize textarea ref
   const commentRef = useRef<HTMLTextAreaElement>(null);
 
   // Fetch issue
   useEffect(() => {
     async function fetchIssue() {
-      if (!projectId) { setIssue(mockIssue); setIsLoading(false); return; }
+      if (!projectId) { setError("No project selected"); setIsLoading(false); return; }
       setIsLoading(true);
       setError(null);
       try {
@@ -181,8 +160,7 @@ export default function IssueDetailPage() {
         setIssue(response.data);
       } catch (err) {
         toast.error("Failed to load issue details");
-        setIssue(mockIssue);
-        setError(null);
+        setError("Failed to load issue details. Please try again.");
       } finally {
         setIsLoading(false);
       }
@@ -199,6 +177,20 @@ export default function IssueDetailPage() {
       setExpandedFrames(new Set(inAppIndices.length > 0 ? inAppIndices : [0]));
     }
   }, [issue]);
+
+  // Fetch linked issues
+  useEffect(() => {
+    async function fetchLinkedIssues() {
+      if (!projectId || !hasIntegrations) return;
+      try {
+        const response = await integrationsApi.listIssueLinks(projectId, issueId);
+        setLinkedIssues(response.data);
+      } catch {
+        // Silently fail - not critical
+      }
+    }
+    if (issue) fetchLinkedIssues();
+  }, [issueId, projectId, issue, hasIntegrations]);
 
   // Fetch frequency data
   useEffect(() => {
@@ -242,6 +234,18 @@ export default function IssueDetailPage() {
     if (issue) fetchComments();
   }, [issueId, projectId, issue]);
 
+  // Fetch session replay linked to this issue
+  useEffect(() => {
+    async function fetchReplay() {
+      if (!projectId || !hasReplay) return;
+      try {
+        const response = await replayApi.getIssueReplay(projectId, issueId);
+        setIssueReplay(response.data ?? null);
+      } catch { setIssueReplay(null); }
+    }
+    if (issue) fetchReplay();
+  }, [issueId, projectId, issue, hasReplay]);
+
   // Keyboard shortcuts
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
@@ -254,23 +258,35 @@ export default function IssueDetailPage() {
           if (issue?.status !== "resolved" && !isResolving) { e.preventDefault(); handleResolve(); }
           break;
         case "i":
+        case "m":
+        case "e":
           if (issue?.status !== "ignored" && !isIgnoring) { e.preventDefault(); handleIgnore(); }
           break;
         case "c":
           e.preventDefault(); handleCopyForAi();
           break;
-        case "a":
-          if (!aiFixLoading) { e.preventDefault(); handleGenerateAiFix(); }
+        case "u":
+          // Up to list
+          e.preventDefault();
+          router.push(projectId ? `/dashboard?project=${projectId}` : "/dashboard");
+          break;
+        case "1":
+          e.preventDefault(); setActiveTab("debug");
+          break;
+        case "2":
+          e.preventDefault(); setActiveTab("timeline");
+          break;
+        case "3":
+          e.preventDefault(); setActiveTab("context");
           break;
         case "escape":
-          if (showAiFix) setShowAiFix(false);
-          else if (selectedEventId) closeEventModal();
+          if (selectedEventId) closeEventModal();
           break;
       }
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [issue, isResolving, isIgnoring, aiFixLoading, showAiFix, selectedEventId]);
+  }, [issue, isResolving, isIgnoring, selectedEventId, router, projectId]);
 
   function toggleFrame(index: number) {
     const newExpanded = new Set(expandedFrames);
@@ -326,38 +342,6 @@ export default function IssueDetailPage() {
       setIssue((i) => i ? { ...i, status: prev } : i);
       toast.error("Failed to ignore issue");
     } finally { setIsIgnoring(false); }
-  }
-
-  async function handleGenerateAiFix() {
-    if (!issue) return;
-    setShowAiFix(true);
-    setAiFixLoading(true);
-    setAiFixError(null);
-
-    try {
-      const request = {
-        error_type: issue.exception?.type || "Error",
-        error_message: issue.exception?.value || issue.title,
-        stack_trace: (issue.exception?.stacktrace || []).map((f) => ({
-          filename: f.filename, function: f.function, lineno: f.lineno, colno: f.colno,
-          context_line: f.context_line, pre_context: f.pre_context, post_context: f.post_context, in_app: f.in_app,
-        })),
-      };
-      const response = projectId
-        ? await aiFixApi.generateFix(projectId, issueId, request)
-        : await aiFixApi.generateFixStandalone(request);
-      setAiFix(response.fix);
-      setAiCreditsRemaining(response.credits_remaining);
-    } catch (err) {
-      setAiFixError(err instanceof Error ? err.message : "Failed to generate AI fix");
-      toast.error("Failed to generate AI fix");
-    } finally { setAiFixLoading(false); }
-  }
-
-  function handleCopyFix() {
-    if (!aiFix) return;
-    navigator.clipboard.writeText(aiFix.fix_code);
-    toast.success("Fix code copied");
   }
 
   function handleCopyForAi() {
@@ -443,6 +427,7 @@ export default function IssueDetailPage() {
 
   async function handleDeleteComment(commentId: string) {
     if (!projectId) return;
+    if (!window.confirm("Delete this comment?")) return;
     try {
       await issuesApi.deleteComment(projectId, issueId, commentId);
       setComments(comments.filter(c => c.id !== commentId));
@@ -464,7 +449,7 @@ export default function IssueDetailPage() {
     return (
       <div className="flex flex-col items-center justify-center min-h-[400px] space-y-4 animate-fade-in-up">
         <AlertCircle className="h-12 w-12 text-destructive" />
-        <h2 className="text-lg font-medium">Failed to load issue</h2>
+        <h2 className="font-display text-heading-md">Failed to load issue</h2>
         <p className="text-muted-foreground">{error || "Issue not found"}</p>
         <Link href="/dashboard"><Button>Back to Dashboard</Button></Link>
       </div>
@@ -472,8 +457,6 @@ export default function IssueDetailPage() {
   }
 
   const stacktrace = issue.exception?.stacktrace || [];
-  const firstInAppIndex = stacktrace.findIndex(f => f.in_app);
-  const aiFixInsertIndex = firstInAppIndex >= 0 ? firstInAppIndex : 0;
 
   return (
     <div className="space-y-4">
@@ -499,7 +482,7 @@ export default function IssueDetailPage() {
               }`} />
             </div>
             <div className="min-w-0">
-              <h1 className="text-sm font-semibold truncate">{issue.title}</h1>
+              <h1 className="text-[15px] font-semibold tracking-tight truncate">{issue.title}</h1>
               <div className="flex items-center gap-2 text-xs text-muted-foreground">
                 <span>{issue.count} events</span>
                 <span>·</span>
@@ -537,12 +520,6 @@ export default function IssueDetailPage() {
               {isResolving ? <Loader2 className="h-3 w-3 animate-spin" /> : <CheckCircle className="h-3 w-3" />}
               <span className="ml-1.5 hidden sm:inline">{issue.status === "resolved" ? "Resolved" : "Resolve"}</span>
             </Button>
-            <Button size="sm" onClick={handleGenerateAiFix}
-              disabled={aiFixLoading || (!isPro && userCredits === 0)} className="h-8">
-              {aiFixLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
-              <span className="ml-1.5 hidden sm:inline">AI Fix</span>
-              {userCredits > 0 && <Badge variant="secondary" className="ml-1.5 h-4 px-1 text-[10px]">{userCredits}</Badge>}
-            </Button>
           </div>
         </div>
       </div>
@@ -560,6 +537,11 @@ export default function IssueDetailPage() {
         <Button variant="outline" size="sm" onClick={handleCopyForAi} className="h-7 text-xs">
           <Clipboard className="mr-1.5 h-3 w-3" />Copy for AI
         </Button>
+        {hasIntegrations && (
+          <Button variant="outline" size="sm" onClick={() => setCreateIssueOpen(true)} className="h-7 text-xs">
+            <GitBranch className="mr-1.5 h-3 w-3" />Create Issue
+          </Button>
+        )}
       </div>
 
       {/* ═══════ TWO-COLUMN LAYOUT ═══════ */}
@@ -579,7 +561,7 @@ export default function IssueDetailPage() {
                 return (
                   <button key={tab.id} onClick={() => setActiveTab(tab.id)}
                     className={`flex items-center gap-2 border-b-2 px-4 py-3 text-sm font-medium transition-colors ${
-                      activeTab === tab.id ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground hover:bg-muted/30"
+                      activeTab === tab.id ? "border-accent-2 text-accent-2" : "border-transparent text-muted-foreground hover:text-foreground hover:bg-muted/30"
                     }`}>
                     <TabIcon className="h-4 w-4" />
                     <span>{tab.label}</span>
@@ -601,6 +583,43 @@ export default function IssueDetailPage() {
                   onClick={() => { navigator.clipboard.writeText(stacktrace.map(f => `  at ${f.function} (${f.filename}:${f.lineno})`).join("\n")); toast.success("Stack trace copied"); }}>
                   <Copy className="mr-1.5 h-3 w-3" />Copy
                 </Button>
+              </div>
+
+              {/* Stack trace controls */}
+              <div className="flex items-center gap-2 mb-2">
+                <button
+                  onClick={() => setShowAppOnly(!showAppOnly)}
+                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
+                    showAppOnly
+                      ? "bg-accent-2 text-accent-2-foreground"
+                      : "bg-muted text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  <Filter className="h-3 w-3" />
+                  App Only
+                </button>
+                <button
+                  onClick={() => {
+                    const framesToExpand = showAppOnly
+                      ? stacktrace.map((f, i) => ({ f, i })).filter(({ f }) => f.in_app).map(({ i }) => i)
+                      : stacktrace.map((_, i) => i);
+                    setExpandedFrames(new Set(framesToExpand));
+                  }}
+                  className="px-2.5 py-1 rounded-md text-xs font-medium bg-muted text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  Expand All
+                </button>
+                <button
+                  onClick={() => setExpandedFrames(new Set())}
+                  className="px-2.5 py-1 rounded-md text-xs font-medium bg-muted text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  Collapse All
+                </button>
+                {showAppOnly && (
+                  <span className="text-xs text-muted-foreground ml-auto">
+                    Showing {stacktrace.filter(f => f.in_app).length} of {stacktrace.length} frames
+                  </span>
+                )}
               </div>
 
               {/* HTTP Request/Response Payload */}
@@ -650,69 +669,8 @@ export default function IssueDetailPage() {
               {stacktrace.length === 0 ? (
                 <p className="text-center text-muted-foreground py-8">No stack trace available</p>
               ) : (
-                stacktrace.map((frame, index) => (
-                  <div key={index}>
-                    <StackFrame frame={frame} index={index} isExpanded={expandedFrames.has(index)} onToggle={() => toggleFrame(index)} />
-                    {/* Inline AI Fix - show below first in-app frame */}
-                    {showAiFix && index === aiFixInsertIndex && (
-                      <div className="ml-4 mt-2 mb-2 rounded-lg border border-primary/20 bg-primary/5 p-4 animate-fade-in-up">
-                        <div className="flex items-center justify-between mb-3">
-                          <div className="flex items-center gap-2">
-                            <Sparkles className="h-4 w-4 text-primary" />
-                            <span className="font-semibold text-sm">AI Fix</span>
-                            {aiFix && (
-                              <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
-                                aiFix.confidence >= 0.8 ? "bg-green-500/10 text-green-600" :
-                                aiFix.confidence >= 0.5 ? "bg-yellow-500/10 text-yellow-600" :
-                                "bg-red-500/10 text-red-600"
-                              }`}>
-                                {Math.round(aiFix.confidence * 100)}% confidence
-                              </span>
-                            )}
-                            {aiCreditsRemaining !== null && (
-                              <span className="text-xs text-muted-foreground">({aiCreditsRemaining} credits left)</span>
-                            )}
-                          </div>
-                          <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => setShowAiFix(false)}>
-                            <XCircle className="h-4 w-4" />
-                          </Button>
-                        </div>
-
-                        {aiFixLoading && (
-                          <div className="flex items-center gap-3 py-6 justify-center">
-                            <Loader2 className="h-5 w-5 animate-spin text-primary" />
-                            <p className="text-sm text-muted-foreground">Analyzing error...</p>
-                          </div>
-                        )}
-                        {aiFixError && (
-                          <div className="text-center py-4">
-                            <p className="text-sm text-destructive">{aiFixError}</p>
-                            <Button variant="outline" size="sm" className="mt-2" onClick={handleGenerateAiFix}>Try Again</Button>
-                          </div>
-                        )}
-                        {aiFix && !aiFixLoading && (
-                          <div className="space-y-3">
-                            <p className="text-sm text-muted-foreground">{aiFix.explanation}</p>
-                            <div className="relative">
-                              <pre className="bg-zinc-950 text-zinc-100 p-4 rounded-md overflow-x-auto text-sm font-mono">{aiFix.fix_code}</pre>
-                              <Button variant="secondary" size="sm" className="absolute top-2 right-2 h-7 text-xs" onClick={handleCopyFix}>
-                                <Copy className="mr-1 h-3 w-3" />Copy
-                              </Button>
-                            </div>
-                            {aiFix.recommendations.length > 0 && (
-                              <ul className="space-y-1">
-                                {aiFix.recommendations.map((rec, i) => (
-                                  <li key={i} className="flex items-start gap-2 text-sm text-muted-foreground">
-                                    <span className="text-primary mt-0.5 shrink-0">•</span>{rec}
-                                  </li>
-                                ))}
-                              </ul>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
+                (showAppOnly ? stacktrace.map((f, i) => ({ frame: f, originalIndex: i })).filter(({ frame }) => frame.in_app) : stacktrace.map((f, i) => ({ frame: f, originalIndex: i }))).map(({ frame, originalIndex }) => (
+                  <StackFrame key={originalIndex} frame={frame} index={originalIndex} isExpanded={expandedFrames.has(originalIndex)} onToggle={() => toggleFrame(originalIndex)} />
                 ))
               )}
             </div>
@@ -852,7 +810,7 @@ export default function IssueDetailPage() {
                     <div className="space-y-3">
                       {(issue.request.url || issue.request.method) && (
                         <div className="flex items-center gap-2 text-sm">
-                          {issue.request.method && <span className="rounded bg-primary/20 px-1.5 py-0.5 text-xs font-medium text-primary">{issue.request.method}</span>}
+                          {issue.request.method && <span className="rounded bg-accent-2/15 px-1.5 py-0.5 text-xs font-medium text-accent-2">{issue.request.method}</span>}
                           <span className="font-mono text-xs break-all">{issue.request.url || "(no URL)"}</span>
                         </div>
                       )}
@@ -907,14 +865,14 @@ export default function IssueDetailPage() {
             <div className="rounded-lg border p-3">
               <div className="flex items-center gap-2">
                 <TrendingUp className="h-4 w-4 text-muted-foreground" />
-                <p className="text-xl font-bold">{issue.count}</p>
+                <p className="font-display text-2xl font-semibold tabular-nums">{issue.count}</p>
               </div>
               <p className="text-xs text-muted-foreground">Events</p>
             </div>
             <div className="rounded-lg border p-3">
               <div className="flex items-center gap-2">
                 <Users className="h-4 w-4 text-muted-foreground" />
-                <p className="text-xl font-bold">{issue.user_count}</p>
+                <p className="font-display text-2xl font-semibold tabular-nums">{issue.user_count}</p>
               </div>
               <p className="text-xs text-muted-foreground">Users</p>
             </div>
@@ -1059,6 +1017,45 @@ export default function IssueDetailPage() {
             </Card>
           )}
 
+          {/* Session Replay */}
+          {hasReplay && issueReplay && (
+            <Card>
+              <CardHeader className="pb-2 px-4 pt-4">
+                <CardTitle className="text-sm flex items-center gap-2"><Video className="h-3.5 w-3.5" />Session Replay</CardTitle>
+              </CardHeader>
+              <CardContent className="px-4 pb-4">
+                <div className="text-xs space-y-1">
+                  <p>A session replay is available for this issue.</p>
+                  <p className="text-muted-foreground">
+                    Session: <span className="font-mono">{issueReplay.session_id}</span>
+                    {issueReplay.duration_ms && ` (${Math.round(issueReplay.duration_ms / 1000)}s)`}
+                  </p>
+                  <a
+                    href={`/dashboard/replay?project=${projectId}`}
+                    className="inline-flex items-center gap-1 text-xs text-accent hover:underline mt-1"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      window.location.href = `/dashboard/replay?project=${projectId}`;
+                    }}
+                  >
+                    <Video className="h-3 w-3" />
+                    Watch replay
+                  </a>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Linked Issues */}
+          {hasIntegrations && (
+            <LinkedIssues
+              projectId={projectId || ""}
+              issueId={issueId}
+              links={linkedIssues}
+              onLinksChange={setLinkedIssues}
+            />
+          )}
+
           {/* Discussion */}
           <Card>
             <CardHeader className="pb-2 px-4 pt-4">
@@ -1097,7 +1094,7 @@ export default function IssueDetailPage() {
                 <div className="space-y-2">
                   {(showAllComments ? comments : comments.slice(0, 3)).map((comment) => (
                     <div key={comment.id} className="group flex items-start gap-2 text-sm">
-                      <div className="h-6 w-6 rounded-full bg-primary/20 flex items-center justify-center text-xs font-medium shrink-0">
+                      <div className="h-6 w-6 rounded-full bg-accent-2/15 text-accent-2 flex items-center justify-center text-xs font-medium shrink-0">
                         {(comment.user_name ?? comment.user_email ?? "?").charAt(0).toUpperCase()}
                       </div>
                       <div className="flex-1 min-w-0">
@@ -1131,7 +1128,7 @@ export default function IssueDetailPage() {
                   ))}
                   {comments.length > 3 && !showAllComments && (
                     <button onClick={() => setShowAllComments(true)}
-                      className="text-xs text-primary hover:underline w-full text-center pt-1">
+                      className="text-xs text-accent-2 hover:underline w-full text-center pt-1">
                       View all {comments.length} comments
                     </button>
                   )}
@@ -1148,13 +1145,13 @@ export default function IssueDetailPage() {
           <div className="fixed left-[50%] top-[50%] z-50 w-full max-w-3xl max-h-[85vh] translate-x-[-50%] translate-y-[-50%] border bg-background shadow-lg sm:rounded-lg flex flex-col">
             <div className="flex items-center justify-between border-b p-4 shrink-0">
               <div>
-                <h2 className="text-lg font-semibold">Event Details</h2>
+                <h2 className="font-display text-heading-sm">Event Details</h2>
                 {eventDetail && <p className="text-sm text-muted-foreground">{new Date(eventDetail.timestamp).toLocaleString()}{eventDetail.release && ` • ${eventDetail.release}`}</p>}
               </div>
               <Button variant="ghost" size="icon" onClick={closeEventModal}><XCircle className="h-4 w-4" /></Button>
             </div>
             <div className="flex-1 overflow-y-auto p-4">
-              {eventLoading && <div className="flex flex-col items-center py-12"><Loader2 className="h-8 w-8 animate-spin text-primary" /><p className="mt-4 text-sm text-muted-foreground">Loading...</p></div>}
+              {eventLoading && <div className="flex flex-col items-center py-12"><Loader2 className="h-8 w-8 animate-spin text-accent-2" /><p className="mt-4 text-sm text-muted-foreground">Loading...</p></div>}
               {eventDetail && !eventLoading && (
                 <div className="space-y-6">
                   {eventDetail.exception && (
@@ -1185,6 +1182,18 @@ export default function IssueDetailPage() {
             <div className="flex justify-end border-t p-4 shrink-0"><Button variant="outline" onClick={closeEventModal}>Close</Button></div>
           </div>
         </div>
+      )}
+
+      {/* Create External Issue Dialog */}
+      {hasIntegrations && projectId && (
+        <CreateIssueDialog
+          open={createIssueOpen}
+          onOpenChange={setCreateIssueOpen}
+          projectId={projectId}
+          issueId={issueId}
+          issueTitle={issue?.title || ""}
+          onCreated={(link) => setLinkedIssues((prev) => [link, ...prev])}
+        />
       )}
     </div>
   );

@@ -1,0 +1,258 @@
+---
+title: Symfony Integration
+description: Integrate the Bugwatch PHP SDK with Symfony using a bundle that subscribes to kernel events for automatic exception capture and request context.
+---
+
+# Symfony Integration
+
+The Bugwatch Symfony integration provides a bundle that subscribes to `kernel.exception` events, captures unhandled exceptions, and attaches full request context. It integrates with Symfony's service container for clean configuration.
+
+## Installation
+
+```bash
+composer require bugwatch/bugwatch-symfony
+```
+
+If you are using Symfony Flex, the bundle is registered automatically. Otherwise, add it to `config/bundles.php`:
+
+```php
+<?php
+
+return [
+    // ...
+    Bugwatch\Symfony\BugwatchBundle::class => ['all' => true],
+];
+```
+
+## Configuration
+
+Create `config/packages/bugwatch.yaml`:
+
+```yaml
+bugwatch:
+  api_key: '%env(BUGWATCH_API_KEY)%'
+  environment: '%kernel.environment%'
+  release: '%env(default::BUGWATCH_RELEASE)%'
+  sample_rate: 1.0
+  send_default_pii: false
+```
+
+Add your API key to `.env`:
+
+```bash
+BUGWATCH_API_KEY=bw_live_xxxxx
+```
+
+## What Gets Captured Automatically
+
+Once the bundle is registered and configured, the SDK captures:
+
+- **Unhandled exceptions** via a `kernel.exception` event subscriber
+- **Request context** including URL, HTTP method, headers, query parameters, request body, and client IP
+- **Route information** including route name and route parameters
+- **Console command exceptions** via a `console.error` event subscriber
+- **Messenger failures** when Symfony Messenger is present (message class, transport, retry count)
+
+## Event Subscriber
+
+The bundle registers a `BugwatchExceptionSubscriber` with a high priority to ensure exceptions are captured before other subscribers modify or handle them:
+
+```yaml
+# This is registered automatically by the bundle
+services:
+  Bugwatch\Symfony\EventSubscriber\BugwatchExceptionSubscriber:
+    tags:
+      - { name: kernel.event_subscriber }
+```
+
+## User Context
+
+The bundle automatically detects the authenticated user from Symfony's Security component. It reads the `UserInterface` to extract the user identifier and, if available, email and display name.
+
+To customize user extraction, define a service implementing `BugwatchUserProviderInterface`:
+
+```php
+<?php
+
+namespace App\Bugwatch;
+
+use Bugwatch\Symfony\BugwatchUserProviderInterface;
+use Symfony\Component\Security\Core\User\UserInterface;
+
+class CustomUserProvider implements BugwatchUserProviderInterface
+{
+    public function getUser(?UserInterface $user): ?array
+    {
+        if (!$user instanceof \App\Entity\User) {
+            return null;
+        }
+
+        return [
+            'id' => (string) $user->getId(),
+            'email' => $user->getEmail(),
+            'username' => $user->getDisplayName(),
+            'role' => $user->getRole(),
+        ];
+    }
+}
+```
+
+Register it in `services.yaml`:
+
+```yaml
+services:
+  Bugwatch\Symfony\BugwatchUserProviderInterface:
+    class: App\Bugwatch\CustomUserProvider
+```
+
+## Manual Capture in Controllers
+
+Inject `Bugwatch` as a service and capture errors manually:
+
+```php
+<?php
+
+namespace App\Controller;
+
+use Bugwatch\Bugwatch;
+use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
+use Symfony\Component\HttpFoundation\JsonResponse;
+use Symfony\Component\Routing\Annotation\Route;
+
+class OrderController extends AbstractController
+{
+    #[Route('/api/orders', methods: ['POST'])]
+    public function create(): JsonResponse
+    {
+        try {
+            $order = $this->orderService->create($this->getPayload());
+            return $this->json($order, 201);
+        } catch (PaymentException $e) {
+            Bugwatch::captureException($e, [
+                'tags' => ['payment_provider' => $e->getProvider()],
+            ]);
+            return $this->json(['error' => 'Payment failed'], 402);
+        }
+    }
+}
+```
+
+## Adding Context
+
+### Tags
+
+```php
+Bugwatch::setTag('tenant_id', $request->headers->get('X-Tenant-ID'));
+```
+
+### Breadcrumbs
+
+```php
+Bugwatch::addBreadcrumb([
+    'category' => 'auth',
+    'message' => 'User authenticated',
+    'level' => 'info',
+]);
+```
+
+## Console Commands
+
+The bundle subscribes to `console.error` events to capture exceptions from Artisan-style commands:
+
+```php
+<?php
+
+namespace App\Command;
+
+use Symfony\Component\Console\Attribute\AsCommand;
+use Symfony\Component\Console\Command\Command;
+use Symfony\Component\Console\Input\InputInterface;
+use Symfony\Component\Console\Output\OutputInterface;
+
+#[AsCommand(name: 'app:process-queue')]
+class ProcessQueueCommand extends Command
+{
+    protected function execute(InputInterface $input, OutputInterface $output): int
+    {
+        // If this throws, the exception is captured automatically
+        $this->queueProcessor->run();
+        return Command::SUCCESS;
+    }
+}
+```
+
+## Messenger Integration
+
+When Symfony Messenger is present, the bundle automatically captures exceptions from message handlers. Each event includes:
+
+- Message class name
+- Transport name
+- Retry count
+- Message payload (serialized and truncated if large)
+
+No additional configuration is needed -- the integration is auto-detected.
+
+## Exception Filtering
+
+Control which exceptions are reported by configuring the `ignore_exceptions` list:
+
+```yaml
+bugwatch:
+  api_key: '%env(BUGWATCH_API_KEY)%'
+  ignore_exceptions:
+    - Symfony\Component\HttpKernel\Exception\NotFoundHttpException
+    - Symfony\Component\Security\Core\Exception\AccessDeniedException
+```
+
+Or use the `before_send` callback as a service:
+
+```php
+<?php
+
+namespace App\Bugwatch;
+
+class EventFilter
+{
+    public function __invoke($event): ?object
+    {
+        // Drop 404 errors
+        if ($event->getTag('http.status_code') === '404') {
+            return null;
+        }
+        return $event;
+    }
+}
+```
+
+```yaml
+bugwatch:
+  before_send: 'App\Bugwatch\EventFilter'
+```
+
+## Verifying the Integration
+
+Use the built-in test command:
+
+```bash
+php bin/console bugwatch:test
+```
+
+This sends a test exception to your Bugwatch project and confirms connectivity.
+
+## Configuration Reference
+
+| Key | Type | Default | Description |
+| --- | --- | --- | --- |
+| `api_key` | `string` | -- | **Required.** Your Bugwatch project API key. |
+| `environment` | `string` | `%kernel.environment%` | Environment name. |
+| `release` | `string` | `null` | Release version. |
+| `sample_rate` | `float` | `1.0` | Fraction of events to send. |
+| `endpoint` | `string` | `https://ingest.bugwatch.dev` | Ingestion endpoint. |
+| `send_default_pii` | `bool` | `false` | Include cookies and request body. |
+| `ignore_exceptions` | `array` | `[]` | Exception classes to ignore. |
+| `before_send` | `string` | `null` | Service ID of a callable invoked before sending. |
+
+## Next Steps
+
+- [PHP SDK Overview](/docs/sdks/php) -- core SDK functions and configuration
+- [Laravel Integration](/docs/sdks/php/laravel) -- auto-discovery integration for Laravel

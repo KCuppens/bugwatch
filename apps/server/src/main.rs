@@ -333,17 +333,24 @@ fn create_app(state: AppState) -> Router {
             .allow_credentials(true)
     };
 
-    Router::new()
+    let router = Router::new()
         .route("/health", get(health_check))
         // Agent install scripts (served for install.bugwatch.dev)
         .route("/install.sh", get(serve_install_script))
         .route("/agent/install.sh", get(serve_install_script))
         .route("/agent/agent.sh", get(serve_agent_script))
-        .nest("/api/v1", api::router())
-        .layer(axum::middleware::from_fn_with_state(
-            state.clone(),
-            crate::payments::x402_payment_middleware,
-        ))
+        .nest("/api/v1", api::router());
+
+    // x402 on-chain payment middleware is a cloud-only concern; self-host
+    // builds omit it entirely (it would be a runtime no-op anyway because
+    // x402_enabled is false and deployment_mode is self-hosted).
+    #[cfg(feature = "saas")]
+    let router = router.layer(axum::middleware::from_fn_with_state(
+        state.clone(),
+        crate::payments::x402_payment_middleware,
+    ));
+
+    router
         .with_state(state)
         .layer(
             TraceLayer::new_for_http()

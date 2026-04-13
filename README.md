@@ -26,13 +26,24 @@ or use the managed cloud, all under the FSL-1.1-Apache-2.0 license that converts
 
 ## Screenshots
 
-<div align="center">
-
-<!-- screenshots needed -->
-
-*Screenshots coming soon — see the [live demo](https://bugwatch.dev) or self-host to explore.*
-
-</div>
+<table>
+  <tr>
+    <td><img src="apps/web/public/screenshots/dashboard.png" alt="Dashboard overview" width="400"/></td>
+    <td><img src="apps/web/public/screenshots/issue-detail.png" alt="Issue detail view" width="400"/></td>
+  </tr>
+  <tr>
+    <td align="center"><strong>Dashboard</strong></td>
+    <td align="center"><strong>Issue Detail</strong></td>
+  </tr>
+  <tr>
+    <td><img src="apps/web/public/screenshots/uptime.png" alt="Uptime monitoring" width="400"/></td>
+    <td><img src="apps/web/public/screenshots/server.png" alt="Server monitoring" width="400"/></td>
+  </tr>
+  <tr>
+    <td align="center"><strong>Uptime Monitoring</strong></td>
+    <td align="center"><strong>Server Monitoring</strong></td>
+  </tr>
+</table>
 
 ---
 
@@ -68,6 +79,20 @@ docker compose -f docker-compose.self-hosted.yml up -d
 
 4. **Open your browser** at `http://localhost:3000` and create your first account.
 
+### Self-Host vs Cloud Build
+
+Bugwatch ships a single codebase with two build targets, controlled by a Cargo
+feature flag and one env var:
+
+| Build      | Command                                         | `BUGWATCH_MODE` | Billing / Stripe                 | Tier limits                       |
+| ---------- | ----------------------------------------------- | --------------- | -------------------------------- | --------------------------------- |
+| Self-host  | `cargo build --release`                         | `self-hosted`   | Disabled (not compiled in)       | All orgs get the Team tier, free  |
+| Cloud      | `cargo build --release --features saas`         | `saas`          | Stripe endpoints + webhooks      | Read from the org's subscription  |
+
+- The default `docker-compose.self-hosted.yml` build targets the self-host profile — you do not need a Stripe account to run Bugwatch for your own team.
+- The `saas` feature is the only thing that compiles in `async-stripe` and the AWS SES email transport, so self-host builds stay lean.
+- The FSL-1.1 license permits running the cloud build for your own company, but prohibits offering Bugwatch as a competing hosted service until it converts to Apache 2.0 on **March 15, 2028**. See [LICENSE](LICENSE).
+
 ### Quick SDK Example (Next.js)
 
 ```bash
@@ -76,30 +101,30 @@ npm install @bugwatch/nextjs
 
 ```typescript
 // instrumentation.ts
-import { init } from '@bugwatch/nextjs';
+import { init } from "@bugwatch/nextjs";
 
-init({ apiKey: 'YOUR_API_KEY' });
+init({ apiKey: "YOUR_API_KEY" });
 ```
 
 ---
 
 ## SDK Matrix
 
-| Language   | Framework | Package                    | Install Command                      |
-| ---------- | --------- | -------------------------- | ------------------------------------ |
-| JavaScript | Core      | [`@bugwatch/core`](https://bugwatch.dev/docs/sdks/javascript/core)       | `npm install @bugwatch/core`       |
-| JavaScript | Node.js   | [`@bugwatch/node`](https://bugwatch.dev/docs/sdks/javascript/node)       | `npm install @bugwatch/node`       |
-| JavaScript | Next.js   | [`@bugwatch/nextjs`](https://bugwatch.dev/docs/sdks/javascript/nextjs)   | `npm install @bugwatch/nextjs`     |
-| JavaScript | React     | [`@bugwatch/react`](https://bugwatch.dev/docs/sdks/javascript/react)     | `npm install @bugwatch/react`      |
-| JavaScript | Express   | [`@bugwatch/express`](https://bugwatch.dev/docs/sdks/javascript/express) | `npm install @bugwatch/express`    |
-| JavaScript | Fastify   | [`@bugwatch/fastify`](https://bugwatch.dev/docs/sdks/javascript/fastify) | `npm install @bugwatch/fastify`    |
-| Python     | Base      | [`bugwatch-python`](https://bugwatch.dev/docs/sdks/python)              | `pip install bugwatch-python`      |
-| Python     | Django    | [`bugwatch-python`](https://bugwatch.dev/docs/sdks/python/django)       | `pip install bugwatch-python`      |
-| Python     | Flask     | [`bugwatch-python`](https://bugwatch.dev/docs/sdks/python/flask)        | `pip install bugwatch-python`      |
-| Python     | FastAPI   | [`bugwatch-python`](https://bugwatch.dev/docs/sdks/python/fastapi)      | `pip install bugwatch-python`      |
-| Python     | Celery    | [`bugwatch-python`](https://bugwatch.dev/docs/sdks/python/celery)       | `pip install bugwatch-python`      |
-| Rust       | Async     | [`bugwatch`](https://bugwatch.dev/docs/sdks/rust/async)                 | `cargo add bugwatch`               |
-| Rust       | Blocking  | [`bugwatch`](https://bugwatch.dev/docs/sdks/rust/blocking)              | `cargo add bugwatch`               |
+| Language   | Framework | Package                                                                  | Install Command                 |
+| ---------- | --------- | ------------------------------------------------------------------------ | ------------------------------- |
+| JavaScript | Core      | [`@bugwatch/core`](https://bugwatch.dev/docs/sdks/javascript/core)       | `npm install @bugwatch/core`    |
+| JavaScript | Node.js   | [`@bugwatch/node`](https://bugwatch.dev/docs/sdks/javascript/node)       | `npm install @bugwatch/node`    |
+| JavaScript | Next.js   | [`@bugwatch/nextjs`](https://bugwatch.dev/docs/sdks/javascript/nextjs)   | `npm install @bugwatch/nextjs`  |
+| JavaScript | React     | [`@bugwatch/react`](https://bugwatch.dev/docs/sdks/javascript/react)     | `npm install @bugwatch/react`   |
+| JavaScript | Express   | [`@bugwatch/express`](https://bugwatch.dev/docs/sdks/javascript/express) | `npm install @bugwatch/express` |
+| JavaScript | Fastify   | [`@bugwatch/fastify`](https://bugwatch.dev/docs/sdks/javascript/fastify) | `npm install @bugwatch/fastify` |
+| Python     | Base      | [`bugwatch-python`](https://bugwatch.dev/docs/sdks/python)               | `pip install bugwatch-python`   |
+| Python     | Django    | [`bugwatch-python`](https://bugwatch.dev/docs/sdks/python/django)        | `pip install bugwatch-python`   |
+| Python     | Flask     | [`bugwatch-python`](https://bugwatch.dev/docs/sdks/python/flask)         | `pip install bugwatch-python`   |
+| Python     | FastAPI   | [`bugwatch-python`](https://bugwatch.dev/docs/sdks/python/fastapi)       | `pip install bugwatch-python`   |
+| Python     | Celery    | [`bugwatch-python`](https://bugwatch.dev/docs/sdks/python/celery)        | `pip install bugwatch-python`   |
+| Rust       | Async     | [`bugwatch`](https://bugwatch.dev/docs/sdks/rust/async)                  | `cargo add bugwatch`            |
+| Rust       | Blocking  | [`bugwatch`](https://bugwatch.dev/docs/sdks/rust/blocking)               | `cargo add bugwatch`            |
 
 ---
 
@@ -121,17 +146,17 @@ init({ apiKey: 'YOUR_API_KEY' });
 
 ## Why Bugwatch?
 
-| Feature        | Bugwatch                              | Sentry                                |
-| -------------- | ------------------------------------- | ------------------------------------- |
-| Pricing model  | Per-seat ($12–$25/mo)                 | Per-event (volume-based)              |
-| Event limits   | Unlimited on all plans                | Capped, overages billed               |
-| Self-hosting   | Docker Compose, fully supported       | Docker, limited official support      |
-| Setup time     | < 5 minutes                           | 10–30 minutes                         |
-| SDK config     | 3 lines of code                       | Multi-step configuration              |
-| Open source    | Yes                                   | Partially (BSL licensed)              |
-| License        | FSL-1.1-Apache-2.0                    | BSL-1.1                               |
+| Feature       | Bugwatch                        | Sentry                           |
+| ------------- | ------------------------------- | -------------------------------- |
+| Pricing model | Per-seat ($12–$25/mo)           | Per-event (volume-based)         |
+| Event limits  | Unlimited on all plans          | Capped, overages billed          |
+| Self-hosting  | Docker Compose, fully supported | Docker, limited official support |
+| Setup time    | < 5 minutes                     | 10–30 minutes                    |
+| SDK config    | 3 lines of code                 | Multi-step configuration         |
+| Open source   | Yes                             | Partially (BSL licensed)         |
+| License       | FSL-1.1-Apache-2.0              | BSL-1.1                          |
 
-*See the [full comparison](https://bugwatch.dev/docs/migration/comparison) for a detailed breakdown.*
+_See the [full comparison](https://bugwatch.dev/docs/migration/comparison) for a detailed breakdown._
 
 ---
 

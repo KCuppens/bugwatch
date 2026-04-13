@@ -1,0 +1,149 @@
+---
+title: Upgrading
+description: Keep your self-hosted Bugwatch instance up to date with the latest features, bug fixes, and security patches.
+---
+
+# Upgrading Bugwatch
+
+Regular upgrades ensure your Bugwatch instance stays secure and benefits from the latest improvements. This guide walks through upgrading both Docker Compose and manual (source) deployments, along with rollback procedures if anything goes wrong.
+
+## Pre-Upgrade Checklist
+
+Before starting any upgrade, complete these steps:
+
+<Callout type="warn">
+Always back up your database before upgrading. Upgrades may apply irreversible migrations, and a backup is the only reliable way to roll back data changes.
+</Callout>
+
+1. **Back up your database:**
+
+```bash
+pg_dump -U bugwatch -h localhost bugwatch > bugwatch_backup_$(date +%Y%m%d).sql
+```
+
+2. **Note your current version.** Query the health endpoint so you know exactly what you are running:
+
+```bash
+curl -s http://localhost:8080/health | jq .
+```
+
+The response includes a `version` field with the running release tag.
+
+3. **Read the release notes** on [GitHub Releases](https://github.com/KCuppens/bugwatch/releases) for any breaking changes or special migration instructions.
+
+4. **Plan for brief downtime.** Most upgrades complete in under a minute, but the API will be unavailable while services restart.
+
+## Docker Compose Upgrade
+
+If you deployed with `docker-compose.self-hosted.yml` or pre-built images, upgrading is straightforward.
+
+```bash
+# Pull the latest images
+docker compose -f docker-compose.self-hosted.yml pull
+
+# Recreate containers with the new images
+docker compose -f docker-compose.self-hosted.yml up -d
+
+# Verify all containers are healthy
+docker compose -f docker-compose.self-hosted.yml ps
+```
+
+Confirm the upgrade succeeded by checking the health endpoint:
+
+```bash
+curl -s http://localhost:8080/health | jq .
+```
+
+If you are building images locally instead of pulling from a registry, replace `docker compose pull` with `docker compose build --no-cache` before running `up -d`.
+
+## Manual / Source Upgrade
+
+For deployments built from source, follow these steps:
+
+```bash
+# 1. Pull the latest code
+cd /opt/bugwatch
+git pull origin main
+
+# 2. Rebuild the Rust API server
+cd apps/server
+cargo build --release
+
+# 3. Install dependencies and rebuild the web app
+cd ../web
+pnpm install
+pnpm run build
+
+# 4. Restart both services
+sudo systemctl restart bugwatch-api
+sudo systemctl restart bugwatch-web
+```
+
+Verify the services are running:
+
+```bash
+sudo systemctl status bugwatch-api
+sudo systemctl status bugwatch-web
+curl -s http://localhost:8080/health | jq .
+```
+
+## Database Migrations
+
+Database migrations run **automatically** when the Bugwatch server starts. There is no separate migration command to execute. On startup, the server detects any pending migrations and applies them before accepting traffic.
+
+<Callout type="warn">
+Because migrations run automatically, you must back up your database **before** starting the new version. Once migrations execute, the only way to undo schema changes is to restore from a backup.
+</Callout>
+
+## Rollback Procedure
+
+If an upgrade introduces problems, roll back to the previous version:
+
+1. **Stop the running services:**
+
+```bash
+# Docker Compose
+docker compose -f docker-compose.self-hosted.yml down
+
+# Manual deployment
+sudo systemctl stop bugwatch-api bugwatch-web
+```
+
+2. **Restore your database backup:**
+
+```bash
+psql -U bugwatch -h localhost bugwatch < bugwatch_backup_YYYYMMDD.sql
+```
+
+3. **Check out the previous version:**
+
+```bash
+git log --oneline -5   # identify the previous commit or tag
+git checkout <previous-tag-or-commit>
+```
+
+4. **Rebuild and restart** using the same steps as a normal upgrade (Docker Compose `build` + `up -d`, or `cargo build --release` and `pnpm run build` for source deployments).
+
+## Breaking Changes Policy
+
+Bugwatch follows [semantic versioning](https://semver.org/). Breaking changes only appear in **major** version bumps. Minor and patch releases are always backward-compatible. Before upgrading across a major version, review the full [changelog](https://github.com/KCuppens/bugwatch/releases) for migration notes and deprecated features.
+
+## Version Checking
+
+You can verify the running version at any time by querying the API health endpoint:
+
+```bash
+curl -s http://localhost:8080/health | jq .
+```
+
+The response returns the current version, database connection status, and uptime. Use this after every upgrade to confirm the new version is live.
+
+## Staying Informed
+
+- **Watch** the [GitHub repository](https://github.com/KCuppens/bugwatch) and select **Custom** > **Releases** to receive notifications for new versions.
+- Review the [changelog](https://github.com/KCuppens/bugwatch/releases) before every upgrade.
+
+## Next Steps
+
+- [Configuration](/docs/self-hosting/configuration) -- review environment variables that may have changed between versions
+- [Docker Compose Setup](/docs/self-hosting/docker) -- reference for Docker-based deployments

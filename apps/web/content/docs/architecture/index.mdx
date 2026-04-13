@@ -1,0 +1,119 @@
+---
+title: Architecture
+description: Understand the technology stack and system design behind Bugwatch. Learn how the Next.js frontend, Rust API server, and PostgreSQL database work together.
+---
+
+# Architecture
+
+Bugwatch is built as a monorepo with a clear separation between the frontend, backend, and SDKs. This section explains the technology choices, system design, and data flow that make up the platform.
+
+## System Overview
+
+At a high level, Bugwatch follows a straightforward pipeline: client SDKs capture errors in your application, send them to a Rust-based API server for processing and storage, and the Next.js dashboard queries that data for display. A Caddy reverse proxy sits in front of both services, handling TLS termination and routing.
+
+```
+                        ┌─────────────────────────────────────────────┐
+                        │                   Caddy                     │
+                        │         (TLS termination, routing)          │
+                        └──────────┬──────────────────┬───────────────┘
+                                   │                  │
+                          /api/v1/*│         /*       │
+                                   ▼                  ▼
+  ┌──────────┐     HTTPS    ┌─────────────┐    ┌─────────────┐
+  │  Your    │  ──────────► │ Rust/Axum   │    │  Next.js 15 │
+  │  App     │  (SDK POST)  │ API Server  │    │  Dashboard  │
+  │ + SDK    │              └──────┬──────┘    └──────┬──────┘
+  └──────────┘                     │                  │
+                                   │  SQL             │  REST
+                                   ▼                  ▼
+                            ┌─────────────────────────────┐
+                            │         PostgreSQL           │
+                            │   (all application data)     │
+                            └─────────────────────────────┘
+```
+
+## Tech Stack
+
+| Layer | Technology | Purpose |
+|-------|-----------|---------|
+| **Reverse Proxy** | Caddy | TLS termination, automatic HTTPS, request routing |
+| **Frontend** | Next.js 15 (React) | Dashboard UI, documentation site (Fumadocs) |
+| **Backend** | Rust (Axum) | REST API, SDK ingestion, alerting engine, billing |
+| **Database** | PostgreSQL | Persistent storage for all application data |
+| **SDKs** | JavaScript, Python, Rust | Client libraries for error capture |
+| **Server Agent** | Compiled binary (Linux) | Host-level CPU, memory, disk, and network metrics |
+
+The **Rust API server** was chosen for its low-latency event ingestion. It processes incoming error events, generates fingerprints for deduplication, evaluates alert rules, and dispatches notifications -- all within a single async pipeline. Authentication uses JWT tokens with Argon2 password hashing.
+
+The **Next.js 15 dashboard** provides the user-facing interface: an issue explorer with full-text search, uptime monitor status pages, server metrics graphs, project settings, an onboarding wizard, and Stripe-powered billing management. The documentation site you are reading is built with Fumadocs and lives in the same Next.js application.
+
+**PostgreSQL** stores everything: users, organizations, projects, issues, events, monitors, server metrics, alert rules, notification channels, and billing records. UUID primary keys are used throughout.
+
+**Caddy** acts as the entry point in production and self-hosted deployments. It automatically provisions TLS certificates via Let's Encrypt and routes `/api/v1/*` requests to the Rust server while forwarding all other traffic to the Next.js frontend.
+
+## Monorepo Structure
+
+```
+bugwatch/
+├── apps/
+│   ├── server/          # Rust API server (Axum)
+│   └── web/             # Next.js web application + docs
+├── packages/
+│   ├── cli/             # @bugwatch/cli
+│   └── sdk/             # Client SDKs
+│       ├── core/        # @bugwatch/core (shared logic)
+│       ├── node/        # @bugwatch/node
+│       ├── nextjs/      # @bugwatch/nextjs
+│       ├── react/       # @bugwatch/react
+│       ├── express/     # @bugwatch/express
+│       ├── fastify/     # @bugwatch/fastify
+│       └── browser/     # @bugwatch/browser
+├── Caddyfile            # Reverse proxy configuration
+└── docker-compose.self-hosted.yml
+```
+
+### apps/server
+
+The Rust backend handles:
+
+- **SDK ingestion** -- receives error events from client SDKs via `POST /api/v1/events`
+- **REST API** -- provides endpoints for the dashboard (issues, projects, monitors, alerts, billing)
+- **Authentication** -- JWT-based auth with Argon2 password hashing and session management
+- **Fingerprinting** -- SHA-256-based error grouping with message normalization
+- **Alert evaluation** -- checks incoming events against alert rules and dispatches notifications
+- **Uptime monitoring** -- periodic HTTP checks against configured monitors
+- **Metrics ingestion** -- receives server agent metrics via `POST /api/v1/metrics`
+- **Rate limiting** -- per-project token bucket algorithm, tier-aware
+- **Data retention** -- scheduled cleanup of old events, checks, metrics, and alert logs
+
+### apps/web
+
+The Next.js frontend provides:
+
+- **Dashboard** -- issue explorer, monitor status, server metrics, project settings
+- **Authentication pages** -- login, signup, password reset
+- **Onboarding wizard** -- guided setup for new users
+- **Billing UI** -- subscription management via Stripe
+- **Documentation** -- MDX-based docs powered by Fumadocs (what you are reading now)
+
+### packages/sdk
+
+The SDK packages share a common core (`@bugwatch/core`) that handles:
+
+- Error serialization and fingerprinting
+- Transport (sending events to the API)
+- Breadcrumb tracking
+- Context management (user, tags, extra data)
+
+Framework-specific packages add automatic error boundary integration, request context capture, and middleware hooks.
+
+## Subsections
+
+<Cards>
+  <Card title="Event Pipeline" href="/docs/architecture/event-pipeline">
+    Follow an error from SDK capture through fingerprinting, issue grouping, alert evaluation, and notification dispatch.
+  </Card>
+  <Card title="Data Model" href="/docs/architecture/data-model">
+    Explore the database entities, relationships, and conventions used across Bugwatch.
+  </Card>
+</Cards>

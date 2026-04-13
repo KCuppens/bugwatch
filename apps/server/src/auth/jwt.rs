@@ -80,10 +80,13 @@ pub fn generate_tokens(
 
 /// Validate and decode a JWT token
 pub fn validate_token(token: &str, secret: &str) -> AppResult<Claims> {
+    let mut validation = Validation::new(jsonwebtoken::Algorithm::HS256);
+    validation.set_required_spec_claims(&["exp", "iat", "sub"]);
+
     let token_data = decode::<Claims>(
         token,
         &DecodingKey::from_secret(secret.as_bytes()),
-        &Validation::default(),
+        &validation,
     )
     .map_err(|e| match e.kind() {
         jsonwebtoken::errors::ErrorKind::ExpiredSignature => {

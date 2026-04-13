@@ -122,6 +122,7 @@ export function SeatManagement({
             <Button
               variant="outline"
               size="icon"
+              aria-label="Remove seat"
               onClick={() => handleSeatsChange(seats - 1)}
               disabled={seats <= minSeats || loadingPreview}
             >
@@ -137,13 +138,14 @@ export function SeatManagement({
                 }}
                 min={minSeats}
                 max={maxSeats}
-                className="text-center text-xl font-bold"
+                className="text-center font-display text-xl font-semibold tabular-nums"
                 disabled={loadingPreview}
               />
             </div>
             <Button
               variant="outline"
               size="icon"
+              aria-label="Add seat"
               onClick={() => handleSeatsChange(seats + 1)}
               disabled={seats >= maxSeats || loadingPreview}
             >

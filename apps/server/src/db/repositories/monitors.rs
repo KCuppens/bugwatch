@@ -1,4 +1,7 @@
-use crate::db::{models::{Monitor, MonitorCheck, MonitorIncident}, DbPool};
+use crate::db::{
+    models::{Monitor, MonitorCheck, MonitorIncident},
+    DbPool,
+};
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
@@ -50,6 +53,29 @@ impl MonitorRepository {
             .fetch_optional(pool)
             .await
             .map_err(Into::into)
+    }
+
+    pub async fn count_by_project(pool: &DbPool, project_id: &str) -> Result<i64> {
+        let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM monitors WHERE project_id = $1")
+            .bind(project_id)
+            .fetch_one(pool)
+            .await?;
+        Ok(row.0)
+    }
+
+    /// Count total monitors across all projects owned by a user
+    pub async fn count_by_owner(pool: &DbPool, owner_id: &str) -> Result<i64> {
+        let row: (i64,) = sqlx::query_as(
+            r#"
+            SELECT COUNT(*) FROM monitors m
+            JOIN projects p ON m.project_id = p.id
+            WHERE p.owner_id = $1
+            "#,
+        )
+        .bind(owner_id)
+        .fetch_one(pool)
+        .await?;
+        Ok(row.0)
     }
 
     pub async fn list_by_project(
@@ -379,7 +405,10 @@ impl MonitorIncidentRepository {
         .map_err(Into::into)
     }
 
-    pub async fn find_open_by_monitor(pool: &DbPool, monitor_id: &str) -> Result<Option<MonitorIncident>> {
+    pub async fn find_open_by_monitor(
+        pool: &DbPool,
+        monitor_id: &str,
+    ) -> Result<Option<MonitorIncident>> {
         sqlx::query_as::<_, MonitorIncident>(
             "SELECT * FROM monitor_incidents WHERE monitor_id = $1 AND resolved_at IS NULL ORDER BY started_at DESC LIMIT 1",
         )

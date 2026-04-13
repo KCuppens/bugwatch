@@ -1,0 +1,196 @@
+---
+title: Rails Integration
+description: Integrate the Bugwatch Ruby SDK with Ruby on Rails for automatic exception capture, request context, and environment-aware configuration.
+---
+
+# Rails Integration
+
+The Bugwatch Rails integration uses a Railtie to automatically configure the SDK, install middleware, and hook into Rails' error reporting lifecycle. It detects `Rails.env`, captures controller exceptions, and attaches request and user context with zero manual setup.
+
+## Installation
+
+Add to your `Gemfile`:
+
+```ruby
+gem 'bugwatch-ruby'
+```
+
+```bash
+bundle install
+```
+
+## Configuration
+
+### 1. Generate the Initializer
+
+Run the generator to create a configuration file:
+
+```bash
+rails generate bugwatch:install
+```
+
+This creates `config/initializers/bugwatch.rb`:
+
+```ruby
+Bugwatch.init(
+  api_key: ENV.fetch('BUGWATCH_API_KEY'),
+  environment: Rails.env,
+  release: ENV['BUGWATCH_RELEASE'],
+)
+```
+
+### 2. Set Your API Key
+
+Add your API key to your environment:
+
+```bash
+export BUGWATCH_API_KEY="bw_live_xxxxx"
+```
+
+Or add it to your Rails credentials:
+
+```bash
+rails credentials:edit
+```
+
+```yaml
+bugwatch:
+  api_key: bw_live_xxxxx
+```
+
+```ruby
+# config/initializers/bugwatch.rb
+Bugwatch.init(
+  api_key: Rails.application.credentials.dig(:bugwatch, :api_key),
+  environment: Rails.env,
+)
+```
+
+## What Gets Captured Automatically
+
+The Railtie installs the following automatically:
+
+- **Rack middleware** at the top of the middleware stack to capture unhandled exceptions and attach request context
+- **ActionController instrumentation** to capture exceptions raised in controllers and attach controller name, action, and parameters
+- **ActiveJob error handler** to capture background job failures (when ActiveJob is present)
+- **Environment detection** via `Rails.env` -- the SDK automatically tags events with the current Rails environment
+
+## Automatic Middleware
+
+The Railtie inserts `Bugwatch::Rack::Middleware` at the top of the middleware stack. You can verify this with:
+
+```bash
+rails middleware
+```
+
+You should see `Bugwatch::Rack::Middleware` near the top of the output.
+
+## Manual Capture in Controllers
+
+Use `rescue_from` to capture specific exception types while returning custom responses:
+
+```ruby
+class ApplicationController < ActionController::Base
+  rescue_from StandardError, with: :handle_error
+
+  private
+
+  def handle_error(exception)
+    Bugwatch.capture_exception(exception)
+    render json: { error: 'Internal server error' }, status: :internal_server_error
+  end
+end
+```
+
+Or capture errors inline:
+
+```ruby
+class OrdersController < ApplicationController
+  def create
+    @order = Order.new(order_params)
+    if @order.save
+      redirect_to @order
+    else
+      Bugwatch.capture_message("Order creation failed",
+        level: :warning,
+        extra: { errors: @order.errors.full_messages }
+      )
+      render :new
+    end
+  end
+end
+```
+
+## User Context
+
+The SDK automatically detects `current_user` if it is defined in your controller. To customize user extraction, configure it in the initializer:
+
+```ruby
+Bugwatch.init(
+  api_key: ENV.fetch('BUGWATCH_API_KEY'),
+  environment: Rails.env,
+  user_context: ->(controller) {
+    user = controller.send(:current_user) rescue nil
+    next nil unless user
+    {
+      id: user.id.to_s,
+      email: user.email,
+      username: user.name,
+      subscription: user.plan&.name,
+    }
+  }
+)
+```
+
+## Adding Tags and Breadcrumbs
+
+Enrich events from within your controllers:
+
+```ruby
+class ProjectsController < ApplicationController
+  before_action :set_bugwatch_context
+
+  def show
+    Bugwatch.add_breadcrumb(
+      category: 'navigation',
+      message: "Viewed project #{params[:id]}",
+      level: :info
+    )
+    @project = Project.find(params[:id])
+  end
+
+  private
+
+  def set_bugwatch_context
+    Bugwatch.set_tag('controller', controller_name)
+    Bugwatch.set_tag('action', action_name)
+  end
+end
+```
+
+## Environment-Specific Configuration
+
+Disable the SDK in test and development environments:
+
+```ruby
+Bugwatch.init(
+  api_key: ENV.fetch('BUGWATCH_API_KEY', nil),
+  environment: Rails.env,
+  enabled: Rails.env.production? || Rails.env.staging?,
+)
+```
+
+## Verifying the Integration
+
+Trigger a test error to confirm everything is working:
+
+```bash
+rails bugwatch:test
+```
+
+This Rake task sends a test exception to your Bugwatch project and confirms connectivity.
+
+## Next Steps
+
+- [Ruby SDK Overview](/docs/sdks/ruby) -- core SDK functions and configuration
+- [Sidekiq Integration](/docs/sdks/ruby/sidekiq) -- capture background job failures

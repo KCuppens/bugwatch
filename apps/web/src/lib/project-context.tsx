@@ -5,6 +5,7 @@ import {
   useContext,
   useState,
   useEffect,
+  useMemo,
   useCallback,
   type ReactNode,
 } from "react";
@@ -135,24 +136,37 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
   );
 
   // Map recent IDs to projects
-  const recentProjects = recentProjectIds
-    .map((id) => projects.find((p) => p.id === id))
-    .filter((p): p is Project => p !== undefined);
+  const recentProjects = useMemo(
+    () =>
+      recentProjectIds
+        .map((id) => projects.find((p) => p.id === id))
+        .filter((p): p is Project => p !== undefined),
+    [recentProjectIds, projects]
+  );
+
+  const value = useMemo(
+    () => ({
+      projects,
+      selectedProject,
+      recentProjects,
+      isLoading,
+      error,
+      selectProject,
+      refreshProjects: fetchProjects,
+    }),
+    [
+      projects,
+      selectedProject,
+      recentProjects,
+      isLoading,
+      error,
+      selectProject,
+      fetchProjects,
+    ]
+  );
 
   return (
-    <ProjectContext.Provider
-      value={{
-        projects,
-        selectedProject,
-        recentProjects,
-        isLoading,
-        error,
-        selectProject,
-        refreshProjects: fetchProjects,
-      }}
-    >
-      {children}
-    </ProjectContext.Provider>
+    <ProjectContext.Provider value={value}>{children}</ProjectContext.Provider>
   );
 }
 

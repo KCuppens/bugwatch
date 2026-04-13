@@ -1,0 +1,793 @@
+---
+title: Billing
+description: API endpoints for managing organizations, subscriptions, invoices, payment methods, and usage.
+---
+
+# Billing
+
+The billing endpoints manage organizations, team members, Stripe subscriptions, invoices, payment methods, and usage tracking. All billing endpoints require Bearer token authentication.
+
+## Organizations
+
+### GET /organization
+
+Get the current user's organization.
+
+**Authentication:** Bearer token required
+
+### Example
+
+```bash
+curl https://api.bugwatch.dev/api/v1/organization \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+```
+
+### Response `200 OK`
+
+```json
+{
+  "organization": {
+    "id": "org_xyz789",
+    "name": "Acme Corp",
+    "slug": "acme-corp-a1b2c3d4",
+    "owner_id": "usr_abc123",
+    "tier": "pro",
+    "seats": 5,
+    "subscription_status": "active",
+    "billing_interval": "monthly",
+    "current_period_start": "2025-01-01T00:00:00Z",
+    "current_period_end": "2025-02-01T00:00:00Z",
+    "cancel_at_period_end": false,
+    "stripe_customer_id": "cus_xxx",
+    "stripe_subscription_id": "sub_xxx"
+  },
+  "members_count": 3,
+  "is_owner": true
+}
+```
+
+---
+
+### POST /organization
+
+Create a new organization. Each user can only have one organization.
+
+**Authentication:** Bearer token required
+
+### Request Body
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `name` | string | Yes | Organization name |
+
+### Example
+
+```bash
+curl -X POST https://api.bugwatch.dev/api/v1/organization \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Acme Corp"
+  }'
+```
+
+### Response `200 OK`
+
+Returns the organization response with `members_count: 1` and `is_owner: true`.
+
+### Errors
+
+| Status | Description |
+|---|---|
+| `409` | User already has an organization |
+
+---
+
+### PATCH /organization
+
+Update the organization name. Only the owner can update the organization.
+
+**Authentication:** Bearer token required (owner only)
+
+### Request Body
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `name` | string | Yes | New organization name |
+
+### Example
+
+```bash
+curl -X PATCH https://api.bugwatch.dev/api/v1/organization \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Acme Corporation"
+  }'
+```
+
+---
+
+## Members
+
+### GET /organization/members
+
+List all members of the organization with their user details.
+
+**Authentication:** Bearer token required
+
+### Example
+
+```bash
+curl https://api.bugwatch.dev/api/v1/organization/members \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+```
+
+### Response `200 OK`
+
+```json
+[
+  {
+    "member": {
+      "id": "mem_001",
+      "organization_id": "org_xyz789",
+      "user_id": "usr_abc123",
+      "role": "owner",
+      "created_at": "2025-01-01T00:00:00Z"
+    },
+    "user_email": "owner@example.com",
+    "user_name": "Jane Developer"
+  },
+  {
+    "member": {
+      "id": "mem_002",
+      "organization_id": "org_xyz789",
+      "user_id": "usr_def456",
+      "role": "member",
+      "created_at": "2025-01-05T00:00:00Z"
+    },
+    "user_email": "dev@example.com",
+    "user_name": "John Smith"
+  }
+]
+```
+
+---
+
+### POST /organization/members
+
+Add a member to the organization by email. Only owners and admins can add members. The user must already have a Bugwatch account.
+
+**Authentication:** Bearer token required (owner or admin)
+
+### Request Body
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `email` | string | Yes | Email of the user to add |
+| `role` | string | No | Role: `admin` or `member` (default: `member`) |
+
+### Example
+
+```bash
+curl -X POST https://api.bugwatch.dev/api/v1/organization/members \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "new-dev@example.com",
+    "role": "member"
+  }'
+```
+
+### Errors
+
+| Status | Description |
+|---|---|
+| `402` | Seat limit reached |
+| `403` | Only owner or admin can add members |
+| `404` | User not found |
+| `409` | User is already a member |
+
+---
+
+### DELETE /organization/members/:member_user_id
+
+Remove a member from the organization. Cannot remove the owner.
+
+**Authentication:** Bearer token required (owner or admin)
+
+### Response `204 No Content`
+
+---
+
+### PATCH /organization/members/:member_user_id
+
+Update a member's role. Only the owner can change roles.
+
+**Authentication:** Bearer token required (owner only)
+
+### Request Body
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `role` | string | Yes | New role: `admin` or `member` |
+
+### Example
+
+```bash
+curl -X PATCH https://api.bugwatch.dev/api/v1/organization/members/usr_def456 \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "role": "admin"
+  }'
+```
+
+---
+
+## Subscriptions
+
+### GET /billing/subscription
+
+Get the current subscription details.
+
+**Authentication:** Bearer token required
+
+### Example
+
+```bash
+curl https://api.bugwatch.dev/api/v1/billing/subscription \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+```
+
+### Response `200 OK`
+
+```json
+{
+  "tier": "pro",
+  "seats": 5,
+  "subscription_status": "active",
+  "billing_interval": "monthly",
+  "current_period_start": "2025-01-01T00:00:00Z",
+  "current_period_end": "2025-02-01T00:00:00Z",
+  "cancel_at_period_end": false,
+  "has_stripe": true
+}
+```
+
+---
+
+### POST /billing/checkout
+
+Create a Stripe checkout session for a new subscription or upgrade.
+
+**Authentication:** Bearer token required
+
+### Request Body
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `tier` | string | Yes | Plan tier: `pro` or `team` |
+| `seats` | integer | No | Number of seats (default: 1) |
+| `annual` | boolean | No | Annual billing (default: false) |
+| `success_url` | string | Yes | URL to redirect after successful payment |
+| `cancel_url` | string | Yes | URL to redirect if payment is canceled |
+
+### Example
+
+```bash
+curl -X POST https://api.bugwatch.dev/api/v1/billing/checkout \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "tier": "pro",
+    "seats": 3,
+    "annual": false,
+    "success_url": "https://app.bugwatch.dev/dashboard/settings?checkout=success",
+    "cancel_url": "https://app.bugwatch.dev/dashboard/settings?checkout=canceled"
+  }'
+```
+
+### Response `200 OK`
+
+```json
+{
+  "checkout_url": "https://checkout.stripe.com/c/pay/cs_xxx..."
+}
+```
+
+Redirect the user to `checkout_url` to complete the payment.
+
+---
+
+### POST /billing/verify-checkout
+
+Verify a completed checkout session and activate the subscription immediately without waiting for the webhook.
+
+**Authentication:** Bearer token required
+
+### Request Body
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `session_id` | string | Yes | Stripe checkout session ID |
+
+### Response `200 OK`
+
+```json
+{
+  "success": true,
+  "subscription": {
+    "tier": "pro",
+    "seats": 3,
+    "subscription_status": "active",
+    "billing_interval": "monthly",
+    "current_period_start": "2025-01-15T00:00:00Z",
+    "current_period_end": "2025-02-15T00:00:00Z",
+    "cancel_at_period_end": false,
+    "has_stripe": true
+  },
+  "message": "Subscription activated successfully",
+  "already_processed": false
+}
+```
+
+---
+
+### POST /billing/portal
+
+Create a Stripe billing portal session for managing payment methods and invoices.
+
+**Authentication:** Bearer token required
+
+### Request Body
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `return_url` | string | Yes | URL to redirect when the user leaves the portal |
+
+### Response `200 OK`
+
+```json
+{
+  "portal_url": "https://billing.stripe.com/p/session/xxx..."
+}
+```
+
+---
+
+### POST /billing/cancel
+
+Cancel the current subscription.
+
+**Authentication:** Bearer token required (owner only)
+
+### Request Body
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `immediately` | boolean | No | Cancel immediately or at period end (default: false, cancels at period end) |
+
+### Response `204 No Content`
+
+---
+
+### POST /billing/change-plan
+
+Change the subscription plan (upgrade or downgrade).
+
+**Authentication:** Bearer token required (owner only)
+
+### Request Body
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `tier` | string | Yes | New plan tier: `pro` or `team` |
+| `seats` | integer | No | Number of seats (default: current seats) |
+| `annual` | boolean | No | Annual billing (default: current interval) |
+
+### Example
+
+```bash
+curl -X POST https://api.bugwatch.dev/api/v1/billing/change-plan \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "tier": "team",
+    "seats": 10,
+    "annual": true
+  }'
+```
+
+### Response `200 OK`
+
+```json
+{
+  "success": true,
+  "tier": "team",
+  "seats": 10,
+  "message": "Plan updated successfully"
+}
+```
+
+---
+
+### POST /billing/preview-change
+
+Preview the proration amount for a plan change before committing.
+
+**Authentication:** Bearer token required
+
+### Request Body
+
+Same as `POST /billing/change-plan`.
+
+### Response `200 OK`
+
+```json
+{
+  "current_amount_cents": 1200,
+  "new_amount_cents": 2100,
+  "proration_amount_cents": 450,
+  "immediate_charge": true
+}
+```
+
+---
+
+### POST /billing/seats
+
+Update the number of seats on the current subscription.
+
+**Authentication:** Bearer token required (owner only)
+
+### Request Body
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `seats` | integer | Yes | New number of seats |
+
+### Example
+
+```bash
+curl -X POST https://api.bugwatch.dev/api/v1/billing/seats \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "seats": 10
+  }'
+```
+
+---
+
+## Usage
+
+### GET /billing/usage
+
+Get usage data for the current billing period.
+
+**Authentication:** Bearer token required
+
+### Example
+
+```bash
+curl https://api.bugwatch.dev/api/v1/billing/usage \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+```
+
+### Response `200 OK`
+
+```json
+{
+  "usage": [
+    {
+      "id": "usg_001",
+      "organization_id": "org_xyz789",
+      "metric": "events",
+      "count": 15234,
+      "period_start": "2025-01-01T00:00:00Z"
+    }
+  ],
+  "period_start": "2025-01-01T00:00:00Z",
+  "period_end": "2025-02-01T00:00:00Z"
+}
+```
+
+---
+
+### GET /billing/usage/history
+
+Get usage records across all billing periods.
+
+**Authentication:** Bearer token required
+
+### Example
+
+```bash
+curl https://api.bugwatch.dev/api/v1/billing/usage/history \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+```
+
+### Response `200 OK`
+
+```json
+{
+  "history": [
+    {
+      "id": "usg_001",
+      "organization_id": "org_xyz789",
+      "metric": "events",
+      "count": 15234,
+      "period_start": "2025-01-01T00:00:00Z"
+    },
+    {
+      "id": "usg_002",
+      "organization_id": "org_xyz789",
+      "metric": "events",
+      "count": 12000,
+      "period_start": "2024-12-01T00:00:00Z"
+    }
+  ]
+}
+```
+
+---
+
+## Invoices
+
+### GET /billing/invoices
+
+List all invoices for the organization.
+
+**Authentication:** Bearer token required
+
+### Example
+
+```bash
+curl https://api.bugwatch.dev/api/v1/billing/invoices \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+```
+
+### Response `200 OK`
+
+```json
+{
+  "invoices": [
+    {
+      "id": "in_xxx",
+      "number": "INV-0001",
+      "amount_due": 3600,
+      "amount_paid": 3600,
+      "currency": "usd",
+      "status": "paid",
+      "created": "2025-01-01T00:00:00Z",
+      "hosted_invoice_url": "https://invoice.stripe.com/i/xxx",
+      "pdf_url": "https://pay.stripe.com/invoice/xxx/pdf"
+    }
+  ]
+}
+```
+
+---
+
+### GET /billing/invoices/:invoice_id
+
+Get details for a specific invoice.
+
+**Authentication:** Bearer token required
+
+### Path Parameters
+
+| Parameter | Type | Description |
+|---|---|---|
+| `invoice_id` | string | Stripe invoice ID |
+
+### Example
+
+```bash
+curl https://api.bugwatch.dev/api/v1/billing/invoices/in_xxx \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+```
+
+---
+
+## Payment Methods
+
+### GET /billing/payment-methods
+
+List all payment methods on file and the default payment method.
+
+**Authentication:** Bearer token required
+
+### Example
+
+```bash
+curl https://api.bugwatch.dev/api/v1/billing/payment-methods \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+```
+
+### Response `200 OK`
+
+```json
+{
+  "payment_methods": [
+    {
+      "id": "pm_xxx",
+      "type": "card",
+      "brand": "visa",
+      "last4": "4242",
+      "exp_month": 12,
+      "exp_year": 2026
+    }
+  ],
+  "default_payment_method": "pm_xxx"
+}
+```
+
+---
+
+### POST /billing/setup-intent
+
+Create a Stripe Setup Intent for adding a new payment method. Returns a `client_secret` for use with Stripe.js.
+
+**Authentication:** Bearer token required
+
+### Response `200 OK`
+
+```json
+{
+  "client_secret": "seti_xxx_secret_xxx"
+}
+```
+
+---
+
+### POST /billing/payment-methods/default
+
+Set the default payment method.
+
+**Authentication:** Bearer token required (owner only)
+
+### Request Body
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `payment_method_id` | string | Yes | Stripe payment method ID |
+
+---
+
+### DELETE /billing/payment-methods/:payment_method_id
+
+Remove a payment method.
+
+**Authentication:** Bearer token required (owner only)
+
+### Example
+
+```bash
+curl -X DELETE https://api.bugwatch.dev/api/v1/billing/payment-methods/pm_xxx \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+```
+
+---
+
+## Coupons
+
+### POST /billing/validate-coupon
+
+Validate a coupon code.
+
+**Authentication:** Bearer token required
+
+### Request Body
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `code` | string | Yes | Coupon or promotion code |
+
+### Example
+
+```bash
+curl -X POST https://api.bugwatch.dev/api/v1/billing/validate-coupon \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "code": "LAUNCH20"
+  }'
+```
+
+### Response `200 OK`
+
+```json
+{
+  "id": "coupon_xxx",
+  "valid": true,
+  "percent_off": 20,
+  "amount_off": null,
+  "currency": null,
+  "duration": "once",
+  "name": "Launch 20% off"
+}
+```
+
+### Errors
+
+| Status | Description |
+|---|---|
+| `400` | Coupon is not valid |
+| `404` | Coupon not found |
+
+---
+
+## Tax IDs
+
+### GET /billing/tax-ids
+
+Get the organization's tax IDs.
+
+**Authentication:** Bearer token required
+
+### Response `200 OK`
+
+```json
+{
+  "tax_ids": [
+    {
+      "id": "txi_xxx",
+      "type_": "eu_vat",
+      "value": "DE123456789",
+      "verification_status": "verified",
+      "country": "DE"
+    }
+  ]
+}
+```
+
+---
+
+### POST /billing/tax-ids
+
+Add a tax ID to the organization.
+
+**Authentication:** Bearer token required (owner only)
+
+### Request Body
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `type` | string | Yes | Tax ID type (e.g., `eu_vat`, `us_ein`, `gb_vat`) |
+| `value` | string | Yes | Tax ID value |
+
+---
+
+## Dashboard
+
+### GET /billing/dashboard
+
+Get a summary of the billing state, including cost, seats, and period information.
+
+**Authentication:** Bearer token required
+
+### Example
+
+```bash
+curl https://api.bugwatch.dev/api/v1/billing/dashboard \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+```
+
+### Response `200 OK`
+
+```json
+{
+  "current_tier": "pro",
+  "monthly_cost_cents": 3600,
+  "seats_used": 3,
+  "seats_total": 5,
+  "billing_period_start": "2025-01-01T00:00:00Z",
+  "billing_period_end": "2025-02-01T00:00:00Z",
+  "is_past_due": false,
+  "cancel_at_period_end": false
+}
+```
+
+The `monthly_cost_cents` is calculated as: Pro = $12/seat/month, Team = $21/seat/month, Free = $0.

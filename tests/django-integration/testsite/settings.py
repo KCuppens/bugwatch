@@ -90,7 +90,7 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 # BUGWATCH CONFIGURATION
 # =============================================================================
 BUGWATCH = {
-    'api_key': os.environ.get('BUGWATCH_API_KEY', 'bw_live_88ce35bd819d4c54875d002fdc0ae8c1'),
+    'api_key': os.environ.get('BUGWATCH_API_KEY', 'bw_live_REPLACE_ME'),
     'endpoint': 'http://127.0.0.1:3000',  # Local Bugwatch server
     'environment': 'development',
     'release': '1.0.0-test',

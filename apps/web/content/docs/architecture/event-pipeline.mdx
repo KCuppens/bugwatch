@@ -1,0 +1,203 @@
+---
+title: Event Pipeline
+description: Follow an error from SDK capture through API ingestion, fingerprinting, issue grouping, alert evaluation, and notification dispatch.
+---
+
+# Event Pipeline
+
+The event pipeline is the core processing path for errors in Bugwatch. It transforms a raw error captured by an SDK into a grouped, searchable issue with alert notifications. The entire pipeline runs synchronously for storage and asynchronously for notifications, with typical ingestion latency under 50ms.
+
+## Pipeline Overview
+
+```
+  ┌──────────────────┐
+  │  1. SDK Capture   │  Error, stack trace, breadcrumbs, context
+  └────────┬─────────┘
+           │
+           ▼
+  ┌──────────────────┐
+  │  2. Transport     │  POST /api/v1/events with API key
+  └────────┬─────────┘
+           │
+           ▼
+  ┌──────────────────┐
+  │  3. Validation    │  API key check, payload schema, rate limiting
+  └────────┬─────────┘
+           │
+           ▼
+  ┌──────────────────┐
+  │  4. Fingerprint   │  SHA-256 hash of type + throw site + normalized message
+  └────────┬─────────┘
+           │
+           ▼
+  ┌──────────────────┐
+  │  5. Issue Grouping│  Atomic upsert: find-or-create by fingerprint
+  └────────┬─────────┘
+           │
+           ▼
+  ┌──────────────────┐
+  │  6. Alert Rules   │  Evaluate new_issue, issue_frequency, monitor_down
+  └────────┬─────────┘
+           │
+           ▼
+  ┌──────────────────┐
+  │  7. Notifications │  Email (SMTP/SES), Slack, Webhooks
+  └──────────────────┘
+```
+
+## Stage 1: SDK Capture
+
+When an error occurs in your application, the Bugwatch SDK captures a rich snapshot:
+
+- **Error message and type** -- e.g., `TypeError: Cannot read properties of undefined`
+- **Stack trace** -- full call stack with file names, line numbers, column numbers, and function names. Each frame is tagged `in_app: true` or `false` to distinguish your code from library code.
+- **Breadcrumbs** -- recent user actions, network requests, and console logs leading up to the error
+- **Context** -- user info, custom tags, extra data, HTTP request details (URL, method, headers)
+- **Environment metadata** -- runtime version, OS, browser, SDK version, platform, release version
+
+## Stage 2: Transport
+
+The SDK serializes the event and sends it to the Bugwatch API:
+
+```http
+POST /api/v1/events
+Authorization: Bearer bw_live_xxxxx
+Content-Type: application/json
+
+{
+  "event_id": "a1b2c3d4-...",
+  "timestamp": "2026-03-15T12:34:56Z",
+  "level": "error",
+  "exception": {
+    "type": "TypeError",
+    "value": "Cannot read properties of undefined",
+    "stacktrace": [...]
+  },
+  "breadcrumbs": [...],
+  "environment": "production",
+  "user": { "id": "usr_123", "email": "..." },
+  "tags": { "version": "2.1.0" }
+}
+```
+
+The SDK retries on transient failures (5xx, network errors) with exponential backoff. Events are dropped silently on 4xx responses to avoid retry storms from invalid payloads.
+
+## Stage 3: Validation
+
+The Rust API server runs three checks in sequence:
+
+1. **API key verification** -- the `Authorization` header must contain a valid `bw_live_*` key that maps to an active project.
+2. **Payload validation** -- the request body must conform to the expected schema. Required fields include `event_id`, `timestamp`, and `level`. The `exception` or `message` field must be present.
+3. **Rate limiting** -- a per-project token bucket algorithm controls ingestion throughput.
+
+### Rate Limiting
+
+Rate limits are enforced per API key using a token bucket algorithm. The bucket refills at a fixed rate per minute, with burst capacity capped at 1,000 tokens.
+
+| Tier | Events per Minute |
+|------|-------------------|
+| Free | 100 |
+| Pro | 1,000 |
+| Team | 5,000 |
+| Enterprise | 10,000 |
+
+<Callout>
+Self-hosted deployments use a single configurable rate limit for all projects, ignoring tier lookups. Set the `rate_limit_per_minute` value in your server configuration.
+</Callout>
+
+When the rate limit is exceeded, the API responds with `429 Too Many Requests` and includes a `Retry-After` header. Inactive buckets are periodically cleaned up to prevent memory growth.
+
+## Stage 4: Fingerprinting
+
+Bugwatch generates a **fingerprint** for each event -- a truncated SHA-256 hash (16 hex characters) that identifies which logical error it represents. Two events with the same fingerprint are considered the same error and are grouped into one issue.
+
+The fingerprint is computed from three components joined by a pipe delimiter:
+
+1. **Exception type** -- e.g., `TypeError`, `HttpError`, `ValueError`
+2. **Top in-app stack frame** -- the filename and function name of the topmost frame where `in_app: true` (the throw site). This means the same error thrown from different call paths (e.g., `handleSubmit` vs `handleRetry`) groups into one issue, because the throw site (`fetchJSON`) is the same.
+3. **Normalized error message** -- the message with dynamic values replaced by wildcards
+
+### Message Normalization
+
+Before hashing, the error message is normalized to strip variable data:
+
+| Pattern | Example | Normalized |
+|---------|---------|------------|
+| Single-quoted strings | `Cannot read property 'id'` | `Cannot read property '*'` |
+| Double-quoted strings | `Key "user_name" missing` | `Key "*" missing` |
+| UUIDs | `Invalid: 550e8400-e29b-...` | `Invalid: *` |
+| IP addresses | `Connection to 192.168.1.1` | `Connection to *` |
+| Numbers | `User 12345 not found` | `User * not found` |
+
+This ensures that `User 12345 not found` and `User 67890 not found` produce the same fingerprint and group into a single issue.
+
+## Stage 5: Issue Grouping
+
+The API performs an **atomic upsert** using PostgreSQL's `INSERT ... ON CONFLICT` to avoid race conditions:
+
+- **New fingerprint:** A new issue is created with `count = 1`, and `first_seen` and `last_seen` set to the current timestamp.
+- **Existing fingerprint:** The existing issue's `count` is incremented, `last_seen` is updated, and the environment is refreshed.
+
+The event payload is then stored in the `events` table, linked to the issue by `issue_id`.
+
+<Callout>
+The upsert uses a unique index on `(project_id, fingerprint)`. This means fingerprints are scoped to each project -- the same error in two different projects creates two separate issues.
+</Callout>
+
+### Issue Status
+
+Issues track their lifecycle with a `status` field:
+
+| Status | Meaning |
+|--------|---------|
+| `unresolved` | Active issue, receiving events |
+| `resolved` | Manually marked as fixed by a team member |
+| `ignored` | Suppressed from the default dashboard view |
+
+When a new event arrives for a `resolved` issue, the issue transitions back to `unresolved` (a regression). The `new_issue` alert rule type can detect this and notify your team.
+
+## Stage 6: Alert Evaluation
+
+After the event is stored, the alerting engine evaluates all active alert rules for the project. Each rule has a `condition` that specifies when it fires:
+
+- **`new_issue`** -- fires when an event creates a brand new issue (count goes from 0 to 1). Can be filtered by error level.
+- **`issue_frequency`** -- fires when an issue's event count within a configured time window exceeds a threshold (e.g., more than 50 events in 10 minutes).
+- **`monitor_down`** -- fires when an uptime monitor transitions to `down` status (evaluated separately by the monitoring subsystem).
+
+Alert rules are connected to one or more notification channels via the `actions` field, which contains an array of channel IDs.
+
+## Stage 7: Notification Dispatch
+
+For each triggered alert rule, Bugwatch dispatches notifications to all attached channels:
+
+- **Email** -- HTML-formatted messages with error details and a direct dashboard link. Supports SMTP for self-hosted deployments and AWS SES for the SaaS platform. Per-issue rate limiting prevents notification floods (configurable cooldown period).
+- **Slack** -- Rich messages posted via incoming webhook URL, containing the error summary, project name, severity, and action links.
+- **Webhook** -- Structured JSON payload with the full alert context, sent via HTTP POST to a configured URL.
+
+<Callout>
+Notification dispatch runs asynchronously so it does not block the event ingestion response. The SDK receives a `202 Accepted` response as soon as the event is stored and the issue is updated.
+</Callout>
+
+All notification attempts are logged in the `alert_logs` table with status (`sent`, `failed`), timestamps, and error messages for debugging delivery issues.
+
+## Data Retention and Cleanup
+
+Bugwatch runs a scheduled retention service that periodically removes old data to keep the database size manageable:
+
+| Data Type | Default Retention |
+|-----------|-------------------|
+| Events | 90 days |
+| Monitor checks | 30 days |
+| Alert logs | 30 days |
+| Server metrics | 7 days |
+
+<Callout>
+Self-hosted deployments can customize the retention period via the `retention_days` configuration option. Setting it to `-1` disables cleanup entirely for unlimited retention.
+</Callout>
+
+Issues themselves are never automatically deleted -- only the raw event payloads are cleaned up. This means your issue list, event counts, and first/last seen timestamps remain intact indefinitely.
+
+## Next Steps
+
+- [Data Model](/docs/architecture/data-model) -- explore the database entities referenced in this pipeline
+- [Alert Rules](/docs/alerting/alert-rules) -- configure what triggers notifications

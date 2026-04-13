@@ -197,7 +197,8 @@ function getEnvConfig() {
 // src/instrumentation.ts
 var DEFAULT_OPTIONS = {
   captureUncaughtExceptions: true,
-  captureUnhandledRejections: true
+  captureUnhandledRejections: true,
+  captureConsoleErrors: true
 };
 var registered = false;
 function reset() {
@@ -246,6 +247,9 @@ function initNode(apiKey, endpoint, options) {
     captureUncaughtExceptions: options.captureUncaughtExceptions,
     captureUnhandledRejections: options.captureUnhandledRejections
   });
+  if (options.captureConsoleErrors !== false) {
+    setupConsoleErrorCapture();
+  }
   if (options.debug || process.env.BUGWATCH_DEBUG === "true") {
     console.log("[Bugwatch] Server-side tracking initialized (Node.js runtime)");
   }
@@ -262,10 +266,99 @@ function initEdge(apiKey, endpoint, options) {
     console.log("[Bugwatch] Server-side tracking initialized (Edge runtime)");
   }
 }
+function setupConsoleErrorCapture() {
+  const originalConsoleError = console.error;
+  let inCapture = false;
+  console.error = (...args) => {
+    originalConsoleError.apply(console, args);
+    if (inCapture) return;
+    inCapture = true;
+    try {
+      const { captureException: captureException2, captureMessage: captureMessage2, getClient: getClient2 } = __require("@bugwatch/core");
+      if (!getClient2()) return;
+      const error = args.find((arg) => arg instanceof Error);
+      if (error) {
+        const message = String(args[0] || "");
+        if (message.startsWith("[Bugwatch]")) return;
+        captureException2(error, {
+          level: "warning",
+          tags: { mechanism: "console.error" },
+          extra: {
+            console_args: args.filter((a) => !(a instanceof Error)).map((a) => {
+              try {
+                return String(a);
+              } catch {
+                return "[unstringifiable]";
+              }
+            }).join(" ") || void 0
+          }
+        });
+      } else {
+        const text = args.map((a) => {
+          try {
+            return String(a);
+          } catch {
+            return "[unstringifiable]";
+          }
+        }).join(" ");
+        if (text.startsWith("[Bugwatch]") || text.startsWith("Warning:") || text.startsWith("\u26A0") || text.includes("Fast Refresh") || text.includes("next-dev.js")) return;
+        const lowerText = text.toLowerCase();
+        if (lowerText.includes("error") || lowerText.includes("failed") || lowerText.includes("exception") || lowerText.includes("timeout") || lowerText.includes("eacces") || lowerText.includes("enoent") || lowerText.includes("econnrefused")) {
+          captureMessage2(text.slice(0, 1e3), "warning");
+        }
+      }
+    } catch {
+    } finally {
+      inCapture = false;
+    }
+  };
+}
 function isRegistered() {
   return registered;
 }
+async function onRequestError(err, request, context) {
+  const { captureException: captureException2, getClient: getClient2 } = await import('@bugwatch/core');
+  captureException2(err, {
+    level: "error",
+    tags: {
+      mechanism: "nextjs.onRequestError",
+      "next.routerKind": context.routerKind,
+      "next.routePath": context.routePath,
+      "next.routeType": context.routeType,
+      ...context.renderSource && { "next.renderSource": context.renderSource },
+      ...err.digest && { "next.digest": err.digest }
+    },
+    request: {
+      url: request.path,
+      method: request.method,
+      headers: sanitizeHeaders2(request.headers)
+    }
+  });
+  const client = getClient2();
+  if (client) {
+    await client.flush().catch(() => {
+    });
+  }
+}
+function sanitizeHeaders2(headers) {
+  const sensitiveKeys = [
+    "authorization",
+    "cookie",
+    "x-api-key",
+    "x-auth-token",
+    "x-csrf-token"
+  ];
+  const sanitized = {};
+  for (const [key, value] of Object.entries(headers)) {
+    if (sensitiveKeys.includes(key.toLowerCase())) {
+      sanitized[key] = "[Filtered]";
+    } else {
+      sanitized[key] = value;
+    }
+  }
+  return sanitized;
+}
 
-export { isRegistered, registerBugwatch, reset };
+export { isRegistered, onRequestError, registerBugwatch, reset };
 //# sourceMappingURL=instrumentation.mjs.map
 //# sourceMappingURL=instrumentation.mjs.map

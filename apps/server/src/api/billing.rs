@@ -4,18 +4,20 @@ use axum::{
     Json,
 };
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "saas")]
 use stripe;
 
+#[cfg(feature = "saas")]
+use crate::billing::StripeClient;
+#[cfg(feature = "saas")]
+use crate::db::models::UsageRecord;
+#[cfg(feature = "saas")]
+use crate::db::repositories::UsageRepository;
 use crate::{
     auth::AuthUser,
-    billing::{get_credit_package, StripeClient},
     db::{
-        models::{Organization, OrganizationMember, UsageRecord},
-        repositories::{
-            CreditPurchaseRepository, OrganizationMemberRepository, OrganizationRepository,
-            UsageRepository, UserRepository,
-        },
-        DbPool,
+        models::{Organization, OrganizationMember},
+        repositories::{OrganizationMemberRepository, OrganizationRepository, UserRepository},
     },
     AppState,
 };
@@ -31,6 +33,7 @@ pub struct OrganizationResponse {
     pub is_owner: bool,
 }
 
+#[cfg(feature = "saas")]
 #[derive(Serialize)]
 pub struct SubscriptionResponse {
     pub tier: String,
@@ -43,26 +46,19 @@ pub struct SubscriptionResponse {
     pub has_stripe: bool,
 }
 
+#[cfg(feature = "saas")]
 #[derive(Serialize)]
 pub struct CheckoutResponse {
     pub checkout_url: String,
 }
 
+#[cfg(feature = "saas")]
 #[derive(Serialize)]
 pub struct PortalResponse {
     pub portal_url: String,
 }
 
-#[derive(Serialize)]
-pub struct CreditsResponse {
-    pub credits: i32,
-}
-
-#[derive(Serialize)]
-pub struct CreditPurchaseResponse {
-    pub checkout_url: String,
-}
-
+#[cfg(feature = "saas")]
 #[derive(Serialize)]
 pub struct UsageResponse {
     pub usage: Vec<UsageRecord>,
@@ -102,6 +98,7 @@ pub struct UpdateMemberRoleRequest {
     pub role: String,
 }
 
+#[cfg(feature = "saas")]
 #[derive(Deserialize)]
 pub struct CreateCheckoutRequest {
     pub tier: String,
@@ -111,19 +108,16 @@ pub struct CreateCheckoutRequest {
     pub cancel_url: String,
 }
 
+#[cfg(feature = "saas")]
 #[derive(Deserialize)]
 pub struct CreatePortalRequest {
     pub return_url: String,
 }
 
+#[cfg(feature = "saas")]
 #[derive(Deserialize)]
 pub struct CancelSubscriptionRequest {
     pub immediately: Option<bool>,
-}
-
-#[derive(Deserialize)]
-pub struct PurchaseCreditsRequest {
-    pub credits: i32,
 }
 
 // ============================================================================
@@ -170,7 +164,8 @@ pub async fn create_organization(
     }
 
     // Generate slug from name (lowercase, hyphenated, with random suffix for uniqueness)
-    let base_slug = req.name
+    let base_slug = req
+        .name
         .to_lowercase()
         .chars()
         .map(|c| if c.is_alphanumeric() { c } else { '-' })
@@ -201,7 +196,10 @@ pub async fn update_organization(
 
     // Only owner can update
     if org.owner_id != user.id {
-        return Err((StatusCode::FORBIDDEN, "Only owner can update organization".to_string()));
+        return Err((
+            StatusCode::FORBIDDEN,
+            "Only owner can update organization".to_string(),
+        ));
     }
 
     let updated = OrganizationRepository::update_name(&state.db, &org.id, &req.name)
@@ -270,11 +268,14 @@ pub async fn add_member(
         .into_iter()
         .find(|m| m.user_id == user.id);
 
-    let can_manage = org.owner_id == user.id
-        || user_member.map(|m| m.role == "admin").unwrap_or(false);
+    let can_manage =
+        org.owner_id == user.id || user_member.map(|m| m.role == "admin").unwrap_or(false);
 
     if !can_manage {
-        return Err((StatusCode::FORBIDDEN, "Only owner or admin can add members".to_string()));
+        return Err((
+            StatusCode::FORBIDDEN,
+            "Only owner or admin can add members".to_string(),
+        ));
     }
 
     // Check seat limit
@@ -329,7 +330,10 @@ pub async fn remove_member(
 
     // Cannot remove owner
     if member_user_id == org.owner_id {
-        return Err((StatusCode::FORBIDDEN, "Cannot remove organization owner".to_string()));
+        return Err((
+            StatusCode::FORBIDDEN,
+            "Cannot remove organization owner".to_string(),
+        ));
     }
 
     // Only owner/admin can remove members
@@ -343,7 +347,10 @@ pub async fn remove_member(
             .unwrap_or(false);
 
     if !can_manage {
-        return Err((StatusCode::FORBIDDEN, "Only owner or admin can remove members".to_string()));
+        return Err((
+            StatusCode::FORBIDDEN,
+            "Only owner or admin can remove members".to_string(),
+        ));
     }
 
     OrganizationMemberRepository::remove(&state.db, &org.id, &member_user_id)
@@ -367,12 +374,18 @@ pub async fn update_member_role(
 
     // Only owner can change roles
     if org.owner_id != user.id {
-        return Err((StatusCode::FORBIDDEN, "Only owner can change member roles".to_string()));
+        return Err((
+            StatusCode::FORBIDDEN,
+            "Only owner can change member roles".to_string(),
+        ));
     }
 
     // Cannot change owner's role
     if member_user_id == org.owner_id {
-        return Err((StatusCode::FORBIDDEN, "Cannot change owner's role".to_string()));
+        return Err((
+            StatusCode::FORBIDDEN,
+            "Cannot change owner's role".to_string(),
+        ));
     }
 
     OrganizationMemberRepository::update_role(&state.db, &org.id, &member_user_id, &req.role)
@@ -402,1102 +415,1097 @@ pub async fn update_member_role(
 }
 
 // ============================================================================
-// Subscription Endpoints
+// Subscription & Billing Endpoints (SaaS only)
 // ============================================================================
+#[cfg(feature = "saas")]
+mod saas_billing {
+    use super::*;
 
-/// Get current subscription details
-pub async fn get_subscription(
-    user: AuthUser,
-    State(state): State<AppState>,
-) -> Result<Json<SubscriptionResponse>, (StatusCode, String)> {
-    let org = OrganizationRepository::find_by_user(&state.db, &user.id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
+    /// Get current subscription details
+    pub async fn get_subscription(
+        user: AuthUser,
+        State(state): State<AppState>,
+    ) -> Result<Json<SubscriptionResponse>, (StatusCode, String)> {
+        let org = OrganizationRepository::find_by_user(&state.db, &user.id)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
 
-    Ok(Json(SubscriptionResponse {
-        tier: org.tier,
-        seats: org.seats,
-        subscription_status: org.subscription_status,
-        billing_interval: org.billing_interval,
-        current_period_start: org.current_period_start,
-        current_period_end: org.current_period_end,
-        cancel_at_period_end: org.cancel_at_period_end,
-        has_stripe: org.stripe_subscription_id.is_some(),
-    }))
-}
-
-/// Create a Stripe checkout session for subscription
-pub async fn create_checkout(
-    user: AuthUser,
-    State(state): State<AppState>,
-    Json(req): Json<CreateCheckoutRequest>,
-) -> Result<Json<CheckoutResponse>, (StatusCode, String)> {
-    let stripe = state
-        .stripe
-        .as_ref()
-        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "Stripe not configured".to_string()))?;
-
-    // Find or create organization for the user
-    let org = match OrganizationRepository::find_by_user(&state.db, &user.id).await {
-        Ok(Some(org)) => org,
-        Ok(None) => {
-            // Auto-create organization for user
-            let u = UserRepository::find_by_id(&state.db, &user.id)
-                .await
-                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-                .ok_or((StatusCode::NOT_FOUND, "User not found".to_string()))?;
-
-            let org_name = u.name.clone().unwrap_or_else(|| {
-                u.email.split('@').next().unwrap_or("My").to_string()
-            });
-            let slug = format!("{}-{}",
-                org_name.to_lowercase().chars().map(|c| if c.is_alphanumeric() { c } else { '-' }).collect::<String>(),
-                &uuid::Uuid::new_v4().to_string()[..8]
-            );
-
-            OrganizationRepository::create(&state.db, &user.id, &format!("{}'s Organization", org_name), &slug)
-                .await
-                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        }
-        Err(e) => return Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
-    };
-
-    // Ensure organization has a Stripe customer
-    let customer_id = match org.stripe_customer_id {
-        Some(id) => id,
-        None => {
-            // Get user email
-            let u = UserRepository::find_by_id(&state.db, &user.id)
-                .await
-                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-                .ok_or((StatusCode::NOT_FOUND, "User not found".to_string()))?;
-
-            let customer = stripe
-                .create_customer(&org.id, &u.email, &org.name)
-                .await
-                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-            // Save customer ID
-            OrganizationRepository::set_stripe_customer(&state.db, &org.id, &customer.id.to_string())
-                .await
-                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-            customer.id.to_string()
-        }
-    };
-
-    let seats = req.seats.unwrap_or(1).max(1) as i64;
-    let annual = req.annual.unwrap_or(false);
-
-    let session = stripe
-        .create_checkout_session(&customer_id, &req.tier, seats, annual, &req.success_url, &req.cancel_url)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    let url = session
-        .url
-        .ok_or((StatusCode::INTERNAL_SERVER_ERROR, "No checkout URL".to_string()))?;
-
-    Ok(Json(CheckoutResponse { checkout_url: url }))
-}
-
-// ============================================================================
-// Checkout Verification
-// ============================================================================
-
-#[derive(Deserialize)]
-pub struct VerifyCheckoutRequest {
-    pub session_id: String,
-}
-
-#[derive(Serialize)]
-pub struct VerifyCheckoutResponse {
-    pub success: bool,
-    pub subscription: Option<SubscriptionResponse>,
-    pub message: String,
-    pub already_processed: bool,
-}
-
-/// Verify a checkout session and update subscription immediately
-pub async fn verify_checkout(
-    user: AuthUser,
-    State(state): State<AppState>,
-    Json(req): Json<VerifyCheckoutRequest>,
-) -> Result<Json<VerifyCheckoutResponse>, (StatusCode, String)> {
-    let stripe = state
-        .stripe
-        .as_ref()
-        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "Stripe not configured".to_string()))?;
-
-    // Get user's organization
-    let org = OrganizationRepository::find_by_user(&state.db, &user.id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
-
-    // Retrieve the checkout session from Stripe
-    let session = stripe
-        .retrieve_checkout_session(&req.session_id)
-        .await
-        .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid session: {}", e)))?;
-
-    // Verify the session belongs to this organization's customer
-    let session_customer_id = session.customer
-        .as_ref()
-        .map(|c| c.id().to_string())
-        .ok_or((StatusCode::BAD_REQUEST, "Session has no customer".to_string()))?;
-
-    if org.stripe_customer_id.as_ref() != Some(&session_customer_id) {
-        return Err((StatusCode::FORBIDDEN, "Session does not belong to your organization".to_string()));
+        Ok(Json(SubscriptionResponse {
+            tier: org.tier,
+            seats: org.seats,
+            subscription_status: org.subscription_status,
+            billing_interval: org.billing_interval,
+            current_period_start: org.current_period_start,
+            current_period_end: org.current_period_end,
+            cancel_at_period_end: org.cancel_at_period_end,
+            has_stripe: org.stripe_subscription_id.is_some(),
+        }))
     }
 
-    // Check session status
-    let status = session.status.as_ref()
-        .map(|s| format!("{:?}", s))
-        .unwrap_or_else(|| "unknown".to_string());
+    /// Create a Stripe checkout session for subscription
+    pub async fn create_checkout(
+        user: AuthUser,
+        State(state): State<AppState>,
+        Json(req): Json<CreateCheckoutRequest>,
+    ) -> Result<Json<CheckoutResponse>, (StatusCode, String)> {
+        let stripe = state.stripe.as_ref().ok_or((
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Stripe not configured".to_string(),
+        ))?;
 
-    match status.as_str() {
-        "Complete" => {
-            // Session completed successfully - extract subscription details
-            let subscription_id = session.subscription
-                .as_ref()
-                .map(|s| s.id().to_string())
-                .ok_or((StatusCode::BAD_REQUEST, "No subscription in completed session".to_string()))?;
+        // Find or create organization for the user
+        let org = match OrganizationRepository::find_by_user(&state.db, &user.id).await {
+            Ok(Some(org)) => org,
+            Ok(None) => {
+                // Auto-create organization for user
+                let u = UserRepository::find_by_id(&state.db, &user.id)
+                    .await
+                    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+                    .ok_or((StatusCode::NOT_FOUND, "User not found".to_string()))?;
 
-            // Check if we've already processed this subscription
-            if org.stripe_subscription_id.as_ref() == Some(&subscription_id) {
-                // Already processed - return current data
-                return Ok(Json(VerifyCheckoutResponse {
-                    success: true,
-                    subscription: Some(SubscriptionResponse {
-                        tier: org.tier,
-                        seats: org.seats,
-                        subscription_status: org.subscription_status,
-                        billing_interval: org.billing_interval,
-                        current_period_start: org.current_period_start,
-                        current_period_end: org.current_period_end,
-                        cancel_at_period_end: org.cancel_at_period_end,
-                        has_stripe: true,
-                    }),
-                    message: "Subscription already active".to_string(),
-                    already_processed: true,
-                }));
-            }
+                let org_name = u
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| u.email.split('@').next().unwrap_or("My").to_string());
+                let slug = format!(
+                    "{}-{}",
+                    org_name
+                        .to_lowercase()
+                        .chars()
+                        .map(|c| if c.is_alphanumeric() { c } else { '-' })
+                        .collect::<String>(),
+                    &uuid::Uuid::new_v4().to_string()[..8]
+                );
 
-            // Get the subscription details from Stripe
-            let stripe_subscription = stripe
-                .retrieve_subscription(&subscription_id)
+                OrganizationRepository::create(
+                    &state.db,
+                    &user.id,
+                    &format!("{}'s Organization", org_name),
+                    &slug,
+                )
                 .await
-                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to retrieve subscription: {}", e)))?;
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            }
+            Err(e) => return Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
+        };
 
-            // Extract tier from the subscription price ID or session metadata
-            let tier = stripe_subscription.items.data.first()
-                .and_then(|item| item.price.as_ref())
-                .and_then(|price| stripe.get_tier_from_price_id(&price.id.to_string()))
-                .or_else(|| extract_tier_from_session(&session))
-                .unwrap_or_else(|| "pro".to_string());
+        // Ensure organization has a Stripe customer
+        let customer_id = match org.stripe_customer_id {
+            Some(id) => id,
+            None => {
+                // Get user email
+                let u = UserRepository::find_by_id(&state.db, &user.id)
+                    .await
+                    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+                    .ok_or((StatusCode::NOT_FOUND, "User not found".to_string()))?;
 
-            // Calculate seats from quantity
-            let seats = stripe_subscription.items.data.first()
-                .and_then(|item| item.quantity)
-                .unwrap_or(1) as i32;
+                let customer = stripe
+                    .create_customer(&org.id, &u.email, &org.name)
+                    .await
+                    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-            // Determine billing interval
-            let billing_interval = stripe_subscription.items.data.first()
-                .and_then(|item| item.price.as_ref())
-                .and_then(|price| price.recurring.as_ref())
-                .map(|r| match r.interval {
-                    stripe::RecurringInterval::Year => "annual".to_string(),
-                    _ => "monthly".to_string(),
-                })
-                .unwrap_or_else(|| "monthly".to_string());
+                // Save customer ID
+                OrganizationRepository::set_stripe_customer(
+                    &state.db,
+                    &org.id,
+                    &customer.id.to_string(),
+                )
+                .await
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-            // Convert timestamps
-            let period_start = chrono::DateTime::from_timestamp(stripe_subscription.current_period_start, 0)
-                .map(|dt| dt.with_timezone(&chrono::Utc));
-            let period_end = chrono::DateTime::from_timestamp(stripe_subscription.current_period_end, 0)
-                .map(|dt| dt.with_timezone(&chrono::Utc));
+                customer.id.to_string()
+            }
+        };
 
-            // Update the organization with subscription details
-            OrganizationRepository::update_subscription(
-                &state.db,
-                &org.id,
-                &tier,
+        let seats = req.seats.unwrap_or(1).max(1) as i64;
+        let annual = req.annual.unwrap_or(false);
+
+        let session = stripe
+            .create_checkout_session(
+                &customer_id,
+                &req.tier,
                 seats,
-                Some(&subscription_id),
-                "active",
-                Some(&billing_interval),
-                period_start,
-                period_end,
-                stripe_subscription.cancel_at_period_end,
+                annual,
+                &req.success_url,
+                &req.cancel_url,
             )
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to update subscription: {}", e)))?;
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-            tracing::info!(
-                "Verified checkout session {} for org {}: tier={}, seats={}, subscription={}",
-                req.session_id, org.id, tier, seats, subscription_id
-            );
+        let url = session.url.ok_or((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "No checkout URL".to_string(),
+        ))?;
 
-            Ok(Json(VerifyCheckoutResponse {
-                success: true,
-                subscription: Some(SubscriptionResponse {
-                    tier: tier.clone(),
-                    seats,
-                    subscription_status: "active".to_string(),
-                    billing_interval: Some(billing_interval),
-                    current_period_start: period_start,
-                    current_period_end: period_end,
-                    cancel_at_period_end: stripe_subscription.cancel_at_period_end,
-                    has_stripe: true,
-                }),
-                message: "Subscription activated successfully".to_string(),
-                already_processed: false,
-            }))
+        Ok(Json(CheckoutResponse { checkout_url: url }))
+    }
+
+    // ============================================================================
+    // Checkout Verification
+    // ============================================================================
+
+    #[derive(Deserialize)]
+    pub struct VerifyCheckoutRequest {
+        pub session_id: String,
+    }
+
+    #[derive(Serialize)]
+    pub struct VerifyCheckoutResponse {
+        pub success: bool,
+        pub subscription: Option<SubscriptionResponse>,
+        pub message: String,
+        pub already_processed: bool,
+    }
+
+    /// Verify a checkout session and update subscription immediately
+    pub async fn verify_checkout(
+        user: AuthUser,
+        State(state): State<AppState>,
+        Json(req): Json<VerifyCheckoutRequest>,
+    ) -> Result<Json<VerifyCheckoutResponse>, (StatusCode, String)> {
+        let stripe = state.stripe.as_ref().ok_or((
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Stripe not configured".to_string(),
+        ))?;
+
+        // Get user's organization
+        let org = OrganizationRepository::find_by_user(&state.db, &user.id)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
+
+        // Retrieve the checkout session from Stripe
+        let session = stripe
+            .retrieve_checkout_session(&req.session_id)
+            .await
+            .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid session: {}", e)))?;
+
+        // Verify the session belongs to this organization's customer
+        let session_customer_id = session
+            .customer
+            .as_ref()
+            .map(|c| c.id().to_string())
+            .ok_or((
+                StatusCode::BAD_REQUEST,
+                "Session has no customer".to_string(),
+            ))?;
+
+        if org.stripe_customer_id.as_ref() != Some(&session_customer_id) {
+            return Err((
+                StatusCode::FORBIDDEN,
+                "Session does not belong to your organization".to_string(),
+            ));
         }
-        "Expired" => {
-            Ok(Json(VerifyCheckoutResponse {
+
+        // Check session status
+        let status = session
+            .status
+            .as_ref()
+            .map(|s| format!("{:?}", s))
+            .unwrap_or_else(|| "unknown".to_string());
+
+        match status.as_str() {
+            "Complete" => {
+                // Session completed successfully - extract subscription details
+                let subscription_id = session
+                    .subscription
+                    .as_ref()
+                    .map(|s| s.id().to_string())
+                    .ok_or((
+                        StatusCode::BAD_REQUEST,
+                        "No subscription in completed session".to_string(),
+                    ))?;
+
+                // Check if we've already processed this subscription
+                if org.stripe_subscription_id.as_ref() == Some(&subscription_id) {
+                    // Already processed - return current data
+                    return Ok(Json(VerifyCheckoutResponse {
+                        success: true,
+                        subscription: Some(SubscriptionResponse {
+                            tier: org.tier,
+                            seats: org.seats,
+                            subscription_status: org.subscription_status,
+                            billing_interval: org.billing_interval,
+                            current_period_start: org.current_period_start,
+                            current_period_end: org.current_period_end,
+                            cancel_at_period_end: org.cancel_at_period_end,
+                            has_stripe: true,
+                        }),
+                        message: "Subscription already active".to_string(),
+                        already_processed: true,
+                    }));
+                }
+
+                // Get the subscription details from Stripe
+                let stripe_subscription = stripe
+                    .retrieve_subscription(&subscription_id)
+                    .await
+                    .map_err(|e| {
+                        (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            format!("Failed to retrieve subscription: {}", e),
+                        )
+                    })?;
+
+                // Extract tier from the subscription price ID or session metadata
+                let tier = stripe_subscription
+                    .items
+                    .data
+                    .first()
+                    .and_then(|item| item.price.as_ref())
+                    .and_then(|price| stripe.get_tier_from_price_id(&price.id.to_string()))
+                    .or_else(|| extract_tier_from_session(&session))
+                    .unwrap_or_else(|| "pro".to_string());
+
+                // Calculate seats from quantity
+                let seats = stripe_subscription
+                    .items
+                    .data
+                    .first()
+                    .and_then(|item| item.quantity)
+                    .unwrap_or(1) as i32;
+
+                // Determine billing interval
+                let billing_interval = stripe_subscription
+                    .items
+                    .data
+                    .first()
+                    .and_then(|item| item.price.as_ref())
+                    .and_then(|price| price.recurring.as_ref())
+                    .map(|r| match r.interval {
+                        stripe::RecurringInterval::Year => "annual".to_string(),
+                        _ => "monthly".to_string(),
+                    })
+                    .unwrap_or_else(|| "monthly".to_string());
+
+                // Convert timestamps
+                let period_start =
+                    chrono::DateTime::from_timestamp(stripe_subscription.current_period_start, 0)
+                        .map(|dt| dt.with_timezone(&chrono::Utc));
+                let period_end =
+                    chrono::DateTime::from_timestamp(stripe_subscription.current_period_end, 0)
+                        .map(|dt| dt.with_timezone(&chrono::Utc));
+
+                // Update the organization with subscription details
+                OrganizationRepository::update_subscription(
+                    &state.db,
+                    &org.id,
+                    &tier,
+                    seats,
+                    Some(&subscription_id),
+                    "active",
+                    Some(&billing_interval),
+                    period_start,
+                    period_end,
+                    stripe_subscription.cancel_at_period_end,
+                )
+                .await
+                .map_err(|e| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("Failed to update subscription: {}", e),
+                    )
+                })?;
+
+                tracing::info!(
+                    "Verified checkout session {} for org {}: tier={}, seats={}, subscription={}",
+                    req.session_id,
+                    org.id,
+                    tier,
+                    seats,
+                    subscription_id
+                );
+
+                Ok(Json(VerifyCheckoutResponse {
+                    success: true,
+                    subscription: Some(SubscriptionResponse {
+                        tier: tier.clone(),
+                        seats,
+                        subscription_status: "active".to_string(),
+                        billing_interval: Some(billing_interval),
+                        current_period_start: period_start,
+                        current_period_end: period_end,
+                        cancel_at_period_end: stripe_subscription.cancel_at_period_end,
+                        has_stripe: true,
+                    }),
+                    message: "Subscription activated successfully".to_string(),
+                    already_processed: false,
+                }))
+            }
+            "Expired" => Ok(Json(VerifyCheckoutResponse {
                 success: false,
                 subscription: None,
                 message: "Checkout session has expired".to_string(),
                 already_processed: false,
-            }))
-        }
-        "Open" => {
-            Ok(Json(VerifyCheckoutResponse {
+            })),
+            "Open" => Ok(Json(VerifyCheckoutResponse {
                 success: false,
                 subscription: None,
                 message: "Checkout is still in progress".to_string(),
                 already_processed: false,
-            }))
-        }
-        _ => {
-            Ok(Json(VerifyCheckoutResponse {
+            })),
+            _ => Ok(Json(VerifyCheckoutResponse {
                 success: false,
                 subscription: None,
                 message: format!("Unknown session status: {}", status),
                 already_processed: false,
-            }))
-        }
-    }
-}
-
-/// Extract tier from checkout session based on price ID or metadata
-fn extract_tier_from_session(session: &stripe::CheckoutSession) -> Option<String> {
-    // Try to get from metadata first
-    if let Some(metadata) = &session.metadata {
-        if let Some(tier) = metadata.get("tier") {
-            return Some(tier.clone());
+            })),
         }
     }
 
-    // Otherwise, we'll default to determining by price later in the webhook
-    // For now, return None and let the caller default to "pro"
-    None
-}
-
-/// Create a Stripe billing portal session
-pub async fn create_portal(
-    user: AuthUser,
-    State(state): State<AppState>,
-    Json(req): Json<CreatePortalRequest>,
-) -> Result<Json<PortalResponse>, (StatusCode, String)> {
-    let stripe = state
-        .stripe
-        .as_ref()
-        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "Stripe not configured".to_string()))?;
-
-    let org = OrganizationRepository::find_by_user(&state.db, &user.id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
-
-    let customer_id = org.stripe_customer_id.ok_or((
-        StatusCode::BAD_REQUEST,
-        "No Stripe customer. Please upgrade first.".to_string(),
-    ))?;
-
-    let session = stripe
-        .create_billing_portal_session(&customer_id, &req.return_url)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    Ok(Json(PortalResponse {
-        portal_url: session.url,
-    }))
-}
-
-/// Cancel subscription
-pub async fn cancel_subscription(
-    user: AuthUser,
-    State(state): State<AppState>,
-    Json(req): Json<CancelSubscriptionRequest>,
-) -> Result<StatusCode, (StatusCode, String)> {
-    let stripe = state
-        .stripe
-        .as_ref()
-        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "Stripe not configured".to_string()))?;
-
-    let org = OrganizationRepository::find_by_user(&state.db, &user.id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
-
-    // Only owner can cancel
-    if org.owner_id != user.id {
-        return Err((StatusCode::FORBIDDEN, "Only owner can cancel subscription".to_string()));
-    }
-
-    let subscription_id = org.stripe_subscription_id.ok_or((
-        StatusCode::BAD_REQUEST,
-        "No active subscription".to_string(),
-    ))?;
-
-    stripe
-        .cancel_subscription(&subscription_id, req.immediately.unwrap_or(false))
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    Ok(StatusCode::NO_CONTENT)
-}
-
-// ============================================================================
-// Credits Endpoints
-// ============================================================================
-
-/// Get user's credit balance
-pub async fn get_credits(
-    user: AuthUser,
-    State(state): State<AppState>,
-) -> Result<Json<CreditsResponse>, (StatusCode, String)> {
-    let u = UserRepository::find_by_id(&state.db, &user.id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or((StatusCode::NOT_FOUND, "User not found".to_string()))?;
-
-    Ok(Json(CreditsResponse { credits: u.credits }))
-}
-
-/// Purchase credits
-pub async fn purchase_credits(
-    user: AuthUser,
-    State(state): State<AppState>,
-    Json(req): Json<PurchaseCreditsRequest>,
-) -> Result<Json<CreditPurchaseResponse>, (StatusCode, String)> {
-    let stripe = state
-        .stripe
-        .as_ref()
-        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "Stripe not configured".to_string()))?;
-
-    let package = get_credit_package(req.credits).ok_or((
-        StatusCode::BAD_REQUEST,
-        format!("Invalid credit package: {}", req.credits),
-    ))?;
-
-    let org = OrganizationRepository::find_by_user(&state.db, &user.id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
-
-    let customer_id = match org.stripe_customer_id {
-        Some(id) => id,
-        None => {
-            let u = UserRepository::find_by_id(&state.db, &user.id)
-                .await
-                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-                .ok_or((StatusCode::NOT_FOUND, "User not found".to_string()))?;
-
-            let customer = stripe
-                .create_customer(&org.id, &u.email, &org.name)
-                .await
-                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-            OrganizationRepository::set_stripe_customer(&state.db, &org.id, &customer.id.to_string())
-                .await
-                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-            customer.id.to_string()
+    /// Extract tier from checkout session based on price ID or metadata
+    fn extract_tier_from_session(session: &stripe::CheckoutSession) -> Option<String> {
+        // Try to get from metadata first
+        if let Some(metadata) = &session.metadata {
+            if let Some(tier) = metadata.get("tier") {
+                return Some(tier.clone());
+            }
         }
-    };
 
-    // Create purchase record
-    let purchase = CreditPurchaseRepository::create(
-        &state.db,
-        &user.id,
-        package.credits,
-        package.price_cents,
-    )
-    .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        // Otherwise, we'll default to determining by price later in the webhook
+        // For now, return None and let the caller default to "pro"
+        None
+    }
 
-    // Get the app URL for success/cancel redirects
-    let app_url = state.config.app_url.clone();
-    let success_url = format!("{}/dashboard/settings?tab=billing&success=true&purchase_id={}", app_url, purchase.id);
-    let cancel_url = format!("{}/dashboard/settings?tab=billing&canceled=true", app_url);
+    /// Create a Stripe billing portal session
+    pub async fn create_portal(
+        user: AuthUser,
+        State(state): State<AppState>,
+        Json(req): Json<CreatePortalRequest>,
+    ) -> Result<Json<PortalResponse>, (StatusCode, String)> {
+        let stripe = state.stripe.as_ref().ok_or((
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Stripe not configured".to_string(),
+        ))?;
 
-    // Create checkout session
-    let session = stripe
-        .create_credit_checkout_session(&customer_id, package, &purchase.id, &success_url, &cancel_url)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        let org = OrganizationRepository::find_by_user(&state.db, &user.id)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
 
-    // Store checkout session ID
-    CreditPurchaseRepository::set_payment_intent(&state.db, &purchase.id, &session.id.to_string())
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        let customer_id = org.stripe_customer_id.ok_or((
+            StatusCode::BAD_REQUEST,
+            "No Stripe customer. Please upgrade first.".to_string(),
+        ))?;
 
-    let checkout_url = session.url.ok_or((
-        StatusCode::INTERNAL_SERVER_ERROR,
-        "No checkout URL".to_string(),
-    ))?;
+        let session = stripe
+            .create_billing_portal_session(&customer_id, &req.return_url)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    Ok(Json(CreditPurchaseResponse { checkout_url }))
-}
+        Ok(Json(PortalResponse {
+            portal_url: session.url,
+        }))
+    }
 
-// ============================================================================
-// Usage Endpoints
-// ============================================================================
+    /// Cancel subscription
+    pub async fn cancel_subscription(
+        user: AuthUser,
+        State(state): State<AppState>,
+        Json(req): Json<CancelSubscriptionRequest>,
+    ) -> Result<StatusCode, (StatusCode, String)> {
+        let stripe = state.stripe.as_ref().ok_or((
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Stripe not configured".to_string(),
+        ))?;
 
-/// Get current billing period usage
-pub async fn get_usage(
-    user: AuthUser,
-    State(state): State<AppState>,
-) -> Result<Json<UsageResponse>, (StatusCode, String)> {
-    let org = OrganizationRepository::find_by_user(&state.db, &user.id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
+        let org = OrganizationRepository::find_by_user(&state.db, &user.id)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
 
-    // Determine current period (from org or default to current month)
-    let now = chrono::Utc::now();
-    let (period_start, period_end) = match (&org.current_period_start, &org.current_period_end) {
-        (Some(start), Some(end)) => (*start, *end),
-        _ => {
-            // Default to current calendar month - use beginning of current month
-            use chrono::{Datelike, TimeZone};
-            let start = chrono::Utc.with_ymd_and_hms(now.year(), now.month(), 1, 0, 0, 0)
-                .single()
-                .unwrap_or(now);
-            let end = start + chrono::Duration::days(30);
-            (start, end)
+        // Only owner can cancel
+        if org.owner_id != user.id {
+            return Err((
+                StatusCode::FORBIDDEN,
+                "Only owner can cancel subscription".to_string(),
+            ));
         }
-    };
 
-    let usage = UsageRepository::list_current(&state.db, &org.id, period_start)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        let subscription_id = org.stripe_subscription_id.ok_or((
+            StatusCode::BAD_REQUEST,
+            "No active subscription".to_string(),
+        ))?;
 
-    Ok(Json(UsageResponse {
-        usage,
-        period_start,
-        period_end,
-    }))
-}
+        stripe
+            .cancel_subscription(&subscription_id, req.immediately.unwrap_or(false))
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-// ============================================================================
-// Plan Change (Upgrade/Downgrade) Endpoints
-// ============================================================================
-
-#[derive(Deserialize)]
-pub struct ChangePlanRequest {
-    pub tier: String,
-    pub seats: Option<i32>,
-    pub annual: Option<bool>,
-}
-
-#[derive(Serialize)]
-pub struct ChangePlanResponse {
-    pub success: bool,
-    pub tier: String,
-    pub seats: i32,
-    pub message: String,
-}
-
-#[derive(Serialize)]
-pub struct ProrationPreviewResponse {
-    pub current_amount_cents: i64,
-    pub new_amount_cents: i64,
-    pub proration_amount_cents: i64,
-    pub immediate_charge: bool,
-}
-
-/// Change subscription plan (upgrade or downgrade)
-pub async fn change_plan(
-    user: AuthUser,
-    State(state): State<AppState>,
-    Json(req): Json<ChangePlanRequest>,
-) -> Result<Json<ChangePlanResponse>, (StatusCode, String)> {
-    let stripe = state.stripe.as_ref().ok_or((
-        StatusCode::SERVICE_UNAVAILABLE,
-        "Stripe not configured".to_string(),
-    ))?;
-
-    let org = OrganizationRepository::find_by_user(&state.db, &user.id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
-
-    // Check if user is owner
-    if org.owner_id != user.id {
-        return Err((StatusCode::FORBIDDEN, "Only owner can change plan".to_string()));
+        Ok(StatusCode::NO_CONTENT)
     }
 
-    // Need an active subscription
-    let subscription_id = org.stripe_subscription_id.as_ref().ok_or((
-        StatusCode::BAD_REQUEST,
-        "No active subscription to modify".to_string(),
-    ))?;
+    // ============================================================================
+    // Usage Endpoints
+    // ============================================================================
 
-    let seats = req.seats.unwrap_or(org.seats) as i64;
-    let annual = req.annual.unwrap_or(org.billing_interval.as_deref() == Some("annual"));
+    /// Get current billing period usage
+    pub async fn get_usage(
+        user: AuthUser,
+        State(state): State<AppState>,
+    ) -> Result<Json<UsageResponse>, (StatusCode, String)> {
+        let org = OrganizationRepository::find_by_user(&state.db, &user.id)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
 
-    // Update subscription in Stripe
-    let subscription = stripe
-        .update_subscription_tier(subscription_id, &req.tier, annual, seats)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        // Determine current period (from org or default to current month)
+        let now = chrono::Utc::now();
+        let (period_start, period_end) = match (&org.current_period_start, &org.current_period_end)
+        {
+            (Some(start), Some(end)) => (*start, *end),
+            _ => {
+                // Default to current calendar month - use beginning of current month
+                use chrono::{Datelike, TimeZone};
+                let start = chrono::Utc
+                    .with_ymd_and_hms(now.year(), now.month(), 1, 0, 0, 0)
+                    .single()
+                    .unwrap_or(now);
+                let end = start + chrono::Duration::days(30);
+                (start, end)
+            }
+        };
 
-    // Update local database
-    let period_start = chrono::DateTime::from_timestamp(subscription.current_period_start, 0)
-        .map(|dt| dt.with_timezone(&chrono::Utc));
-    let period_end = chrono::DateTime::from_timestamp(subscription.current_period_end, 0)
-        .map(|dt| dt.with_timezone(&chrono::Utc));
+        let usage = UsageRepository::list_current(&state.db, &org.id, period_start)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    OrganizationRepository::update_subscription(
-        &state.db,
-        &org.id,
-        &req.tier,
-        seats as i32,
-        Some(&subscription.id.to_string()),
-        "active",
-        Some(if annual { "annual" } else { "monthly" }),
-        period_start,
-        period_end,
-        subscription.cancel_at_period_end,
-    )
-    .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    Ok(Json(ChangePlanResponse {
-        success: true,
-        tier: req.tier,
-        seats: seats as i32,
-        message: "Plan updated successfully".to_string(),
-    }))
-}
-
-/// Preview proration for plan change
-pub async fn preview_plan_change(
-    user: AuthUser,
-    State(state): State<AppState>,
-    Json(req): Json<ChangePlanRequest>,
-) -> Result<Json<ProrationPreviewResponse>, (StatusCode, String)> {
-    let stripe = state.stripe.as_ref().ok_or((
-        StatusCode::SERVICE_UNAVAILABLE,
-        "Stripe not configured".to_string(),
-    ))?;
-
-    let org = OrganizationRepository::find_by_user(&state.db, &user.id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
-
-    let subscription_id = org.stripe_subscription_id.as_ref().ok_or((
-        StatusCode::BAD_REQUEST,
-        "No active subscription".to_string(),
-    ))?;
-
-    let seats = req.seats.unwrap_or(org.seats) as i64;
-    let annual = req.annual.unwrap_or(false);
-
-    let preview = stripe
-        .preview_proration(subscription_id, &req.tier, annual, seats)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    Ok(Json(ProrationPreviewResponse {
-        current_amount_cents: preview.current_amount_cents,
-        new_amount_cents: preview.new_amount_cents,
-        proration_amount_cents: preview.proration_amount_cents,
-        immediate_charge: preview.immediate_charge,
-    }))
-}
-
-/// Update seat count
-#[derive(Deserialize)]
-pub struct UpdateSeatsRequest {
-    pub seats: i32,
-}
-
-pub async fn update_seats(
-    user: AuthUser,
-    State(state): State<AppState>,
-    Json(req): Json<UpdateSeatsRequest>,
-) -> Result<Json<ChangePlanResponse>, (StatusCode, String)> {
-    let stripe = state.stripe.as_ref().ok_or((
-        StatusCode::SERVICE_UNAVAILABLE,
-        "Stripe not configured".to_string(),
-    ))?;
-
-    let org = OrganizationRepository::find_by_user(&state.db, &user.id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
-
-    if org.owner_id != user.id {
-        return Err((StatusCode::FORBIDDEN, "Only owner can update seats".to_string()));
+        Ok(Json(UsageResponse {
+            usage,
+            period_start,
+            period_end,
+        }))
     }
 
-    let subscription_id = org.stripe_subscription_id.as_ref().ok_or((
-        StatusCode::BAD_REQUEST,
-        "No active subscription".to_string(),
-    ))?;
+    // ============================================================================
+    // Plan Change (Upgrade/Downgrade) Endpoints
+    // ============================================================================
 
-    // Update in Stripe
-    stripe
-        .update_subscription_seats(subscription_id, req.seats as i64)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    // Update local database
-    OrganizationRepository::update_seats(&state.db, &org.id, req.seats)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    Ok(Json(ChangePlanResponse {
-        success: true,
-        tier: org.tier,
-        seats: req.seats,
-        message: "Seats updated successfully".to_string(),
-    }))
-}
-
-// ============================================================================
-// Invoice Endpoints
-// ============================================================================
-
-use crate::billing::stripe::{InvoiceSummary, InvoiceDetail};
-
-#[derive(Serialize)]
-pub struct InvoicesResponse {
-    pub invoices: Vec<InvoiceSummary>,
-}
-
-/// List all invoices
-pub async fn list_invoices(
-    user: AuthUser,
-    State(state): State<AppState>,
-) -> Result<Json<InvoicesResponse>, (StatusCode, String)> {
-    let stripe = state.stripe.as_ref().ok_or((
-        StatusCode::SERVICE_UNAVAILABLE,
-        "Stripe not configured".to_string(),
-    ))?;
-
-    let org = OrganizationRepository::find_by_user(&state.db, &user.id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
-
-    let customer_id = org.stripe_customer_id.as_ref().ok_or((
-        StatusCode::NOT_FOUND,
-        "No billing history".to_string(),
-    ))?;
-
-    let invoices = stripe
-        .list_invoices(customer_id, Some(100))
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    Ok(Json(InvoicesResponse { invoices }))
-}
-
-/// Get single invoice details
-pub async fn get_invoice(
-    user: AuthUser,
-    State(state): State<AppState>,
-    Path(invoice_id): Path<String>,
-) -> Result<Json<InvoiceDetail>, (StatusCode, String)> {
-    let stripe = state.stripe.as_ref().ok_or((
-        StatusCode::SERVICE_UNAVAILABLE,
-        "Stripe not configured".to_string(),
-    ))?;
-
-    // Verify user has an org (access control)
-    let _org = OrganizationRepository::find_by_user(&state.db, &user.id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
-
-    let invoice = stripe
-        .get_invoice(&invoice_id)
-        .await
-        .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
-
-    Ok(Json(invoice))
-}
-
-// ============================================================================
-// Payment Method Endpoints
-// ============================================================================
-
-use crate::billing::stripe::PaymentMethodSummary;
-
-#[derive(Serialize)]
-pub struct PaymentMethodsResponse {
-    pub payment_methods: Vec<PaymentMethodSummary>,
-    pub default_payment_method: Option<String>,
-}
-
-#[derive(Serialize)]
-pub struct SetupIntentResponse {
-    pub client_secret: String,
-}
-
-#[derive(Deserialize)]
-pub struct SetDefaultPaymentMethodRequest {
-    pub payment_method_id: String,
-}
-
-/// List payment methods
-pub async fn list_payment_methods(
-    user: AuthUser,
-    State(state): State<AppState>,
-) -> Result<Json<PaymentMethodsResponse>, (StatusCode, String)> {
-    let stripe = state.stripe.as_ref().ok_or((
-        StatusCode::SERVICE_UNAVAILABLE,
-        "Stripe not configured".to_string(),
-    ))?;
-
-    let org = OrganizationRepository::find_by_user(&state.db, &user.id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
-
-    let customer_id = org.stripe_customer_id.as_ref().ok_or((
-        StatusCode::NOT_FOUND,
-        "No payment methods".to_string(),
-    ))?;
-
-    let methods = stripe
-        .list_payment_methods(customer_id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    // Get default payment method from customer
-    let customer = stripe
-        .get_customer(customer_id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    let default_pm = customer.invoice_settings
-        .and_then(|s| s.default_payment_method)
-        .map(|pm| pm.id().to_string());
-
-    Ok(Json(PaymentMethodsResponse {
-        payment_methods: methods,
-        default_payment_method: default_pm,
-    }))
-}
-
-/// Create setup intent for adding new payment method
-pub async fn create_setup_intent(
-    user: AuthUser,
-    State(state): State<AppState>,
-) -> Result<Json<SetupIntentResponse>, (StatusCode, String)> {
-    let stripe = state.stripe.as_ref().ok_or((
-        StatusCode::SERVICE_UNAVAILABLE,
-        "Stripe not configured".to_string(),
-    ))?;
-
-    let org = OrganizationRepository::find_by_user(&state.db, &user.id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
-
-    let customer_id = org.stripe_customer_id.as_ref().ok_or((
-        StatusCode::BAD_REQUEST,
-        "No Stripe customer".to_string(),
-    ))?;
-
-    let intent = stripe
-        .create_setup_intent(customer_id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    let client_secret = intent.client_secret.ok_or((
-        StatusCode::INTERNAL_SERVER_ERROR,
-        "No client secret".to_string(),
-    ))?;
-
-    Ok(Json(SetupIntentResponse { client_secret }))
-}
-
-/// Set default payment method
-pub async fn set_default_payment_method(
-    user: AuthUser,
-    State(state): State<AppState>,
-    Json(req): Json<SetDefaultPaymentMethodRequest>,
-) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let stripe = state.stripe.as_ref().ok_or((
-        StatusCode::SERVICE_UNAVAILABLE,
-        "Stripe not configured".to_string(),
-    ))?;
-
-    let org = OrganizationRepository::find_by_user(&state.db, &user.id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
-
-    if org.owner_id != user.id {
-        return Err((StatusCode::FORBIDDEN, "Only owner can update payment methods".to_string()));
+    #[derive(Deserialize)]
+    pub struct ChangePlanRequest {
+        pub tier: String,
+        pub seats: Option<i32>,
+        pub annual: Option<bool>,
     }
 
-    let customer_id = org.stripe_customer_id.as_ref().ok_or((
-        StatusCode::BAD_REQUEST,
-        "No Stripe customer".to_string(),
-    ))?;
-
-    stripe
-        .set_default_payment_method(customer_id, &req.payment_method_id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    Ok(Json(serde_json::json!({ "success": true })))
-}
-
-/// Delete payment method
-pub async fn delete_payment_method(
-    user: AuthUser,
-    State(state): State<AppState>,
-    Path(payment_method_id): Path<String>,
-) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let stripe = state.stripe.as_ref().ok_or((
-        StatusCode::SERVICE_UNAVAILABLE,
-        "Stripe not configured".to_string(),
-    ))?;
-
-    let org = OrganizationRepository::find_by_user(&state.db, &user.id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
-
-    if org.owner_id != user.id {
-        return Err((StatusCode::FORBIDDEN, "Only owner can delete payment methods".to_string()));
+    #[derive(Serialize)]
+    pub struct ChangePlanResponse {
+        pub success: bool,
+        pub tier: String,
+        pub seats: i32,
+        pub message: String,
     }
 
-    stripe
-        .detach_payment_method(&payment_method_id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    Ok(Json(serde_json::json!({ "success": true })))
-}
-
-// ============================================================================
-// Coupon Validation Endpoints
-// ============================================================================
-
-use crate::billing::stripe::CouponInfo;
-
-#[derive(Deserialize)]
-pub struct ValidateCouponRequest {
-    pub code: String,
-}
-
-/// Validate a coupon code
-pub async fn validate_coupon(
-    user: AuthUser,
-    State(state): State<AppState>,
-    Json(req): Json<ValidateCouponRequest>,
-) -> Result<Json<CouponInfo>, (StatusCode, String)> {
-    let stripe = state.stripe.as_ref().ok_or((
-        StatusCode::SERVICE_UNAVAILABLE,
-        "Stripe not configured".to_string(),
-    ))?;
-
-    // Verify user exists (basic auth check)
-    let _org = OrganizationRepository::find_by_user(&state.db, &user.id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    let coupon = stripe
-        .validate_coupon(&req.code)
-        .await
-        .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
-
-    if !coupon.valid {
-        return Err((StatusCode::BAD_REQUEST, "Coupon is not valid".to_string()));
+    #[derive(Serialize)]
+    pub struct ProrationPreviewResponse {
+        pub current_amount_cents: i64,
+        pub new_amount_cents: i64,
+        pub proration_amount_cents: i64,
+        pub immediate_charge: bool,
     }
 
-    Ok(Json(coupon))
-}
+    /// Change subscription plan (upgrade or downgrade)
+    pub async fn change_plan(
+        user: AuthUser,
+        State(state): State<AppState>,
+        Json(req): Json<ChangePlanRequest>,
+    ) -> Result<Json<ChangePlanResponse>, (StatusCode, String)> {
+        let stripe = state.stripe.as_ref().ok_or((
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Stripe not configured".to_string(),
+        ))?;
 
-// ============================================================================
-// Tax ID Endpoints
-// ============================================================================
+        let org = OrganizationRepository::find_by_user(&state.db, &user.id)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
 
-use crate::billing::stripe::TaxIdInfo;
+        // Check if user is owner
+        if org.owner_id != user.id {
+            return Err((
+                StatusCode::FORBIDDEN,
+                "Only owner can change plan".to_string(),
+            ));
+        }
 
-#[derive(Serialize)]
-pub struct TaxIdsResponse {
-    pub tax_ids: Vec<TaxIdInfo>,
-}
+        // Need an active subscription
+        let subscription_id = org.stripe_subscription_id.as_ref().ok_or((
+            StatusCode::BAD_REQUEST,
+            "No active subscription to modify".to_string(),
+        ))?;
 
-#[derive(Deserialize)]
-pub struct AddTaxIdRequest {
-    #[serde(rename = "type")]
-    pub type_: String,
-    pub value: String,
-}
+        let seats = req.seats.unwrap_or(org.seats) as i64;
+        let annual = req
+            .annual
+            .unwrap_or(org.billing_interval.as_deref() == Some("annual"));
 
-/// Get tax IDs
-pub async fn get_tax_ids(
-    user: AuthUser,
-    State(state): State<AppState>,
-) -> Result<Json<TaxIdsResponse>, (StatusCode, String)> {
-    let stripe = state.stripe.as_ref().ok_or((
-        StatusCode::SERVICE_UNAVAILABLE,
-        "Stripe not configured".to_string(),
-    ))?;
+        // Update subscription in Stripe
+        let subscription = stripe
+            .update_subscription_tier(subscription_id, &req.tier, annual, seats)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    let org = OrganizationRepository::find_by_user(&state.db, &user.id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
+        // Update local database
+        let period_start = chrono::DateTime::from_timestamp(subscription.current_period_start, 0)
+            .map(|dt| dt.with_timezone(&chrono::Utc));
+        let period_end = chrono::DateTime::from_timestamp(subscription.current_period_end, 0)
+            .map(|dt| dt.with_timezone(&chrono::Utc));
 
-    let customer_id = org.stripe_customer_id.as_ref().ok_or((
-        StatusCode::NOT_FOUND,
-        "No billing setup".to_string(),
-    ))?;
-
-    let tax_ids = stripe
-        .list_tax_ids(customer_id)
+        OrganizationRepository::update_subscription(
+            &state.db,
+            &org.id,
+            &req.tier,
+            seats as i32,
+            Some(&subscription.id.to_string()),
+            "active",
+            Some(if annual { "annual" } else { "monthly" }),
+            period_start,
+            period_end,
+            subscription.cancel_at_period_end,
+        )
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    Ok(Json(TaxIdsResponse { tax_ids }))
-}
-
-/// Add tax ID
-pub async fn add_tax_id(
-    user: AuthUser,
-    State(state): State<AppState>,
-    Json(req): Json<AddTaxIdRequest>,
-) -> Result<Json<TaxIdInfo>, (StatusCode, String)> {
-    let stripe = state.stripe.as_ref().ok_or((
-        StatusCode::SERVICE_UNAVAILABLE,
-        "Stripe not configured".to_string(),
-    ))?;
-
-    let org = OrganizationRepository::find_by_user(&state.db, &user.id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
-
-    if org.owner_id != user.id {
-        return Err((StatusCode::FORBIDDEN, "Only owner can add tax ID".to_string()));
+        Ok(Json(ChangePlanResponse {
+            success: true,
+            tier: req.tier,
+            seats: seats as i32,
+            message: "Plan updated successfully".to_string(),
+        }))
     }
 
-    let customer_id = org.stripe_customer_id.as_ref().ok_or((
-        StatusCode::BAD_REQUEST,
-        "No Stripe customer".to_string(),
-    ))?;
+    /// Preview proration for plan change
+    pub async fn preview_plan_change(
+        user: AuthUser,
+        State(state): State<AppState>,
+        Json(req): Json<ChangePlanRequest>,
+    ) -> Result<Json<ProrationPreviewResponse>, (StatusCode, String)> {
+        let stripe = state.stripe.as_ref().ok_or((
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Stripe not configured".to_string(),
+        ))?;
 
-    let tax_id = stripe
-        .add_tax_id(customer_id, &req.type_, &req.value)
-        .await
-        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+        let org = OrganizationRepository::find_by_user(&state.db, &user.id)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
 
-    // Also store in local database
-    OrganizationRepository::update_tax_info(&state.db, &org.id, Some(&req.value), None, None)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        let subscription_id = org.stripe_subscription_id.as_ref().ok_or((
+            StatusCode::BAD_REQUEST,
+            "No active subscription".to_string(),
+        ))?;
 
-    Ok(Json(TaxIdInfo {
-        id: tax_id.id.to_string(),
-        type_: format!("{:?}", tax_id.type_),
-        value: tax_id.value.unwrap_or_default(),
-        verification_status: tax_id.verification.as_ref().map(|v| format!("{:?}", v.status)),
-        country: tax_id.country,
-    }))
-}
+        let seats = req.seats.unwrap_or(org.seats) as i64;
+        let annual = req.annual.unwrap_or(false);
 
-// ============================================================================
-// Billing Dashboard Endpoints
-// ============================================================================
+        let preview = stripe
+            .preview_proration(subscription_id, &req.tier, annual, seats)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-#[derive(Serialize)]
-pub struct BillingDashboardResponse {
-    pub current_tier: String,
-    pub monthly_cost_cents: i64,
-    pub seats_used: i32,
-    pub seats_total: i32,
-    pub billing_period_start: Option<chrono::DateTime<chrono::Utc>>,
-    pub billing_period_end: Option<chrono::DateTime<chrono::Utc>>,
-    pub is_past_due: bool,
-    pub cancel_at_period_end: bool,
-}
+        Ok(Json(ProrationPreviewResponse {
+            current_amount_cents: preview.current_amount_cents,
+            new_amount_cents: preview.new_amount_cents,
+            proration_amount_cents: preview.proration_amount_cents,
+            immediate_charge: preview.immediate_charge,
+        }))
+    }
 
-/// Get billing dashboard summary
-pub async fn get_billing_dashboard(
-    user: AuthUser,
-    State(state): State<AppState>,
-) -> Result<Json<BillingDashboardResponse>, (StatusCode, String)> {
-    let org = OrganizationRepository::find_by_user(&state.db, &user.id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
+    /// Update seat count
+    #[derive(Deserialize)]
+    pub struct UpdateSeatsRequest {
+        pub seats: i32,
+    }
 
-    let members_count = OrganizationMemberRepository::count(&state.db, &org.id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    pub async fn update_seats(
+        user: AuthUser,
+        State(state): State<AppState>,
+        Json(req): Json<UpdateSeatsRequest>,
+    ) -> Result<Json<ChangePlanResponse>, (StatusCode, String)> {
+        let stripe = state.stripe.as_ref().ok_or((
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Stripe not configured".to_string(),
+        ))?;
 
-    // Calculate monthly cost based on tier and seats
-    let monthly_cost_cents = match org.tier.as_str() {
-        "pro" => 1200 * org.seats as i64,   // $12/seat/month
-        "team" => 2100 * org.seats as i64,  // $21/seat/month
-        _ => 0,
-    };
+        let org = OrganizationRepository::find_by_user(&state.db, &user.id)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
 
-    Ok(Json(BillingDashboardResponse {
-        current_tier: org.tier,
-        monthly_cost_cents,
-        seats_used: members_count,
-        seats_total: org.seats,
-        billing_period_start: org.current_period_start,
-        billing_period_end: org.current_period_end,
-        is_past_due: org.subscription_status == "past_due",
-        cancel_at_period_end: org.cancel_at_period_end,
-    }))
-}
+        if org.owner_id != user.id {
+            return Err((
+                StatusCode::FORBIDDEN,
+                "Only owner can update seats".to_string(),
+            ));
+        }
 
-#[derive(Serialize)]
-pub struct UsageHistoryResponse {
-    pub history: Vec<UsageRecord>,
-}
+        let subscription_id = org.stripe_subscription_id.as_ref().ok_or((
+            StatusCode::BAD_REQUEST,
+            "No active subscription".to_string(),
+        ))?;
 
-/// Get usage history (multiple periods)
-pub async fn get_usage_history(
-    user: AuthUser,
-    State(state): State<AppState>,
-) -> Result<Json<UsageHistoryResponse>, (StatusCode, String)> {
-    let org = OrganizationRepository::find_by_user(&state.db, &user.id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
+        // Update in Stripe
+        stripe
+            .update_subscription_seats(subscription_id, req.seats as i64)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    let history = UsageRepository::list_all(&state.db, &org.id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        // Update local database
+        OrganizationRepository::update_seats(&state.db, &org.id, req.seats)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    Ok(Json(UsageHistoryResponse { history }))
-}
+        Ok(Json(ChangePlanResponse {
+            success: true,
+            tier: org.tier,
+            seats: req.seats,
+            message: "Seats updated successfully".to_string(),
+        }))
+    }
 
-// ============================================================================
-// Helper to add stripe client to AppState
-// ============================================================================
+    // ============================================================================
+    // Invoice Endpoints
+    // ============================================================================
 
-pub fn create_stripe_client(config: &crate::config::Config) -> Option<StripeClient> {
-    StripeClient::new(config).ok().flatten()
-}
+    use crate::billing::stripe::{InvoiceDetail, InvoiceSummary};
+
+    #[derive(Serialize)]
+    pub struct InvoicesResponse {
+        pub invoices: Vec<InvoiceSummary>,
+    }
+
+    /// List all invoices
+    pub async fn list_invoices(
+        user: AuthUser,
+        State(state): State<AppState>,
+    ) -> Result<Json<InvoicesResponse>, (StatusCode, String)> {
+        let stripe = state.stripe.as_ref().ok_or((
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Stripe not configured".to_string(),
+        ))?;
+
+        let org = OrganizationRepository::find_by_user(&state.db, &user.id)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
+
+        let customer_id = org
+            .stripe_customer_id
+            .as_ref()
+            .ok_or((StatusCode::NOT_FOUND, "No billing history".to_string()))?;
+
+        let invoices = stripe
+            .list_invoices(customer_id, Some(100))
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+        Ok(Json(InvoicesResponse { invoices }))
+    }
+
+    /// Get single invoice details
+    pub async fn get_invoice(
+        user: AuthUser,
+        State(state): State<AppState>,
+        Path(invoice_id): Path<String>,
+    ) -> Result<Json<InvoiceDetail>, (StatusCode, String)> {
+        let stripe = state.stripe.as_ref().ok_or((
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Stripe not configured".to_string(),
+        ))?;
+
+        // Verify user has an org (access control)
+        let _org = OrganizationRepository::find_by_user(&state.db, &user.id)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
+
+        let invoice = stripe
+            .get_invoice(&invoice_id)
+            .await
+            .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
+
+        Ok(Json(invoice))
+    }
+
+    // ============================================================================
+    // Payment Method Endpoints
+    // ============================================================================
+
+    use crate::billing::stripe::PaymentMethodSummary;
+
+    #[derive(Serialize)]
+    pub struct PaymentMethodsResponse {
+        pub payment_methods: Vec<PaymentMethodSummary>,
+        pub default_payment_method: Option<String>,
+    }
+
+    #[derive(Serialize)]
+    pub struct SetupIntentResponse {
+        pub client_secret: String,
+    }
+
+    #[derive(Deserialize)]
+    pub struct SetDefaultPaymentMethodRequest {
+        pub payment_method_id: String,
+    }
+
+    /// List payment methods
+    pub async fn list_payment_methods(
+        user: AuthUser,
+        State(state): State<AppState>,
+    ) -> Result<Json<PaymentMethodsResponse>, (StatusCode, String)> {
+        let stripe = state.stripe.as_ref().ok_or((
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Stripe not configured".to_string(),
+        ))?;
+
+        let org = OrganizationRepository::find_by_user(&state.db, &user.id)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
+
+        let customer_id = org
+            .stripe_customer_id
+            .as_ref()
+            .ok_or((StatusCode::NOT_FOUND, "No payment methods".to_string()))?;
+
+        let methods = stripe
+            .list_payment_methods(customer_id)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+        // Get default payment method from customer
+        let customer = stripe
+            .get_customer(customer_id)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+        let default_pm = customer
+            .invoice_settings
+            .and_then(|s| s.default_payment_method)
+            .map(|pm| pm.id().to_string());
+
+        Ok(Json(PaymentMethodsResponse {
+            payment_methods: methods,
+            default_payment_method: default_pm,
+        }))
+    }
+
+    /// Create setup intent for adding new payment method
+    pub async fn create_setup_intent(
+        user: AuthUser,
+        State(state): State<AppState>,
+    ) -> Result<Json<SetupIntentResponse>, (StatusCode, String)> {
+        let stripe = state.stripe.as_ref().ok_or((
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Stripe not configured".to_string(),
+        ))?;
+
+        let org = OrganizationRepository::find_by_user(&state.db, &user.id)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
+
+        let customer_id = org
+            .stripe_customer_id
+            .as_ref()
+            .ok_or((StatusCode::BAD_REQUEST, "No Stripe customer".to_string()))?;
+
+        let intent = stripe
+            .create_setup_intent(customer_id)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+        let client_secret = intent.client_secret.ok_or((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "No client secret".to_string(),
+        ))?;
+
+        Ok(Json(SetupIntentResponse { client_secret }))
+    }
+
+    /// Set default payment method
+    pub async fn set_default_payment_method(
+        user: AuthUser,
+        State(state): State<AppState>,
+        Json(req): Json<SetDefaultPaymentMethodRequest>,
+    ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+        let stripe = state.stripe.as_ref().ok_or((
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Stripe not configured".to_string(),
+        ))?;
+
+        let org = OrganizationRepository::find_by_user(&state.db, &user.id)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
+
+        if org.owner_id != user.id {
+            return Err((
+                StatusCode::FORBIDDEN,
+                "Only owner can update payment methods".to_string(),
+            ));
+        }
+
+        let customer_id = org
+            .stripe_customer_id
+            .as_ref()
+            .ok_or((StatusCode::BAD_REQUEST, "No Stripe customer".to_string()))?;
+
+        stripe
+            .set_default_payment_method(customer_id, &req.payment_method_id)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+        Ok(Json(serde_json::json!({ "success": true })))
+    }
+
+    /// Delete payment method
+    pub async fn delete_payment_method(
+        user: AuthUser,
+        State(state): State<AppState>,
+        Path(payment_method_id): Path<String>,
+    ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+        let stripe = state.stripe.as_ref().ok_or((
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Stripe not configured".to_string(),
+        ))?;
+
+        let org = OrganizationRepository::find_by_user(&state.db, &user.id)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
+
+        if org.owner_id != user.id {
+            return Err((
+                StatusCode::FORBIDDEN,
+                "Only owner can delete payment methods".to_string(),
+            ));
+        }
+
+        stripe
+            .detach_payment_method(&payment_method_id)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+        Ok(Json(serde_json::json!({ "success": true })))
+    }
+
+    // ============================================================================
+    // Coupon Validation Endpoints
+    // ============================================================================
+
+    use crate::billing::stripe::CouponInfo;
+
+    #[derive(Deserialize)]
+    pub struct ValidateCouponRequest {
+        pub code: String,
+    }
+
+    /// Validate a coupon code
+    pub async fn validate_coupon(
+        user: AuthUser,
+        State(state): State<AppState>,
+        Json(req): Json<ValidateCouponRequest>,
+    ) -> Result<Json<CouponInfo>, (StatusCode, String)> {
+        let stripe = state.stripe.as_ref().ok_or((
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Stripe not configured".to_string(),
+        ))?;
+
+        // Verify user exists (basic auth check)
+        let _org = OrganizationRepository::find_by_user(&state.db, &user.id)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+        let coupon = stripe
+            .validate_coupon(&req.code)
+            .await
+            .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
+
+        if !coupon.valid {
+            return Err((StatusCode::BAD_REQUEST, "Coupon is not valid".to_string()));
+        }
+
+        Ok(Json(coupon))
+    }
+
+    // ============================================================================
+    // Tax ID Endpoints
+    // ============================================================================
+
+    use crate::billing::stripe::TaxIdInfo;
+
+    #[derive(Serialize)]
+    pub struct TaxIdsResponse {
+        pub tax_ids: Vec<TaxIdInfo>,
+    }
+
+    #[derive(Deserialize)]
+    pub struct AddTaxIdRequest {
+        #[serde(rename = "type")]
+        pub type_: String,
+        pub value: String,
+    }
+
+    /// Get tax IDs
+    pub async fn get_tax_ids(
+        user: AuthUser,
+        State(state): State<AppState>,
+    ) -> Result<Json<TaxIdsResponse>, (StatusCode, String)> {
+        let stripe = state.stripe.as_ref().ok_or((
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Stripe not configured".to_string(),
+        ))?;
+
+        let org = OrganizationRepository::find_by_user(&state.db, &user.id)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
+
+        let customer_id = org
+            .stripe_customer_id
+            .as_ref()
+            .ok_or((StatusCode::NOT_FOUND, "No billing setup".to_string()))?;
+
+        let tax_ids = stripe
+            .list_tax_ids(customer_id)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+        Ok(Json(TaxIdsResponse { tax_ids }))
+    }
+
+    /// Add tax ID
+    pub async fn add_tax_id(
+        user: AuthUser,
+        State(state): State<AppState>,
+        Json(req): Json<AddTaxIdRequest>,
+    ) -> Result<Json<TaxIdInfo>, (StatusCode, String)> {
+        let stripe = state.stripe.as_ref().ok_or((
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Stripe not configured".to_string(),
+        ))?;
+
+        let org = OrganizationRepository::find_by_user(&state.db, &user.id)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
+
+        if org.owner_id != user.id {
+            return Err((
+                StatusCode::FORBIDDEN,
+                "Only owner can add tax ID".to_string(),
+            ));
+        }
+
+        let customer_id = org
+            .stripe_customer_id
+            .as_ref()
+            .ok_or((StatusCode::BAD_REQUEST, "No Stripe customer".to_string()))?;
+
+        let tax_id = stripe
+            .add_tax_id(customer_id, &req.type_, &req.value)
+            .await
+            .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+
+        // Also store in local database
+        OrganizationRepository::update_tax_info(&state.db, &org.id, Some(&req.value), None, None)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+        Ok(Json(TaxIdInfo {
+            id: tax_id.id.to_string(),
+            type_: format!("{:?}", tax_id.type_),
+            value: tax_id.value.unwrap_or_default(),
+            verification_status: tax_id
+                .verification
+                .as_ref()
+                .map(|v| format!("{:?}", v.status)),
+            country: tax_id.country,
+        }))
+    }
+
+    // ============================================================================
+    // Billing Dashboard Endpoints
+    // ============================================================================
+
+    #[derive(Serialize)]
+    pub struct BillingDashboardResponse {
+        pub current_tier: String,
+        pub monthly_cost_cents: i64,
+        pub seats_used: i32,
+        pub seats_total: i32,
+        pub billing_period_start: Option<chrono::DateTime<chrono::Utc>>,
+        pub billing_period_end: Option<chrono::DateTime<chrono::Utc>>,
+        pub is_past_due: bool,
+        pub cancel_at_period_end: bool,
+    }
+
+    /// Get billing dashboard summary
+    pub async fn get_billing_dashboard(
+        user: AuthUser,
+        State(state): State<AppState>,
+    ) -> Result<Json<BillingDashboardResponse>, (StatusCode, String)> {
+        let org = OrganizationRepository::find_by_user(&state.db, &user.id)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
+
+        let members_count = OrganizationMemberRepository::count(&state.db, &org.id)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+        // Calculate monthly cost based on tier and seats
+        let monthly_cost_cents = match org.tier.as_str() {
+            "pro" => 1200 * org.seats as i64,  // $12/seat/month
+            "team" => 2100 * org.seats as i64, // $21/seat/month
+            _ => 0,
+        };
+
+        Ok(Json(BillingDashboardResponse {
+            current_tier: org.tier,
+            monthly_cost_cents,
+            seats_used: members_count,
+            seats_total: org.seats,
+            billing_period_start: org.current_period_start,
+            billing_period_end: org.current_period_end,
+            is_past_due: org.subscription_status == "past_due",
+            cancel_at_period_end: org.cancel_at_period_end,
+        }))
+    }
+
+    #[derive(Serialize)]
+    pub struct UsageHistoryResponse {
+        pub history: Vec<UsageRecord>,
+    }
+
+    /// Get usage history (multiple periods)
+    pub async fn get_usage_history(
+        user: AuthUser,
+        State(state): State<AppState>,
+    ) -> Result<Json<UsageHistoryResponse>, (StatusCode, String)> {
+        let org = OrganizationRepository::find_by_user(&state.db, &user.id)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
+
+        let history = UsageRepository::list_all(&state.db, &org.id)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+        Ok(Json(UsageHistoryResponse { history }))
+    }
+
+    // ============================================================================
+    // Helper to add stripe client to AppState
+    // ============================================================================
+
+    pub fn create_stripe_client(config: &crate::config::Config) -> Option<StripeClient> {
+        StripeClient::new(config).ok().flatten()
+    }
+} // end mod saas_billing
+
+#[cfg(feature = "saas")]
+pub use saas_billing::*;

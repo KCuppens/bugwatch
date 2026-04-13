@@ -1,11 +1,16 @@
 import type { Config } from "tailwindcss";
+import { createPreset } from "fumadocs-ui/tailwind-plugin";
 
 const config: Config = {
   darkMode: ["class"],
+  presets: [createPreset()],
   content: [
     "./src/pages/**/*.{js,ts,jsx,tsx,mdx}",
     "./src/components/**/*.{js,ts,jsx,tsx,mdx}",
     "./src/app/**/*.{js,ts,jsx,tsx,mdx}",
+    "./content/**/*.mdx",
+    "./mdx-components.tsx",
+    "./node_modules/fumadocs-ui/dist/**/*.js",
   ],
   theme: {
     extend: {
@@ -36,6 +41,10 @@ const config: Config = {
           DEFAULT: "hsl(var(--accent))",
           foreground: "hsl(var(--accent-foreground))",
         },
+        "accent-2": {
+          DEFAULT: "hsl(var(--accent-2))",
+          foreground: "hsl(var(--accent-2-foreground))",
+        },
         destructive: {
           DEFAULT: "hsl(var(--destructive))",
           foreground: "hsl(var(--destructive-foreground))",
@@ -53,15 +62,44 @@ const config: Config = {
           DEFAULT: "hsl(var(--bug))",
           foreground: "hsl(var(--bug-foreground))",
         },
+        surface: {
+          1: "hsl(var(--surface-1))",
+          2: "hsl(var(--surface-2))",
+          3: "hsl(var(--surface-3))",
+        },
+        "border-subtle": "hsl(var(--border-subtle))",
+        "border-strong": "hsl(var(--border-strong))",
       },
       borderRadius: {
-        lg: "var(--radius)",
-        md: "calc(var(--radius) - 2px)",
-        sm: "calc(var(--radius) - 4px)",
+        xl: "16px",
+        lg: "12px",
+        md: "8px",
+        sm: "6px",
+        pill: "100px",
+      },
+      spacing: {
+        '18': '4.5rem',
+        '22': '5.5rem',
+        '26': '6.5rem',
+        '30': '7.5rem',
       },
       fontFamily: {
         sans: ["var(--font-geist-sans)"],
         mono: ["var(--font-geist-mono)"],
+        display: ["var(--font-display)", "var(--font-geist-sans)", "system-ui", "sans-serif"],
+      },
+      fontSize: {
+        "display-xl": ["72px", { lineHeight: "1.05", letterSpacing: "-0.03em", fontWeight: "700" }],
+        "display-lg": ["56px", { lineHeight: "1.1", letterSpacing: "-0.025em", fontWeight: "700" }],
+        "display-md": ["44px", { lineHeight: "1.15", letterSpacing: "-0.02em", fontWeight: "700" }],
+        "heading-lg": ["32px", { lineHeight: "1.2", letterSpacing: "-0.015em", fontWeight: "600" }],
+        "heading-md": ["24px", { lineHeight: "1.3", letterSpacing: "-0.01em", fontWeight: "600" }],
+        "heading-sm": ["18px", { lineHeight: "1.4", fontWeight: "600" }],
+        "body-lg": ["17px", { lineHeight: "1.6" }],
+        body: ["15px", { lineHeight: "1.55" }],
+        "body-sm": ["13px", { lineHeight: "1.5" }],
+        caption: ["12px", { lineHeight: "1.4", letterSpacing: "0.01em" }],
+        "mono-sm": ["13px", { lineHeight: "1.5" }],
       },
       keyframes: {
         "accordion-down": {

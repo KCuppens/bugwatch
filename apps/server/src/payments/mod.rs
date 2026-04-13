@@ -41,6 +41,10 @@ pub async fn verify_and_apply_payment(
         })?;
 
     if payment.organization_id != org_id {
+        // Roll back to pending so the agent can retry with the correct org credentials.
+        if let Err(e) = state.payment_store.unclaim(&payment.nonce).await {
+            tracing::error!(nonce = %payment.nonce, error = %e, "Failed to unclaim nonce after org mismatch");
+        }
         return Err(AppError::Unauthorized(
             "Payment nonce belongs to different organization".to_string(),
         ));
@@ -48,13 +52,17 @@ pub async fn verify_and_apply_payment(
 
     // Check that the payment nonce was issued for this resource
     if !payment.resource.is_empty() && payment.resource != request_path {
+        // Roll back to pending so the agent can retry against the correct endpoint.
+        if let Err(e) = state.payment_store.unclaim(&payment.nonce).await {
+            tracing::error!(nonce = %payment.nonce, error = %e, "Failed to unclaim nonce after resource mismatch");
+        }
         return Err(AppError::Unauthorized(
             "Payment challenge was issued for a different resource".to_string(),
         ));
     }
 
     // 2. Verify on-chain USDC transfer
-    state
+    if let Err(e) = state
         .onchain_verifier
         .verify_usdc_transfer(
             &proof.tx_hash,
@@ -64,17 +72,21 @@ pub async fn verify_and_apply_payment(
                 .map_err(|_| AppError::Internal("Invalid payment amount in DB".to_string()))?,
         )
         .await
-        .map_err(|e| {
-            tracing::warn!(
-                "x402 on-chain verification failed for nonce {}: {}",
-                payment.nonce,
-                e
-            );
-            AppError::PaymentRequired(
-                "Payment verification failed. Ensure the transaction is confirmed on Base mainnet."
-                    .to_string(),
-            )
-        })?;
+    {
+        tracing::warn!(
+            "x402 on-chain verification failed for nonce {}: {}",
+            payment.nonce,
+            e
+        );
+        // Roll back to pending: the tx may not be confirmed yet and the agent can retry.
+        if let Err(ue) = state.payment_store.unclaim(&payment.nonce).await {
+            tracing::error!(nonce = %payment.nonce, error = %ue, "Failed to unclaim nonce after on-chain verification failure");
+        }
+        return Err(AppError::PaymentRequired(
+            "Payment verification failed. Ensure the transaction is confirmed on Base mainnet."
+                .to_string(),
+        ));
+    }
 
     // 3. Begin DB transaction: capacity grant + mark_consumed are atomic.
     // If mark_consumed fails (e.g. tx_hash unique constraint), the grant rolls back too.
@@ -146,7 +158,7 @@ pub async fn apply_capacity_grant_in_tx(
         AppError::Internal("Grant quantity exceeds maximum allowed value".to_string())
     })?;
 
-    match grant_type {
+    let rows = match grant_type {
         "project" => {
             sqlx::query(
                 "UPDATE organizations SET x402_extra_projects = LEAST(x402_extra_projects + $1, 50) WHERE id = $2"
@@ -155,7 +167,8 @@ pub async fn apply_capacity_grant_in_tx(
             .bind(org_id)
             .execute(&mut **tx)
             .await
-            .map_err(|e| AppError::Internal(format!("DB error: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("DB error: {}", e)))?
+            .rows_affected()
         }
         "monitor" => {
             sqlx::query(
@@ -165,7 +178,8 @@ pub async fn apply_capacity_grant_in_tx(
             .bind(org_id)
             .execute(&mut **tx)
             .await
-            .map_err(|e| AppError::Internal(format!("DB error: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("DB error: {}", e)))?
+            .rows_affected()
         }
         "storage_bytes" => {
             sqlx::query(
@@ -175,7 +189,8 @@ pub async fn apply_capacity_grant_in_tx(
             .bind(org_id)
             .execute(&mut **tx)
             .await
-            .map_err(|e| AppError::Internal(format!("DB error: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("DB error: {}", e)))?
+            .rows_affected()
         }
         "retention_days" => {
             sqlx::query(
@@ -185,7 +200,8 @@ pub async fn apply_capacity_grant_in_tx(
             .bind(org_id)
             .execute(&mut **tx)
             .await
-            .map_err(|e| AppError::Internal(format!("DB error: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("DB error: {}", e)))?
+            .rows_affected()
         }
         _ => {
             return Err(AppError::Internal(format!(
@@ -193,7 +209,15 @@ pub async fn apply_capacity_grant_in_tx(
                 grant_type
             )))
         }
+    };
+
+    if rows == 0 {
+        return Err(AppError::Internal(format!(
+            "Capacity grant failed: organization '{}' not found in database",
+            org_id
+        )));
     }
+
     Ok(())
 }
 
@@ -225,9 +249,15 @@ pub async fn x402_payment_middleware(
                                 req.extensions_mut().insert(X402PaymentVerified);
                                 return next.run(req).await;
                             }
-                            Ok(_) => {
+                            Ok(ref pt) if pt == "capacity_grant" => {
                                 // Capacity grant applied: fall through to handler normally
                                 // (the limit check will now pass)
+                            }
+                            Ok(ref pt) => {
+                                tracing::warn!(
+                                    payment_type = %pt,
+                                    "x402 payment verified with unrecognized payment_type; falling through to handler"
+                                );
                             }
                             Err(e) => {
                                 tracing::warn!("Invalid X-Payment proof: {:?}", e);

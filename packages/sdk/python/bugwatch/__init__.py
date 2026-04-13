@@ -173,6 +173,52 @@ def _bugwatch_asyncio_handler(loop, context):
         loop.default_exception_handler(context)
 
 
+def _bugwatch_task_done_callback(task):
+    """Callback added to every asyncio.Task to capture unhandled exceptions.
+
+    The loop's exception handler only fires when a Task is garbage-collected
+    with an unretreived exception. This callback fires immediately when the
+    task finishes, so we get the exception faster AND with a better stack.
+    We skip CancelledError (normal cancellation, not a bug).
+    """
+    if task.cancelled():
+        return
+    exc = task.exception() if not task.cancelled() else None
+    if exc is None:
+        return
+    if _client is None:
+        return
+    # Avoid double-capture: only capture if the exception hasn't been retrieved
+    # by user code. We use a flag on the task to track this.
+    if getattr(task, "_bugwatch_captured", False):
+        return
+    task._bugwatch_captured = True
+    try:
+        _client.capture_exception(
+            exc,
+            level=Level.ERROR,
+            extra={
+                "asyncio.task_name": getattr(task, "get_name", lambda: str(task))(),
+                "asyncio.mechanism": "task_done_callback",
+            },
+        )
+    except Exception:
+        pass
+
+
+_original_task_factory = None
+
+
+def _bugwatch_task_factory(loop, coro, **kwargs):
+    """Custom task factory that wraps the default and adds our done callback."""
+    if _original_task_factory is not None:
+        task = _original_task_factory(loop, coro, **kwargs)
+    else:
+        task = asyncio.tasks.Task(coro, loop=loop, **kwargs)
+    task.add_done_callback(_bugwatch_task_done_callback)
+    return task
+
+
 def _install_excepthook():
     """Install sys.excepthook."""
     global _original_excepthook
@@ -191,27 +237,37 @@ def _install_threading_hook():
 
 
 def _install_asyncio_hook():
-    """Install asyncio exception handler.
+    """Install asyncio exception handler AND task factory.
 
-    If an event loop is already running, installs the handler immediately.
-    Otherwise, patches asyncio.set_event_loop to install the handler
-    when a loop becomes available.
+    The exception handler catches exceptions from tasks whose result is never
+    retrieved (garbage-collected with unretreived exception). The task factory
+    adds a done-callback to every task so we capture exceptions *immediately*
+    when the task finishes, not on GC.
+
+    If an event loop is already running, installs both immediately.
+    Otherwise, patches asyncio.set_event_loop to install when a loop arrives.
     """
-    global _original_asyncio_handler
+    global _original_asyncio_handler, _original_task_factory
 
     def _do_install(loop):
-        global _original_asyncio_handler
+        global _original_asyncio_handler, _original_task_factory
+        # Exception handler
         handler = loop.get_exception_handler()
         if handler is not _bugwatch_asyncio_handler:
             _original_asyncio_handler = handler
             loop.set_exception_handler(_bugwatch_asyncio_handler)
+        # Task factory — capture exceptions immediately on task completion
+        current_factory = loop.get_task_factory()
+        if current_factory is not _bugwatch_task_factory:
+            _original_task_factory = current_factory
+            loop.set_task_factory(_bugwatch_task_factory)
 
     try:
         loop = asyncio.get_running_loop()
         _do_install(loop)
     except RuntimeError:
         # No running loop yet — patch the event loop policy so we install
-        # the handler when a loop is created and run.
+        # when a loop is created and run.
         _original_run = asyncio.events.BaseDefaultEventLoopPolicy.set_event_loop
 
         def _patched_set_event_loop(self, loop):
@@ -227,13 +283,22 @@ def _install_asyncio_hook():
 
 def _uninstall_hooks():
     """Restore original exception hooks."""
-    global _hooks_installed
+    global _hooks_installed, _original_task_factory
 
     if _original_excepthook:
         sys.excepthook = _original_excepthook
 
     if _original_threading_excepthook and sys.version_info >= (3, 8):
         threading.excepthook = _original_threading_excepthook
+
+    # Restore asyncio task factory
+    try:
+        loop = asyncio.get_running_loop()
+        if loop.get_task_factory() is _bugwatch_task_factory:
+            loop.set_task_factory(_original_task_factory)
+            _original_task_factory = None
+    except RuntimeError:
+        pass
 
     _hooks_installed = False
 

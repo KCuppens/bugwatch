@@ -156,8 +156,8 @@ export default function ProjectSettingsPage() {
           </Button>
         </Link>
         <div>
-          <h1 className="text-2xl font-bold">Project Settings</h1>
-          <p className="text-muted-foreground">{project.name}</p>
+          <h1 className="font-display text-heading-lg">Project Settings</h1>
+          <p className="text-body-sm text-muted-foreground mt-1">{project.name}</p>
         </div>
       </div>
 

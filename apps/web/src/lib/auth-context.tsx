@@ -4,6 +4,7 @@ import {
   createContext,
   useContext,
   useEffect,
+  useMemo,
   useState,
   useCallback,
   type ReactNode,
@@ -135,11 +136,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // Cross-tab synchronization via storage events
   useEffect(() => {
     const handleStorageChange = (e: StorageEvent) => {
-      if (e.key === "access_token") {
+      if (e.key === "access_token" || e.key === "refresh_token") {
         if (!e.newValue) {
           // Token removed in another tab - logout
           setUser(null);
-        } else if (!user) {
+        } else if (!user && e.key === "access_token") {
           // Token added in another tab - fetch user
           fetchCurrentUser();
         }
@@ -187,21 +188,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await fetchCurrentUser();
   }, [fetchCurrentUser]);
 
-  return (
-    <AuthContext.Provider
-      value={{
-        user,
-        isLoading,
-        isAuthenticated: !!user,
-        login,
-        signup,
-        logout,
-        refreshUser,
-      }}
-    >
-      {children}
-    </AuthContext.Provider>
+  const value = useMemo(
+    () => ({
+      user,
+      isLoading,
+      isAuthenticated: !!user,
+      login,
+      signup,
+      logout,
+      refreshUser,
+    }),
+    [user, isLoading, login, signup, logout, refreshUser]
   );
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
 export function useAuth() {

@@ -59,6 +59,16 @@ impl SessionRepository {
             .await?;
         Ok(())
     }
+
+    pub async fn update_token_hash(pool: &DbPool, id: &str, token: &str) -> Result<()> {
+        let token_hash = hash_token(token);
+        sqlx::query("UPDATE sessions SET token_hash = $1 WHERE id = $2")
+            .bind(&token_hash)
+            .bind(id)
+            .execute(pool)
+            .await?;
+        Ok(())
+    }
 }
 
 fn hash_token(token: &str) -> String {

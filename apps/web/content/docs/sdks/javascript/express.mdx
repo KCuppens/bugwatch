@@ -1,0 +1,234 @@
+---
+title: "@bugwatch/express"
+description: Bugwatch SDK for Express.js. Captures route errors, attaches request context, and provides per-route wrapping with minimal setup.
+---
+
+# @bugwatch/express
+
+`@bugwatch/express` provides deep integration between Bugwatch and Express.js. It captures errors from your middleware chain, attaches request context (URL, method, headers, user) to every event, and offers both one-liner setup and granular per-route control.
+
+## Installation
+
+```bash
+npm install @bugwatch/express
+```
+
+```bash
+yarn add @bugwatch/express
+```
+
+```bash
+pnpm add @bugwatch/express
+```
+
+## Quick Start (One-Liner)
+
+The fastest way to get started. `setup()` installs request and error handlers in the right order and initializes the SDK.
+
+```js
+import express from "express";
+import { setup } from "@bugwatch/express";
+
+const app = express();
+
+setup(app, {
+  apiKey: "bw_live_xxxxx",
+});
+
+app.get("/", (req, res) => {
+  res.send("Hello, world!");
+});
+
+app.listen(3000);
+```
+
+That is all you need. The SDK will capture any unhandled errors in your routes and attach full request context.
+
+### User Extraction
+
+Pass an `extractUser` function to automatically associate errors with the logged-in user.
+
+```js
+setup(app, {
+  apiKey: "bw_live_xxxxx",
+  extractUser: (req) => ({
+    id: req.user?.id,
+    email: req.user?.email,
+    username: req.user?.name,
+  }),
+});
+```
+
+The function receives the Express `Request` object and should return a user object (or `null` if no user is authenticated). The SDK calls this for every request and attaches the result to any errors captured during that request.
+
+## Manual Setup
+
+For full control over middleware ordering, use the individual middleware functions instead of `setup()`.
+
+```js
+import express from "express";
+import { init } from "@bugwatch/core";
+import { requestHandler, errorHandler } from "@bugwatch/express";
+
+// Initialize the SDK
+init({ apiKey: "bw_live_xxxxx" });
+
+const app = express();
+
+// Request handler MUST go before your routes
+app.use(requestHandler());
+
+// Your routes
+app.get("/api/users", async (req, res) => {
+  const users = await db.users.findAll();
+  res.json(users);
+});
+
+app.get("/api/users/:id", async (req, res) => {
+  const user = await db.users.findById(req.params.id);
+  if (!user) {
+    throw new Error("User not found");
+  }
+  res.json(user);
+});
+
+// Error handler MUST go after your routes
+app.use(errorHandler());
+
+app.listen(3000);
+```
+
+### Middleware Order
+
+The order matters:
+
+1. `requestHandler()` -- **before** all routes. Initializes context isolation per request and records request data (URL, method, headers, IP).
+2. Your routes and other middleware.
+3. `errorHandler()` -- **after** all routes. Catches errors that propagate through the middleware chain, captures them to Bugwatch, and forwards them to your own error handler (if any).
+
+```js
+app.use(requestHandler());      // 1. First
+app.use(bodyParser.json());     // 2. Your middleware
+app.use("/api", apiRouter);     // 3. Your routes
+app.use(errorHandler());        // 4. Last (before your custom error handler)
+app.use(customErrorHandler);    // 5. Your custom error handler (optional)
+```
+
+## Per-Route Wrapping
+
+Use `wrapHandler()` to wrap individual route handlers. This is useful when you only want Bugwatch error capture on specific routes, or when you cannot use the global middleware approach.
+
+```js
+import { wrapHandler } from "@bugwatch/express";
+
+app.post(
+  "/api/checkout",
+  wrapHandler(async (req, res) => {
+    const order = await processOrder(req.body);
+    res.json({ orderId: order.id });
+  })
+);
+```
+
+`wrapHandler()` catches both synchronous exceptions and rejected promises, captures them to Bugwatch with full request context, and forwards them to the next error handler.
+
+## Manual Capture
+
+Use `captureError()` to manually capture an error within a route handler while continuing to process the request.
+
+```js
+import { captureError } from "@bugwatch/express";
+
+app.post("/api/orders", async (req, res) => {
+  try {
+    const order = await createOrder(req.body);
+    res.json(order);
+  } catch (error) {
+    // Capture the error but don't crash the request
+    captureError(req, error, {
+      tags: { route: "create-order" },
+      extra: { payload: req.body },
+    });
+
+    // Return a user-friendly response
+    res.status(500).json({ error: "Failed to create order" });
+  }
+});
+```
+
+`captureError()` takes the request object as the first argument so it can include request context in the event. It accepts an optional third argument for additional tags and extra data.
+
+## Request Context
+
+Every captured error automatically includes the following request context:
+
+```json
+{
+  "request": {
+    "method": "POST",
+    "url": "/api/orders",
+    "query": { "currency": "usd" },
+    "headers": {
+      "content-type": "application/json",
+      "user-agent": "Mozilla/5.0 ..."
+    },
+    "ip": "203.0.113.42",
+    "body_size": 1024
+  }
+}
+```
+
+Sensitive headers (`authorization`, `cookie`, `set-cookie`) are automatically redacted.
+
+## Full Example
+
+```js
+import express from "express";
+import { setup, wrapHandler, captureError } from "@bugwatch/express";
+
+const app = express();
+app.use(express.json());
+
+// One-liner setup with user extraction
+setup(app, {
+  apiKey: "bw_live_xxxxx",
+  environment: "production",
+  extractUser: (req) => req.user ?? null,
+});
+
+// Automatic error capture via setup()
+app.get("/api/projects", async (req, res) => {
+  const projects = await db.projects.findAll();
+  res.json(projects);
+});
+
+// Per-route wrapping for extra control
+app.post(
+  "/api/projects",
+  wrapHandler(async (req, res) => {
+    const project = await db.projects.create(req.body);
+    res.status(201).json(project);
+  })
+);
+
+// Manual capture for non-fatal errors
+app.post("/api/webhooks", async (req, res) => {
+  try {
+    await processWebhook(req.body);
+  } catch (error) {
+    captureError(req, error);
+  }
+  // Always acknowledge the webhook
+  res.status(200).send("OK");
+});
+
+app.listen(3000, () => {
+  console.log("Server listening on port 3000");
+});
+```
+
+## Next Steps
+
+- [Fastify SDK](/docs/sdks/javascript/fastify) -- plugin-based integration for Fastify
+- [Node.js SDK](/docs/sdks/javascript/node) -- process-level error capture for any Node.js application
+- [Core SDK](/docs/sdks/javascript/core) -- full API reference

@@ -2,7 +2,7 @@
 
 import { Crown } from 'lucide-react';
 import { usePaywall } from '@/lib/paywall-context';
-import { getFeatureTier, getTierDisplayName } from '@/hooks/use-feature';
+import { getFeatureTier, getTierDisplayName, isSelfHosted } from '@/hooks/use-feature';
 import {
   Popover,
   PopoverContent,
@@ -25,6 +25,9 @@ export function ProBadge({
 }: ProBadgeProps) {
   const { openPaywall } = usePaywall();
   const requiredTier = getFeatureTier(feature);
+
+  // Don't show upgrade badges in self-hosted mode
+  if (isSelfHosted()) return null;
 
   const handleClick = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -95,6 +98,9 @@ export function UpgradeLink({
 }: UpgradeLinkProps) {
   const { openPaywall } = usePaywall();
   const requiredTier = feature ? getFeatureTier(feature) : 'pro';
+
+  // Don't show upgrade links in self-hosted mode
+  if (isSelfHosted()) return null;
 
   const handleClick = (e: React.MouseEvent) => {
     e.preventDefault();

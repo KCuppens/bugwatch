@@ -1,0 +1,4 @@
+{
+  "title": "Alerting",
+  "pages": ["index", "alert-rules", "notification-channels", "webhooks"]
+}

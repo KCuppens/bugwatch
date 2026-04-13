@@ -1,0 +1,9 @@
+node_modules
+.next
+dist
+target
+coverage
+.turbo
+*.lock
+apps/web/.source
+packages/sdk/nextjs/dist

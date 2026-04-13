@@ -2,6 +2,10 @@
 
 import { useAuth } from '@/lib/auth-context';
 
+export function isSelfHosted(): boolean {
+  return process.env.NEXT_PUBLIC_DEPLOYMENT_MODE !== 'saas';
+}
+
 export type Tier = 'free' | 'pro' | 'team' | 'enterprise';
 
 const TIER_LEVELS: Record<Tier, number> = {
@@ -12,16 +16,21 @@ const TIER_LEVELS: Record<Tier, number> = {
 };
 
 const FEATURE_TIERS: Record<string, Tier> = {
+  // Free features
+  slack: 'free',
+
   // Pro features
   webhooks: 'pro',
   pagerduty: 'pro',
-  opsgenie: 'pro',
-  slack_advanced: 'pro',
-  slack: 'pro',
+  email_notifications: 'pro',
+  server_monitoring: 'pro',
+
+  // Pro features (cont.)
+  performance_monitoring: 'pro',
 
   // Team features
+  opsgenie: 'team',
   session_replay: 'team',
-  performance_monitoring: 'team',
   jira: 'team',
   linear: 'team',
   github: 'team',
@@ -37,11 +46,12 @@ const FEATURE_TIERS: Record<string, Tier> = {
  * Human-readable display names for features
  */
 export const FEATURE_DISPLAY_NAMES: Record<string, string> = {
+  slack: 'Slack Notifications',
   webhooks: 'Webhook Alerts',
   pagerduty: 'PagerDuty Integration',
+  email_notifications: 'Email Notifications',
+  server_monitoring: 'Server Monitoring',
   opsgenie: 'OpsGenie Integration',
-  slack_advanced: 'Advanced Slack Features',
-  slack: 'Slack Integration',
   session_replay: 'Session Replay',
   performance_monitoring: 'Performance Monitoring',
   jira: 'Jira Integration',
@@ -65,6 +75,7 @@ export function getFeatureDisplayName(feature: string): string {
  */
 export function useFeature(feature: string): boolean {
   const { user } = useAuth();
+  if (isSelfHosted()) return true;
   const userTier = (user?.organization?.tier || 'free') as Tier;
   const requiredTier = FEATURE_TIERS[feature] || 'free';
   return TIER_LEVELS[userTier] >= TIER_LEVELS[requiredTier];
@@ -82,6 +93,16 @@ export function useTier(): {
 } {
   const { user } = useAuth();
   const tier = (user?.organization?.tier || 'free') as Tier;
+
+  if (isSelfHosted()) {
+    return {
+      tier: 'team' as Tier,
+      hasAccess: () => true,
+      isPro: true,
+      isTeam: true,
+      isEnterprise: false,
+    };
+  }
 
   return {
     tier,
@@ -117,10 +138,10 @@ export function getTierPrice(tier: Tier, annual: boolean = false): number {
  */
 export function getTierRateLimit(tier: Tier): number {
   const limits: Record<Tier, number> = {
-    free: 5,
-    pro: 60,
-    team: 300,
-    enterprise: 3000,
+    free: 100,
+    pro: 1000,
+    team: 5000,
+    enterprise: 10000,
   };
   return limits[tier];
 }

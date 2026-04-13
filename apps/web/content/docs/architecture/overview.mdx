@@ -1,0 +1,106 @@
+---
+title: System Overview
+description: How the Bugwatch components interact. Follow the request flow from SDK error capture through API processing to dashboard display.
+---
+
+# System Overview
+
+This page describes how the major Bugwatch components interact and how data flows through the system.
+
+## Component Diagram
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                      Your Application                    │
+│                                                          │
+│  ┌──────────────┐                    ┌───────────────┐  │
+│  │ Bugwatch SDK │                    │ Server Agent  │  │
+│  └──────┬───────┘                    └───────┬───────┘  │
+└─────────┼────────────────────────────────────┼──────────┘
+          │                                    │
+          │ POST /api/v1/events                │ POST /api/v1/metrics
+          │ (error events)                     │ (system metrics)
+          ▼                                    ▼
+┌──────────────────────────────────────────────────────────┐
+│                    Bugwatch API Server                    │
+│                      (Rust / Axum)                        │
+│                                                          │
+│  ┌─────────────┐  ┌──────────────┐  ┌────────────────┐  │
+│  │  Ingestion   │  │   Alerting   │  │   REST API     │  │
+│  │  Pipeline    │  │   Engine     │  │   (Dashboard)  │  │
+│  └──────┬──────┘  └──────┬───────┘  └────────┬───────┘  │
+│         │                │                    │          │
+│         └────────────────┼────────────────────┘          │
+│                          │                               │
+└──────────────────────────┼───────────────────────────────┘
+                           │
+                           ▼
+                  ┌─────────────────┐
+                  │   PostgreSQL    │
+                  │    Database     │
+                  └─────────────────┘
+                           ▲
+                           │
+┌──────────────────────────┼───────────────────────────────┐
+│                    Next.js Web App                        │
+│                                                          │
+│  ┌──────────┐  ┌──────────┐  ┌────────────┐             │
+│  │ Dashboard │  │ Settings │  │  Billing   │             │
+│  └──────────┘  └──────────┘  └────────────┘             │
+└──────────────────────────────────────────────────────────┘
+                           ▲
+                           │
+                      ┌────────┐
+                      │ Browser│
+                      └────────┘
+```
+
+## Request Flows
+
+### Error Ingestion
+
+1. An error occurs in your application
+2. The Bugwatch SDK captures the error, collects stack trace, breadcrumbs, and context
+3. The SDK sends a `POST /api/v1/events` request to the API server with the project API key
+4. The API server authenticates the request, validates the payload, and processes it through the [event pipeline](/docs/architecture/event-pipeline)
+5. The event is stored in PostgreSQL, grouped into an issue, and alert rules are evaluated
+6. If an alert rule matches, notifications are dispatched to configured channels
+
+### Dashboard Interaction
+
+1. A user logs in through the Next.js web app
+2. The web app makes authenticated API calls to the Rust backend
+3. The API server validates the JWT token and checks project membership
+4. Data is queried from PostgreSQL and returned as JSON
+5. The web app renders the response in the dashboard UI
+
+### Uptime Monitoring
+
+1. The API server runs a background task that periodically checks configured monitors
+2. For each monitor, it sends an HTTP request to the target URL
+3. The response status, latency, and any errors are recorded as a `MonitorCheck`
+4. If a monitor transitions from up to down (or vice versa), a `MonitorIncident` is created
+5. Alert rules for `monitor_down` and `monitor_recovery` are evaluated
+
+### Server Metrics
+
+1. The server agent collects system metrics on the host (CPU, memory, disk, network, etc.)
+2. Every 60 seconds (configurable), it sends a `POST /api/v1/metrics` payload to the API
+3. The API authenticates the request using the project API key
+4. Metrics are stored as `ServerMetric` records in PostgreSQL
+5. Alert rules for `server_cpu_high`, `server_memory_high`, `server_disk_high`, and `server_offline` are evaluated
+
+## Authentication
+
+Bugwatch uses JWT-based authentication:
+
+- Users authenticate with email and password
+- Passwords are hashed with Argon2
+- The API returns a signed JWT token on successful login
+- All subsequent API requests include the JWT in the `Authorization: Bearer` header
+- SDK ingestion endpoints authenticate with the project API key instead of JWT
+
+## Next Steps
+
+- [Event Pipeline](/docs/architecture/event-pipeline) -- detailed walkthrough of error processing
+- [Data Model](/docs/architecture/data-model) -- database entities and relationships

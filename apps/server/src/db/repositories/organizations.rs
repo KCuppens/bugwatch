@@ -1,5 +1,5 @@
 use crate::db::{
-    models::{Organization, OrganizationMember, UsageRecord, BillingEvent, CreditPurchase},
+    models::{BillingEvent, Organization, OrganizationMember, UsageRecord},
     DbPool,
 };
 use anyhow::Result;
@@ -171,6 +171,24 @@ impl OrganizationRepository {
         .map_err(Into::into)
     }
 
+    /// Find the organization that owns a project
+    pub async fn find_by_project_id(
+        pool: &DbPool,
+        project_id: &str,
+    ) -> Result<Option<Organization>> {
+        sqlx::query_as::<_, Organization>(
+            r#"
+            SELECT o.* FROM organizations o
+            JOIN projects p ON p.organization_id = o.id
+            WHERE p.id = $1
+            "#,
+        )
+        .bind(project_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(Into::into)
+    }
+
     /// Get the tier for a project (via organization)
     pub async fn get_project_tier(pool: &DbPool, project_id: &str) -> Result<String> {
         let row: Option<(String,)> = sqlx::query_as(
@@ -307,13 +325,11 @@ impl OrganizationMemberRepository {
 
     /// Remove a member from an organization
     pub async fn remove(pool: &DbPool, organization_id: &str, user_id: &str) -> Result<()> {
-        sqlx::query(
-            "DELETE FROM organization_members WHERE organization_id = $1 AND user_id = $2",
-        )
-        .bind(organization_id)
-        .bind(user_id)
-        .execute(pool)
-        .await?;
+        sqlx::query("DELETE FROM organization_members WHERE organization_id = $1 AND user_id = $2")
+            .bind(organization_id)
+            .bind(user_id)
+            .execute(pool)
+            .await?;
         Ok(())
     }
 
@@ -330,12 +346,11 @@ impl OrganizationMemberRepository {
 
     /// Count members in an organization
     pub async fn count(pool: &DbPool, organization_id: &str) -> Result<i32> {
-        let row: (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM organization_members WHERE organization_id = $1",
-        )
-        .bind(organization_id)
-        .fetch_one(pool)
-        .await?;
+        let row: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM organization_members WHERE organization_id = $1")
+                .bind(organization_id)
+                .fetch_one(pool)
+                .await?;
         Ok(row.0 as i32)
     }
 
@@ -444,10 +459,7 @@ impl UsageRepository {
     }
 
     /// Get all usage records for an organization (historical)
-    pub async fn list_all(
-        pool: &DbPool,
-        organization_id: &str,
-    ) -> Result<Vec<UsageRecord>> {
+    pub async fn list_all(pool: &DbPool, organization_id: &str) -> Result<Vec<UsageRecord>> {
         sqlx::query_as::<_, UsageRecord>(
             "SELECT * FROM usage_records WHERE organization_id = $1 ORDER BY period_start DESC",
         )
@@ -496,12 +508,11 @@ impl BillingEventRepository {
 
     /// Check if an event has already been processed (idempotency)
     pub async fn exists_by_stripe_event(pool: &DbPool, stripe_event_id: &str) -> Result<bool> {
-        let row: (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM billing_events WHERE stripe_event_id = $1",
-        )
-        .bind(stripe_event_id)
-        .fetch_one(pool)
-        .await?;
+        let row: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM billing_events WHERE stripe_event_id = $1")
+                .bind(stripe_event_id)
+                .fetch_one(pool)
+                .await?;
         Ok(row.0 > 0)
     }
 
@@ -517,87 +528,6 @@ impl BillingEventRepository {
         .bind(organization_id)
         .bind(limit)
         .fetch_all(pool)
-        .await
-        .map_err(Into::into)
-    }
-}
-
-pub struct CreditPurchaseRepository;
-
-impl CreditPurchaseRepository {
-    /// Create a pending credit purchase
-    pub async fn create(
-        pool: &DbPool,
-        user_id: &str,
-        credits: i32,
-        amount_cents: i32,
-    ) -> Result<CreditPurchase> {
-        let id = Uuid::new_v4().to_string();
-        let now = chrono::Utc::now();
-
-        sqlx::query_as::<_, CreditPurchase>(
-            r#"
-            INSERT INTO credit_purchases (id, user_id, credits, amount_cents, status, created_at)
-            VALUES ($1, $2, $3, $4, 'pending', $5)
-            RETURNING *
-            "#,
-        )
-        .bind(&id)
-        .bind(user_id)
-        .bind(credits)
-        .bind(amount_cents)
-        .bind(&now)
-        .fetch_one(pool)
-        .await
-        .map_err(Into::into)
-    }
-
-    /// Update purchase with Stripe payment intent ID
-    pub async fn set_payment_intent(
-        pool: &DbPool,
-        id: &str,
-        stripe_payment_intent_id: &str,
-    ) -> Result<()> {
-        sqlx::query(
-            "UPDATE credit_purchases SET stripe_payment_intent_id = $1 WHERE id = $2",
-        )
-        .bind(stripe_payment_intent_id)
-        .bind(id)
-        .execute(pool)
-        .await?;
-        Ok(())
-    }
-
-    /// Mark purchase as completed
-    pub async fn complete(pool: &DbPool, id: &str) -> Result<CreditPurchase> {
-        sqlx::query_as::<_, CreditPurchase>(
-            "UPDATE credit_purchases SET status = 'completed' WHERE id = $1 RETURNING *",
-        )
-        .bind(id)
-        .fetch_one(pool)
-        .await
-        .map_err(Into::into)
-    }
-
-    /// Mark purchase as failed
-    pub async fn fail(pool: &DbPool, id: &str) -> Result<()> {
-        sqlx::query("UPDATE credit_purchases SET status = 'failed' WHERE id = $1")
-            .bind(id)
-            .execute(pool)
-            .await?;
-        Ok(())
-    }
-
-    /// Find by Stripe payment intent ID
-    pub async fn find_by_payment_intent(
-        pool: &DbPool,
-        stripe_payment_intent_id: &str,
-    ) -> Result<Option<CreditPurchase>> {
-        sqlx::query_as::<_, CreditPurchase>(
-            "SELECT * FROM credit_purchases WHERE stripe_payment_intent_id = $1",
-        )
-        .bind(stripe_payment_intent_id)
-        .fetch_optional(pool)
         .await
         .map_err(Into::into)
     }

@@ -1,0 +1,254 @@
+---
+title: Configuration
+description: Configure the Bugwatch server agent with the TOML config file or environment variable overrides. Covers all options including collectors, Docker monitoring, log levels, and reporting intervals.
+---
+
+# Configuring the Server Agent
+
+The Bugwatch server agent reads its configuration from a TOML config file and optional environment variable overrides. Environment variables always take precedence over the config file.
+
+## Config File Location
+
+The default configuration file is located at:
+
+```
+/etc/bugwatch/agent.toml
+```
+
+This file is created automatically during installation. If you need to recreate it, you can copy the example config:
+
+```bash
+sudo cp /etc/bugwatch/agent.example.toml /etc/bugwatch/agent.toml
+```
+
+<Callout type="info">
+The agent watches the config file for changes, but most options require a restart to take effect. Always restart the agent after making configuration changes.
+</Callout>
+
+## Configuration Options
+
+The table below lists every available configuration option:
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `api_key` | string | -- (required) | Your Bugwatch project API key. Starts with `bw_live_` or `bw_test_`. |
+| `endpoint` | string | `https://api.bugwatch.dev` | The Bugwatch API endpoint URL. Change this for self-hosted deployments. |
+| `hostname` | string | system hostname | Override the hostname reported to Bugwatch. Useful when the system hostname is not descriptive (e.g., cloud instance IDs). |
+| `interval` | integer | `60` | How often (in seconds) the agent collects and reports metrics. |
+| `collectors` | array of strings | `["cpu", "memory", "disk", "network"]` | Which metric collectors to enable. Available collectors: `cpu`, `memory`, `disk`, `network`, `docker`. |
+| `log_level` | string | `"info"` | Agent log verbosity. One of: `error`, `warn`, `info`, `debug`, `trace`. |
+| `docker_enabled` | boolean | `false` | Enable Docker container monitoring. Equivalent to adding `"docker"` to the `collectors` array. |
+| `docker_socket` | string | `/var/run/docker.sock` | Path to the Docker daemon socket. Only used when Docker monitoring is enabled. |
+
+## Example Complete Config File
+
+Below is a fully annotated example showing every option:
+
+```toml
+# /etc/bugwatch/agent.toml
+
+# Your Bugwatch project API key (required)
+api_key = "bw_live_xxxxxxxxxxxxxxxxxxxxx"
+
+# Bugwatch API endpoint (change for self-hosted deployments)
+endpoint = "https://api.bugwatch.dev"
+
+# Override the hostname reported to Bugwatch
+# If omitted, the system hostname is used automatically
+hostname = "web-prod-01"
+
+# Reporting interval in seconds
+# How often the agent collects and sends metrics
+interval = 60
+
+# Log verbosity: error, warn, info, debug, trace
+log_level = "info"
+
+# Metric collectors to enable
+# Available: cpu, memory, disk, network, docker
+collectors = ["cpu", "memory", "disk", "network"]
+
+# Docker monitoring
+docker_enabled = false
+docker_socket = "/var/run/docker.sock"
+```
+
+<Callout type="warn">
+Keep your `api_key` secret. Avoid committing the config file to version control. The file permissions should be set to `0600` so only root can read it.
+</Callout>
+
+## Environment Variable Overrides
+
+Every config file option can be overridden with an environment variable. This is useful for container orchestrators, configuration management tools (Ansible, Puppet, Chef), or CI/CD pipelines where you want to inject configuration at runtime.
+
+| Environment Variable | Config Equivalent | Example |
+|---------------------|-------------------|---------|
+| `BUGWATCH_API_KEY` | `api_key` | `bw_live_xxxxx` |
+| `BUGWATCH_ENDPOINT` | `endpoint` | `https://bugwatch.yourcompany.com` |
+| `BUGWATCH_HOSTNAME` | `hostname` | `web-prod-01` |
+| `BUGWATCH_INTERVAL` | `interval` | `30` |
+| `BUGWATCH_COLLECTORS` | `collectors` | `cpu,memory,disk,network,docker` |
+| `BUGWATCH_LOG_LEVEL` | `log_level` | `debug` |
+| `BUGWATCH_DOCKER_ENABLED` | `docker_enabled` | `true` |
+| `BUGWATCH_DOCKER_SOCKET` | `docker_socket` | `/var/run/docker.sock` |
+
+### Setting Environment Variables with systemd
+
+To set environment variables for the systemd service, create an override file:
+
+```bash
+sudo systemctl edit bugwatch-agent
+```
+
+Add the variables in the `[Service]` section:
+
+```ini
+[Service]
+Environment="BUGWATCH_API_KEY=bw_live_xxxxx"
+Environment="BUGWATCH_ENDPOINT=https://bugwatch.yourcompany.com"
+Environment="BUGWATCH_INTERVAL=30"
+Environment="BUGWATCH_LOG_LEVEL=debug"
+```
+
+Then reload and restart:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart bugwatch-agent
+```
+
+### Setting Environment Variables Inline
+
+You can also pass environment variables directly when running the agent manually (useful for testing):
+
+```bash
+BUGWATCH_API_KEY=bw_live_xxxxx BUGWATCH_LOG_LEVEL=debug bugwatch-agent
+```
+
+## Collectors
+
+Collectors are the individual modules that gather system metrics. You can enable or disable them independently to control what data is collected and reduce overhead.
+
+### Available Collectors
+
+| Collector | Metrics Gathered |
+|-----------|-----------------|
+| `cpu` | Overall CPU utilization, per-core usage, load averages (1m, 5m, 15m) |
+| `memory` | Total, used, free, cached, and swap memory |
+| `disk` | Disk usage per mount point, read/write I/O rates |
+| `network` | Bytes sent/received per interface, packet counts, error rates |
+| `docker` | Container status, per-container CPU and memory, container names and images |
+
+To run only CPU and memory monitoring:
+
+```toml
+collectors = ["cpu", "memory"]
+```
+
+To enable all collectors including Docker:
+
+```toml
+collectors = ["cpu", "memory", "disk", "network", "docker"]
+```
+
+## Docker Monitoring Configuration
+
+Docker monitoring lets you track the health and resource usage of all containers running on the host. To enable it:
+
+1. Add `docker` to the `collectors` array, or set `docker_enabled = true`:
+
+```toml
+docker_enabled = true
+# or
+collectors = ["cpu", "memory", "disk", "network", "docker"]
+```
+
+2. Ensure the agent has access to the Docker socket:
+
+```bash
+sudo usermod -aG docker bugwatch
+```
+
+3. Restart the agent:
+
+```bash
+sudo systemctl restart bugwatch-agent
+```
+
+<Callout type="info">
+If you are running Docker with a non-default socket path (e.g., rootless Docker), set the `docker_socket` option to the correct path:
+```toml
+docker_socket = "/run/user/1000/docker.sock"
+```
+</Callout>
+
+### Docker Metrics Collected
+
+| Metric | Description |
+|--------|-------------|
+| Container status | Running, stopped, restarting, or exited |
+| Container CPU | CPU utilization percentage per container |
+| Container memory | Memory usage and limit per container |
+| Container name | Container name and image for identification |
+| Container uptime | How long the container has been running |
+
+Once enabled, container metrics appear alongside host metrics on the **Server** tab of your dashboard.
+
+## Adjusting the Reporting Interval
+
+The `interval` option controls how frequently the agent collects and sends metrics, in seconds.
+
+```toml
+# Report every 30 seconds
+interval = 30
+```
+
+**Recommended ranges:**
+
+| Environment | Recommended Interval | Notes |
+|-------------|---------------------|-------|
+| Production | 30--60 seconds | Good balance of granularity and efficiency |
+| Development / staging | 60--120 seconds | Lower network and API usage |
+| High-frequency monitoring | 10--30 seconds | More granular data, slightly higher resource usage |
+
+<Callout type="warn">
+The minimum supported interval is **10 seconds**. Values below 10 are rejected and the agent will fall back to the default of 60 seconds.
+</Callout>
+
+## Self-Hosted Endpoint Configuration
+
+If you are running a self-hosted Bugwatch instance, point the agent at your own API:
+
+```toml
+endpoint = "https://bugwatch.yourcompany.com"
+```
+
+For self-hosted setups behind a reverse proxy with a custom path prefix:
+
+```toml
+endpoint = "https://internal.yourcompany.com/bugwatch/api"
+```
+
+<Callout type="info">
+The agent communicates over HTTPS on port 443 by default. If your self-hosted instance uses a non-standard port, include it in the endpoint URL: `https://bugwatch.yourcompany.com:8443`.
+</Callout>
+
+## Applying Configuration Changes
+
+After making any changes to `/etc/bugwatch/agent.toml` or environment variable overrides, restart the agent for the changes to take effect:
+
+```bash
+sudo systemctl restart bugwatch-agent
+```
+
+You can verify the agent picked up the new configuration by checking the startup logs:
+
+```bash
+sudo journalctl -u bugwatch-agent -n 20 --no-pager
+```
+
+The agent logs its active configuration at the `info` level on startup.
+
+## Next Steps
+
+- [Troubleshooting](/docs/server-agent/troubleshooting) -- resolve common issues with the server agent

@@ -495,6 +495,12 @@ interface ErrorBoundaryProps {
   children: ReactNode;
   fallback?: ReactNode | ((error: Error, reset: () => void) => ReactNode);
   onError?: (error: Error, errorInfo: ErrorInfo) => void;
+  /**
+   * Auto-reset the error state when the URL changes (default: true).
+   * Listens for `popstate` and patches `pushState`/`replaceState` to detect
+   * client-side navigation. Disable if you want errors to persist across nav.
+   */
+  resetOnLocationChange?: boolean;
 }
 
 interface ErrorBoundaryState {
@@ -502,10 +508,34 @@ interface ErrorBoundaryState {
   error: Error | null;
 }
 
+const LOCATION_CHANGE_EVENT = "bugwatch:location-change";
+let historyPatched = false;
+
+function patchHistoryOnce(): void {
+  if (historyPatched || typeof window === "undefined" || !window.history) return;
+  historyPatched = true;
+  const fire = () => window.dispatchEvent(new Event(LOCATION_CHANGE_EVENT));
+  const origPush = window.history.pushState.bind(window.history);
+  const origReplace = window.history.replaceState.bind(window.history);
+  window.history.pushState = function (...args) {
+    const r = origPush(...args);
+    fire();
+    return r;
+  };
+  window.history.replaceState = function (...args) {
+    const r = origReplace(...args);
+    fire();
+    return r;
+  };
+  window.addEventListener("popstate", fire);
+}
+
 /**
  * Error Boundary component
  */
 class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
+  private locationListenerAttached = false;
+
   constructor(props: ErrorBoundaryProps) {
     super(props);
     this.state = { hasError: false, error: null };
@@ -514,6 +544,26 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
   static getDerivedStateFromError(error: Error): ErrorBoundaryState {
     return { hasError: true, error };
   }
+
+  componentDidMount(): void {
+    if (this.props.resetOnLocationChange !== false && typeof window !== "undefined") {
+      patchHistoryOnce();
+      window.addEventListener(LOCATION_CHANGE_EVENT, this.handleLocationChange);
+      this.locationListenerAttached = true;
+    }
+  }
+
+  componentWillUnmount(): void {
+    if (this.locationListenerAttached && typeof window !== "undefined") {
+      window.removeEventListener(LOCATION_CHANGE_EVENT, this.handleLocationChange);
+    }
+  }
+
+  handleLocationChange = (): void => {
+    if (this.state.hasError) {
+      this.setState({ hasError: false, error: null });
+    }
+  };
 
   componentDidCatch(error: Error, errorInfo: ErrorInfo): void {
     // Capture to Bugwatch

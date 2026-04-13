@@ -14,7 +14,6 @@ import {
   TrendingDown,
   Zap,
   Check,
-  MoreHorizontal,
   ChevronRight,
   Activity,
   Flame,
@@ -67,7 +66,7 @@ const levelConfig = {
     icon: Info,
     color: "text-blue-500",
     bg: "bg-blue-500/10",
-    border: "border-l-info-500",
+    border: "border-l-blue-500",
     badge: "bg-blue-500/10 text-blue-600 dark:text-blue-400",
   },
 };
@@ -115,12 +114,13 @@ function generateTrendData(
 ): { trend: "up" | "down" | "stable"; percentage: number } {
   const hoursSinceFirst =
     (Date.now() - new Date(firstSeen).getTime()) / (1000 * 60 * 60);
+  const eventsPerDay = count / Math.max(hoursSinceFirst / 24, 1);
   if (hoursSinceFirst < 2)
     return { trend: "up", percentage: Math.min(500, Math.round(count * 10)) };
   if (hoursSinceFirst < 24)
-    return { trend: "up", percentage: Math.round(50 + Math.random() * 150) };
+    return { trend: "up", percentage: Math.round(Math.min(200, eventsPerDay)) };
   if (count > 100) return { trend: "stable", percentage: 0 };
-  return { trend: "down", percentage: Math.round(10 + Math.random() * 30) };
+  return { trend: "down", percentage: Math.round(Math.min(40, (count / Math.max(hoursSinceFirst, 1)) * 10)) };
 }
 
 // ---------- Skeleton Components ----------
@@ -145,7 +145,7 @@ function IssueListSkeleton() {
       <div className="p-4 border-b">
         <Skeleton className="h-5 w-32" />
       </div>
-      <div className="divide-y divide-white/5">
+      <div className="divide-y divide-border-subtle">
         {Array.from({ length: 5 }).map((_, i) => (
           <div key={i} className="flex items-center gap-4 p-4">
             <Skeleton className="h-8 w-8 rounded-lg shrink-0" />
@@ -167,7 +167,7 @@ function SidePanelSkeleton() {
       <div className="p-4 border-b">
         <Skeleton className="h-5 w-28" />
       </div>
-      <div className="divide-y divide-white/5">
+      <div className="divide-y divide-border-subtle">
         {Array.from({ length: 3 }).map((_, i) => (
           <div key={i} className="flex items-center gap-3 p-3">
             <Skeleton className="h-5 w-5 rounded-full shrink-0" />
@@ -281,8 +281,24 @@ export default function OverviewPage() {
 
   // Polling every 30 seconds
   useEffect(() => {
-    const interval = setInterval(fetchData, 30000);
-    return () => clearInterval(interval);
+    let interval: ReturnType<typeof setInterval> | null = null;
+
+    function handleVisibility() {
+      if (document.hidden) {
+        if (interval) { clearInterval(interval); interval = null; }
+      } else {
+        fetchData();
+        interval = setInterval(fetchData, 30000);
+      }
+    }
+
+    interval = setInterval(fetchData, 30000);
+    document.addEventListener("visibilitychange", handleVisibility);
+
+    return () => {
+      if (interval) clearInterval(interval);
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
   }, [fetchData]);
 
   const handleResolveIssue = useCallback(
@@ -319,7 +335,7 @@ export default function OverviewPage() {
           <div className="mx-auto w-16 h-16 rounded-2xl bg-gradient-to-br from-red-500/20 to-red-500/5 flex items-center justify-center mb-6">
             <AlertCircle className="h-8 w-8 text-red-500" />
           </div>
-          <h2 className="text-2xl font-semibold mb-2">Failed to load</h2>
+          <h2 className="font-display text-heading-lg mb-2">Failed to load</h2>
           <p className="text-muted-foreground mb-6">{error}</p>
           <Button onClick={fetchData} className="gap-2">
             <RefreshCw className="h-4 w-4" />
@@ -335,9 +351,9 @@ export default function OverviewPage() {
       <div className="flex items-center justify-center min-h-[600px]">
         <div className="text-center max-w-md">
           <div className="mx-auto w-16 h-16 rounded-2xl bg-gradient-to-br from-primary/20 to-primary/5 flex items-center justify-center mb-6">
-            <Bug className="h-8 w-8 text-primary" />
+            <Bug className="h-8 w-8 text-accent-2" />
           </div>
-          <h2 className="text-2xl font-semibold mb-2">No projects yet</h2>
+          <h2 className="font-display text-heading-lg mb-2">No projects yet</h2>
           <p className="text-muted-foreground mb-6">
             Create your first project to start tracking errors across your
             applications.
@@ -358,8 +374,8 @@ export default function OverviewPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-4">
-          <h1 className="text-xl font-semibold">Overview</h1>
-          <span className="text-sm text-muted-foreground">All projects</span>
+          <h1 className="font-display text-heading-lg">Overview</h1>
+          <span className="text-body-sm text-muted-foreground">All projects</span>
         </div>
         <div className="flex items-center gap-2">
           <Button
@@ -381,21 +397,21 @@ export default function OverviewPage() {
 
       {/* Stat Cards */}
       {isLoading ? (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           {Array.from({ length: 4 }).map((_, i) => (
             <StatCardSkeleton key={i} />
           ))}
         </div>
       ) : (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           {/* Unresolved */}
-          <div className="group relative overflow-hidden rounded-xl border bg-card p-4 transition-all hover:shadow-lg hover:shadow-primary/5 hover:border-primary/20">
+          <div className="group relative overflow-hidden rounded-xl border bg-card p-4 transition-all hover:shadow-lg hover:shadow-accent-2/5 hover:border-accent-2/20 card-hover">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                <p className="text-caption font-medium text-muted-foreground uppercase tracking-wide">
                   Unresolved
                 </p>
-                <p className="text-2xl font-bold mt-1">{totals.unresolved}</p>
+                <p className="font-display text-3xl font-semibold mt-1 tabular-nums tracking-tight">{totals.unresolved}</p>
               </div>
               <div
                 className={cn(
@@ -420,13 +436,13 @@ export default function OverviewPage() {
           </div>
 
           {/* Total Events */}
-          <div className="group relative overflow-hidden rounded-xl border bg-card p-4 transition-all hover:shadow-lg hover:shadow-primary/5 hover:border-primary/20">
+          <div className="group relative overflow-hidden rounded-xl border bg-card p-4 transition-all hover:shadow-lg hover:shadow-accent-2/5 hover:border-accent-2/20 card-hover">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                <p className="text-caption font-medium text-muted-foreground uppercase tracking-wide">
                   Total Events
                 </p>
-                <p className="text-2xl font-bold mt-1">
+                <p className="font-display text-3xl font-semibold mt-1 tabular-nums tracking-tight">
                   {totals.events.toLocaleString()}
                 </p>
               </div>
@@ -442,13 +458,13 @@ export default function OverviewPage() {
           </div>
 
           {/* Users Affected */}
-          <div className="group relative overflow-hidden rounded-xl border bg-card p-4 transition-all hover:shadow-lg hover:shadow-primary/5 hover:border-primary/20">
+          <div className="group relative overflow-hidden rounded-xl border bg-card p-4 transition-all hover:shadow-lg hover:shadow-accent-2/5 hover:border-accent-2/20 card-hover">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                <p className="text-caption font-medium text-muted-foreground uppercase tracking-wide">
                   Users Affected
                 </p>
-                <p className="text-2xl font-bold mt-1">
+                <p className="font-display text-3xl font-semibold mt-1 tabular-nums tracking-tight">
                   {totals.users.toLocaleString()}
                 </p>
               </div>
@@ -459,13 +475,13 @@ export default function OverviewPage() {
           </div>
 
           {/* Uptime Health (replaces Projects count) */}
-          <div className="group relative overflow-hidden rounded-xl border bg-card p-4 transition-all hover:shadow-lg hover:shadow-primary/5 hover:border-primary/20">
+          <div className="group relative overflow-hidden rounded-xl border bg-card p-4 transition-all hover:shadow-lg hover:shadow-accent-2/5 hover:border-accent-2/20 card-hover">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                <p className="text-caption font-medium text-muted-foreground uppercase tracking-wide">
                   Uptime Health
                 </p>
-                <p className="text-2xl font-bold mt-1">
+                <p className="font-display text-3xl font-semibold mt-1 tabular-nums tracking-tight">
                   {monitorsSummary.total > 0
                     ? `${monitorsSummary.up}/${monitorsSummary.total}`
                     : "-"}
@@ -527,7 +543,7 @@ export default function OverviewPage() {
           placeholder="Search issues by title or project..."
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          className="w-full h-10 pl-10 pr-4 rounded-lg border bg-card text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/50"
+          className="w-full h-10 pl-10 pr-4 rounded-lg border bg-card text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-accent-2/20 focus:border-accent-2/50"
         />
       </div>
 
@@ -583,7 +599,7 @@ export default function OverviewPage() {
                   )}
                 </div>
               ) : (
-                <div className="divide-y divide-white/5">
+                <div className="divide-y divide-border-subtle">
                   {filteredIssues.map((issue) => {
                     const config =
                       levelConfig[issue.level as keyof typeof levelConfig] ||
@@ -611,7 +627,7 @@ export default function OverviewPage() {
                       >
                         <Link
                           href={`/dashboard/issues/${issue.id}?project=${issue.project_id}`}
-                          className="flex-1 flex items-center gap-4 py-3 px-4"
+                          className="flex-1 flex items-center gap-4 py-3 px-4 focus:ring-2 focus:ring-accent/40 focus:outline-none"
                         >
                           {/* Icon */}
                           <div
@@ -734,17 +750,6 @@ export default function OverviewPage() {
                                 )}
                                 Resolve
                               </Button>
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                className="h-7 w-7 p-0"
-                                onClick={(e) => {
-                                  e.preventDefault();
-                                  e.stopPropagation();
-                                }}
-                              >
-                                <MoreHorizontal className="h-4 w-4" />
-                              </Button>
                             </div>
 
                             {!isHovered && (
@@ -813,7 +818,7 @@ export default function OverviewPage() {
                       </span>
                     </div>
                   </div>
-                  <div className="divide-y divide-white/5 max-h-[300px] overflow-y-auto">
+                  <div className="divide-y divide-border-subtle max-h-[300px] overflow-y-auto">
                     {monitors.map((monitor) => {
                       const isDown = monitor.current_status === "down";
                       const projectColor = stringToColor(monitor.project_name);
@@ -900,7 +905,7 @@ export default function OverviewPage() {
                   </p>
                 </div>
               ) : (
-                <div className="divide-y divide-white/5 max-h-[300px] overflow-y-auto">
+                <div className="divide-y divide-border-subtle max-h-[300px] overflow-y-auto">
                   {alertLogs.map((log) => {
                     const projectColor = stringToColor(log.project_name);
                     return (

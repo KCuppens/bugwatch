@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Crown, Sparkles, X } from 'lucide-react';
-import { getTierDisplayName, getFeatureTier, type Tier } from '@/hooks/use-feature';
+import { getTierDisplayName, getFeatureTier, isSelfHosted, type Tier } from '@/hooks/use-feature';
 import { usePaywall } from '@/lib/paywall-context';
 
 interface UpgradePromptProps {
@@ -27,7 +27,8 @@ export function UpgradePrompt({
   const [dismissed, setDismissed] = useState(false);
   const { openPaywall } = usePaywall();
 
-  if (dismissed) return null;
+  // Don't show upgrade prompts in self-hosted mode
+  if (isSelfHosted() || dismissed) return null;
 
   const handleUpgrade = () => {
     if (onUpgrade) {
@@ -145,7 +146,7 @@ export function FeatureGate({
 
   const currentLevel = tierLevels[currentTier] ?? 0;
   const requiredLevel = tierLevels[requiredTier] ?? 0;
-  const hasAccess = currentLevel >= requiredLevel;
+  const hasAccess = isSelfHosted() || currentLevel >= requiredLevel;
 
   if (hasAccess) {
     return <>{children}</>;

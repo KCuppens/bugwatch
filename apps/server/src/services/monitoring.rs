@@ -6,12 +6,12 @@ use tokio::sync::Semaphore;
 use tokio::time;
 use tracing::{error, info, warn};
 
+use super::alerting::AlertingService;
 use crate::db::{
     models::Monitor,
     repositories::{MonitorCheckRepository, MonitorIncidentRepository, MonitorRepository},
     DbPool,
 };
-use super::alerting::AlertingService;
 
 /// Maximum concurrent health checks to prevent OOM from accumulated timeouts
 const MAX_CONCURRENT_CHECKS: usize = 10;
@@ -78,7 +78,10 @@ impl HealthCheckWorker {
                 // Acquire semaphore permit to limit concurrent checks
                 let permit = self.semaphore.clone().acquire_owned().await;
                 if permit.is_err() {
-                    warn!("Failed to acquire semaphore permit for monitor {}", monitor.id);
+                    warn!(
+                        "Failed to acquire semaphore permit for monitor {}",
+                        monitor.id
+                    );
                     continue;
                 }
                 let permit = permit.unwrap();
@@ -122,6 +125,26 @@ async fn check_monitor(
     monitor: &Monitor,
     alerting: &AlertingService,
 ) -> Result<()> {
+    // Validate URL against SSRF before making the request
+    if let Err(e) = crate::utils::validate_monitor_url(&monitor.url) {
+        warn!(
+            "Monitor '{}' has unsafe URL ({}): {}",
+            monitor.name, monitor.url, e
+        );
+        let now = chrono::Utc::now();
+        MonitorCheckRepository::create(
+            pool,
+            &monitor.id,
+            "error",
+            None,
+            None,
+            Some(&format!("URL validation failed: {}", e)),
+        )
+        .await?;
+        MonitorRepository::update_status(pool, &monitor.id, "error", now).await?;
+        return Ok(());
+    }
+
     let now = chrono::Utc::now();
     let start = Instant::now();
 
@@ -213,7 +236,10 @@ async fn check_monitor(
 
     if status == "down" && previous_status != "down" {
         // Start new incident
-        info!("Monitor {} is DOWN, triggering alerts: {:?}", monitor.name, error_message);
+        info!(
+            "Monitor {} is DOWN, triggering alerts: {:?}",
+            monitor.name, error_message
+        );
         MonitorIncidentRepository::create(pool, &monitor.id, error_message.as_deref()).await?;
 
         // Trigger alert
@@ -226,12 +252,17 @@ async fn check_monitor(
     } else if status == "up" && previous_status == "down" {
         // Resolve existing incident
         info!("Monitor {} is back UP", monitor.name);
-        if let Some(incident) = MonitorIncidentRepository::find_open_by_monitor(pool, &monitor.id).await? {
+        if let Some(incident) =
+            MonitorIncidentRepository::find_open_by_monitor(pool, &monitor.id).await?
+        {
             MonitorIncidentRepository::resolve(pool, &incident.id).await?;
         }
 
         // Trigger recovery alert
-        if let Err(e) = alerting.on_monitor_recovery(&monitor.project_id, monitor).await {
+        if let Err(e) = alerting
+            .on_monitor_recovery(&monitor.project_id, monitor)
+            .await
+        {
             error!("Failed to trigger monitor recovery alert: {}", e);
         }
     }

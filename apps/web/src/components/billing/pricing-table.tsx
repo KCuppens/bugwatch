@@ -6,6 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Badge } from '@/components/ui/badge';
 import { Loader2, Check, X, Crown, Sparkles, AlertCircle } from 'lucide-react';
 import { billingApi } from '@/lib/api';
+import { isValidHttpUrl } from '@/lib/url-utils';
 import { getTierDisplayName, type Tier } from '@/hooks/use-feature';
 import {
   TIER_PRICING,
@@ -39,6 +40,7 @@ export function PricingTable({ currentTier, isOwner }: PricingTableProps) {
         `${window.location.origin}/dashboard/settings?tab=billing&success=true&session_id={CHECKOUT_SESSION_ID}`,
         `${window.location.origin}/dashboard/settings?tab=billing&canceled=true`
       );
+      if (!isValidHttpUrl(response.checkout_url)) return;
       window.location.href = response.checkout_url;
     } catch (err) {
       console.error('Failed to create checkout:', err);
@@ -168,13 +170,13 @@ export function PricingTable({ currentTier, isOwner }: PricingTableProps) {
                 <div className="pt-2">
                   {price !== null ? (
                     <div className="flex items-baseline gap-1">
-                      <span className="text-3xl font-bold">${price}</span>
+                      <span className="font-display text-3xl font-semibold tabular-nums">${price}</span>
                       <span className="text-muted-foreground text-sm">
                         /seat/{isAnnual ? 'mo' : 'month'}
                       </span>
                     </div>
                   ) : (
-                    <div className="text-2xl font-bold">Custom</div>
+                    <div className="font-display text-2xl font-semibold">Custom</div>
                   )}
                   {isAnnual && price !== null && price > 0 && (
                     <p className="text-xs text-muted-foreground mt-1">

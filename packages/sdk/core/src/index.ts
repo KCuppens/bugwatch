@@ -1,11 +1,27 @@
 // Core client
-export { Bugwatch } from "./client";
+import { Bugwatch } from "./client";
+export { Bugwatch };
+
+// Hot-path imports hoisted to module load. The historical require() calls
+// below re-resolve already-loaded modules on every captureException /
+// addBreadcrumb etc., which is ~1µs overhead that multiplies across every
+// customer event.
+import { getEnvConfig, validateApiKey, hasApiKey } from "./env";
+import {
+  setRequestUser as _setRequestUser,
+  setRequestTag as _setRequestTag,
+  setRequestExtra as _setRequestExtra,
+  addRequestBreadcrumb as _addRequestBreadcrumb,
+} from "./context";
+import { Transaction as _Transaction } from "./performance";
 
 // Types
 export type {
   BugwatchOptions,
   BugwatchClient,
   ErrorEvent,
+  PerformanceEvent,
+  SpanData,
   ExceptionInfo,
   StackFrame,
   Breadcrumb,
@@ -17,6 +33,9 @@ export type {
   Integration,
 } from "./types";
 
+// Performance monitoring
+export { Transaction, Span } from "./performance";
+
 // Transport implementations
 export {
   HttpTransport,
@@ -25,12 +44,19 @@ export {
   BatchTransport,
 } from "./transport";
 
+// PII scrubbing
+export { scrubEvent } from "./scrubbing";
+
+// Offline event queue
+export { createPersistentQueue, type PersistentQueue } from "./persistent-queue";
+
 // Utilities
 export { parseStackTrace, extractErrorInfo, isBrowserExtensionError } from "./stacktrace";
 export { generateFingerprint, fingerprintFromException } from "./fingerprint";
 
 // Environment utilities
-export { getEnvConfig, validateApiKey, hasApiKey, ENV_VARS } from "./env";
+export { getEnvConfig, validateApiKey, hasApiKey };
+export { ENV_VARS } from "./env";
 
 // Request context utilities (for request-scoped context isolation)
 export {
@@ -76,9 +102,6 @@ let lazyInitWarned = false;
  * ```
  */
 export function init(options?: Partial<import("./types").BugwatchOptions>): import("./client").Bugwatch {
-  const { Bugwatch } = require("./client");
-  const { getEnvConfig, validateApiKey } = require("./env");
-
   // Merge env config with explicit options (explicit takes precedence)
   const envConfig = getEnvConfig();
   const mergedOptions = { ...envConfig, ...options };
@@ -106,14 +129,11 @@ export function getClient(): import("./client").Bugwatch | null {
 function tryLazyInit(): boolean {
   if (globalClient) return true;
 
-  const { getEnvConfig, hasApiKey } = require("./env");
-
   if (!hasApiKey()) {
     return false;
   }
 
   try {
-    const { Bugwatch } = require("./client");
     const envConfig = getEnvConfig();
 
     // Double-check that apiKey is present (defensive programming)
@@ -184,12 +204,11 @@ export function addBreadcrumb(
   }
 
   // Try to add to request context first
-  const { addRequestBreadcrumb } = require("./context");
   const crumb = {
     ...breadcrumb,
     timestamp: new Date().toISOString(),
   };
-  if (addRequestBreadcrumb(crumb, globalClient.getOptions().maxBreadcrumbs || 100)) {
+  if (_addRequestBreadcrumb(crumb, globalClient.getOptions().maxBreadcrumbs || 100)) {
     return; // Added to request context
   }
 
@@ -208,8 +227,7 @@ export function setUser(user: import("./types").UserContext | null): void {
   }
 
   // Try to set on request context first
-  const { setRequestUser } = require("./context");
-  if (setRequestUser(user)) {
+  if (_setRequestUser(user)) {
     return; // Set on request context
   }
 
@@ -228,8 +246,7 @@ export function setTag(key: string, value: string): void {
   }
 
   // Try to set on request context first
-  const { setRequestTag } = require("./context");
-  if (setRequestTag(key, value)) {
+  if (_setRequestTag(key, value)) {
     return; // Set on request context
   }
 
@@ -248,8 +265,7 @@ export function setExtra(key: string, value: unknown): void {
   }
 
   // Try to set on request context first
-  const { setRequestExtra } = require("./context");
-  if (setRequestExtra(key, value)) {
+  if (_setRequestExtra(key, value)) {
     return; // Set on request context
   }
 
@@ -281,6 +297,21 @@ export async function close(): Promise<void> {
   }
   await globalClient.close();
   globalClient = null;
+}
+
+/**
+ * Start a new performance transaction using the global client.
+ * Returns a Transaction object. Call .finish() when the operation completes.
+ */
+export function startTransaction(
+  name: string,
+  op: string
+): import("./performance").Transaction {
+  if (!globalClient && !tryLazyInit()) {
+    // Return a no-op transaction that doesn't send anything
+    return new _Transaction(name, op);
+  }
+  return globalClient!.startTransaction(name, op);
 }
 
 /**

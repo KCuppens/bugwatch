@@ -136,7 +136,7 @@ pub async fn ingest_metrics(
             .unwrap_or_else(|_| "free".to_string());
         if !can_access_feature(&tier_str, "server_monitoring") {
             let org_id = project.organization_id.as_deref().unwrap_or("");
-            let resource = format!("/api/v1/metrics");
+            let resource = "/api/v1/metrics";
             return Err(crate::payments::x402_feature_response(
                 &state,
                 "server_monitoring",

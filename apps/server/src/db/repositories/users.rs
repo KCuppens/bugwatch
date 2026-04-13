@@ -74,57 +74,21 @@ impl UserRepository {
         Ok(())
     }
 
-    /// Get user's current credit balance
-    pub async fn get_credits(pool: &DbPool, id: &str) -> Result<i32> {
-        let row: (i32,) = sqlx::query_as("SELECT credits FROM users WHERE id = $1")
+    pub async fn update_name(pool: &DbPool, id: &str, name: &str) -> Result<()> {
+        sqlx::query("UPDATE users SET name = $1 WHERE id = $2")
+            .bind(name)
             .bind(id)
-            .fetch_one(pool)
+            .execute(pool)
             .await?;
-        Ok(row.0)
+        Ok(())
     }
 
-    /// Deduct credits from user account
-    /// Returns the new credit balance, or error if insufficient credits
-    pub async fn deduct_credits(pool: &DbPool, id: &str, amount: i32) -> Result<i32> {
-        // First check if user has enough credits
-        let current_credits = Self::get_credits(pool, id).await?;
-        if current_credits < amount {
-            anyhow::bail!("Insufficient credits. Have {}, need {}", current_credits, amount);
-        }
-
-        // Deduct credits and return new balance
-        let row: (i32,) = sqlx::query_as(
-            r#"
-            UPDATE users
-            SET credits = credits - $1
-            WHERE id = $2 AND credits >= $3
-            RETURNING credits
-            "#,
-        )
-        .bind(amount)
-        .bind(id)
-        .bind(amount)
-        .fetch_one(pool)
-        .await?;
-
-        Ok(row.0)
-    }
-
-    /// Add credits to user account
-    pub async fn add_credits(pool: &DbPool, id: &str, amount: i32) -> Result<i32> {
-        let row: (i32,) = sqlx::query_as(
-            r#"
-            UPDATE users
-            SET credits = credits + $1
-            WHERE id = $2
-            RETURNING credits
-            "#,
-        )
-        .bind(amount)
-        .bind(id)
-        .fetch_one(pool)
-        .await?;
-
-        Ok(row.0)
+    pub async fn update_password(pool: &DbPool, id: &str, password_hash: &str) -> Result<()> {
+        sqlx::query("UPDATE users SET password_hash = $1 WHERE id = $2")
+            .bind(password_hash)
+            .bind(id)
+            .execute(pool)
+            .await?;
+        Ok(())
     }
 }

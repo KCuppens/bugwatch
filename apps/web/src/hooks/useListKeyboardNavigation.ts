@@ -7,18 +7,25 @@ interface UseListKeyboardNavigationOptions {
   onOpen: (index: number) => void;
   onToggleSelect?: (index: number) => void;
   onFocusSearch?: () => void;
+  onResolve?: (index: number) => void;
+  onIgnore?: (index: number) => void;
+  onShowHelp?: () => void;
   isEnabled?: boolean;
 }
 
 /**
  * Vim-style keyboard navigation for issue lists.
- * j/k: move focus, Enter: open, x: toggle select, /: focus search
+ * j/k: move focus, Enter: open, x: toggle select, /: focus search,
+ * r: resolve, m/e: mute/archive, ?: help
  */
 export function useListKeyboardNavigation({
   itemCount,
   onOpen,
   onToggleSelect,
   onFocusSearch,
+  onResolve,
+  onIgnore,
+  onShowHelp,
   isEnabled = true,
 }: UseListKeyboardNavigationOptions) {
   const [focusedIndex, setFocusedIndex] = useState(-1);
@@ -89,12 +96,34 @@ export function useListKeyboardNavigation({
           onFocusSearch?.();
           break;
         }
+        case "r": {
+          if (focusedIndex >= 0 && focusedIndex < itemCount && onResolve) {
+            e.preventDefault();
+            onResolve(focusedIndex);
+          }
+          break;
+        }
+        case "m":
+        case "e": {
+          if (focusedIndex >= 0 && focusedIndex < itemCount && onIgnore) {
+            e.preventDefault();
+            onIgnore(focusedIndex);
+          }
+          break;
+        }
+        case "?": {
+          if (onShowHelp) {
+            e.preventDefault();
+            onShowHelp();
+          }
+          break;
+        }
       }
     }
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isEnabled, focusedIndex, itemCount, onOpen, onToggleSelect, onFocusSearch, scrollIntoView]);
+  }, [isEnabled, focusedIndex, itemCount, onOpen, onToggleSelect, onFocusSearch, onResolve, onIgnore, onShowHelp, scrollIntoView]);
 
   // Reset focus when item count changes
   useEffect(() => {

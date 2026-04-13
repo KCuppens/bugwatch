@@ -1,0 +1,103 @@
+# Bugwatch Self-Hosted Docker Compose
+#
+# Required environment variables (create a .env file):
+#
+#   JWT_SECRET=your-secret-key-min-32-chars
+#   DOMAIN=bugwatch.example.com
+#
+# Optional environment variables:
+#
+#   POSTGRES_PASSWORD=bugwatch          (default: bugwatch)
+#   SMTP_HOST=smtp.example.com
+#   SMTP_PORT=587
+#   SMTP_USER=your-email@example.com
+#   SMTP_PASSWORD=your-smtp-password
+#   SMTP_FROM=noreply@example.com
+#
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: bugwatch
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-bugwatch}
+      POSTGRES_DB: bugwatch
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bugwatch"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  server:
+    image: ghcr.io/kcuppens/bugwatch-server:latest
+    build:
+      context: .
+      dockerfile: apps/server/Dockerfile
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://bugwatch:${POSTGRES_PASSWORD:-bugwatch}@postgres:5432/bugwatch
+      JWT_SECRET: ${JWT_SECRET}
+      BUGWATCH_MODE: self-hosted
+      ENVIRONMENT: production
+      SERVER_ADDR: 0.0.0.0:3000
+      APP_URL: https://${DOMAIN:-localhost}
+      ALLOWED_ORIGINS: https://${DOMAIN:-localhost}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  web:
+    image: ghcr.io/kcuppens/bugwatch-web:latest
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: https://${DOMAIN:-localhost}/api/v1
+        NEXT_PUBLIC_DEPLOYMENT_MODE: self-hosted
+    restart: unless-stopped
+    environment:
+      PORT: 3001
+    depends_on:
+      server:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3001').then(r=>{process.exit(r.ok?0:1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      server:
+        condition: service_healthy
+      web:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  caddy_data:
+  caddy_config:

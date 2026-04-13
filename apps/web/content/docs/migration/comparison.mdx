@@ -1,0 +1,184 @@
+---
+title: Bugwatch vs Sentry vs Alternatives
+description: Feature-by-feature comparison of Bugwatch against Sentry, GlitchTip, and Highlight.io for error tracking, pricing, self-hosting, and developer experience.
+---
+
+## Overview
+
+Choosing an error tracking platform is a long-term decision that affects your team's workflow, budget, and on-call experience. This page offers an honest, factual comparison of Bugwatch against three popular alternatives: Sentry, GlitchTip, and Highlight.io. We highlight where Bugwatch excels and where other tools may be a better fit. Every claim below is based on publicly available documentation and pricing pages as of early 2026.
+
+## Feature Comparison
+
+| Feature | Bugwatch | Sentry | GlitchTip | Highlight.io |
+|---------|----------|--------|-----------|-------------|
+| **Pricing model** | Per-seat | Per-event | Per-event | Per-session |
+| **Free tier events** | Unlimited | 5K/month | 1K/month | 500/month |
+| **Event limits on paid** | Unlimited | Capped by plan | Capped by plan | Capped by plan |
+| **Self-hosting** | Docker Compose | Requires Kubernetes | Docker Compose | Docker Compose |
+| **Uptime monitoring** | Built-in | Via integration | No | No |
+| **Server monitoring** | Built-in agent | No | No | No |
+| **JavaScript SDKs** | 6 frameworks | 10+ frameworks | Sentry-compatible | 4 frameworks |
+| **Python SDKs** | 5 frameworks | 8+ frameworks | Sentry-compatible | 2 frameworks |
+| **Rust SDK** | Yes | Yes | No | No |
+| **Setup complexity** | `npm install` + 3 lines | Multi-file config | Sentry drop-in | `npm install` + wrapper |
+| **License** | FSL-1.1-Apache-2.0 | BSL-1.1 | MIT | Apache 2.0 |
+| **Session replay** | No | Yes | No | Yes |
+| **Performance / APM** | No | Yes | No | Yes |
+| **AI-assisted triage** | Built-in | Paid add-on | No | No |
+
+## Pricing Deep-Dive
+
+Bugwatch uses **per-seat pricing with unlimited events**. You pay for team members, not error volume. That single difference eliminates surprise bills from traffic spikes, aggressive retry loops, or a bug that fires thousands of events per minute.
+
+### Bugwatch Tiers
+
+| Plan | Price | Projects | Events | Retention | Uptime Monitors | Extras |
+|------|-------|----------|--------|-----------|-----------------|--------|
+| **Free** | $0 | 1 | Unlimited | 7 days | 1 | Community support |
+| **Pro** | $12/seat/month | Unlimited | Unlimited | 90 days | 10 | Priority support |
+| **Team** | $25/seat/month | Unlimited | Unlimited | 365 days | 25 | All integrations, SSO |
+| **Enterprise** | Custom | Unlimited | Unlimited | Custom | Custom | Dedicated support, SLA |
+
+### Sentry Pricing
+
+Sentry's plans are event-based. Their Team plan starts at **$26/month for 50K events**, and their Business plan is **$80/month for 100K events**. Events beyond your quota are billed as overages, and a single bad deploy can burn through your monthly quota in hours.
+
+<Callout type="info">
+Sentry offers a volume discount at higher tiers, but you still need to predict your usage accurately or risk overage charges at the end of the billing cycle.
+</Callout>
+
+### Real-World Cost Scenario
+
+Consider a **10-person engineering team** tracking **1M events per month** across multiple services:
+
+| | Bugwatch Team | Sentry Team |
+|---|---|---|
+| **Base cost** | 10 seats x $25 = **$250/mo** | $26/mo base + overage for 950K extra events |
+| **Total estimate** | **$250/mo flat** | **$300+/mo** (varies with overage pricing) |
+| **Spike risk** | None — unlimited events | A 2x spike doubles your overage bill |
+| **Annual cost** | **$3,000** | **$3,600+** with conservative usage |
+
+With Bugwatch, your bill is predictable. It only changes when you add team members. With Sentry, every traffic spike, bot attack, or noisy error loop is a billing event.
+
+## Self-Hosting Comparison
+
+Self-hosting gives you full control over your data, compliance, and uptime. But the operational cost varies dramatically between platforms.
+
+### Bugwatch
+
+```bash
+# Clone and start — that's it
+git clone https://github.com/KCuppens/bugwatch.git
+cd bugwatch
+docker compose -f docker-compose.self-hosted.yml up -d
+```
+
+- **Services**: 4 (PostgreSQL, API server, Web app, Caddy reverse proxy)
+- **RAM requirement**: ~1 GB minimum
+- **Setup time**: Under 5 minutes
+- **Updates**: `docker compose pull && docker compose up -d`
+
+### Sentry
+
+- **Services**: 20+ (Kafka, ZooKeeper, ClickHouse, Redis, PostgreSQL, Snuba, Relay, multiple workers...)
+- **RAM requirement**: 8 GB+ minimum, 16 GB recommended
+- **Setup time**: 30–60 minutes for basic setup, hours for production hardening
+- **Orchestration**: Requires Kubernetes for production deployments
+- **Updates**: Complex migration process, often requires downtime
+
+### GlitchTip
+
+- **Services**: 3 (PostgreSQL, Redis, Web/Worker)
+- **RAM requirement**: ~1 GB
+- **Setup time**: 10–15 minutes
+- **Trade-off**: Simpler than Sentry, but significantly fewer features (no uptime monitoring, no server metrics, limited SDK support)
+
+### Highlight.io
+
+- **Services**: 5+ (PostgreSQL, ClickHouse, Kafka, Collector, Frontend)
+- **RAM requirement**: ~4 GB minimum (ClickHouse is memory-hungry)
+- **Setup time**: 15–30 minutes
+- **Trade-off**: Requires ClickHouse for session replay storage, which adds operational complexity
+
+<Callout type="info">
+If self-hosting simplicity matters to your team, Bugwatch and GlitchTip are the lightest options. Bugwatch adds uptime and server monitoring that GlitchTip lacks.
+</Callout>
+
+## SDK Developer Experience
+
+SDK setup is something every developer on your team touches. Less config means faster onboarding and fewer mistakes.
+
+### Next.js Setup — Bugwatch
+
+```bash
+npm install @bugwatch/nextjs
+```
+
+```ts title="instrumentation.ts"
+import { initBugwatch } from "@bugwatch/nextjs/instrumentation";
+
+export async function register() {
+  initBugwatch({ dsn: process.env.NEXT_PUBLIC_BUGWATCH_DSN! });
+}
+```
+
+That's it — three lines in a single file. The SDK automatically captures unhandled errors, console errors, and `onRequestError` hooks.
+
+### Next.js Setup — Sentry
+
+```bash
+npx @sentry/wizard@latest -i nextjs
+```
+
+This generates **three separate config files**:
+
+- `sentry.client.config.ts` — browser-side initialization
+- `sentry.server.config.ts` — Node.js server initialization
+- `sentry.edge.config.ts` — edge runtime initialization
+
+Plus you need to wrap your Next.js config:
+
+```ts title="next.config.ts"
+import { withSentryConfig } from "@sentry/nextjs";
+
+const nextConfig = { /* ... */ };
+
+export default withSentryConfig(nextConfig, {
+  org: "your-org",
+  project: "your-project",
+  silent: !process.env.CI,
+  // ... additional options
+});
+```
+
+<Callout type="warn">
+Sentry's `withSentryConfig` wrapper modifies your Webpack configuration and adds source map upload steps to your build. This can increase build times and occasionally conflicts with other Next.js plugins.
+</Callout>
+
+### Summary
+
+| | Bugwatch | Sentry |
+|---|---|---|
+| **Install command** | `npm install @bugwatch/nextjs` | `npx @sentry/wizard -i nextjs` |
+| **Config files** | 1 (`instrumentation.ts`) | 3–4 (client, server, edge, next.config wrapper) |
+| **Build impact** | None | Adds Webpack plugin + source map upload |
+| **Auto-capture** | Errors, console.error, onRequestError | Errors (console requires manual setup) |
+
+## When to Choose Bugwatch
+
+- **You want predictable pricing** — Per-seat means no surprise bills from error spikes or high-traffic days
+- **You need uptime + server monitoring in one tool** — Three monitoring pillars in a single dashboard instead of stitching together multiple services
+- **You want real self-hosting** — Docker Compose deployment in under 5 minutes, no Kubernetes required
+- **You're starting fresh** — Minimal SDK config, modern dashboard, and AI-assisted setup make onboarding fast
+
+## When Bugwatch May Not Be Right
+
+- **You need APM / performance tracing** — Bugwatch focuses on errors, uptime, and server metrics. If distributed tracing is critical, consider Sentry or Highlight.io alongside Bugwatch
+- **You need session replay** — Bugwatch doesn't record user sessions. Pair with a dedicated session replay tool if needed
+- **You're heavily invested in Sentry's ecosystem** — If you rely on Sentry's extensive integrations (GitHub Issues, Jira, Linear, etc.), note that Bugwatch currently supports Slack, email, PagerDuty, and webhooks with more integrations on the roadmap. See our [Sentry migration guide](/docs/migration/from-sentry) for a detailed transition plan
+
+## Migration
+
+Ready to switch? Moving from Sentry or another platform to Bugwatch is straightforward.
+
+See our [step-by-step Sentry migration guide](/docs/migration/from-sentry) for instructions on removing the Sentry SDK, installing Bugwatch, and verifying your setup — typically a 15-minute process.

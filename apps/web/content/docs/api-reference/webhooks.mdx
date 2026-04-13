@@ -1,0 +1,221 @@
+---
+title: Webhooks
+description: Stripe incoming webhooks and outgoing alert webhook payload formats for Bugwatch integrations.
+---
+
+# Webhooks
+
+Bugwatch uses webhooks in two ways: **incoming** Stripe webhooks that manage the subscription lifecycle, and **outgoing** alert webhooks that deliver notifications to your configured channels.
+
+## Stripe Webhook
+
+### POST /webhooks/stripe
+
+Receives and processes Stripe webhook events. This endpoint is called by Stripe, not by your application. It does not require Bearer token authentication -- instead, it verifies the `Stripe-Signature` header using the configured webhook secret.
+
+**Authentication:** Stripe signature verification (HMAC-SHA256)
+
+### Signature Verification
+
+Stripe signs every webhook event with the `Stripe-Signature` header containing a timestamp and HMAC-SHA256 signature. Bugwatch verifies this signature using your configured `STRIPE_WEBHOOK_SECRET` to ensure the event is genuine.
+
+### Handled Event Types
+
+| Event Type | Description | Action |
+|---|---|---|
+| `checkout.session.completed` | Customer completed a checkout session | Creates or updates the subscription, sets tier and seats |
+| `invoice.paid` | Invoice was paid successfully | Records the billing event, confirms renewal |
+| `invoice.payment_failed` | Invoice payment failed | Records the billing event, marks subscription as past due |
+| `customer.subscription.updated` | Subscription was modified | Updates tier, seats, period dates, and cancellation status |
+| `customer.subscription.deleted` | Subscription was canceled | Downgrades organization to free tier |
+
+### Idempotency
+
+The webhook handler checks for duplicate events using the Stripe event ID. If an event has already been processed, it returns `200 OK` without re-processing.
+
+### Example Stripe Configuration
+
+Configure your Stripe webhook endpoint in the Stripe Dashboard:
+
+1. Go to **Developers** > **Webhooks** > **Add endpoint**
+2. Set the endpoint URL to `https://api.bugwatch.dev/api/v1/webhooks/stripe`
+3. Select the events listed above
+4. Copy the signing secret and set it as your `STRIPE_WEBHOOK_SECRET` environment variable
+
+### Response
+
+Returns `200 OK` for all successfully processed events (including unhandled event types, which are acknowledged but ignored).
+
+---
+
+## Outgoing Alert Webhooks
+
+When an alert rule triggers, Bugwatch sends notifications through the configured channels. Below are the payload formats for each channel type.
+
+### Email Channel Payload
+
+Email notifications are sent to all recipients configured in the channel. The email contains:
+
+- **Subject**: Alert name and trigger summary
+- **Body**: Issue or monitor details, link to the Bugwatch dashboard
+
+Example email content for a new issue alert:
+
+```
+Subject: [Bugwatch] New error: TypeError in Dashboard.tsx
+
+Project: My Web App
+Issue: TypeError: Cannot read properties of undefined (reading 'map')
+Level: error
+Environment: production
+First seen: 2025-01-16T09:15:00Z
+
+View in Bugwatch: https://app.bugwatch.dev/dashboard/issues/iss_def456
+```
+
+### Slack Channel Payload
+
+Slack notifications are sent as rich messages using Slack's Block Kit format via the configured incoming webhook URL.
+
+Example Slack payload for a new issue alert:
+
+```json
+{
+  "text": "[Bugwatch] New error in My Web App: TypeError: Cannot read properties of undefined (reading 'map')",
+  "blocks": [
+    {
+      "type": "section",
+      "text": {
+        "type": "mrkdwn",
+        "text": "*New Error in My Web App*\n\n*TypeError*: Cannot read properties of undefined (reading 'map')\n\nLevel: `error` | Environment: `production`\n\n<https://app.bugwatch.dev/dashboard/issues/iss_def456|View in Bugwatch>"
+      }
+    }
+  ]
+}
+```
+
+### Webhook Channel Payload
+
+Custom webhook notifications are sent as POST requests to your configured URL with a JSON payload. If a signing secret is configured, the request includes an `X-Bugwatch-Signature` header containing an HMAC-SHA256 signature of the payload body.
+
+#### Headers
+
+| Header | Description |
+|---|---|
+| `Content-Type` | `application/json` |
+| `X-Bugwatch-Signature` | HMAC-SHA256 signature (if signing secret is configured) |
+| `X-Bugwatch-Event` | Event type (e.g., `new_issue`, `monitor_down`) |
+
+#### Payload Format
+
+```json
+{
+  "event": "new_issue",
+  "timestamp": "2025-01-16T09:15:00Z",
+  "project": {
+    "id": "proj_abc123",
+    "name": "My Web App"
+  },
+  "alert_rule": {
+    "id": "alert_abc123",
+    "name": "Critical errors alert"
+  },
+  "data": {
+    "issue": {
+      "id": "iss_def456",
+      "title": "TypeError: Cannot read properties of undefined (reading 'map')",
+      "level": "error",
+      "environment": "production",
+      "count": 1,
+      "user_count": 1,
+      "first_seen": "2025-01-16T09:15:00Z",
+      "url": "https://app.bugwatch.dev/dashboard/issues/iss_def456"
+    }
+  }
+}
+```
+
+#### Monitor Down Payload
+
+```json
+{
+  "event": "monitor_down",
+  "timestamp": "2025-01-16T09:15:00Z",
+  "project": {
+    "id": "proj_abc123",
+    "name": "My Web App"
+  },
+  "alert_rule": {
+    "id": "alert_mon_001",
+    "name": "API monitor down"
+  },
+  "data": {
+    "monitor": {
+      "id": "mon_abc123",
+      "name": "Production API",
+      "url": "https://api.example.com/health",
+      "current_status": "down",
+      "error": "Connection timeout",
+      "last_checked_at": "2025-01-16T09:15:00Z"
+    }
+  }
+}
+```
+
+#### Server Alert Payload
+
+```json
+{
+  "event": "server_cpu_high",
+  "timestamp": "2025-01-16T09:15:00Z",
+  "project": {
+    "id": "proj_abc123",
+    "name": "My Web App"
+  },
+  "alert_rule": {
+    "id": "alert_srv_001",
+    "name": "High CPU alert"
+  },
+  "data": {
+    "server": {
+      "id": "srv_db_abc123",
+      "hostname": "prod-web-1.example.com",
+      "metric": "cpu_usage_percent",
+      "value": 95.2,
+      "threshold": 90.0
+    }
+  }
+}
+```
+
+### Verifying Webhook Signatures
+
+If you configured a signing secret for your webhook channel, you can verify the signature to ensure the request came from Bugwatch:
+
+```python
+import hmac
+import hashlib
+
+def verify_signature(payload_body, signature, secret):
+    expected = hmac.new(
+        secret.encode('utf-8'),
+        payload_body,
+        hashlib.sha256
+    ).hexdigest()
+    return hmac.compare_digest(expected, signature)
+```
+
+```javascript
+const crypto = require('crypto');
+
+function verifySignature(payloadBody, signature, secret) {
+  const expected = crypto
+    .createHmac('sha256', secret)
+    .update(payloadBody)
+    .digest('hex');
+  return crypto.timingSafeEqual(
+    Buffer.from(expected),
+    Buffer.from(signature)
+  );
+}
+```

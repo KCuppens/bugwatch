@@ -1,0 +1,163 @@
+---
+title: Celery Integration
+description: Integrate the Bugwatch Python SDK with Celery to automatically capture task failures, retries, and errors in your background workers.
+---
+
+# Celery Integration
+
+The Bugwatch Celery integration monitors your background task workers and automatically captures task failures, retry events, and unhandled exceptions -- giving you full visibility into your async job pipeline.
+
+## Installation
+
+Install the SDK with the Celery extras:
+
+```bash
+pip install bugwatch-sdk[celery]
+```
+
+## Quick Start
+
+Initialize Bugwatch first, then wrap your Celery app:
+
+```python
+import bugwatch
+from celery import Celery
+from bugwatch.integrations.celery import BugwatchCelery
+
+bugwatch.init(
+    api_key="your-api-key",
+    environment="production",
+    release="1.0.0",
+)
+
+app = Celery("myapp", broker="redis://localhost:6379/0")
+
+BugwatchCelery(app)
+```
+
+## What Gets Captured Automatically
+
+Once the integration is active, the SDK captures:
+
+- **Task failures** -- any exception that causes a task to fail
+- **Task retries** -- exceptions that trigger a retry, logged as warnings
+- **Worker-level errors** -- unhandled exceptions in the worker process
+- **Task context** -- task name, task ID, arguments, retries count, and queue name
+
+## Example Task
+
+No changes are needed in your task code. Failures are captured automatically:
+
+```python
+@app.task(bind=True, max_retries=3)
+def send_email(self, to, subject, body):
+    try:
+        email_service.send(to=to, subject=subject, body=body)
+    except EmailServiceUnavailable as e:
+        raise self.retry(exc=e, countdown=60)
+```
+
+In this example, each retry is recorded as a warning-level event, and the final failure (after all retries are exhausted) is recorded as an error.
+
+## Manual Reporting in Tasks
+
+You can report handled exceptions or messages from within tasks:
+
+```python
+import bugwatch
+
+@app.task
+def process_invoice(invoice_id):
+    invoice = Invoice.objects.get(pk=invoice_id)
+
+    bugwatch.add_breadcrumb(
+        category="task",
+        message=f"Processing invoice {invoice_id}",
+        level="info",
+    )
+
+    try:
+        result = billing_service.charge(invoice)
+    except PartialChargeError as e:
+        bugwatch.capture_exception(e)
+        invoice.mark_partial()
+        return
+
+    invoice.mark_paid()
+```
+
+## Adding Context
+
+### Tags
+
+Add tags to identify tasks in the Bugwatch dashboard:
+
+```python
+import bugwatch
+
+@app.task
+def generate_report(report_type, user_id):
+    bugwatch.set_tag("task.type", report_type)
+    bugwatch.set_tag("user_id", user_id)
+    # ...
+```
+
+### User Context
+
+Attach the user who triggered the task:
+
+```python
+import bugwatch
+
+@app.task
+def export_data(user_id, export_format):
+    user = User.objects.get(pk=user_id)
+    bugwatch.set_user({
+        "id": str(user.pk),
+        "email": user.email,
+    })
+    # ...
+```
+
+## Using with Django
+
+If your Celery app is part of a Django project, initialize Bugwatch in your Django settings and set up Celery as usual:
+
+```python
+# settings.py
+import bugwatch
+
+bugwatch.init(
+    api_key="your-api-key",
+    environment="production",
+)
+
+# celery.py
+import os
+from celery import Celery
+from bugwatch.integrations.celery import BugwatchCelery
+
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "myproject.settings")
+
+app = Celery("myproject")
+app.config_from_object("django.conf:settings", namespace="CELERY")
+app.autodiscover_tasks()
+
+BugwatchCelery(app)
+```
+
+## Worker Shutdown
+
+The Celery integration automatically flushes pending events when a worker shuts down gracefully. For forced shutdowns, events buffered in memory may be lost. To minimize this, keep the `flush_interval` low:
+
+```python
+bugwatch.init(
+    api_key="your-api-key",
+    flush_interval=2,  # Flush every 2 seconds (default: 5)
+)
+```
+
+## Next Steps
+
+- [Python SDK Overview](/docs/sdks/python) -- core SDK functions and configuration
+- [Django Integration](/docs/sdks/python/django) -- pair Celery monitoring with your Django application

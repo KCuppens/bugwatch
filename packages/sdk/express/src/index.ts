@@ -74,4 +74,7 @@ export {
   setExtra,
   flush,
   close,
+  startTransaction,
+  Transaction,
+  Span,
 } from "@bugwatch/core";

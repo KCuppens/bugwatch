@@ -1,0 +1,162 @@
+---
+title: Gin Integration
+description: Integrate the Bugwatch Go SDK with the Gin web framework to automatically capture panics, attach request context, and monitor your Gin application.
+---
+
+# Gin Integration
+
+The Bugwatch Gin integration provides middleware that automatically recovers from panics, captures errors, and attaches full request context to every event. It replaces Gin's default recovery middleware with one that reports to Bugwatch.
+
+## Installation
+
+```bash
+go get github.com/KCuppens/bugwatch-go
+```
+
+The Gin middleware is included in the main `bugwatch-go` package -- no additional dependencies are required.
+
+## Quick Start
+
+```go
+package main
+
+import (
+	"github.com/gin-gonic/gin"
+	"github.com/KCuppens/bugwatch-go"
+	bugwatchgin "github.com/KCuppens/bugwatch-go/gin"
+)
+
+func main() {
+	bugwatch.Init(bugwatch.Options{
+		APIKey:      "bw_live_xxxxx",
+		Environment: "production",
+	})
+	defer bugwatch.Flush(5 * time.Second)
+
+	r := gin.New()
+
+	// Add Bugwatch middleware (replaces gin.Recovery())
+	r.Use(bugwatchgin.Middleware())
+
+	r.GET("/", func(c *gin.Context) {
+		c.JSON(200, gin.H{"status": "ok"})
+	})
+
+	r.Run(":8080")
+}
+```
+
+<Callout type="info">
+Use `gin.New()` instead of `gin.Default()` to avoid adding the default `Recovery()` middleware alongside the Bugwatch middleware. The Bugwatch middleware already handles panic recovery.
+</Callout>
+
+## What Gets Captured Automatically
+
+Once the middleware is added, the SDK captures:
+
+- **Panics** raised during request handling, with full stack traces
+- **Request context** including URL, HTTP method, headers, query parameters, and client IP
+- **Route information** including the matched Gin route pattern (e.g., `/api/users/:id`)
+
+## User Extraction
+
+Pass an `ExtractUser` option to automatically associate errors with the current user:
+
+```go
+r.Use(bugwatchgin.Middleware(bugwatchgin.Options{
+	ExtractUser: func(c *gin.Context) *bugwatch.User {
+		user, exists := c.Get("user")
+		if !exists {
+			return nil
+		}
+		u := user.(*User)
+		return &bugwatch.User{
+			ID:    u.ID,
+			Email: u.Email,
+		}
+	},
+}))
+```
+
+## Manual Capture in Handlers
+
+You can still capture errors manually inside your handlers:
+
+```go
+r.POST("/api/orders", func(c *gin.Context) {
+	order, err := createOrder(c.Request.Context(), c.Request.Body)
+	if err != nil {
+		bugwatch.CaptureException(err)
+		c.JSON(500, gin.H{"error": "Failed to create order"})
+		return
+	}
+	c.JSON(201, order)
+})
+```
+
+## Attaching Context Per Request
+
+Use `bugwatchgin.SetTag` and `bugwatchgin.SetUser` within a handler to enrich the current request scope:
+
+```go
+r.GET("/api/projects/:id", func(c *gin.Context) {
+	bugwatchgin.SetTag(c, "project_id", c.Param("id"))
+
+	project, err := getProject(c.Param("id"))
+	if err != nil {
+		bugwatch.CaptureException(err)
+		c.JSON(404, gin.H{"error": "Not found"})
+		return
+	}
+	c.JSON(200, project)
+})
+```
+
+## Full Example
+
+```go
+package main
+
+import (
+	"time"
+
+	"github.com/gin-gonic/gin"
+	"github.com/KCuppens/bugwatch-go"
+	bugwatchgin "github.com/KCuppens/bugwatch-go/gin"
+)
+
+func main() {
+	bugwatch.Init(bugwatch.Options{
+		APIKey:      "bw_live_xxxxx",
+		Environment: "production",
+		Release:     "1.2.0",
+	})
+	defer bugwatch.Flush(5 * time.Second)
+
+	r := gin.New()
+	r.Use(gin.Logger())
+	r.Use(bugwatchgin.Middleware())
+
+	r.GET("/health", func(c *gin.Context) {
+		c.JSON(200, gin.H{"status": "healthy"})
+	})
+
+	r.GET("/api/users/:id", func(c *gin.Context) {
+		bugwatchgin.SetTag(c, "user_id", c.Param("id"))
+		user, err := getUser(c.Param("id"))
+		if err != nil {
+			bugwatch.CaptureException(err)
+			c.JSON(500, gin.H{"error": "Internal server error"})
+			return
+		}
+		c.JSON(200, user)
+	})
+
+	r.Run(":8080")
+}
+```
+
+## Next Steps
+
+- [Go SDK Overview](/docs/sdks/go) -- core SDK functions and configuration
+- [Echo Integration](/docs/sdks/go/echo) -- middleware for the Echo web framework

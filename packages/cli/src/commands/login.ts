@@ -44,13 +44,16 @@ export async function loginCommand(options: LoginOptions): Promise<void> {
     process.exit(1);
   }
 
-  // Save config first so the verification call can use it
-  await saveConfig({ apiKey, url });
+  // Verify the key works before saving config
+  // Temporarily set env vars so listProjects uses them
+  process.env.BUGWATCH_API_KEY = apiKey;
+  if (url) process.env.BUGWATCH_URL = url;
 
-  // Verify the key works
   const spinner = ora("Verifying API key...").start();
   try {
     const projects = await listProjects();
+    // Verification succeeded — now save config
+    await saveConfig({ apiKey, url });
     spinner.succeed(
       `Authenticated! Found ${projects.length} project(s).`
     );
@@ -59,8 +62,9 @@ export async function loginCommand(options: LoginOptions): Promise<void> {
     );
   } catch (error) {
     spinner.fail("Failed to verify API key.");
-    // Remove the saved config since it's invalid
-    await saveConfig({ apiKey: "", url });
+    // Clean up env vars
+    delete process.env.BUGWATCH_API_KEY;
+    delete process.env.BUGWATCH_URL;
     const message = error instanceof Error ? error.message : String(error);
     console.log(chalk.red(`\n  ${message}\n`));
     process.exit(1);

@@ -174,8 +174,8 @@ export default function ProjectsPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold">Projects</h1>
-          <p className="text-muted-foreground">
+          <h1 className="font-display text-heading-lg">Projects</h1>
+          <p className="text-body-sm text-muted-foreground mt-1">
             Manage your projects and API keys
           </p>
         </div>
@@ -201,8 +201,8 @@ export default function ProjectsPage() {
               <CardHeader className="pb-2">
                 <div className="flex items-start justify-between">
                   <div className="flex items-center gap-2">
-                    <div className="rounded-md bg-primary/10 p-2 relative">
-                      <FolderOpen className="h-4 w-4 text-primary" />
+                    <div className="rounded-lg bg-accent-2/10 p-2 relative">
+                      <FolderOpen className="h-4 w-4 text-accent-2" />
                     </div>
                     <div>
                       <div className="flex items-center gap-2">
@@ -226,7 +226,7 @@ export default function ProjectsPage() {
                 {/* Platform/Framework Badge */}
                 {badge && (
                   <div className="flex items-center gap-2">
-                    <span className="inline-flex items-center rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-medium text-primary">
+                    <span className="inline-flex items-center rounded-full bg-accent-2/10 px-2.5 py-0.5 text-caption font-medium text-accent-2">
                       {badge.platform}
                     </span>
                     <span className="inline-flex items-center rounded-full bg-muted px-2.5 py-0.5 text-xs font-medium text-muted-foreground">

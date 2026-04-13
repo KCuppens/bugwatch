@@ -1,0 +1,260 @@
+---
+title: Migrating from Sentry
+description: Step-by-step guide to migrate from Sentry to Bugwatch. Replace Sentry SDK packages, update initialization code, and map concepts between platforms.
+---
+
+# Migrating from Sentry
+
+This guide walks you through replacing Sentry with Bugwatch in your application. The concepts are similar between the two platforms, so the migration is mostly a matter of swapping packages and updating initialization code.
+
+## Step 1: Install the Bugwatch SDK
+
+Replace the Sentry SDK package with the corresponding Bugwatch package.
+
+### JavaScript / Next.js
+
+```bash
+# Remove Sentry
+npm uninstall @sentry/nextjs @sentry/react @sentry/node @sentry/browser
+
+# Install Bugwatch
+npm install @bugwatch/nextjs
+```
+
+### Python
+
+```bash
+# Remove Sentry
+pip uninstall sentry-sdk
+
+# Install Bugwatch
+pip install bugwatch
+```
+
+### Rust
+
+Update your `Cargo.toml`:
+
+```toml
+# Remove
+# sentry = "0.x"
+
+# Add
+bugwatch = "0.1"
+```
+
+## Step 2: Update Initialization Code
+
+Replace the Sentry `init` call with Bugwatch's `init`. The main difference is that Bugwatch uses a simple API key instead of a DSN URL.
+
+### JavaScript / Next.js
+
+**Before (Sentry):**
+
+```js
+import * as Sentry from "@sentry/nextjs";
+
+Sentry.init({
+  dsn: "https://examplePublicKey@o0.ingest.sentry.io/0",
+  tracesSampleRate: 1.0,
+});
+```
+
+**After (Bugwatch):**
+
+```js
+import { init } from "@bugwatch/nextjs";
+
+init({
+  apiKey: "bw_live_xxxxx",
+});
+```
+
+### Python
+
+**Before (Sentry):**
+
+```python
+import sentry_sdk
+
+sentry_sdk.init(
+    dsn="https://examplePublicKey@o0.ingest.sentry.io/0",
+    traces_sample_rate=1.0,
+)
+```
+
+**After (Bugwatch):**
+
+```python
+import bugwatch
+
+bugwatch.init(api_key="bw_live_xxxxx")
+```
+
+### Rust
+
+**Before (Sentry):**
+
+```rust
+let _guard = sentry::init("https://examplePublicKey@o0.ingest.sentry.io/0");
+```
+
+**After (Bugwatch):**
+
+```rust
+bugwatch::init("bw_live_xxxxx");
+```
+
+## Step 3: Map Your DSN to an API Key
+
+Sentry uses a DSN (Data Source Name) URL that encodes your project and authentication details. Bugwatch replaces this with a single API key.
+
+1. Log in to your Bugwatch dashboard
+2. Navigate to your project's **Settings** page
+3. Copy the **API Key** (it looks like `bw_live_xxxxx`)
+4. Use this key in your `init()` call
+
+## Step 4: Update Error Enrichment
+
+Both platforms support adding context to errors. The APIs are similar but use different method names.
+
+### User Context
+
+**Sentry:**
+
+```js
+Sentry.setUser({ id: "123", email: "user@example.com" });
+```
+
+**Bugwatch:**
+
+```js
+import { setUser } from "@bugwatch/nextjs";
+
+setUser({ id: "123", email: "user@example.com" });
+```
+
+### Tags
+
+**Sentry:**
+
+```js
+Sentry.setTag("environment", "production");
+```
+
+**Bugwatch:**
+
+```js
+import { setTag } from "@bugwatch/nextjs";
+
+setTag("environment", "production");
+```
+
+### Breadcrumbs
+
+**Sentry:**
+
+```js
+Sentry.addBreadcrumb({
+  message: "User clicked checkout",
+  category: "ui",
+  level: "info",
+});
+```
+
+**Bugwatch:**
+
+```js
+import { addBreadcrumb } from "@bugwatch/nextjs";
+
+addBreadcrumb({
+  message: "User clicked checkout",
+  category: "ui",
+  level: "info",
+});
+```
+
+### Manual Error Capture
+
+**Sentry:**
+
+```js
+Sentry.captureException(error);
+Sentry.captureMessage("Something happened");
+```
+
+**Bugwatch:**
+
+```js
+import { captureException, captureMessage } from "@bugwatch/nextjs";
+
+captureException(error);
+captureMessage("Something happened");
+```
+
+## Step 5: Remove Sentry Configuration Files
+
+Sentry often requires additional configuration files. Remove them after migration:
+
+- `sentry.client.config.js` / `sentry.client.config.ts`
+- `sentry.server.config.js` / `sentry.server.config.ts`
+- `sentry.edge.config.js` / `sentry.edge.config.ts`
+- `.sentryclirc`
+- Sentry-related entries in `next.config.js` (e.g., `withSentryConfig` wrapper)
+
+## Step 6: Update Next.js Config
+
+If you were using Sentry's Next.js wrapper, remove it:
+
+**Before:**
+
+```js
+const { withSentryConfig } = require("@sentry/nextjs");
+
+module.exports = withSentryConfig(nextConfig, sentryWebpackPluginOptions);
+```
+
+**After:**
+
+```js
+module.exports = nextConfig;
+```
+
+Bugwatch does not require a build-time webpack plugin. The SDK is initialized at runtime.
+
+## Concept Mapping
+
+| Sentry Concept | Bugwatch Equivalent | Notes |
+|---------------|---------------------|-------|
+| DSN | API Key | Simpler, single string |
+| Project | Project | Same concept |
+| Issue | Issue | Same concept |
+| Event | Event | Same concept |
+| Breadcrumbs | Breadcrumbs | Same API |
+| Tags | Tags | Same API |
+| User context | User context | Same API |
+| Releases | -- | Not yet supported |
+| Performance transactions | -- | Planned |
+| Session replay | -- | Planned |
+| Crons monitoring | Uptime Monitoring | Different approach, similar goal |
+
+## Running Both in Parallel
+
+We recommend running Sentry and Bugwatch side by side for a few days before fully removing Sentry. This lets you verify that Bugwatch captures the same errors.
+
+```js
+// Temporary: run both SDKs
+import * as Sentry from "@sentry/nextjs";
+import { init as initBugwatch } from "@bugwatch/nextjs";
+
+Sentry.init({ dsn: "..." });
+initBugwatch({ apiKey: "bw_live_xxxxx" });
+```
+
+Once you confirm errors appear in both dashboards, remove the Sentry SDK.
+
+## Next Steps
+
+- [Getting Started](/docs/getting-started) -- full setup walkthrough
+- [Alerting](/docs/alerting) -- set up notifications to replace your Sentry alert rules
+- [Server Agent](/docs/server-agent) -- add server monitoring (something Sentry does not offer)

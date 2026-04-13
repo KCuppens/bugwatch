@@ -1,0 +1,179 @@
+---
+title: Sidekiq Integration
+description: Integrate the Bugwatch Ruby SDK with Sidekiq to automatically capture background job failures and attach job context.
+---
+
+# Sidekiq Integration
+
+The Bugwatch Sidekiq integration installs an error handler that captures job failures, attaches job context (class, queue, arguments, retry count), and reports them to your Bugwatch dashboard.
+
+## Installation
+
+Add to your `Gemfile` (if not already present):
+
+```ruby
+gem 'bugwatch-ruby'
+```
+
+```bash
+bundle install
+```
+
+## Configuration
+
+### With Rails
+
+If you are using Rails, the Sidekiq integration is auto-detected and configured by the Railtie. No additional setup is needed beyond the standard Rails initializer:
+
+```ruby
+# config/initializers/bugwatch.rb
+Bugwatch.init(
+  api_key: ENV.fetch('BUGWATCH_API_KEY'),
+  environment: Rails.env,
+)
+```
+
+### Without Rails
+
+For standalone Sidekiq applications, configure the error handler in your Sidekiq initializer:
+
+```ruby
+# config/sidekiq.rb (or wherever you configure Sidekiq)
+require 'bugwatch'
+require 'bugwatch/sidekiq'
+
+Bugwatch.init(
+  api_key: 'bw_live_xxxxx',
+  environment: 'production',
+)
+
+Sidekiq.configure_server do |config|
+  config.error_handlers << Bugwatch::Sidekiq::ErrorHandler.new
+end
+```
+
+## What Gets Captured Automatically
+
+When a job raises an unhandled exception, the error handler captures:
+
+- **The exception** with full stack trace and error message
+- **Job class** (e.g., `OrderMailer`, `ReportGenerator`)
+- **Queue name** (e.g., `default`, `critical`, `mailers`)
+- **Job arguments** (automatically truncated if too large)
+- **Retry count** -- how many times the job has been retried
+- **Job ID** for correlation with Sidekiq's own logs
+
+## Context Tags
+
+Every captured event is automatically tagged with:
+
+| Tag | Example | Description |
+| --- | --- | --- |
+| `sidekiq.queue` | `critical` | The queue the job was pulled from |
+| `sidekiq.job_class` | `OrderProcessor` | The worker class name |
+| `sidekiq.retry_count` | `2` | Number of previous retries |
+| `sidekiq.job_id` | `abc123def456` | Sidekiq's unique job identifier |
+
+## Adding Custom Context
+
+Add breadcrumbs and tags inside your workers to enrich error reports:
+
+```ruby
+class OrderProcessor
+  include Sidekiq::Job
+
+  def perform(order_id)
+    Bugwatch.set_tag('order_id', order_id)
+
+    Bugwatch.add_breadcrumb(
+      category: 'sidekiq',
+      message: "Processing order #{order_id}",
+      level: :info
+    )
+
+    order = Order.find(order_id)
+    Bugwatch.set_user(id: order.user_id.to_s, email: order.user.email)
+
+    process(order)
+  end
+end
+```
+
+## Filtering Job Errors
+
+Use the `before_send` callback to filter out specific job errors:
+
+```ruby
+Bugwatch.init(
+  api_key: 'bw_live_xxxxx',
+  before_send: ->(event) {
+    # Ignore Redis connection errors during Sidekiq shutdown
+    exception = event.exception
+    if exception.is_a?(Redis::CannotConnectError) &&
+       event.tags['sidekiq.queue'].present?
+      return nil
+    end
+    event
+  }
+)
+```
+
+## Dead Job Tracking
+
+Track jobs that exhaust all retries and land in the dead set:
+
+```ruby
+Sidekiq.configure_server do |config|
+  config.death_handlers << ->(job, exception) {
+    Bugwatch.capture_exception(exception,
+      tags: {
+        'sidekiq.dead' => 'true',
+        'sidekiq.job_class' => job['class'],
+        'sidekiq.queue' => job['queue'],
+      },
+      level: :fatal
+    )
+  }
+end
+```
+
+## Full Example
+
+```ruby
+# config/initializers/bugwatch.rb
+require 'bugwatch'
+require 'bugwatch/sidekiq'
+
+Bugwatch.init(
+  api_key: ENV.fetch('BUGWATCH_API_KEY'),
+  environment: Rails.env,
+  release: ENV['GIT_SHA'],
+)
+
+# app/jobs/report_generator.rb
+class ReportGenerator
+  include Sidekiq::Job
+  sidekiq_options queue: 'critical', retry: 5
+
+  def perform(report_id)
+    Bugwatch.set_tag('report_id', report_id)
+
+    report = Report.find(report_id)
+    Bugwatch.set_user(id: report.user_id.to_s)
+
+    Bugwatch.add_breadcrumb(
+      category: 'report',
+      message: "Generating report #{report_id}",
+      level: :info
+    )
+
+    result = generate(report)
+    report.update!(status: :complete, url: result.url)
+  end
+end
+```
+
+## Next Steps
+
+- [Ruby SDK Overview](/docs/sdks/ruby) -- core SDK functions and configuration
+- [Rails Integration](/docs/sdks/ruby/rails) -- automatic setup for Rails applications

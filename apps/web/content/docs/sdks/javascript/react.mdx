@@ -1,0 +1,286 @@
+---
+title: "@bugwatch/react"
+description: Bugwatch SDK for React applications. Provides error boundaries, hooks, and automatic capture of browser errors, unhandled rejections, and HTTP failures.
+---
+
+# @bugwatch/react
+
+`@bugwatch/react` brings Bugwatch error tracking to React applications. It provides a context provider for initialization, error boundary components for graceful error handling, and hooks for manual capture -- all while automatically monitoring browser-level errors in the background.
+
+## Installation
+
+```bash
+npm install @bugwatch/react
+```
+
+```bash
+yarn add @bugwatch/react
+```
+
+```bash
+pnpm add @bugwatch/react
+```
+
+## Quick Start
+
+Wrap your application root with `<BugwatchProvider>` to initialize the SDK and enable automatic error capture.
+
+```tsx
+import { BugwatchProvider } from "@bugwatch/react";
+import { createRoot } from "react-dom/client";
+import App from "./App";
+
+createRoot(document.getElementById("root")!).render(
+  <BugwatchProvider options={{ apiKey: "bw_live_xxxxx" }}>
+    <App />
+  </BugwatchProvider>
+);
+```
+
+That is all you need. The SDK will immediately start capturing errors.
+
+## What Gets Captured Automatically
+
+Once `<BugwatchProvider>` mounts, the SDK installs global handlers to capture:
+
+| Source | Description | Default |
+| --- | --- | --- |
+| `window.onerror` | Uncaught exceptions from synchronous code | Enabled |
+| Unhandled promise rejections | Rejected promises without a `.catch()` handler | Enabled |
+| `console.error` breadcrumbs | `console.error()` calls are recorded as breadcrumbs (not sent as events) | Enabled |
+| HTTP fetch errors | `fetch()` responses with 4xx/5xx status codes (excludes 401 and 403) | Enabled |
+
+Each of these can be toggled individually via configuration options.
+
+## Configuration
+
+```tsx
+<BugwatchProvider
+  options={{
+    apiKey: "bw_live_xxxxx",
+    environment: "production",
+    release: "1.4.0",
+
+    // Automatic capture toggles
+    captureGlobalErrors: true,
+    captureUnhandledRejections: true,
+    captureConsoleBreadcrumbs: true,
+    captureHttpErrors: true,
+  }}
+>
+  <App />
+</BugwatchProvider>
+```
+
+### Options Reference
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `captureGlobalErrors` | `boolean` | `true` | Capture errors via `window.onerror`. |
+| `captureUnhandledRejections` | `boolean` | `true` | Capture unhandled promise rejections. |
+| `captureConsoleBreadcrumbs` | `boolean` | `true` | Record `console.error()` calls as breadcrumbs attached to future events. |
+| `captureHttpErrors` | `boolean` | `true` | Intercept `fetch()` and capture 4xx/5xx responses as breadcrumbs. 401 and 403 responses are excluded to avoid noise from auth flows. |
+
+All [`@bugwatch/core` options](/docs/sdks/javascript/core#configuration) are also supported.
+
+## Hooks
+
+### useBugwatch
+
+Access the full Bugwatch SDK client from any component inside the provider tree.
+
+```tsx
+import { useBugwatch } from "@bugwatch/react";
+
+function ProfilePage({ user }) {
+  const { setUser, captureException, addBreadcrumb } = useBugwatch();
+
+  useEffect(() => {
+    setUser({ id: user.id, email: user.email });
+  }, [user]);
+
+  const handleSave = async () => {
+    addBreadcrumb({
+      category: "ui",
+      message: "Save profile clicked",
+    });
+
+    try {
+      await saveProfile(user);
+    } catch (error) {
+      captureException(error);
+    }
+  };
+
+  return <button onClick={handleSave}>Save</button>;
+}
+```
+
+### useCaptureException
+
+A focused hook that returns only the `captureException` function. Useful when you only need to capture errors.
+
+```tsx
+import { useCaptureException } from "@bugwatch/react";
+
+function DataLoader() {
+  const captureException = useCaptureException();
+
+  useEffect(() => {
+    fetchData().catch((error) => {
+      captureException(error, {
+        tags: { component: "DataLoader" },
+      });
+    });
+  }, []);
+
+  return <div>Loading...</div>;
+}
+```
+
+### useCaptureMessage
+
+A focused hook that returns only the `captureMessage` function.
+
+```tsx
+import { useCaptureMessage } from "@bugwatch/react";
+
+function DeprecatedFeature() {
+  const captureMessage = useCaptureMessage();
+
+  useEffect(() => {
+    captureMessage("Deprecated feature accessed: old-dashboard", "warning");
+  }, []);
+
+  return <div>This feature will be removed soon.</div>;
+}
+```
+
+## Error Boundaries
+
+### BugwatchErrorBoundary
+
+A React error boundary that captures rendering errors and sends them to Bugwatch. Use it to wrap sections of your component tree and show a fallback UI when something breaks.
+
+```tsx
+import { BugwatchErrorBoundary } from "@bugwatch/react";
+
+function App() {
+  return (
+    <BugwatchErrorBoundary
+      fallback={({ error, resetError }) => (
+        <div>
+          <h2>Something went wrong</h2>
+          <p>{error.message}</p>
+          <button onClick={resetError}>Try again</button>
+        </div>
+      )}
+      beforeCapture={(error, errorInfo) => {
+        // Optionally add context before the error is sent
+        console.log("Component stack:", errorInfo.componentStack);
+      }}
+    >
+      <Dashboard />
+    </BugwatchErrorBoundary>
+  );
+}
+```
+
+#### Props
+
+| Prop | Type | Description |
+| --- | --- | --- |
+| `fallback` | `ReactNode \| (props: { error, resetError }) => ReactNode` | UI to render when an error is caught. Can be a static element or a render function with access to the error and a reset callback. |
+| `beforeCapture` | `(error, errorInfo) => void` | Called before the error is sent to Bugwatch. Use it to add tags, breadcrumbs, or extra context. |
+| `onError` | `(error, errorInfo) => void` | Called after the error is captured. Use it for side effects like logging or analytics. |
+| `onReset` | `() => void` | Called when the user triggers a reset via the `resetError` callback. |
+
+### withBugwatchErrorBoundary
+
+A higher-order component that wraps a component with `BugwatchErrorBoundary`. Useful for class components or when you prefer the HOC pattern.
+
+```tsx
+import { withBugwatchErrorBoundary } from "@bugwatch/react";
+
+function Dashboard() {
+  return <div>Dashboard content</div>;
+}
+
+export default withBugwatchErrorBoundary(Dashboard, {
+  fallback: <div>Failed to load dashboard.</div>,
+});
+```
+
+## Identifying Users
+
+Set the current user so that errors are associated with their account. This is typically done after login.
+
+```tsx
+import { useBugwatch } from "@bugwatch/react";
+
+function AuthProvider({ children }) {
+  const { setUser } = useBugwatch();
+
+  useEffect(() => {
+    const user = getCurrentUser();
+    if (user) {
+      setUser({
+        id: user.id,
+        email: user.email,
+        username: user.name,
+      });
+    }
+  }, []);
+
+  return <>{children}</>;
+}
+```
+
+## Full Example
+
+```tsx
+import { BugwatchProvider, BugwatchErrorBoundary, useBugwatch } from "@bugwatch/react";
+import { createRoot } from "react-dom/client";
+
+function App() {
+  const { setTag } = useBugwatch();
+
+  useEffect(() => {
+    setTag("theme", "dark");
+  }, []);
+
+  return (
+    <BugwatchErrorBoundary
+      fallback={({ error, resetError }) => (
+        <div>
+          <p>Error: {error.message}</p>
+          <button onClick={resetError}>Retry</button>
+        </div>
+      )}
+    >
+      <MainContent />
+    </BugwatchErrorBoundary>
+  );
+}
+
+createRoot(document.getElementById("root")!).render(
+  <BugwatchProvider
+    options={{
+      apiKey: "bw_live_xxxxx",
+      environment: "production",
+      captureGlobalErrors: true,
+      captureUnhandledRejections: true,
+      captureConsoleBreadcrumbs: true,
+      captureHttpErrors: true,
+    }}
+  >
+    <App />
+  </BugwatchProvider>
+);
+```
+
+## Next Steps
+
+- [Next.js SDK](/docs/sdks/javascript/nextjs) -- full-stack integration for Next.js with SSR support
+- [Core SDK](/docs/sdks/javascript/core) -- underlying API reference
+- [SDK Overview](/docs/sdks) -- compare all available SDKs

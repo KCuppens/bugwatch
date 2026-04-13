@@ -38,8 +38,8 @@ pub fn hash_agent_key(key: &str) -> String {
 /// Generate a new agent API key
 pub fn generate_agent_key() -> String {
     use uuid::Uuid;
-    let random = Uuid::new_v4().to_string().replace('-', "")
-        + &Uuid::new_v4().to_string().replace('-', "");
+    let random =
+        Uuid::new_v4().to_string().replace('-', "") + &Uuid::new_v4().to_string().replace('-', "");
     // Take first 40 chars of the random string
     format!("bw_agent_{}", &random[..40])
 }
@@ -77,13 +77,13 @@ impl FromRequestParts<AppState> for AgentAuth {
                     .filter(|t| t.starts_with("bw_agent_"))
                     .map(|s| s.to_string())
             })
-            .ok_or_else(|| {
-                AppError::Unauthorized("Missing agent API key".to_string())
-            })?;
+            .ok_or_else(|| AppError::Unauthorized("Missing agent API key".to_string()))?;
 
         // Validate it's an agent key by prefix
         if !api_key.starts_with("bw_agent_") {
-            return Err(AppError::Unauthorized("Invalid agent API key format".to_string()));
+            return Err(AppError::Unauthorized(
+                "Invalid agent API key format".to_string(),
+            ));
         }
 
         // Hash and look up
@@ -91,11 +91,13 @@ impl FromRequestParts<AppState> for AgentAuth {
         let agent_key = AgentKeyRepository::find_by_hash(&state.db, &key_hash)
             .await
             .map_err(|_| AppError::Internal("Failed to validate agent key".to_string()))?
-            .ok_or_else(|| AppError::Unauthorized("Invalid or revoked agent API key".to_string()))?;
+            .ok_or_else(|| {
+                AppError::Unauthorized("Invalid or revoked agent API key".to_string())
+            })?;
 
         // Parse permissions
-        let permissions: Vec<String> = serde_json::from_str(&agent_key.permissions)
-            .unwrap_or_default();
+        let permissions: Vec<String> =
+            serde_json::from_str(&agent_key.permissions).unwrap_or_default();
 
         let organization_id = agent_key.organization_id.clone();
 
@@ -121,13 +123,21 @@ mod tests {
     #[test]
     fn generate_agent_key_starts_with_prefix() {
         let key = generate_agent_key();
-        assert!(key.starts_with("bw_agent_"), "Key should start with bw_agent_, got: {key}");
+        assert!(
+            key.starts_with("bw_agent_"),
+            "Key should start with bw_agent_, got: {key}"
+        );
     }
 
     #[test]
     fn generate_agent_key_has_correct_length() {
         let key = generate_agent_key();
-        assert_eq!(key.len(), 49, "Key should be 49 chars (9 prefix + 40 random), got: {}", key.len());
+        assert_eq!(
+            key.len(),
+            49,
+            "Key should be 49 chars (9 prefix + 40 random), got: {}",
+            key.len()
+        );
     }
 
     #[test]
@@ -149,14 +159,25 @@ mod tests {
     fn hash_agent_key_different_inputs_different_hashes() {
         let hash1 = hash_agent_key("bw_agent_key1");
         let hash2 = hash_agent_key("bw_agent_key2");
-        assert_ne!(hash1, hash2, "Different inputs should produce different hashes");
+        assert_ne!(
+            hash1, hash2,
+            "Different inputs should produce different hashes"
+        );
     }
 
     #[test]
     fn hash_agent_key_is_64_hex_chars() {
         let hash = hash_agent_key("bw_agent_test");
-        assert_eq!(hash.len(), 64, "SHA-256 hex digest should be 64 chars, got: {}", hash.len());
-        assert!(hash.chars().all(|c| c.is_ascii_hexdigit()), "Hash should be all hex chars");
+        assert_eq!(
+            hash.len(),
+            64,
+            "SHA-256 hex digest should be 64 chars, got: {}",
+            hash.len()
+        );
+        assert!(
+            hash.chars().all(|c| c.is_ascii_hexdigit()),
+            "Hash should be all hex chars"
+        );
     }
 
     #[test]

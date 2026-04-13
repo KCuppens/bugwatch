@@ -1,0 +1,59 @@
+---
+title: Self-Hosting
+description: Run Bugwatch on your own infrastructure for full control over your data. Deploy with Docker Compose or build from source.
+---
+
+# Self-Hosting Bugwatch
+
+Bugwatch is open source and can be self-hosted on your own infrastructure. This gives you full control over your data, no usage limits, and the ability to customize the platform to your needs.
+
+## Requirements
+
+### Docker Deployment (Recommended)
+
+- **Docker** 20.10 or later
+- **Docker Compose** v2.0 or later
+- At least **2 GB RAM** and **10 GB disk** for a small deployment
+
+### Manual Deployment
+
+- **Rust** 1.75+ (with `cargo`)
+- **Node.js** 18+ (with `npm`)
+- **PostgreSQL** 15+
+- A reverse proxy (Nginx, Caddy, or similar) for production use
+
+## Architecture
+
+A self-hosted Bugwatch deployment consists of three components:
+
+| Component | Technology | Description |
+|-----------|-----------|-------------|
+| **API Server** | Rust (Axum) | Handles SDK ingestion, REST API, authentication, and alerting |
+| **Web App** | Next.js | Dashboard UI for viewing issues, monitors, and settings |
+| **Database** | PostgreSQL | Stores all application data |
+
+```
+┌──────────┐     ┌──────────────┐     ┌────────────┐
+│  Browser  │────►│   Web App    │     │            │
+│           │     │  (Next.js)   │────►│ PostgreSQL │
+└──────────┘     └──────────────┘     │            │
+                                      │            │
+┌──────────┐     ┌──────────────┐     │            │
+│   SDKs   │────►│  API Server  │────►│            │
+│  Agents  │     │  (Rust/Axum) │     └────────────┘
+└──────────┘     └──────────────┘
+```
+
+## Deployment Options
+
+Choose the deployment method that fits your infrastructure:
+
+- **[Docker Compose](/docs/self-hosting/docker)** -- the fastest way to get up and running. Recommended for most users.
+- **[Manual Setup](/docs/self-hosting/manual-setup)** -- build from source and deploy each component individually. Use this if you need fine-grained control or cannot use Docker.
+
+## Next Steps
+
+- [Docker Compose Setup](/docs/self-hosting/docker) -- deploy with a single `docker compose up`
+- [Manual Setup](/docs/self-hosting/manual-setup) -- build from source
+- [Configuration](/docs/self-hosting/configuration) -- environment variables reference
+- [Upgrading](/docs/self-hosting/upgrading) -- keep your instance up to date

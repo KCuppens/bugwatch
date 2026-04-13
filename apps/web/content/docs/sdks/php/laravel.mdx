@@ -1,0 +1,220 @@
+---
+title: Laravel Integration
+description: Integrate the Bugwatch PHP SDK with Laravel for automatic exception capture, request context, and zero-config setup via service provider auto-discovery.
+---
+
+# Laravel Integration
+
+The Bugwatch Laravel integration uses package auto-discovery to register a service provider that configures the SDK, installs middleware, and hooks into Laravel's exception handler. No manual provider registration is needed.
+
+## Installation
+
+```bash
+composer require bugwatch/bugwatch-laravel
+```
+
+### Publish the Configuration
+
+```bash
+php artisan vendor:publish --tag=bugwatch-config
+```
+
+This creates `config/bugwatch.php`:
+
+```php
+<?php
+
+return [
+    'api_key' => env('BUGWATCH_API_KEY'),
+    'environment' => env('APP_ENV', 'production'),
+    'release' => env('BUGWATCH_RELEASE'),
+    'sample_rate' => env('BUGWATCH_SAMPLE_RATE', 1.0),
+    'send_default_pii' => env('BUGWATCH_SEND_PII', false),
+];
+```
+
+### Set Your API Key
+
+Add to your `.env` file:
+
+```bash
+BUGWATCH_API_KEY=bw_live_xxxxx
+```
+
+## What Gets Captured Automatically
+
+Once the package is installed and configured, the SDK captures:
+
+- **Unhandled exceptions** via Laravel's exception handler
+- **Request context** including URL, HTTP method, headers, query parameters, input data, and client IP
+- **Authenticated user** from `Auth::user()` (user ID, email, and name)
+- **Route information** including route name, controller, action, and route parameters
+- **Queue job failures** when Laravel's queue system is in use
+- **Scheduled command exceptions** from the task scheduler
+
+<Callout type="info">
+The service provider is auto-discovered by Laravel. You do not need to add it to the `providers` array in `config/app.php`.
+</Callout>
+
+## Exception Handler Integration
+
+The package automatically extends Laravel's exception handler. If you need to customize which exceptions are reported, use the `dontReport` property or the `reportable` method in your `app/Exceptions/Handler.php`:
+
+```php
+<?php
+
+namespace App\Exceptions;
+
+use Illuminate\Foundation\Exceptions\Handler as ExceptionHandler;
+
+class Handler extends ExceptionHandler
+{
+    protected $dontReport = [
+        \Illuminate\Auth\AuthenticationException::class,
+        \Illuminate\Validation\ValidationException::class,
+    ];
+
+    public function register(): void
+    {
+        $this->reportable(function (\Throwable $e) {
+            // All reportable exceptions are sent to Bugwatch automatically
+        });
+    }
+}
+```
+
+## Middleware
+
+The package registers a global HTTP middleware that adds request context to every captured event. You can also use the Bugwatch middleware on specific route groups:
+
+```php
+// routes/api.php
+Route::middleware(['bugwatch.context'])->group(function () {
+    Route::get('/users', [UserController::class, 'index']);
+    Route::post('/orders', [OrderController::class, 'store']);
+});
+```
+
+## Manual Capture
+
+Capture exceptions manually in your controllers or services:
+
+```php
+<?php
+
+namespace App\Http\Controllers;
+
+use Bugwatch\Bugwatch;
+
+class OrderController extends Controller
+{
+    public function store(Request $request)
+    {
+        try {
+            $order = $this->orderService->create($request->validated());
+            return response()->json($order, 201);
+        } catch (PaymentException $e) {
+            Bugwatch::captureException($e, [
+                'tags' => ['payment_provider' => $e->getProvider()],
+            ]);
+            return response()->json(['error' => 'Payment failed'], 402);
+        }
+    }
+}
+```
+
+## User Context
+
+The SDK automatically detects the authenticated user via `Auth::user()`. To customize user extraction, bind a custom user provider in a service provider:
+
+```php
+// app/Providers/AppServiceProvider.php
+use Bugwatch\Bugwatch;
+
+public function boot(): void
+{
+    Bugwatch::setUserResolver(function () {
+        $user = auth()->user();
+        if (!$user) return null;
+
+        return [
+            'id' => (string) $user->id,
+            'email' => $user->email,
+            'username' => $user->name,
+            'subscription' => $user->subscription?->name,
+        ];
+    });
+}
+```
+
+## Adding Context
+
+### Tags
+
+Add tags in middleware or controllers:
+
+```php
+Bugwatch::setTag('tenant_id', $request->header('X-Tenant-ID'));
+Bugwatch::setTag('feature_flag', 'new-checkout');
+```
+
+### Breadcrumbs
+
+Build an event trail:
+
+```php
+Bugwatch::addBreadcrumb([
+    'category' => 'auth',
+    'message' => 'User authenticated via OAuth',
+    'level' => 'info',
+    'data' => ['provider' => 'github'],
+]);
+```
+
+## Queue Job Capture
+
+The package automatically captures exceptions from failed queue jobs. Each event includes:
+
+- Job class name and method
+- Queue name and connection
+- Number of attempts
+- Job payload (truncated if too large)
+
+```php
+// No additional configuration needed -- job failures are captured automatically
+class ProcessOrder implements ShouldQueue
+{
+    public function handle(): void
+    {
+        // If this throws, the exception is captured with full job context
+        $this->orderService->process($this->order);
+    }
+}
+```
+
+## Artisan Commands
+
+Verify your integration:
+
+```bash
+php artisan bugwatch:test
+```
+
+This sends a test exception and confirms connectivity with your Bugwatch project.
+
+## Configuration Reference
+
+| Key | Type | Default | Description |
+| --- | --- | --- | --- |
+| `api_key` | `string` | -- | **Required.** Your Bugwatch project API key. |
+| `environment` | `string` | `APP_ENV` | Environment name. |
+| `release` | `string` | `null` | Release version. |
+| `sample_rate` | `float` | `1.0` | Fraction of events to send. |
+| `endpoint` | `string` | `https://ingest.bugwatch.dev` | Ingestion endpoint. |
+| `send_default_pii` | `bool` | `false` | Include cookies and request body. |
+| `ignore_exceptions` | `array` | `[]` | Exception classes to ignore. |
+
+## Next Steps
+
+- [PHP SDK Overview](/docs/sdks/php) -- core SDK functions and configuration
+- [Symfony Integration](/docs/sdks/php/symfony) -- bundle-based integration for Symfony

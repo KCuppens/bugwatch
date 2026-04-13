@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, createContext, useContext, type ReactNode } from "react";
+import { useEffect, useState, useCallback, useRef, createContext, useContext, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { Command } from "cmdk";
 import {
@@ -10,7 +10,6 @@ import {
   Activity,
   Search,
   Plus,
-  Sparkles,
   LogOut,
   Moon,
   Sun,
@@ -19,11 +18,14 @@ import {
   Check,
   Keyboard,
   Bell,
+  BellOff,
+  CheckCircle2,
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useAuth } from "@/lib/auth-context";
 import { useProject } from "@/lib/project-context";
-import { overviewApi, type IssueWithProject } from "@/lib/api";
+import { overviewApi, issuesApi, type IssueWithProject } from "@/lib/api";
+import { toast } from "sonner";
 
 // Context for controlling command palette from anywhere
 interface CommandPaletteContextValue {
@@ -77,13 +79,22 @@ function CommandPaletteContent({ open, setOpen }: CommandPaletteContentProps) {
   const { projects, selectedProject, selectProject } = useProject();
   const [search, setSearch] = useState("");
   const [recentIssues, setRecentIssues] = useState<IssueWithProject[]>([]);
+  const issuesCacheRef = useRef<{ data: IssueWithProject[]; timestamp: number } | null>(null);
 
-  // Fetch real issues when palette opens
+  // Fetch real issues when palette opens (with 30s cache)
   useEffect(() => {
     if (!open) return;
+    const now = Date.now();
+    if (issuesCacheRef.current && now - issuesCacheRef.current.timestamp < 30000) {
+      setRecentIssues(issuesCacheRef.current.data);
+      return;
+    }
     overviewApi.getIssuesAcrossProjects({ limit: 5 })
-      .then((res) => setRecentIssues(res.data))
-      .catch(() => {});
+      .then((res) => {
+        setRecentIssues(res.data);
+        issuesCacheRef.current = { data: res.data, timestamp: Date.now() };
+      })
+      .catch((err) => { console.error("Failed to fetch recent issues for command palette:", err); });
   }, [open]);
 
   // Close on Escape key
@@ -115,15 +126,15 @@ function CommandPaletteContent({ open, setOpen }: CommandPaletteContentProps) {
       />
 
       {/* Command Dialog */}
-      <div className="fixed left-1/2 top-1/4 w-full max-w-lg -translate-x-1/2 rounded-lg border bg-background shadow-lg">
-        <Command className="rounded-lg" loop>
-          <div className="flex items-center border-b px-3">
-            <Search className="mr-2 h-4 w-4 shrink-0 opacity-50" />
+      <div className="fixed left-1/2 top-[18%] w-full max-w-xl -translate-x-1/2 elev-3 overflow-hidden">
+        <Command className="rounded-2xl" loop>
+          <div className="flex items-center border-b border-border-subtle px-4">
+            <Search className="mr-2 h-4 w-4 shrink-0 text-muted-foreground" />
             <Command.Input
               value={search}
               onValueChange={setSearch}
-              placeholder="Type a command or search..."
-              className="flex h-12 w-full rounded-md bg-transparent py-3 text-sm outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50"
+              placeholder="Type a command or search issues, projects, actions..."
+              className="flex h-14 w-full rounded-md bg-transparent py-3 text-body outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50"
             />
           </div>
           <Command.List className="max-h-80 overflow-y-auto p-2">
@@ -135,35 +146,35 @@ function CommandPaletteContent({ open, setOpen }: CommandPaletteContentProps) {
             <Command.Group heading="Quick Actions" className="pb-2">
               <Command.Item
                 onSelect={() => runCommand(() => router.push("/dashboard"))}
-                className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-sm aria-selected:bg-accent"
+                className="flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-sm aria-selected:bg-accent-2/10 aria-selected:text-accent-2"
               >
                 <Home className="h-4 w-4" />
                 Go to Dashboard
               </Command.Item>
               <Command.Item
                 onSelect={() => runCommand(() => router.push("/dashboard/projects"))}
-                className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-sm aria-selected:bg-accent"
+                className="flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-sm aria-selected:bg-accent-2/10 aria-selected:text-accent-2"
               >
                 <FolderOpen className="h-4 w-4" />
                 View Projects
               </Command.Item>
               <Command.Item
                 onSelect={() => runCommand(() => router.push("/dashboard/uptime"))}
-                className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-sm aria-selected:bg-accent"
+                className="flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-sm aria-selected:bg-accent-2/10 aria-selected:text-accent-2"
               >
                 <Activity className="h-4 w-4" />
                 View Uptime Monitors
               </Command.Item>
               <Command.Item
                 onSelect={() => runCommand(() => router.push("/dashboard/settings"))}
-                className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-sm aria-selected:bg-accent"
+                className="flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-sm aria-selected:bg-accent-2/10 aria-selected:text-accent-2"
               >
                 <Settings className="h-4 w-4" />
                 Open Settings
               </Command.Item>
               <Command.Item
                 onSelect={() => runCommand(() => router.push("/dashboard/alerts"))}
-                className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-sm aria-selected:bg-accent"
+                className="flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-sm aria-selected:bg-accent-2/10 aria-selected:text-accent-2"
               >
                 <Bell className="h-4 w-4" />
                 View Alert Rules
@@ -173,7 +184,7 @@ function CommandPaletteContent({ open, setOpen }: CommandPaletteContentProps) {
                   // Dispatch keyboard event to trigger shortcuts dialog
                   document.dispatchEvent(new KeyboardEvent("keydown", { key: "?" }));
                 })}
-                className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-sm aria-selected:bg-accent"
+                className="flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-sm aria-selected:bg-accent-2/10 aria-selected:text-accent-2"
               >
                 <Keyboard className="h-4 w-4" />
                 Keyboard Shortcuts
@@ -188,12 +199,12 @@ function CommandPaletteContent({ open, setOpen }: CommandPaletteContentProps) {
                     key={project.id}
                     value={`switch-project-${project.name}`}
                     onSelect={() => runCommand(() => selectProject(project))}
-                    className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-sm aria-selected:bg-accent"
+                    className="flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-sm aria-selected:bg-accent-2/10 aria-selected:text-accent-2"
                   >
                     <FolderOpen className="h-4 w-4" />
                     <span className="flex-1">{project.name}</span>
                     {selectedProject?.id === project.id && (
-                      <Check className="h-4 w-4 text-primary" />
+                      <Check className="h-4 w-4 text-accent-2" />
                     )}
                   </Command.Item>
                 ))}
@@ -208,7 +219,7 @@ function CommandPaletteContent({ open, setOpen }: CommandPaletteContentProps) {
                     key={issue.id}
                     value={`issue-${issue.title}-${issue.project_name}`}
                     onSelect={() => runCommand(() => router.push(`/dashboard/issues/${issue.id}`))}
-                    className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-sm aria-selected:bg-accent"
+                    className="flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-sm aria-selected:bg-accent-2/10 aria-selected:text-accent-2"
                   >
                     <Bug className={`h-4 w-4 ${
                       issue.level === "fatal" ? "text-red-500" :
@@ -223,32 +234,87 @@ function CommandPaletteContent({ open, setOpen }: CommandPaletteContentProps) {
               </Command.Group>
             )}
 
+            {/* Issue Actions */}
+            {recentIssues.length > 0 && (
+              <Command.Group heading="Issue Actions" className="pb-2">
+                {recentIssues.slice(0, 5).map((issue) => (
+                  <Command.Item
+                    key={`resolve-${issue.id}`}
+                    value={`resolve ${issue.title}`}
+                    onSelect={() => runCommand(async () => {
+                      try {
+                        await issuesApi.update(issue.project_id, issue.id, "resolved");
+                        toast.success("Issue resolved", {
+                          description: issue.title,
+                          action: {
+                            label: "Undo",
+                            onClick: async () => {
+                              try {
+                                await issuesApi.update(issue.project_id, issue.id, "unresolved");
+                              } catch {
+                                toast.error("Failed to undo");
+                              }
+                            },
+                          },
+                        });
+                      } catch {
+                        toast.error("Failed to resolve issue");
+                      }
+                    })}
+                    className="flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-sm aria-selected:bg-accent-2/10 aria-selected:text-accent-2"
+                  >
+                    <CheckCircle2 className="h-4 w-4 text-accent" />
+                    <span className="truncate flex-1">Resolve: {issue.title}</span>
+                  </Command.Item>
+                ))}
+                {recentIssues.slice(0, 5).map((issue) => (
+                  <Command.Item
+                    key={`ignore-${issue.id}`}
+                    value={`ignore ${issue.title}`}
+                    onSelect={() => runCommand(async () => {
+                      try {
+                        await issuesApi.update(issue.project_id, issue.id, "ignored");
+                        toast.success("Issue ignored", {
+                          description: issue.title,
+                          action: {
+                            label: "Undo",
+                            onClick: async () => {
+                              try {
+                                await issuesApi.update(issue.project_id, issue.id, "unresolved");
+                              } catch {
+                                toast.error("Failed to undo");
+                              }
+                            },
+                          },
+                        });
+                      } catch {
+                        toast.error("Failed to ignore issue");
+                      }
+                    })}
+                    className="flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-sm aria-selected:bg-accent-2/10 aria-selected:text-accent-2"
+                  >
+                    <BellOff className="h-4 w-4 text-muted-foreground" />
+                    <span className="truncate flex-1">Ignore: {issue.title}</span>
+                  </Command.Item>
+                ))}
+              </Command.Group>
+            )}
+
             {/* Create */}
             <Command.Group heading="Create" className="pb-2">
               <Command.Item
                 onSelect={() => runCommand(() => router.push("/dashboard/projects?create=true"))}
-                className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-sm aria-selected:bg-accent"
+                className="flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-sm aria-selected:bg-accent-2/10 aria-selected:text-accent-2"
               >
                 <Plus className="h-4 w-4" />
                 New Project
               </Command.Item>
               <Command.Item
                 onSelect={() => runCommand(() => router.push("/dashboard/uptime?create=true"))}
-                className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-sm aria-selected:bg-accent"
+                className="flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-sm aria-selected:bg-accent-2/10 aria-selected:text-accent-2"
               >
                 <Plus className="h-4 w-4" />
                 New Uptime Monitor
-              </Command.Item>
-            </Command.Group>
-
-            {/* AI */}
-            <Command.Group heading="AI" className="pb-2">
-              <Command.Item
-                onSelect={() => runCommand(() => console.log("AI Fix"))}
-                className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-sm aria-selected:bg-accent"
-              >
-                <Sparkles className="h-4 w-4" />
-                Generate AI Fix for Issue
               </Command.Item>
             </Command.Group>
 
@@ -256,21 +322,21 @@ function CommandPaletteContent({ open, setOpen }: CommandPaletteContentProps) {
             <Command.Group heading="Theme" className="pb-2">
               <Command.Item
                 onSelect={() => runCommand(() => setTheme("light"))}
-                className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-sm aria-selected:bg-accent"
+                className="flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-sm aria-selected:bg-accent-2/10 aria-selected:text-accent-2"
               >
                 <Sun className="h-4 w-4" />
                 Light Mode
               </Command.Item>
               <Command.Item
                 onSelect={() => runCommand(() => setTheme("dark"))}
-                className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-sm aria-selected:bg-accent"
+                className="flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-sm aria-selected:bg-accent-2/10 aria-selected:text-accent-2"
               >
                 <Moon className="h-4 w-4" />
                 Dark Mode
               </Command.Item>
               <Command.Item
                 onSelect={() => runCommand(() => setTheme("system"))}
-                className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-sm aria-selected:bg-accent"
+                className="flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-sm aria-selected:bg-accent-2/10 aria-selected:text-accent-2"
               >
                 <Settings className="h-4 w-4" />
                 System Theme
@@ -281,7 +347,7 @@ function CommandPaletteContent({ open, setOpen }: CommandPaletteContentProps) {
             <Command.Group heading="Account" className="pb-2">
               <Command.Item
                 onSelect={() => runCommand(() => router.push("/dashboard/settings"))}
-                className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-sm aria-selected:bg-accent"
+                className="flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-sm aria-selected:bg-accent-2/10 aria-selected:text-accent-2"
               >
                 <User className="h-4 w-4" />
                 Profile Settings
@@ -291,7 +357,7 @@ function CommandPaletteContent({ open, setOpen }: CommandPaletteContentProps) {
                   await logout();
                   router.push("/login");
                 })}
-                className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-sm text-red-500 aria-selected:bg-accent"
+                className="flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-red-500 aria-selected:bg-red-500/10"
               >
                 <LogOut className="h-4 w-4" />
                 Logout
@@ -300,17 +366,17 @@ function CommandPaletteContent({ open, setOpen }: CommandPaletteContentProps) {
           </Command.List>
 
           {/* Footer */}
-          <div className="flex items-center justify-between border-t px-3 py-2 text-xs text-muted-foreground">
-            <div className="flex items-center gap-2">
-              <kbd className="rounded border bg-muted px-1.5 py-0.5">↑↓</kbd>
+          <div className="flex items-center justify-between border-t border-border-subtle px-4 py-2.5 text-caption text-muted-foreground">
+            <div className="flex items-center gap-1.5">
+              <kbd className="inline-flex h-5 items-center rounded border border-border-subtle bg-surface-3 px-1.5 font-mono text-[10px]">↑↓</kbd>
               <span>Navigate</span>
             </div>
-            <div className="flex items-center gap-2">
-              <kbd className="rounded border bg-muted px-1.5 py-0.5">↵</kbd>
+            <div className="flex items-center gap-1.5">
+              <kbd className="inline-flex h-5 items-center rounded border border-border-subtle bg-surface-3 px-1.5 font-mono text-[10px]">↵</kbd>
               <span>Select</span>
             </div>
-            <div className="flex items-center gap-2">
-              <kbd className="rounded border bg-muted px-1.5 py-0.5">Esc</kbd>
+            <div className="flex items-center gap-1.5">
+              <kbd className="inline-flex h-5 items-center rounded border border-border-subtle bg-surface-3 px-1.5 font-mono text-[10px]">Esc</kbd>
               <span>Close</span>
             </div>
           </div>

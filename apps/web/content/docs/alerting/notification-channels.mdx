@@ -1,0 +1,130 @@
+---
+title: Notification Channels
+description: Set up notification channels in Bugwatch to receive alerts via email, Slack, or webhooks. Configure multiple channels per project and test them before going live.
+---
+
+# Notification Channels
+
+Notification channels define where Bugwatch delivers alert notifications. Each project can have multiple channels, and each alert rule can send to one or more channels.
+
+## Channel Types
+
+Bugwatch supports three channel types out of the box:
+
+- **Email** -- send alerts to one or more email addresses
+- **Slack** -- post alerts to a Slack channel via an incoming webhook
+- **Webhook** -- send structured JSON payloads to any HTTP endpoint
+
+## Creating a Channel
+
+1. Open your project in the Bugwatch dashboard
+2. Navigate to **Settings** > **Notification Channels**
+3. Click **Add Channel**
+4. Select the channel type and fill in the configuration
+5. Click **Save**
+
+## Email
+
+Send alert notifications to one or more email recipients.
+
+**Configuration:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `recipients` | string[] | Yes | List of email addresses to notify |
+
+**Example configuration:**
+
+```json
+{
+  "type": "email",
+  "name": "Engineering Team",
+  "config": {
+    "recipients": [
+      "oncall@yourcompany.com",
+      "lead@yourcompany.com"
+    ]
+  }
+}
+```
+
+Email notifications include the alert rule name, a summary of the triggering event, and a direct link to the relevant issue or monitor in the Bugwatch dashboard.
+
+## Slack
+
+Post alert notifications to a Slack channel using an incoming webhook URL.
+
+**Configuration:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `webhook_url` | string | Yes | Slack incoming webhook URL |
+| `channel` | string | No | Override the default channel configured in the webhook |
+
+**Setting up a Slack webhook:**
+
+1. Go to [api.slack.com/apps](https://api.slack.com/apps) and create a new app (or select an existing one)
+2. Under **Incoming Webhooks**, toggle the feature on
+3. Click **Add New Webhook to Workspace** and select the channel
+4. Copy the webhook URL
+
+**Example configuration:**
+
+```json
+{
+  "type": "slack",
+  "name": "Slack #alerts",
+  "config": {
+    "webhook_url": "https://hooks.slack.com/services/YOUR_WORKSPACE/YOUR_APP/YOUR_TOKEN",
+    "channel": "#production-alerts"
+  }
+}
+```
+
+Slack notifications are formatted with contextual information including the error message, project name, and a link to the dashboard.
+
+## Webhook
+
+Send a structured JSON payload to any HTTP endpoint. This is useful for integrating with PagerDuty, Opsgenie, custom dashboards, or internal tools.
+
+**Configuration:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `url` | string | Yes | The endpoint URL to receive the webhook payload |
+| `secret` | string | No | A shared secret used to sign the payload with HMAC-SHA256 |
+
+**Example configuration:**
+
+```json
+{
+  "type": "webhook",
+  "name": "PagerDuty Integration",
+  "config": {
+    "url": "https://yourcompany.com/webhooks/bugwatch",
+    "secret": "whsec_your_shared_secret_here"
+  }
+}
+```
+
+For details on the webhook payload format and signature verification, see [Webhooks](/docs/alerting/webhooks).
+
+## Testing a Channel
+
+Before relying on a channel for production alerts, you can send a test notification to verify it is configured correctly.
+
+**From the dashboard:** Click the **Test** button next to any channel on the Notification Channels settings page.
+
+**Via the API:**
+
+```bash
+curl -X POST https://api.bugwatch.dev/api/v1/projects/{project_id}/channels/{channel_id}/test \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+A test notification will be sent immediately. If the channel is configured correctly, you should receive a test alert within seconds.
+
+## Next Steps
+
+- [Alert Rules](/docs/alerting/alert-rules) -- create rules to determine when notifications fire
+- [Webhooks](/docs/alerting/webhooks) -- learn about webhook payloads and signature verification

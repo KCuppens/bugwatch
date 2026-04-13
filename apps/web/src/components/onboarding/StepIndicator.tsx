@@ -22,7 +22,7 @@ export function StepIndicator({
 }: StepIndicatorProps) {
   return (
     <nav aria-label="Progress" className="w-full">
-      <ol className="flex items-center justify-between">
+      <ol aria-label={`Step ${currentStep} of ${steps.length}`} className="flex items-center justify-between">
         {steps.map((step, index) => {
           const isCompleted = step.id < currentStep;
           const isCurrent = step.id === currentStep;
@@ -31,6 +31,7 @@ export function StepIndicator({
           return (
             <li
               key={step.id}
+              aria-current={isCurrent ? "step" : undefined}
               className={cn("flex items-center", index < steps.length - 1 && "flex-1")}
             >
               <div className="flex flex-col items-center">

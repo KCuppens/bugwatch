@@ -1,45 +1,50 @@
 # Bugwatch SDKs
 
-This directory contains the official Bugwatch SDKs for error tracking.
+Official SDKs for [Bugwatch](https://bugwatch.dev) error tracking. Capture, track, and resolve errors across your entire stack with first-class support for JavaScript, Python, and Rust.
 
 ## Packages
 
-| Package | Description |
-|---------|-------------|
-| `@bugwatch/core` | Core SDK with shared functionality |
-| `@bugwatch/node` | Node.js SDK with process error handlers |
-| `@bugwatch/nextjs` | Next.js SDK with server/client support |
-| `@bugwatch/react` | React SDK with ErrorBoundary component |
+| Language | Package | Install | Docs |
+|----------|---------|---------|------|
+| JavaScript | `@bugwatch/core` | `npm i @bugwatch/core` | [Docs](https://bugwatch.dev/docs/sdks/javascript/core) |
+| JavaScript | `@bugwatch/node` | `npm i @bugwatch/node` | [Docs](https://bugwatch.dev/docs/sdks/javascript/node) |
+| JavaScript | `@bugwatch/nextjs` | `npm i @bugwatch/nextjs` | [Docs](https://bugwatch.dev/docs/sdks/javascript/nextjs) |
+| JavaScript | `@bugwatch/react` | `npm i @bugwatch/react` | [Docs](https://bugwatch.dev/docs/sdks/javascript/react) |
+| JavaScript | `@bugwatch/express` | `npm i @bugwatch/express` | [Docs](https://bugwatch.dev/docs/sdks/javascript/express) |
+| JavaScript | `@bugwatch/fastify` | `npm i @bugwatch/fastify` | [Docs](https://bugwatch.dev/docs/sdks/javascript/fastify) |
+| Python | `bugwatch-python` | `pip install bugwatch-python` | [Docs](https://bugwatch.dev/docs/sdks/python) |
+| Rust | `bugwatch` | `cargo add bugwatch` | [Docs](https://bugwatch.dev/docs/sdks/rust) |
 
 ## Quick Start
 
 ### Next.js
 
+Install the SDK:
+
 ```bash
 npm install @bugwatch/nextjs
 ```
 
-```javascript
-// next.config.js
-const { withBugwatch } = require('@bugwatch/nextjs');
+Initialize Bugwatch on the server side using the `instrumentation.ts` hook:
 
-module.exports = withBugwatch({
-  apiKey: 'your-api-key',
-  environment: process.env.NODE_ENV,
-})({
-  // your next.js config
-});
+```typescript
+// instrumentation.ts
+import { init } from '@bugwatch/nextjs';
+
+init({ apiKey: 'YOUR_API_KEY' });
 ```
 
+Wrap your app with `BugwatchProvider` to capture client-side errors:
+
 ```tsx
-// app/layout.tsx (or _app.tsx for pages router)
+// app/layout.tsx
 import { BugwatchProvider } from '@bugwatch/nextjs/client';
 
 export default function RootLayout({ children }) {
   return (
     <html>
       <body>
-        <BugwatchProvider options={{ apiKey: 'your-api-key' }}>
+        <BugwatchProvider options={{ apiKey: 'YOUR_API_KEY' }}>
           {children}
         </BugwatchProvider>
       </body>
@@ -48,57 +53,65 @@ export default function RootLayout({ children }) {
 }
 ```
 
-### React
+### Python (Django)
+
+Install the SDK:
 
 ```bash
-npm install @bugwatch/react
+pip install bugwatch-python
 ```
 
-```tsx
-import { BugwatchProvider } from '@bugwatch/react';
+Add the middleware and API key to your Django settings:
 
-function App() {
-  return (
-    <BugwatchProvider
-      options={{
-        apiKey: 'your-api-key',
-        environment: 'production',
-      }}
-      fallback={(error, reset) => (
-        <div>
-          <h1>Something went wrong</h1>
-          <button onClick={reset}>Try again</button>
-        </div>
-      )}
-    >
-      <YourApp />
-    </BugwatchProvider>
-  );
+```python
+# settings.py
+MIDDLEWARE = [
+    'bugwatch.django.BugwatchMiddleware',
+    ...
+]
+BUGWATCH_API_KEY = 'YOUR_API_KEY'
+```
+
+The Python SDK also ships with integrations for Flask, FastAPI, and Celery. See the [Python docs](https://bugwatch.dev/docs/sdks/python) for details.
+
+### Rust (Async)
+
+Add the crate with the `async` feature:
+
+```bash
+cargo add bugwatch --features async
+```
+
+Initialize Bugwatch at the start of your application:
+
+```rust
+use bugwatch::init;
+
+#[tokio::main]
+async fn main() {
+    init(bugwatch::Options {
+        api_key: "YOUR_API_KEY".into(),
+        ..Default::default()
+    });
+
+    // Your app code...
 }
 ```
 
-### Node.js
+A blocking mode (without Tokio) is also available. See the [Rust docs](https://bugwatch.dev/docs/sdks/rust) for details.
 
-```bash
-npm install @bugwatch/node
-```
+## Self-Hosted Endpoint
 
-```javascript
-const { init, captureException } = require('@bugwatch/node');
+If you are running a self-hosted Bugwatch instance, set the `endpoint` option to your API URL:
 
+```typescript
 init({
-  apiKey: 'your-api-key',
-  environment: 'production',
+  apiKey: 'YOUR_API_KEY',
+  endpoint: 'https://your-selfhosted-api.example.com',
 });
-
-// Errors are automatically captured
-// You can also manually capture:
-try {
-  doSomething();
-} catch (error) {
-  captureException(error);
-}
 ```
+
+The default endpoint is `https://api.bugwatch.dev`.
 
 ## API Reference
 
@@ -137,10 +150,10 @@ interface BugwatchOptions {
   // Optional
   endpoint?: string;           // API endpoint (default: https://api.bugwatch.dev)
   environment?: string;        // e.g., 'production', 'staging'
-  release?: string;           // App version
-  debug?: boolean;            // Enable debug logging
-  sampleRate?: number;        // 0.0 to 1.0
-  maxBreadcrumbs?: number;    // Max breadcrumbs to capture
+  release?: string;            // App version
+  debug?: boolean;             // Enable debug logging
+  sampleRate?: number;         // 0.0 to 1.0
+  maxBreadcrumbs?: number;     // Max breadcrumbs to capture
   tags?: Record<string, string>;
   user?: UserContext;
   beforeSend?: (event: ErrorEvent) => ErrorEvent | null;
@@ -160,3 +173,7 @@ pnpm dev
 # Type check
 pnpm typecheck
 ```
+
+## Documentation
+
+For full documentation, guides, and framework-specific instructions, visit [bugwatch.dev/docs/sdks](https://bugwatch.dev/docs/sdks).

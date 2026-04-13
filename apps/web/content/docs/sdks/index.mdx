@@ -1,0 +1,83 @@
+---
+title: SDKs
+description: Choose the right Bugwatch SDK for your language and framework. Official libraries are available for JavaScript, Python, Rust, Go, Java, Ruby, and PHP.
+---
+
+# SDKs
+
+Bugwatch provides official SDKs for the most popular languages and frameworks. Each SDK captures errors automatically, enriches them with context, and delivers them to your Bugwatch dashboard in real time.
+
+## Choosing the Right SDK
+
+Pick the SDK that matches your runtime and framework. If your framework has a dedicated SDK, prefer it over the generic language SDK -- it will handle framework-specific error boundaries, middleware, and lifecycle hooks for you.
+
+| Language | Package | Best For |
+| --- | --- | --- |
+| **JavaScript** | [`@bugwatch/core`](/docs/sdks/javascript/core) | Browser apps, custom integrations, or building your own SDK |
+| **JavaScript** | [`@bugwatch/node`](/docs/sdks/javascript/node) | Node.js servers, CLI tools, background workers |
+| **JavaScript** | [`@bugwatch/react`](/docs/sdks/javascript/react) | React single-page applications |
+| **JavaScript** | [`@bugwatch/nextjs`](/docs/sdks/javascript/nextjs) | Next.js applications (App Router and Pages Router) |
+| **JavaScript** | [`@bugwatch/express`](/docs/sdks/javascript/express) | Express.js APIs and web servers |
+| **JavaScript** | [`@bugwatch/fastify`](/docs/sdks/javascript/fastify) | Fastify APIs and web servers |
+| **Python** | [`bugwatch-python`](/docs/sdks/python) | Django, Flask, FastAPI, Celery, and general Python |
+| **Rust** | [`bugwatch`](/docs/sdks/rust) | Native Rust services and CLI tools |
+| **Go** | [`bugwatch-go`](/docs/sdks/go) | net/http, Gin, and Echo web applications |
+| **Java** | [`bugwatch-spring`](/docs/sdks/java) | Spring Boot applications |
+| **Ruby** | [`bugwatch`](/docs/sdks/ruby) | Rack, Rails, and Sidekiq applications |
+| **PHP** | [`bugwatch/sdk`](/docs/sdks/php) | Laravel and Symfony applications |
+
+## How It Works
+
+Every SDK follows the same core workflow:
+
+1. **Initialize** -- call `init()` with your project API key at application startup
+2. **Capture** -- errors are captured automatically (uncaught exceptions, framework-level error handlers) or manually via `captureException()` and `captureMessage()`
+3. **Enrich** -- attach user context, tags, breadcrumbs, and extra data to every event
+4. **Deliver** -- events are serialized and sent to the Bugwatch ingestion endpoint over HTTPS
+
+## Common Concepts
+
+### API Key
+
+Every project in Bugwatch has a unique API key (prefixed `bw_live_` for production or `bw_test_` for development). Pass this key to `init()` to associate captured errors with the correct project.
+
+### Environments
+
+Tag events with an environment string (`production`, `staging`, `development`) so you can filter noise and focus on the errors that matter most.
+
+### Releases
+
+Attach a release version to your events to track which deploy introduced a regression. Most SDKs detect the release automatically from environment variables or your build tooling.
+
+### Breadcrumbs
+
+Breadcrumbs are a trail of events (clicks, navigations, console logs, HTTP requests) leading up to an error. They give you the context needed to reproduce issues without asking users what they did.
+
+### Before Send
+
+Every SDK supports a `beforeSend` callback that lets you modify or drop events before they leave the client. Use it to scrub sensitive data, filter noisy errors, or add custom tags.
+
+```js
+init({
+  apiKey: "bw_live_xxxxx",
+  beforeSend(event) {
+    // Drop errors from browser extensions
+    if (event.exception?.values?.[0]?.stacktrace?.frames?.some(
+      (f) => f.filename?.startsWith("chrome-extension://")
+    )) {
+      return null;
+    }
+    return event;
+  },
+});
+```
+
+## Next Steps
+
+- [JavaScript SDKs](/docs/sdks/javascript/core) -- start with `@bugwatch/core` or jump to your framework
+- [Python SDK](/docs/sdks/python) -- Django, Flask, FastAPI, and Celery integrations
+- [Rust SDK](/docs/sdks/rust) -- native error capture for Rust applications
+- [Go SDK](/docs/sdks/go) -- net/http, Gin, and Echo integrations
+- [Java SDK](/docs/sdks/java) -- Spring Boot auto-configuration
+- [Ruby SDK](/docs/sdks/ruby) -- Rack, Rails, and Sidekiq integrations
+- [PHP SDK](/docs/sdks/php) -- Laravel and Symfony integrations

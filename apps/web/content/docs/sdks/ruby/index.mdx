@@ -1,0 +1,233 @@
+---
+title: Ruby SDK
+description: Install and configure the Bugwatch Ruby SDK to capture exceptions, errors, and diagnostic events from your Ruby applications.
+---
+
+# Ruby SDK
+
+The Bugwatch Ruby SDK provides automatic and manual error capture for Ruby applications. It hooks into Ruby's `at_exit` handler and provides Rack middleware for web applications, with dedicated integrations for Rails and Sidekiq.
+
+## Installation
+
+Add to your `Gemfile`:
+
+```ruby
+gem 'bugwatch-ruby'
+```
+
+Then run:
+
+```bash
+bundle install
+```
+
+Or install directly:
+
+```bash
+gem install bugwatch-ruby
+```
+
+## Quick Start
+
+Initialize the SDK as early as possible in your application:
+
+```ruby
+require 'bugwatch'
+
+Bugwatch.init(
+  api_key: 'bw_live_xxxxx',
+  environment: 'production',
+  release: '1.0.0'
+)
+```
+
+Or use an environment variable for the API key:
+
+```bash
+export BUGWATCH_API_KEY="bw_live_xxxxx"
+```
+
+```ruby
+require 'bugwatch'
+
+Bugwatch.init(environment: 'production')
+```
+
+## Automatic Capture
+
+Once initialized, the SDK automatically captures:
+
+- **Uncaught exceptions** via `at_exit` hooks
+- **Thread exceptions** when `Thread.abort_on_exception` is set
+- **Signal-triggered errors** for clean shutdown reporting
+
+## Manual Error Reporting
+
+### Capture an Exception
+
+Report a caught exception:
+
+```ruby
+begin
+  process_payment(order)
+rescue PaymentError => e
+  Bugwatch.capture_exception(e)
+end
+```
+
+Pass additional context:
+
+```ruby
+begin
+  process_payment(order)
+rescue PaymentError => e
+  Bugwatch.capture_exception(e,
+    tags: { order_id: order.id },
+    extra: { amount: order.total }
+  )
+end
+```
+
+### Capture a Message
+
+Send informational or warning messages:
+
+```ruby
+Bugwatch.capture_message('Cache miss rate above 80%', level: :warning)
+```
+
+## Rack Middleware
+
+For any Rack-based web application, add the Bugwatch middleware to capture request errors and attach request context:
+
+```ruby
+require 'bugwatch'
+
+Bugwatch.init(api_key: 'bw_live_xxxxx')
+
+use Bugwatch::Rack::Middleware
+run MyApp
+```
+
+The middleware captures unhandled exceptions during request processing and attaches request context (URL, method, headers, query parameters, remote IP) to every event.
+
+### Sinatra Example
+
+```ruby
+require 'sinatra'
+require 'bugwatch'
+
+Bugwatch.init(api_key: 'bw_live_xxxxx')
+
+use Bugwatch::Rack::Middleware
+
+get '/' do
+  'Hello, world!'
+end
+
+get '/error' do
+  raise 'Test error'
+end
+```
+
+## Enriching Events
+
+### User Context
+
+Attach user information to all subsequent events:
+
+```ruby
+Bugwatch.set_user(
+  id: 'usr_123',
+  email: 'alice@example.com',
+  username: 'alice'
+)
+```
+
+### Tags
+
+Add searchable key-value tags:
+
+```ruby
+Bugwatch.set_tag('region', 'us-east-1')
+Bugwatch.set_tag('service', 'payments')
+```
+
+### Breadcrumbs
+
+Add breadcrumbs to build an event trail:
+
+```ruby
+Bugwatch.add_breadcrumb(
+  category: 'db',
+  message: 'Connected to primary database',
+  level: :info
+)
+```
+
+### Extra Data
+
+Attach arbitrary data for debugging:
+
+```ruby
+Bugwatch.set_extra('request_id', 'req_abc123')
+Bugwatch.set_extra('retry_count', 3)
+```
+
+## Configuration
+
+```ruby
+Bugwatch.init(
+  api_key: 'bw_live_xxxxx',
+  environment: 'production',
+  release: '1.0.0',
+  endpoint: 'https://ingest.bugwatch.dev',
+  debug: false,
+  sample_rate: 1.0,
+  max_breadcrumbs: 100,
+  before_send: ->(event) {
+    # Drop errors from health checks
+    return nil if event.request&.url&.include?('/health')
+    event
+  }
+)
+```
+
+### Options Reference
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `api_key` | `String` | -- | **Required.** Your Bugwatch project API key. |
+| `endpoint` | `String` | `https://ingest.bugwatch.dev` | Ingestion endpoint URL. |
+| `environment` | `String` | `nil` | Environment name (e.g., `production`, `staging`). |
+| `release` | `String` | `nil` | Release or version identifier. |
+| `debug` | `Boolean` | `false` | When `true`, the SDK logs diagnostics to `$stderr`. |
+| `sample_rate` | `Float` | `1.0` | Fraction of events to send (between `0.0` and `1.0`). |
+| `max_breadcrumbs` | `Integer` | `100` | Maximum number of breadcrumbs to keep. |
+| `before_send` | `Proc` | `nil` | Callback invoked before an event is sent. Return `nil` to drop. |
+
+## Shutdown
+
+Before your application exits, flush pending events:
+
+```ruby
+Bugwatch.flush(timeout: 5)
+Bugwatch.close
+```
+
+## Environment Variables
+
+The SDK reads the following environment variables as fallback values. Explicit options always take precedence.
+
+| Variable | Maps To | Example |
+| --- | --- | --- |
+| `BUGWATCH_API_KEY` | `api_key` | `bw_live_xxxxx` |
+| `BUGWATCH_ENVIRONMENT` | `environment` | `production` |
+| `BUGWATCH_RELEASE` | `release` | `1.0.0` |
+| `BUGWATCH_DEBUG` | `debug` | `true` |
+| `BUGWATCH_ENDPOINT` | `endpoint` | `https://ingest.self-hosted.example.com` |
+
+## Next Steps
+
+- [Rails Integration](/docs/sdks/ruby/rails) -- automatic setup for Rails applications
+- [Sidekiq Integration](/docs/sdks/ruby/sidekiq) -- capture background job failures

@@ -76,6 +76,7 @@ impl IssueRepository {
         limit: i64,
         offset: i64,
     ) -> Result<Vec<Issue>> {
+        let limit = limit.min(1000);
         let mut param_idx = 2;
         let mut query = String::from("SELECT * FROM issues WHERE project_id = $1");
         let mut params: Vec<String> = vec![project_id.to_string()];
@@ -98,7 +99,11 @@ impl IssueRepository {
             param_idx += 1;
         }
 
-        query.push_str(&format!(" ORDER BY last_seen DESC LIMIT ${} OFFSET ${}", param_idx, param_idx + 1));
+        query.push_str(&format!(
+            " ORDER BY last_seen DESC LIMIT ${} OFFSET ${}",
+            param_idx,
+            param_idx + 1
+        ));
 
         let mut q = sqlx::query_as::<_, Issue>(&query);
         for p in &params {
@@ -156,6 +161,7 @@ impl IssueRepository {
         limit: i64,
         offset: i64,
     ) -> Result<Vec<Issue>> {
+        let limit = limit.min(1000);
         let mut param_idx = 2;
         let mut query = String::from("SELECT * FROM issues WHERE project_id = $1");
         let mut params: Vec<String> = vec![project_id.to_string()];
@@ -163,7 +169,11 @@ impl IssueRepository {
         // Status filter (multiple values)
         if let Some(statuses) = &filters.status {
             if !statuses.is_empty() {
-                let placeholders: Vec<String> = statuses.iter().enumerate().map(|(i, _)| format!("${}", param_idx + i)).collect();
+                let placeholders: Vec<String> = statuses
+                    .iter()
+                    .enumerate()
+                    .map(|(i, _)| format!("${}", param_idx + i))
+                    .collect();
                 query.push_str(&format!(" AND status IN ({})", placeholders.join(",")));
                 params.extend(statuses.clone());
                 param_idx += statuses.len();
@@ -173,7 +183,11 @@ impl IssueRepository {
         // Level filter (multiple values)
         if let Some(levels) = &filters.level {
             if !levels.is_empty() {
-                let placeholders: Vec<String> = levels.iter().enumerate().map(|(i, _)| format!("${}", param_idx + i)).collect();
+                let placeholders: Vec<String> = levels
+                    .iter()
+                    .enumerate()
+                    .map(|(i, _)| format!("${}", param_idx + i))
+                    .collect();
                 query.push_str(&format!(" AND level IN ({})", placeholders.join(",")));
                 params.extend(levels.clone());
                 param_idx += levels.len();
@@ -183,7 +197,11 @@ impl IssueRepository {
         // Environment filter (multiple values)
         if let Some(environments) = &filters.environment {
             if !environments.is_empty() {
-                let placeholders: Vec<String> = environments.iter().enumerate().map(|(i, _)| format!("${}", param_idx + i)).collect();
+                let placeholders: Vec<String> = environments
+                    .iter()
+                    .enumerate()
+                    .map(|(i, _)| format!("${}", param_idx + i))
+                    .collect();
                 query.push_str(&format!(" AND environment IN ({})", placeholders.join(",")));
                 params.extend(environments.clone());
                 param_idx += environments.len();
@@ -246,11 +264,19 @@ impl IssueRepository {
             param_idx += 1;
         }
 
-        // Text search (title and fingerprint)
+        // Text search (title and fingerprint) - escape LIKE wildcards
         if let Some(text) = &filters.text {
-            query.push_str(&format!(" AND (title LIKE ${} OR fingerprint LIKE ${})", param_idx, param_idx + 1));
-            params.push(format!("%{}%", text));
-            params.push(format!("%{}%", text));
+            let escaped = text
+                .replace('\\', "\\\\")
+                .replace('%', "\\%")
+                .replace('_', "\\_");
+            query.push_str(&format!(
+                " AND (title LIKE ${} ESCAPE '\\' OR fingerprint LIKE ${} ESCAPE '\\')",
+                param_idx,
+                param_idx + 1
+            ));
+            params.push(format!("%{}%", escaped));
+            params.push(format!("%{}%", escaped));
             param_idx += 2;
         }
 
@@ -265,7 +291,13 @@ impl IssueRepository {
             Some("asc") => "ASC",
             _ => "DESC",
         };
-        query.push_str(&format!(" ORDER BY {} {} LIMIT ${} OFFSET ${}", sort_col, sort_dir, param_idx, param_idx + 1));
+        query.push_str(&format!(
+            " ORDER BY {} {} LIMIT ${} OFFSET ${}",
+            sort_col,
+            sort_dir,
+            param_idx,
+            param_idx + 1
+        ));
 
         let mut q = sqlx::query_as::<_, Issue>(&query);
         for p in &params {
@@ -289,7 +321,11 @@ impl IssueRepository {
         // Status filter
         if let Some(statuses) = &filters.status {
             if !statuses.is_empty() {
-                let placeholders: Vec<String> = statuses.iter().enumerate().map(|(i, _)| format!("${}", param_idx + i)).collect();
+                let placeholders: Vec<String> = statuses
+                    .iter()
+                    .enumerate()
+                    .map(|(i, _)| format!("${}", param_idx + i))
+                    .collect();
                 query.push_str(&format!(" AND status IN ({})", placeholders.join(",")));
                 params.extend(statuses.clone());
                 param_idx += statuses.len();
@@ -299,7 +335,11 @@ impl IssueRepository {
         // Level filter
         if let Some(levels) = &filters.level {
             if !levels.is_empty() {
-                let placeholders: Vec<String> = levels.iter().enumerate().map(|(i, _)| format!("${}", param_idx + i)).collect();
+                let placeholders: Vec<String> = levels
+                    .iter()
+                    .enumerate()
+                    .map(|(i, _)| format!("${}", param_idx + i))
+                    .collect();
                 query.push_str(&format!(" AND level IN ({})", placeholders.join(",")));
                 params.extend(levels.clone());
                 param_idx += levels.len();
@@ -309,7 +349,11 @@ impl IssueRepository {
         // Environment filter
         if let Some(environments) = &filters.environment {
             if !environments.is_empty() {
-                let placeholders: Vec<String> = environments.iter().enumerate().map(|(i, _)| format!("${}", param_idx + i)).collect();
+                let placeholders: Vec<String> = environments
+                    .iter()
+                    .enumerate()
+                    .map(|(i, _)| format!("${}", param_idx + i))
+                    .collect();
                 query.push_str(&format!(" AND environment IN ({})", placeholders.join(",")));
                 params.extend(environments.clone());
                 param_idx += environments.len();
@@ -372,11 +416,19 @@ impl IssueRepository {
             param_idx += 1;
         }
 
-        // Text search
+        // Text search - escape LIKE wildcards
         if let Some(text) = &filters.text {
-            query.push_str(&format!(" AND (title LIKE ${} OR fingerprint LIKE ${})", param_idx, param_idx + 1));
-            params.push(format!("%{}%", text));
-            params.push(format!("%{}%", text));
+            let escaped = text
+                .replace('\\', "\\\\")
+                .replace('%', "\\%")
+                .replace('_', "\\_");
+            query.push_str(&format!(
+                " AND (title LIKE ${} ESCAPE '\\' OR fingerprint LIKE ${} ESCAPE '\\')",
+                param_idx,
+                param_idx + 1
+            ));
+            params.push(format!("%{}%", escaped));
+            params.push(format!("%{}%", escaped));
         }
 
         let mut q = sqlx::query_as::<_, (i64,)>(&query);
@@ -388,51 +440,48 @@ impl IssueRepository {
         Ok(count)
     }
 
-    /// Get facet counts for filtering UI
-    pub async fn get_facets(
-        pool: &DbPool,
-        project_id: &str,
-    ) -> Result<Facets> {
-        // Get level counts
-        let level_rows = sqlx::query_as::<_, (String, i64)>(
-            "SELECT level, COUNT(*) as count FROM issues WHERE project_id = $1 GROUP BY level"
+    /// Get facet counts for filtering UI (single UNION ALL query)
+    pub async fn get_facets(pool: &DbPool, project_id: &str) -> Result<Facets> {
+        let rows = sqlx::query_as::<_, (String, String, i64)>(
+            r#"
+            SELECT 'level' as facet_type, level as facet_value, COUNT(*) as count
+            FROM issues WHERE project_id = $1 GROUP BY level
+            UNION ALL
+            SELECT 'status' as facet_type, status as facet_value, COUNT(*) as count
+            FROM issues WHERE project_id = $1 GROUP BY status
+            UNION ALL
+            SELECT 'environment' as facet_type, environment as facet_value, COUNT(*) as count
+            FROM issues WHERE project_id = $1 GROUP BY environment
+            "#,
         )
         .bind(project_id)
         .fetch_all(pool)
         .await?;
 
         let mut level = std::collections::HashMap::new();
-        for (l, c) in level_rows {
-            level.insert(l, c as u32);
-        }
-
-        // Get status counts
-        let status_rows = sqlx::query_as::<_, (String, i64)>(
-            "SELECT status, COUNT(*) as count FROM issues WHERE project_id = $1 GROUP BY status"
-        )
-        .bind(project_id)
-        .fetch_all(pool)
-        .await?;
-
         let mut status = std::collections::HashMap::new();
-        for (s, c) in status_rows {
-            status.insert(s, c as u32);
-        }
-
-        // Get environment counts
-        let env_rows = sqlx::query_as::<_, (String, i64)>(
-            "SELECT environment, COUNT(*) as count FROM issues WHERE project_id = $1 GROUP BY environment"
-        )
-        .bind(project_id)
-        .fetch_all(pool)
-        .await?;
-
         let mut environment = std::collections::HashMap::new();
-        for (e, c) in env_rows {
-            environment.insert(e, c as u32);
+
+        for (facet_type, facet_value, count) in rows {
+            match facet_type.as_str() {
+                "level" => {
+                    level.insert(facet_value, count as u32);
+                }
+                "status" => {
+                    status.insert(facet_value, count as u32);
+                }
+                "environment" => {
+                    environment.insert(facet_value, count as u32);
+                }
+                _ => {}
+            }
         }
 
-        Ok(Facets { level, status, environment })
+        Ok(Facets {
+            level,
+            status,
+            environment,
+        })
     }
 }
 
@@ -482,6 +531,7 @@ impl IssueRepository {
         limit: i64,
         offset: i64,
     ) -> Result<Vec<Issue>> {
+        let limit = limit.min(1000);
         if project_ids.is_empty() {
             return Ok(vec![]);
         }
@@ -600,15 +650,17 @@ impl IssueRepository {
 
         Ok(rows
             .into_iter()
-            .map(|(project_id, unresolved_count, total_events, total_users, critical_count)| {
-                ProjectStats {
-                    project_id,
-                    unresolved_count,
-                    total_events,
-                    total_users,
-                    critical_count,
-                }
-            })
+            .map(
+                |(project_id, unresolved_count, total_events, total_users, critical_count)| {
+                    ProjectStats {
+                        project_id,
+                        unresolved_count,
+                        total_events,
+                        total_users,
+                        critical_count,
+                    }
+                },
+            )
             .collect())
     }
 }

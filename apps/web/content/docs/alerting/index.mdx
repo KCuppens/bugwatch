@@ -1,0 +1,55 @@
+---
+title: Alerting
+description: Configure real-time alerts in Bugwatch so your team gets notified the moment something breaks. Set up alert rules, notification channels, and webhook integrations.
+---
+
+# Alerting
+
+Bugwatch alerting keeps your team informed the moment something goes wrong. Instead of checking the dashboard manually, you define rules that automatically trigger notifications through your preferred channels.
+
+## How Alerting Works
+
+The alerting system has two core concepts:
+
+1. **Alert Rules** -- conditions that define when a notification should fire (e.g., "a new error occurs" or "CPU exceeds 90%")
+2. **Notification Channels** -- destinations where alerts are delivered (e.g., Slack, email, or a webhook URL)
+
+When an event occurs in Bugwatch -- a new error, an uptime monitor going down, or a server metric crossing a threshold -- the system evaluates all active alert rules for that project. If a rule matches, Bugwatch dispatches notifications to every channel attached to that rule.
+
+```
+Event occurs → Alert rules evaluated → Matching rule found → Notification dispatched
+                                                               ├── Slack
+                                                               ├── Email
+                                                               └── Webhook
+```
+
+## Setting Up Alerts
+
+To configure alerting for a project:
+
+1. Navigate to your project in the Bugwatch dashboard
+2. Go to **Settings** > **Alert Rules**
+3. Click **Create Rule** and select a condition type
+4. Attach one or more notification channels
+5. Save the rule
+
+Alerts begin firing immediately after creation.
+
+## Tier Availability
+
+| Feature | Free | Pro | Enterprise |
+|---------|------|-----|------------|
+| New issue alerts | Yes | Yes | Yes |
+| Issue frequency alerts | Yes | Yes | Yes |
+| Monitor down/recovery alerts | Yes | Yes | Yes |
+| Server CPU/memory/disk alerts | -- | Yes | Yes |
+| Server offline alerts | -- | Yes | Yes |
+| Email channel | Yes | Yes | Yes |
+| Slack channel | Yes | Yes | Yes |
+| Webhook channel | Yes | Yes | Yes |
+
+## Next Steps
+
+- [Alert Rules](/docs/alerting/alert-rules) -- learn about the available condition types and how to create rules
+- [Notification Channels](/docs/alerting/notification-channels) -- set up Slack, email, and webhook destinations
+- [Webhooks](/docs/alerting/webhooks) -- integrate with external systems using outgoing webhooks

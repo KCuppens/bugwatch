@@ -1,21 +1,58 @@
+"use client";
+
+import { useState, useEffect } from "react";
 import Link from "next/link";
-import { Github, Star } from "lucide-react";
+import { Github, Star, X } from "lucide-react";
 
 export function Header() {
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const [scrolled, setScrolled] = useState(false);
+
+  useEffect(() => {
+    const handleScroll = () => setScrolled(window.scrollY > 20);
+    window.addEventListener("scroll", handleScroll);
+    return () => window.removeEventListener("scroll", handleScroll);
+  }, []);
+
+  // Lock body scroll when mobile menu is open
+  useEffect(() => {
+    if (mobileOpen) {
+      document.body.style.overflow = "hidden";
+    } else {
+      document.body.style.overflow = "";
+    }
+    return () => { document.body.style.overflow = ""; };
+  }, [mobileOpen]);
+
   return (
-    <header className="glass border-b border-white/10 sticky top-0 z-50">
+    <header className={`sticky top-0 z-50 border-b transition-all duration-300 ${
+      scrolled
+        ? "border-border-subtle bg-surface-1/95 backdrop-blur-lg shadow-lg shadow-black/5"
+        : "border-transparent bg-transparent"
+    }`}>
       <div className="container mx-auto px-4 h-16 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <span className="text-2xl">🐛</span>
-          <span className="font-bold text-xl">BugWatch</span>
-        </div>
+        <Link href="/" className="flex items-center gap-2.5">
+          <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent text-accent-foreground shadow-lg shadow-accent/25">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" className="h-[18px] w-[18px]" aria-hidden="true">
+              <path d="M8 2v3" />
+              <path d="M16 2v3" />
+              <rect x="4" y="6" width="16" height="14" rx="5" />
+              <path d="M4 13h16" />
+              <path d="M2 15h2" />
+              <path d="M20 15h2" />
+              <path d="M2 10h2" />
+              <path d="M20 10h2" />
+            </svg>
+          </span>
+          <span className="font-display font-bold text-xl tracking-tight">BugWatch</span>
+        </Link>
 
         <nav className="hidden md:flex items-center gap-6">
           <Link
-            href="https://github.com/bugwatch/bugwatch"
+            href="https://github.com/KCuppens/bugwatch"
             target="_blank"
             rel="noopener noreferrer"
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full glass text-sm text-muted-foreground hover:text-foreground transition-colors"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-surface-2 border border-border-subtle text-sm text-muted-foreground hover:text-foreground transition-colors"
           >
             <Github className="h-4 w-4" />
             <Star className="h-3 w-3" />
@@ -27,12 +64,16 @@ export function Header() {
           >
             Docs
           </Link>
-          <Link
+          <a
             href="#pricing"
+            onClick={(e) => {
+              e.preventDefault();
+              document.getElementById("pricing")?.scrollIntoView({ behavior: "smooth" });
+            }}
             className="text-sm text-muted-foreground hover:text-foreground transition-colors"
           >
             Pricing
-          </Link>
+          </a>
           <Link
             href="/login"
             className="text-sm text-muted-foreground hover:text-foreground transition-colors"
@@ -48,11 +89,87 @@ export function Header() {
         </nav>
 
         {/* Mobile menu button */}
-        <button className="md:hidden p-2 glass rounded-lg">
+        <button
+          className="md:hidden p-2 bg-surface-2 border border-border-subtle rounded-lg"
+          onClick={() => setMobileOpen(true)}
+          aria-label="Open menu"
+        >
           <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
           </svg>
         </button>
+      </div>
+
+      {/* Mobile menu backdrop */}
+      {mobileOpen && (
+        <div
+          className="fixed inset-0 bg-black/60 z-50 md:hidden"
+          onClick={() => setMobileOpen(false)}
+        />
+      )}
+
+      {/* Mobile menu drawer */}
+      <div
+        className={`fixed top-0 right-0 h-full w-72 bg-background border-l border-border-subtle z-50 transform transition-transform duration-300 ease-in-out md:hidden ${
+          mobileOpen ? "translate-x-0" : "translate-x-full"
+        }`}
+      >
+        <div className="flex items-center justify-between p-4 border-b border-border-subtle">
+          <span className="font-bold text-lg">Menu</span>
+          <button
+            className="p-2 rounded-lg bg-surface-2 border border-border-subtle"
+            onClick={() => setMobileOpen(false)}
+            aria-label="Close menu"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        <nav className="flex flex-col p-4 gap-2">
+          <Link
+            href="https://github.com/KCuppens/bugwatch"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-2 px-4 py-3 rounded-lg text-sm text-muted-foreground hover:text-foreground hover:bg-surface-3 transition-colors"
+            onClick={() => setMobileOpen(false)}
+          >
+            <Github className="h-4 w-4" />
+            <Star className="h-3 w-3" />
+            <span>Star on GitHub</span>
+          </Link>
+          <Link
+            href="/docs"
+            className="flex items-center gap-2 px-4 py-3 rounded-lg text-sm text-muted-foreground hover:text-foreground hover:bg-surface-3 transition-colors"
+            onClick={() => setMobileOpen(false)}
+          >
+            Docs
+          </Link>
+          <a
+            href="#pricing"
+            onClick={(e) => {
+              e.preventDefault();
+              setMobileOpen(false);
+              document.getElementById("pricing")?.scrollIntoView({ behavior: "smooth" });
+            }}
+            className="flex items-center gap-2 px-4 py-3 rounded-lg text-sm text-muted-foreground hover:text-foreground hover:bg-surface-3 transition-colors"
+          >
+            Pricing
+          </a>
+          <Link
+            href="/login"
+            className="flex items-center gap-2 px-4 py-3 rounded-lg text-sm text-muted-foreground hover:text-foreground hover:bg-surface-3 transition-colors"
+            onClick={() => setMobileOpen(false)}
+          >
+            Login
+          </Link>
+          <Link
+            href="/signup"
+            className="mt-2 bg-accent text-accent-foreground px-4 py-3 rounded-lg text-sm font-medium text-center hover:bg-accent/90 transition-colors"
+            onClick={() => setMobileOpen(false)}
+          >
+            Get Started
+          </Link>
+        </nav>
       </div>
     </header>
   );

@@ -1,0 +1,58 @@
+---
+title: Migration
+description: Migrate to Bugwatch from other error tracking platforms. Understand the benefits and see how Bugwatch compares to Sentry and other tools.
+---
+
+# Migration Guide
+
+Switching error tracking platforms can feel daunting, but Bugwatch is designed to make the transition straightforward. This guide explains why teams migrate to Bugwatch and provides step-by-step instructions for moving from other platforms.
+
+## Why Migrate to Bugwatch?
+
+### Open Source
+
+Bugwatch is fully open source. You can inspect the code, contribute improvements, and self-host for complete data sovereignty. No vendor lock-in, no black boxes.
+
+### Lower Cost
+
+Bugwatch's pricing is simple and predictable. The free tier is generous enough for most small projects, and the Pro tier is priced below comparable offerings from commercial platforms.
+
+### Simpler Setup
+
+A single SDK package, a single API key, and you are capturing errors. No complex DSN strings, no separate performance and error SDKs, no mandatory instrumentation wrappers.
+
+### All-in-One Platform
+
+Error tracking, uptime monitoring, and server metrics in a single dashboard. No need to juggle multiple tools.
+
+## Feature Comparison
+
+| Feature | Bugwatch | Sentry |
+|---------|----------|--------|
+| Error tracking | Yes | Yes |
+| Stack trace grouping | Yes | Yes |
+| Breadcrumbs | Yes | Yes |
+| User context | Yes | Yes |
+| Uptime monitoring | Yes | No (requires third party) |
+| Server metrics | Yes | No (requires third party) |
+| Self-hosting | Yes (open source) | Yes (limited open source) |
+| Pricing model | Per-seat | Per-event volume |
+| SDK complexity | Single package | Multiple packages |
+| Performance monitoring | Planned | Yes |
+| Session replay | Planned | Yes |
+
+## Migration Paths
+
+- **[From Sentry](/docs/migration/from-sentry)** -- step-by-step guide for replacing Sentry SDKs with Bugwatch
+
+## General Migration Steps
+
+Regardless of which platform you are migrating from, the process follows the same pattern:
+
+1. **Create a Bugwatch account** and set up a project
+2. **Install the Bugwatch SDK** in your application alongside your existing error tracker
+3. **Run both in parallel** for a few days to verify Bugwatch is capturing errors correctly
+4. **Remove the old SDK** once you are confident in the Bugwatch integration
+5. **Set up alerting** to match your existing notification workflows
+
+Running both SDKs in parallel ensures you do not lose visibility during the transition.

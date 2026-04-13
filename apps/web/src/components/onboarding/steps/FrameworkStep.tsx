@@ -29,7 +29,7 @@ export function FrameworkStep({
   return (
     <div className="space-y-8">
       <div className="space-y-2 text-center">
-        <h2 className="text-2xl font-bold">Select Your Framework</h2>
+        <h2 className="font-display text-heading-lg">Select Your Framework</h2>
         <p className="text-muted-foreground">
           Choose the specific framework you&apos;re using
           {platformConfig && (

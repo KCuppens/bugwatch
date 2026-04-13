@@ -1,0 +1,170 @@
+---
+title: Python SDK
+description: Install and configure the Bugwatch Python SDK to capture errors, track exceptions, and monitor your Python applications in production.
+---
+
+# Python SDK
+
+The Bugwatch Python SDK provides automatic error capture and manual reporting for any Python application. It hooks into the runtime to catch uncaught exceptions, thread errors, and asyncio failures -- so nothing slips through unnoticed.
+
+## Installation
+
+Install the core SDK with pip:
+
+```bash
+pip install bugwatch-sdk
+```
+
+Or install with extras for your framework of choice:
+
+```bash
+# Django
+pip install bugwatch-sdk[django]
+
+# Flask
+pip install bugwatch-sdk[flask]
+
+# FastAPI
+pip install bugwatch-sdk[fastapi]
+
+# All frameworks
+pip install bugwatch-sdk[all]
+```
+
+<Callout type="info">
+All Python framework integrations (Django, Flask, FastAPI, Celery) are included in the `bugwatch-python` package. No separate installs needed.
+</Callout>
+
+## Quick Start
+
+Initialize the SDK as early as possible in your application's lifecycle:
+
+```python
+import bugwatch
+
+bugwatch.init(
+    api_key="your-api-key",
+    environment="production",
+    release="1.0.0",
+)
+```
+
+Alternatively, set the `BUGWATCH_API_KEY` environment variable and call `init()` without arguments:
+
+```bash
+export BUGWATCH_API_KEY="your-api-key"
+```
+
+```python
+import bugwatch
+
+bugwatch.init()
+```
+
+## Automatic Capture
+
+Once initialized, the SDK automatically captures:
+
+- **Uncaught exceptions** via `sys.excepthook`
+- **Thread exceptions** via `threading.excepthook`
+- **Asyncio exceptions** via the asyncio exception handler
+
+No additional configuration is required -- errors are captured and reported as they occur.
+
+## Manual Error Reporting
+
+### Capture an Exception
+
+Use `capture_exception()` inside an `except` block to report handled errors:
+
+```python
+try:
+    process_payment(order)
+except PaymentError as e:
+    bugwatch.capture_exception(e)
+```
+
+### Capture a Message
+
+Send informational or warning messages that are not tied to an exception:
+
+```python
+bugwatch.capture_message("User exceeded rate limit", level="warning")
+```
+
+## Enriching Events
+
+### Breadcrumbs
+
+Add breadcrumbs to build a trail of events leading up to an error:
+
+```python
+bugwatch.add_breadcrumb(
+    category="auth",
+    message="User logged in",
+    level="info",
+    data={"user_id": "usr_123"},
+)
+```
+
+### User Context
+
+Attach the current user to all subsequent events:
+
+```python
+bugwatch.set_user({
+    "id": "usr_123",
+    "email": "alice@example.com",
+    "username": "alice",
+})
+```
+
+### Tags
+
+Add searchable key-value tags to events:
+
+```python
+bugwatch.set_tag("region", "us-east-1")
+bugwatch.set_tag("service", "payments")
+```
+
+### Extra Data
+
+Attach arbitrary data for debugging:
+
+```python
+bugwatch.set_extra("order_id", "ord_456")
+bugwatch.set_extra("cart_items", 3)
+```
+
+## Shutdown
+
+Before your application exits, flush any pending events and close the transport:
+
+```python
+bugwatch.flush(timeout=5)
+bugwatch.close()
+```
+
+For long-running processes, call `flush()` periodically to ensure events are delivered promptly.
+
+## API Reference
+
+| Function | Description |
+| --- | --- |
+| `bugwatch.init(**options)` | Initialize the SDK with your configuration |
+| `bugwatch.capture_exception(error)` | Report a caught exception |
+| `bugwatch.capture_message(message, level)` | Send an informational or warning message |
+| `bugwatch.add_breadcrumb(**kwargs)` | Add a breadcrumb to the current scope |
+| `bugwatch.set_user(user_dict)` | Attach user context to events |
+| `bugwatch.set_tag(key, value)` | Add a searchable tag to events |
+| `bugwatch.set_extra(key, value)` | Attach extra debugging data to events |
+| `bugwatch.flush(timeout)` | Send all pending events, blocking up to `timeout` seconds |
+| `bugwatch.close()` | Flush and shut down the SDK transport |
+
+## Next Steps
+
+- [Django Integration](/docs/sdks/python/django) -- middleware-based setup for Django projects
+- [Flask Integration](/docs/sdks/python/flask) -- automatic request context for Flask apps
+- [FastAPI Integration](/docs/sdks/python/fastapi) -- async-native support for FastAPI
+- [Celery Integration](/docs/sdks/python/celery) -- capture task failures in background workers

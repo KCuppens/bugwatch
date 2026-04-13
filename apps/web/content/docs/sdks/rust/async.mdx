@@ -1,0 +1,182 @@
+---
+title: Async Rust
+description: Use the Bugwatch Rust SDK with async runtimes like tokio and async-std for non-blocking error capture in async Rust applications.
+---
+
+# Async Rust
+
+The Bugwatch Rust SDK provides first-class async support for non-blocking error capture. Events are sent over async I/O so your application's throughput is not affected by error reporting.
+
+## Installation
+
+Enable the `async` feature in your `Cargo.toml`:
+
+```toml
+[dependencies]
+bugwatch = { version = "0.1", features = ["async"] }
+```
+
+If you only need async support and want to exclude the blocking transport:
+
+```toml
+[dependencies]
+bugwatch = { version = "0.1", default-features = false, features = ["async"] }
+```
+
+## Quick Start
+
+Initialize the client and use async methods for event delivery:
+
+```rust
+use bugwatch::{BugwatchClient, BugwatchOptions, Level};
+
+#[tokio::main]
+async fn main() {
+    let client = BugwatchClient::init(BugwatchOptions {
+        api_key: "your-api-key".to_string(),
+        environment: Some("production".to_string()),
+        release: Some("1.0.0".to_string()),
+        ..Default::default()
+    });
+
+    bugwatch::install_panic_hook(&client);
+
+    if let Err(e) = run_server().await {
+        client.capture_error_async(&*e).await;
+    }
+
+    client.flush_async(std::time::Duration::from_secs(5)).await;
+}
+```
+
+## Async Error Capture
+
+Use `capture_error_async` to report errors without blocking the current task:
+
+```rust
+use bugwatch::BugwatchClient;
+
+async fn handle_request(client: &BugwatchClient, req: Request) -> Response {
+    match process(req).await {
+        Ok(resp) => resp,
+        Err(e) => {
+            client.capture_error_async(&*e).await;
+            Response::internal_server_error()
+        }
+    }
+}
+```
+
+## Async Message Capture
+
+Send messages asynchronously:
+
+```rust
+use bugwatch::Level;
+
+client.capture_message_async("Queue depth exceeded threshold", Level::Warning).await;
+```
+
+## Tokio Integration
+
+The async transport works out of the box with tokio. Here is a full example with an Axum web server:
+
+```rust
+use axum::{Router, routing::get, response::IntoResponse};
+use bugwatch::{BugwatchClient, BugwatchOptions};
+use std::sync::Arc;
+
+struct AppState {
+    bugwatch: BugwatchClient,
+}
+
+async fn health() -> impl IntoResponse {
+    "ok"
+}
+
+async fn fallible_handler(
+    state: axum::extract::State<Arc<AppState>>,
+) -> impl IntoResponse {
+    match do_work().await {
+        Ok(result) => (axum::http::StatusCode::OK, result).into_response(),
+        Err(e) => {
+            state.bugwatch.capture_error_async(&*e).await;
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+#[tokio::main]
+async fn main() {
+    let client = BugwatchClient::init(BugwatchOptions {
+        api_key: "your-api-key".to_string(),
+        environment: Some("production".to_string()),
+        ..Default::default()
+    });
+
+    bugwatch::install_panic_hook(&client);
+
+    let state = Arc::new(AppState { bugwatch: client.clone() });
+
+    let app = Router::new()
+        .route("/health", get(health))
+        .route("/work", get(fallible_handler))
+        .with_state(state);
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
+    axum::serve(listener, app).await.unwrap();
+
+    client.flush_async(std::time::Duration::from_secs(5)).await;
+}
+```
+
+## async-std Integration
+
+The async transport is runtime-agnostic and also works with async-std:
+
+```rust
+use bugwatch::{BugwatchClient, BugwatchOptions};
+
+#[async_std::main]
+async fn main() {
+    let client = BugwatchClient::init(BugwatchOptions {
+        api_key: "your-api-key".to_string(),
+        environment: Some("production".to_string()),
+        ..Default::default()
+    });
+
+    bugwatch::install_panic_hook(&client);
+
+    if let Err(e) = run_app().await {
+        client.capture_error_async(&*e).await;
+    }
+
+    client.flush_async(std::time::Duration::from_secs(5)).await;
+}
+```
+
+## Async Flush and Shutdown
+
+Always flush before your application exits to ensure all buffered events are delivered:
+
+```rust
+// Async flush with timeout
+client.flush_async(std::time::Duration::from_secs(5)).await;
+```
+
+For graceful shutdown in a server context:
+
+```rust
+tokio::select! {
+    _ = server.serve() => {},
+    _ = tokio::signal::ctrl_c() => {
+        println!("Shutting down...");
+        client.flush_async(std::time::Duration::from_secs(5)).await;
+    }
+}
+```
+
+## Next Steps
+
+- [Rust SDK Overview](/docs/sdks/rust) -- full API reference and configuration options
+- [Blocking Rust](/docs/sdks/rust/blocking) -- synchronous API for CLI tools and scripts

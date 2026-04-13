@@ -75,11 +75,7 @@ impl CommentRepository {
         Ok(comment)
     }
 
-    pub async fn update(
-        db: &DbPool,
-        id: &str,
-        content: &str,
-    ) -> AppResult<()> {
+    pub async fn update(db: &DbPool, id: &str, content: &str) -> AppResult<()> {
         let now = Utc::now();
 
         sqlx::query(
@@ -108,12 +104,11 @@ impl CommentRepository {
     }
 
     pub async fn count_by_issue(db: &DbPool, issue_id: &str) -> AppResult<i64> {
-        let count: (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM issue_comments WHERE issue_id = $1",
-        )
-        .bind(issue_id)
-        .fetch_one(db)
-        .await?;
+        let count: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM issue_comments WHERE issue_id = $1")
+                .bind(issue_id)
+                .fetch_one(db)
+                .await?;
 
         Ok(count.0)
     }

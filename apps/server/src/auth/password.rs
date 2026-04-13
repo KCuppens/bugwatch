@@ -47,14 +47,24 @@ pub fn validate_password(password: &str) -> AppResult<()> {
     Ok(())
 }
 
-/// Validate email format
+/// Validate email format using a proper regex pattern
 pub fn validate_email(email: &str) -> AppResult<()> {
-    if !email.contains('@') || !email.contains('.') {
-        return Err(AppError::Validation("Invalid email format".to_string()));
+    use regex::Regex;
+    use std::sync::LazyLock;
+
+    // HTML5 email pattern - good enough for practical use
+    static EMAIL_RE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$").unwrap()
+    });
+
+    if email.len() > 254 {
+        return Err(AppError::Validation(
+            "Email address too long (max 254 characters)".to_string(),
+        ));
     }
 
-    if email.len() < 5 {
-        return Err(AppError::Validation("Email too short".to_string()));
+    if !EMAIL_RE.is_match(email) {
+        return Err(AppError::Validation("Invalid email format".to_string()));
     }
 
     Ok(())

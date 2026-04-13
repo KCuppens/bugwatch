@@ -143,7 +143,7 @@ pub async fn oauth_authorize(
             return Err(crate::payments::x402_feature_response(
                 &state,
                 features::GITHUB_INTEGRATION,
-                "/api/v1/integrations/oauth/{provider}/authorize",
+                &format!("/api/v1/integrations/oauth/{}/authorize", provider),
                 &guard.organization_id,
                 None,
                 &format!(
@@ -433,7 +433,7 @@ pub async fn delete_integration(
             return Err(crate::payments::x402_feature_response(
                 &state,
                 features::GITHUB_INTEGRATION,
-                "/api/v1/integrations/{integration_id}",
+                &format!("/api/v1/integrations/{}", integration_id),
                 &guard.organization_id,
                 None,
                 &format!(

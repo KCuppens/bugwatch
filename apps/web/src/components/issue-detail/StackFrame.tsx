@@ -34,7 +34,7 @@ export function StackFrame({ frame, index: _index, isExpanded, onToggle }: Stack
     <div
       className={`rounded-md border overflow-hidden transition-all ${
         frame.in_app
-          ? "border-primary/30 bg-primary/5"
+          ? "border-accent-2/30 bg-accent-2/5"
           : "bg-muted/30 border-border"
       }`}
     >
@@ -52,7 +52,7 @@ export function StackFrame({ frame, index: _index, isExpanded, onToggle }: Stack
               {frame.function || "(anonymous)"}
             </span>
             {frame.in_app && (
-              <span className="shrink-0 rounded-md border border-primary/40 bg-primary/10 px-1.5 py-0.5 text-xs font-semibold text-primary">
+              <span className="shrink-0 rounded-md border border-accent-2/40 bg-accent-2/10 px-1.5 py-0.5 text-xs font-semibold text-accent-2">
                 APP
               </span>
             )}

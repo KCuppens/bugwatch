@@ -29,7 +29,7 @@ export const TIER_PRICING: Record<Tier, TierPricing> = {
     description: 'For professional developers',
   },
   team: {
-    monthly: 21,
+    monthly: 25,
     annual: 17.50,
     description: 'For growing teams',
   },
@@ -42,16 +42,18 @@ export const TIER_PRICING: Record<Tier, TierPricing> = {
 
 export const FEATURE_COMPARISON: FeatureRow[] = [
   // Limits
-  { name: 'Events per minute', category: 'limits', free: '5', pro: '60', team: '300', enterprise: '3,000+' },
+  { name: 'Events per minute', category: 'limits', free: '100', pro: '1,000', team: '5,000', enterprise: '10,000+' },
   { name: 'Projects', category: 'limits', free: '1', pro: 'Unlimited', team: 'Unlimited', enterprise: 'Unlimited' },
-  { name: 'Data retention', category: 'limits', free: '7 days', pro: '30 days', team: '90 days', enterprise: 'Custom' },
-  { name: 'AI fixes included', category: 'limits', free: '0', pro: '10/month', team: '50/month', enterprise: 'Unlimited' },
+  { name: 'Data retention', category: 'limits', free: '7 days', pro: '90 days', team: '365 days', enterprise: 'Unlimited' },
+  { name: 'Uptime monitors', category: 'limits', free: '1', pro: '10', team: '25', enterprise: 'Unlimited' },
+  { name: 'Server monitoring', category: 'limits', free: false, pro: true, team: true, enterprise: true },
 
   // Features
-  { name: 'Email alerts', category: 'features', free: true, pro: true, team: true, enterprise: true },
+  { name: 'Slack notifications', category: 'features', free: true, pro: true, team: true, enterprise: true },
+  { name: 'Email notifications', category: 'features', free: false, pro: true, team: true, enterprise: true },
   { name: 'Webhook alerts', category: 'features', free: false, pro: true, team: true, enterprise: true },
-  { name: 'Slack integration', category: 'features', free: false, pro: true, team: true, enterprise: true },
-  { name: 'Team members', category: 'features', free: false, pro: false, team: true, enterprise: true },
+  { name: 'PagerDuty', category: 'features', free: false, pro: true, team: true, enterprise: true },
+  { name: 'OpsGenie', category: 'features', free: false, pro: false, team: true, enterprise: true },
   { name: 'Jira integration', category: 'features', free: false, pro: false, team: true, enterprise: true },
   { name: 'Linear integration', category: 'features', free: false, pro: false, team: true, enterprise: true },
   { name: 'GitHub integration', category: 'features', free: false, pro: false, team: true, enterprise: true },

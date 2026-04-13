@@ -20,6 +20,7 @@
     "dev": "tsup --watch",
     "typecheck": "tsc --noEmit",
     "clean": "rm -rf dist",
+    "lint": "eslint .",
     "test": "vitest run",
     "test:watch": "vitest"
   },
@@ -40,10 +41,10 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/bugwatch/bugwatch.git",
+    "url": "https://github.com/KCuppens/bugwatch.git",
     "directory": "packages/sdk/express"
   },
-  "license": "MIT",
+  "license": "FSL-1.1-Apache-2.0",
   "keywords": [
     "bugwatch",
     "error-tracking",

@@ -4,14 +4,18 @@ version = "0.1.0"
 edition = "2021"
 authors = ["Bugwatch Team"]
 description = "Bugwatch API Server - AI-Powered Error Tracking"
-license = "MIT"
+license = "FSL-1.1-Apache-2.0"
 repository = "https://github.com/KCuppens/bugwatch"
+
+[features]
+default = []
+saas = ["dep:async-stripe", "dep:aws-sdk-sesv2", "dep:aws-config"]
 
 [dependencies]
 # Web framework
 axum = { version = "0.7", features = ["macros"] }
 axum-extra = { version = "0.9", features = ["typed-header"] }
-tokio = { version = "1.43", features = ["full"] }
+tokio = { version = "1.43", features = ["rt-multi-thread", "macros", "sync", "net", "time", "signal", "io-util", "fs"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "trace", "request-id"] }
 
@@ -33,6 +37,7 @@ chrono = { version = "0.4", features = ["serde"] }
 thiserror = "2.0"
 anyhow = "1.0"
 regex = "1.11"
+url = "2.5"
 
 # Logging
 tracing = "0.1"
@@ -47,22 +52,39 @@ async-trait = "0.1"
 # Cryptography
 hex = "0.4"
 hmac = "0.12"
+aes-gcm = "0.10"
 
 # Rate limiting
 dashmap = "6"
 
+# Encoding
+base64 = "0.22"
+urlencoding = "2.1"
+
 # HTTP client for external APIs
 reqwest = { version = "0.12", features = ["json"] }
 
-# Stripe payments
-async-stripe = { version = "0.39", features = ["runtime-tokio-hyper"] }
+# Stripe payments (SaaS only)
+async-stripe = { version = "0.39", features = ["runtime-tokio-hyper"], optional = true }
 
-# AWS SDK for email (SES)
-aws-config = { version = "1.5", features = ["behavior-version-latest"] }
-aws-sdk-sesv2 = "1.54"
+# AWS SDK for email (SES) (SaaS only)
+aws-config = { version = "1.5", features = ["behavior-version-latest"], optional = true }
+aws-sdk-sesv2 = { version = "1.54", optional = true }
+
+# SMTP for self-hosted email
+lettre = { version = "0.11", features = ["tokio1-native-tls"] }
 
 # BugWatch SDK for self-monitoring (dogfooding)
 bugwatch = { version = "0.2", features = ["async"] }
 
 [dev-dependencies]
 tokio-test = "0.4"
+
+[profile.release]
+# Full link-time optimization; slower builds, ~20-30% smaller binary and
+# noticeable runtime wins on hot paths. codegen-units = 1 further improves
+# inlining at the cost of parallel backend work.
+lto = "fat"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"

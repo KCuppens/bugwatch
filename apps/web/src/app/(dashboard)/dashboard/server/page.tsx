@@ -28,6 +28,7 @@ import {
   Search,
   ChevronUp,
   ChevronDown,
+  AlertCircle,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -78,7 +79,7 @@ function getStatusColor(value: number | null, warn: number = 70, crit: number = 
 }
 
 function getStatusBg(value: number | null, warn: number = 70, crit: number = 90): string {
-  if (value === null) return "bg-white/5";
+  if (value === null) return "bg-surface-3";
   if (value >= crit) return "bg-red-500/10 border-red-500/20";
   if (value >= warn) return "bg-yellow-500/10 border-yellow-500/20";
   return "bg-green-500/10 border-green-500/20";
@@ -168,11 +169,35 @@ export default function ServerPage() {
     fetchMetrics();
   }, [fetchMetrics]);
 
-  // Poll every 30 seconds
+  // Poll every 30 seconds, pause when tab is hidden
   useEffect(() => {
     if (!selectedProject || !selectedServer) return;
-    const interval = setInterval(fetchMetrics, 30000);
-    return () => clearInterval(interval);
+    let interval: ReturnType<typeof setInterval> | null = null;
+
+    function startPolling() {
+      if (interval) clearInterval(interval);
+      interval = setInterval(fetchMetrics, 30000);
+    }
+
+    function stopPolling() {
+      if (interval) { clearInterval(interval); interval = null; }
+    }
+
+    function handleVisibilityChange() {
+      if (document.hidden) {
+        stopPolling();
+      } else {
+        fetchMetrics();
+        startPolling();
+      }
+    }
+
+    startPolling();
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      stopPolling();
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
   }, [fetchMetrics, selectedProject, selectedServer]);
 
   // Get API key for install command
@@ -218,7 +243,7 @@ export default function ServerPage() {
     return (
       <div className="space-y-6">
         <div>
-          <h1 className="text-2xl font-bold">Server Monitoring</h1>
+          <h1 className="font-display text-heading-lg">Server Monitoring</h1>
           <p className="text-muted-foreground mt-1">
             Select a project from the sidebar to view server metrics.
           </p>
@@ -232,19 +257,19 @@ export default function ServerPage() {
     return (
       <div className="space-y-6">
         <div>
-          <h1 className="text-2xl font-bold">Server Monitoring</h1>
+          <h1 className="font-display text-heading-lg">Server Monitoring</h1>
           <p className="text-muted-foreground mt-1">
             Monitor your server health alongside error tracking
           </p>
         </div>
 
-        <Card className="border-white/10 bg-white/[0.02]">
+        <Card className="border-border-subtle">
           <CardContent className="p-8 text-center space-y-6">
             <div className="mx-auto w-16 h-16 rounded-full bg-accent/10 flex items-center justify-center">
               <Server className="h-8 w-8 text-accent" />
             </div>
             <div>
-              <h2 className="text-xl font-semibold">Install the BugWatch Agent</h2>
+              <h2 className="font-display text-heading-md">Install the BugWatch Agent</h2>
               <p className="text-muted-foreground mt-2 max-w-md mx-auto">
                 Run this one-liner on your server to start monitoring CPU, memory, disk, and network metrics.
               </p>
@@ -301,12 +326,39 @@ export default function ServerPage() {
     load15: m.load_avg_15 ?? 0,
   }));
 
+  // Check if agent is offline (no data in 5+ minutes)
+  const isAgentOffline = latest?.recorded_at
+    ? (Date.now() - new Date(latest.recorded_at).getTime()) > 5 * 60 * 1000
+    : false;
+
+  const formatTimeAgo = (dateString: string) => {
+    const diffMs = Date.now() - new Date(dateString).getTime();
+    const mins = Math.floor(diffMs / 60000);
+    const hours = Math.floor(diffMs / 3600000);
+    if (mins < 60) return `${mins}m ago`;
+    if (hours < 24) return `${hours}h ago`;
+    return `${Math.floor(hours / 24)}d ago`;
+  };
+
   return (
     <div className="space-y-6">
+      {/* Agent Offline Banner */}
+      {isAgentOffline && latest?.recorded_at && (
+        <div className="flex items-center gap-3 p-4 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400">
+          <AlertCircle className="h-5 w-5 shrink-0" />
+          <div>
+            <p className="font-medium text-sm">Agent offline</p>
+            <p className="text-xs text-red-400/80">
+              Last heartbeat: {formatTimeAgo(latest.recorded_at)}. Check that the agent is running.
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-4">
         <div>
-          <h1 className="text-2xl font-bold">Server Monitoring</h1>
+          <h1 className="font-display text-heading-lg">Server Monitoring</h1>
           <p className="text-muted-foreground mt-1">
             {serverInfo ? `${serverInfo.hostname}` : "Server health metrics"}
             {serverInfo?.os && ` — ${serverInfo.os}`}
@@ -315,7 +367,7 @@ export default function ServerPage() {
         <div className="flex items-center gap-3">
           {servers.length > 1 && (
             <Select value={selectedServer || ""} onValueChange={setSelectedServer}>
-              <SelectTrigger className="w-[200px] bg-white/5 border-white/10">
+              <SelectTrigger className="w-[200px] bg-surface-3 border-border-subtle">
                 <SelectValue placeholder="Select server" />
               </SelectTrigger>
               <SelectContent>
@@ -328,7 +380,7 @@ export default function ServerPage() {
               </SelectContent>
             </Select>
           )}
-          <div className="flex bg-white/5 rounded-lg border border-white/10 p-0.5">
+          <div className="flex bg-surface-3 rounded-lg border border-border-subtle p-0.5">
             {["1h", "6h", "24h", "7d"].map((p) => (
               <Button
                 key={p}
@@ -336,7 +388,7 @@ export default function ServerPage() {
                 size="sm"
                 className={`px-3 py-1.5 text-xs ${
                   period === p
-                    ? "bg-accent/15 text-accent"
+                    ? "bg-accent-2/12 text-accent-2"
                     : "text-muted-foreground hover:text-foreground"
                 }`}
                 onClick={() => setPeriod(p)}
@@ -356,13 +408,13 @@ export default function ServerPage() {
               <Cpu className="h-4 w-4 text-muted-foreground" />
               <span className="text-xs text-muted-foreground">CPU</span>
             </div>
-            <p className={`text-2xl font-bold ${getStatusColor(latest?.cpu_usage_percent ?? null)}`}>
+            <p className={`font-display text-2xl font-semibold tabular-nums ${getStatusColor(latest?.cpu_usage_percent ?? null)}`}>
               {latest?.cpu_usage_percent !== null && latest?.cpu_usage_percent !== undefined
                 ? `${latest.cpu_usage_percent.toFixed(1)}%`
                 : "N/A"}
             </p>
             {/* Threshold legend */}
-            <div className="mt-2 flex items-center gap-0.5 h-1.5 rounded-full overflow-hidden bg-white/5">
+            <div className="mt-2 flex items-center gap-0.5 h-1.5 rounded-full overflow-hidden bg-surface-3">
               <div className="h-full bg-green-500/60" style={{ width: "70%" }} />
               <div className="h-full bg-yellow-500/60" style={{ width: "20%" }} />
               <div className="h-full bg-red-500/60" style={{ width: "10%" }} />
@@ -376,7 +428,7 @@ export default function ServerPage() {
               <MemoryStick className="h-4 w-4 text-muted-foreground" />
               <span className="text-xs text-muted-foreground">Memory</span>
             </div>
-            <p className={`text-2xl font-bold ${getStatusColor(latest?.mem_usage_percent ?? null)}`}>
+            <p className={`font-display text-2xl font-semibold tabular-nums ${getStatusColor(latest?.mem_usage_percent ?? null)}`}>
               {latest?.mem_usage_percent !== null && latest?.mem_usage_percent !== undefined
                 ? `${latest.mem_usage_percent.toFixed(1)}%`
                 : "N/A"}
@@ -384,7 +436,7 @@ export default function ServerPage() {
             <p className="text-xs text-muted-foreground mt-1">
               {formatBytes(latest?.mem_used_bytes ?? null)} / {formatBytes(latest?.mem_total_bytes ?? null)}
             </p>
-            <div className="mt-2 flex items-center gap-0.5 h-1.5 rounded-full overflow-hidden bg-white/5">
+            <div className="mt-2 flex items-center gap-0.5 h-1.5 rounded-full overflow-hidden bg-surface-3">
               <div className="h-full bg-green-500/60" style={{ width: "70%" }} />
               <div className="h-full bg-yellow-500/60" style={{ width: "20%" }} />
               <div className="h-full bg-red-500/60" style={{ width: "10%" }} />
@@ -400,7 +452,7 @@ export default function ServerPage() {
               <HardDrive className="h-4 w-4 text-muted-foreground" />
               <span className="text-xs text-muted-foreground">Disk</span>
             </div>
-            <p className={`text-2xl font-bold ${getStatusColor(
+            <p className={`font-display text-2xl font-semibold tabular-nums ${getStatusColor(
               latest?.disks?.[0]?.usage_percent ?? null
             )}`}>
               {latest?.disks?.[0]?.usage_percent !== undefined
@@ -410,7 +462,7 @@ export default function ServerPage() {
             <p className="text-xs text-muted-foreground mt-1">
               {latest?.disks?.[0] && `${formatBytes(latest.disks[0].used_bytes)} / ${formatBytes(latest.disks[0].total_bytes)}`}
             </p>
-            <div className="mt-2 flex items-center gap-0.5 h-1.5 rounded-full overflow-hidden bg-white/5">
+            <div className="mt-2 flex items-center gap-0.5 h-1.5 rounded-full overflow-hidden bg-surface-3">
               <div className="h-full bg-green-500/60" style={{ width: "70%" }} />
               <div className="h-full bg-yellow-500/60" style={{ width: "20%" }} />
               <div className="h-full bg-red-500/60" style={{ width: "10%" }} />
@@ -418,13 +470,13 @@ export default function ServerPage() {
           </CardContent>
         </Card>
 
-        <Card className="border bg-white/[0.02] border-white/10">
+        <Card className="border border-border-subtle">
           <CardContent className="p-4">
             <div className="flex items-center gap-2 mb-2">
               <Activity className="h-4 w-4 text-muted-foreground" />
               <span className="text-xs text-muted-foreground">Load Average</span>
             </div>
-            <p className="text-2xl font-bold">
+            <p className="font-display text-2xl font-semibold tabular-nums">
               {latest?.load_avg_1 !== null && latest?.load_avg_1 !== undefined
                 ? latest.load_avg_1.toFixed(2)
                 : "N/A"}
@@ -433,7 +485,7 @@ export default function ServerPage() {
               {latest?.load_avg_5 != null && `5m: ${latest?.load_avg_5?.toFixed(2)}`}
               {latest?.load_avg_15 != null && ` · 15m: ${latest?.load_avg_15?.toFixed(2)}`}
             </p>
-            <div className="mt-2 flex items-center gap-0.5 h-1.5 rounded-full overflow-hidden bg-white/5">
+            <div className="mt-2 flex items-center gap-0.5 h-1.5 rounded-full overflow-hidden bg-surface-3">
               <div className="h-full bg-green-500/60" style={{ width: "50%" }} />
               <div className="h-full bg-yellow-500/60" style={{ width: "30%" }} />
               <div className="h-full bg-red-500/60" style={{ width: "20%" }} />
@@ -445,7 +497,7 @@ export default function ServerPage() {
       {/* Charts */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {/* CPU Chart */}
-        <Card className="border-white/10 bg-white/[0.02]">
+        <Card className="border-border-subtle">
           <CardContent className="p-4">
             <h3 className="text-sm font-medium mb-4">CPU Usage</h3>
             <div className="h-48">
@@ -466,7 +518,7 @@ export default function ServerPage() {
         </Card>
 
         {/* Memory Chart */}
-        <Card className="border-white/10 bg-white/[0.02]">
+        <Card className="border-border-subtle">
           <CardContent className="p-4">
             <h3 className="text-sm font-medium mb-4">Memory Usage</h3>
             <div className="h-48">
@@ -487,7 +539,7 @@ export default function ServerPage() {
         </Card>
 
         {/* Network I/O Chart */}
-        <Card className="border-white/10 bg-white/[0.02]">
+        <Card className="border-border-subtle">
           <CardContent className="p-4">
             <h3 className="text-sm font-medium mb-4">Network I/O</h3>
             <div className="h-48">
@@ -510,7 +562,7 @@ export default function ServerPage() {
         </Card>
 
         {/* Load Average Chart */}
-        <Card className="border-white/10 bg-white/[0.02]">
+        <Card className="border-border-subtle">
           <CardContent className="p-4">
             <h3 className="text-sm font-medium mb-4">Load Average</h3>
             <div className="h-48">
@@ -535,7 +587,7 @@ export default function ServerPage() {
 
       {/* Server Info + Uptime */}
       {serverInfo && (
-        <Card className="border-white/10 bg-white/[0.02]">
+        <Card className="border-border-subtle">
           <CardContent className="p-4">
             <h3 className="text-sm font-medium mb-3">Server Information</h3>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
@@ -567,13 +619,13 @@ export default function ServerPage() {
 
       {/* Disk Table */}
       {latest?.disks && latest.disks.length > 0 && (
-        <Card className="border-white/10 bg-white/[0.02]">
+        <Card className="border-border-subtle">
           <CardContent className="p-4">
             <h3 className="text-sm font-medium mb-3">Disk Usage</h3>
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="text-muted-foreground text-left border-b border-white/10">
+                  <tr className="text-muted-foreground text-left border-b border-border-subtle">
                     <th className="pb-2 font-medium">Mount</th>
                     <th className="pb-2 font-medium">Filesystem</th>
                     <th className="pb-2 font-medium">Used</th>
@@ -584,7 +636,7 @@ export default function ServerPage() {
                 </thead>
                 <tbody>
                   {latest.disks.map((disk, i) => (
-                    <tr key={i} className="border-b border-white/5">
+                    <tr key={i} className="border-b border-border-subtle">
                       <td className="py-2 font-mono text-xs">{disk.mount}</td>
                       <td className="py-2 text-muted-foreground">{disk.filesystem || "—"}</td>
                       <td className="py-2">{formatBytes(disk.used_bytes)}</td>
@@ -592,7 +644,7 @@ export default function ServerPage() {
                       <td className="py-2">{formatBytes(disk.total_bytes)}</td>
                       <td className="py-2">
                         <div className="flex items-center gap-2">
-                          <div className="flex-1 h-2 bg-white/10 rounded-full overflow-hidden">
+                          <div className="flex-1 h-2 bg-surface-3 rounded-full overflow-hidden">
                             <div
                               className={`h-full rounded-full ${
                                 disk.usage_percent >= 90
@@ -644,7 +696,7 @@ export default function ServerPage() {
         };
 
         return (
-          <Card className="border-white/10 bg-white/[0.02]">
+          <Card className="border-border-subtle">
             <CardContent className="p-4">
               <div className="flex items-center justify-between mb-3">
                 <h3 className="text-sm font-medium">Processes ({filtered.length})</h3>
@@ -672,7 +724,7 @@ export default function ServerPage() {
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
-                    <tr className="text-muted-foreground text-left border-b border-white/10">
+                    <tr className="text-muted-foreground text-left border-b border-border-subtle">
                       <th className="pb-2 font-medium">PID</th>
                       <th className="pb-2 font-medium cursor-pointer hover:text-foreground" onClick={() => toggleSort("name")}>
                         Name <SortIcon field="name" />
@@ -688,7 +740,7 @@ export default function ServerPage() {
                   </thead>
                   <tbody>
                     {displayed.map((proc, i) => (
-                      <tr key={i} className="border-b border-white/5 hover:bg-white/5 transition-colors">
+                      <tr key={i} className="border-b border-border-subtle hover:bg-surface-3 transition-colors">
                         <td className="py-2 font-mono text-xs">{proc.pid}</td>
                         <td className="py-2">{proc.name}</td>
                         <td className="py-2 text-muted-foreground">{proc.user || "—"}</td>
@@ -710,7 +762,7 @@ export default function ServerPage() {
 
       {/* Docker Table */}
       {latest?.docker && latest.docker.length > 0 && (
-        <Card className="border-white/10 bg-white/[0.02]">
+        <Card className="border-border-subtle">
           <CardContent className="p-4">
             <h3 className="text-sm font-medium mb-3 flex items-center gap-2">
               <Container className="h-4 w-4" />
@@ -719,7 +771,7 @@ export default function ServerPage() {
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="text-muted-foreground text-left border-b border-white/10">
+                  <tr className="text-muted-foreground text-left border-b border-border-subtle">
                     <th className="pb-2 font-medium">Name</th>
                     <th className="pb-2 font-medium">Status</th>
                     <th className="pb-2 font-medium">CPU %</th>
@@ -728,7 +780,7 @@ export default function ServerPage() {
                 </thead>
                 <tbody>
                   {latest.docker.map((container, i) => (
-                    <tr key={i} className="border-b border-white/5">
+                    <tr key={i} className="border-b border-border-subtle">
                       <td className="py-2 font-mono text-xs">{container.name}</td>
                       <td className="py-2">
                         <span className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full ${

@@ -1,0 +1,16 @@
+{
+  "name": "bugwatch/sdk",
+  "description": "Official PHP SDK for Bugwatch - AI-Powered Error Tracking",
+  "type": "library",
+  "license": "FSL-1.1-Apache-2.0",
+  "version": "0.1.0",
+  "authors": [{"name": "Bugwatch Team", "email": "support@bugwatch.dev"}],
+  "homepage": "https://bugwatch.dev",
+  "keywords": ["bugwatch", "error-tracking", "monitoring", "logging", "exceptions"],
+  "require": {"php": ">=8.1", "ext-curl": "*", "ext-json": "*"},
+  "require-dev": {"phpunit/phpunit": "^10.0", "phpstan/phpstan": "^1.0", "friendsofphp/php-cs-fixer": "^3.0"},
+  "autoload": {"psr-4": {"Bugwatch\\": "src/"}},
+  "autoload-dev": {"psr-4": {"Bugwatch\\Tests\\": "tests/"}},
+  "extra": {"laravel": {"providers": ["Bugwatch\\Integrations\\Laravel\\BugwatchServiceProvider"]}},
+  "minimum-stability": "stable"
+}

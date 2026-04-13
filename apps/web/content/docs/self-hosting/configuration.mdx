@@ -1,0 +1,110 @@
+---
+title: Configuration
+description: Complete reference for all Bugwatch environment variables. Configure the database, authentication, billing, email, and web app settings for your self-hosted deployment.
+---
+
+# Configuration Reference
+
+Bugwatch is configured through environment variables. This page documents every available variable for both the API server and the web app.
+
+## API Server
+
+### Core
+
+| Variable | Required | Description | Default |
+|----------|----------|-------------|---------|
+| `DATABASE_URL` | Yes | PostgreSQL connection string | -- |
+| `JWT_SECRET` | Yes | Secret key for signing JWT tokens. Use at least 32 random characters. | -- |
+| `CORS_ORIGINS` | Yes | Comma-separated list of allowed origins (e.g., `https://bugwatch.yourcompany.com`) | -- |
+| `HOST` | No | Address to bind the server to | `0.0.0.0` |
+| `PORT` | No | Port to listen on | `8080` |
+
+**Example:**
+
+```bash
+DATABASE_URL=postgresql://bugwatch:password@localhost:5432/bugwatch
+JWT_SECRET=a1b2c3d4e5f6...  # openssl rand -hex 32
+CORS_ORIGINS=https://bugwatch.yourcompany.com
+```
+
+### Billing (Optional)
+
+These variables are only needed if you want to enable Stripe-based billing. They are not required for self-hosted deployments.
+
+| Variable | Required | Description | Default |
+|----------|----------|-------------|---------|
+| `STRIPE_SECRET_KEY` | No | Stripe API secret key | -- |
+| `STRIPE_WEBHOOK_SECRET` | No | Stripe webhook signing secret | -- |
+
+### Email Notifications (SMTP)
+
+Configure SMTP to enable email notification channels and password reset emails.
+
+| Variable | Required | Description | Default |
+|----------|----------|-------------|---------|
+| `SMTP_HOST` | No | SMTP server hostname | -- |
+| `SMTP_PORT` | No | SMTP server port | `587` |
+| `SMTP_USERNAME` | No | SMTP authentication username | -- |
+| `SMTP_PASSWORD` | No | SMTP authentication password | -- |
+| `SMTP_FROM` | No | Sender email address (e.g., `noreply@bugwatch.yourcompany.com`) | -- |
+
+**Example:**
+
+```bash
+SMTP_HOST=smtp.mailgun.org
+SMTP_PORT=587
+SMTP_USERNAME=postmaster@bugwatch.yourcompany.com
+SMTP_PASSWORD=your-smtp-password
+SMTP_FROM=noreply@bugwatch.yourcompany.com
+```
+
+If SMTP is not configured, email notification channels will be unavailable. The application will still function for error tracking and alerting via Slack and webhooks.
+
+## Web App
+
+| Variable | Required | Description | Default |
+|----------|----------|-------------|---------|
+| `NEXT_PUBLIC_API_URL` | Yes | Base URL of the Bugwatch API server (e.g., `https://api.bugwatch.yourcompany.com`) | -- |
+| `NEXT_PUBLIC_SITE_URL` | Yes | Base URL of the web app itself (e.g., `https://bugwatch.yourcompany.com`) | -- |
+
+**Example:**
+
+```bash
+NEXT_PUBLIC_API_URL=https://api.bugwatch.yourcompany.com
+NEXT_PUBLIC_SITE_URL=https://bugwatch.yourcompany.com
+```
+
+These variables are baked into the Next.js build at build time. If you change them, you must rebuild the web app.
+
+## Generating Secrets
+
+Use `openssl` to generate secure random values:
+
+```bash
+# Generate a JWT secret
+openssl rand -hex 32
+
+# Generate a strong password
+openssl rand -base64 24
+```
+
+## Docker Compose Environment
+
+When using Docker Compose, place all variables in a `.env` file at the repository root. Docker Compose automatically loads this file.
+
+```bash
+# .env
+DATABASE_URL=postgresql://bugwatch:bugwatch@postgres:5432/bugwatch
+JWT_SECRET=your-generated-secret
+CORS_ORIGINS=http://localhost:3000
+NEXT_PUBLIC_API_URL=http://localhost:8080
+NEXT_PUBLIC_SITE_URL=http://localhost:3000
+```
+
+Note that the `DATABASE_URL` hostname should be `postgres` (the Docker Compose service name) rather than `localhost` when running inside Docker.
+
+## Next Steps
+
+- [Docker Compose Setup](/docs/self-hosting/docker) -- deploy with Docker Compose
+- [Manual Setup](/docs/self-hosting/manual-setup) -- build from source
+- [Upgrading](/docs/self-hosting/upgrading) -- keep your deployment up to date

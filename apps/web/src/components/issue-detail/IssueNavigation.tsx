@@ -73,6 +73,7 @@ export function IssueNavigation({ currentIssueId, projectId }: IssueNavigationPr
         disabled={!prevId}
         onClick={() => prevId && navigateTo(prevId)}
         title="Previous issue ([)"
+        aria-label="Previous issue"
       >
         <ChevronLeft className="h-4 w-4" />
       </Button>
@@ -83,6 +84,7 @@ export function IssueNavigation({ currentIssueId, projectId }: IssueNavigationPr
         disabled={!nextId}
         onClick={() => nextId && navigateTo(nextId)}
         title="Next issue (])"
+        aria-label="Next issue"
       >
         <ChevronRight className="h-4 w-4" />
       </Button>

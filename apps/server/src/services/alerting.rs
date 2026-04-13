@@ -2,6 +2,7 @@ use anyhow::Result;
 use serde::Deserialize;
 use tracing::{error, info};
 
+use super::notifications::{AlertPayload, NotificationService};
 use crate::db::{
     models::{Issue, Monitor, NotificationChannel, ServerMetric},
     repositories::{
@@ -10,7 +11,6 @@ use crate::db::{
     },
     DbPool,
 };
-use super::notifications::{AlertPayload, NotificationService};
 
 /// Alerting service for triggering and sending alerts
 pub struct AlertingService {
@@ -29,10 +29,7 @@ pub enum AlertCondition {
         level: Option<String>,
     },
     #[serde(rename = "issue_frequency")]
-    IssueFrequency {
-        threshold: u32,
-        window_minutes: u32,
-    },
+    IssueFrequency { threshold: u32, window_minutes: u32 },
     #[serde(rename = "monitor_down")]
     MonitorDown {
         #[serde(default)]
@@ -87,22 +84,26 @@ impl AlertingService {
 
     /// Trigger alerts for a new issue
     pub async fn on_new_issue(&self, project_id: &str, issue: &Issue) -> Result<()> {
-        info!("on_new_issue triggered for issue '{}' ({})", issue.title, issue.id);
+        tracing::debug!(
+            "on_new_issue triggered for issue '{}' ({})",
+            issue.title,
+            issue.id
+        );
 
         let project = match ProjectRepository::find_by_id(&self.pool, project_id).await? {
             Some(p) => p,
             None => {
-                info!("Project {} not found, skipping alerts", project_id);
+                tracing::debug!("Project {} not found, skipping alerts", project_id);
                 return Ok(());
             }
         };
 
         let rules = AlertRuleRepository::list_active_by_project(&self.pool, project_id).await?;
-        info!("Found {} active alert rules for project {}", rules.len(), project_id);
-
-        if rules.is_empty() {
-            info!("No alert rules configured - create one in Dashboard > Alerts > Rules");
-        }
+        tracing::debug!(
+            "Found {} active alert rules for project {}",
+            rules.len(),
+            project_id
+        );
 
         for rule in rules {
             let condition: AlertCondition = match serde_json::from_str(&rule.condition) {
@@ -122,7 +123,7 @@ impl AlertingService {
             };
 
             if matches {
-                info!("Alert rule '{}' matches new_issue condition", rule.name);
+                tracing::debug!("Alert rule '{}' matches new_issue condition", rule.name);
                 let payload = AlertPayload {
                     title: format!("New {} in {}", issue.level, project.name),
                     message: issue.title.clone(),
@@ -144,7 +145,10 @@ impl AlertingService {
 
                 self.send_alert(&rule.id, &rule.actions, &payload).await;
             } else {
-                info!("Alert rule '{}' does not match (condition: {:?})", rule.name, condition);
+                info!(
+                    "Alert rule '{}' does not match (condition: {:?})",
+                    rule.name, condition
+                );
             }
         }
 
@@ -158,7 +162,10 @@ impl AlertingService {
         monitor: &Monitor,
         error_message: Option<&str>,
     ) -> Result<()> {
-        info!("on_monitor_down triggered for monitor '{}' ({})", monitor.name, monitor.id);
+        info!(
+            "on_monitor_down triggered for monitor '{}' ({})",
+            monitor.name, monitor.id
+        );
 
         let project = match ProjectRepository::find_by_id(&self.pool, project_id).await? {
             Some(p) => p,
@@ -169,7 +176,11 @@ impl AlertingService {
         };
 
         let rules = AlertRuleRepository::list_active_by_project(&self.pool, project_id).await?;
-        info!("Found {} active alert rules for project {}", rules.len(), project_id);
+        info!(
+            "Found {} active alert rules for project {}",
+            rules.len(),
+            project_id
+        );
 
         for rule in rules {
             let condition: AlertCondition = match serde_json::from_str(&rule.condition) {
@@ -216,7 +227,10 @@ impl AlertingService {
 
                 self.send_alert(&rule.id, &rule.actions, &payload).await;
             } else {
-                info!("Alert rule '{}' does not match (condition type: {:?})", rule.name, condition);
+                info!(
+                    "Alert rule '{}' does not match (condition type: {:?})",
+                    rule.name, condition
+                );
             }
         }
 
@@ -306,8 +320,7 @@ impl AlertingService {
                     threshold_percent,
                     server_id,
                 } => {
-                    let applies = server_id.is_none()
-                        || server_id.as_deref() == Some(server_db_id);
+                    let applies = server_id.is_none() || server_id.as_deref() == Some(server_db_id);
                     if applies {
                         if let Some(cpu) = metric.cpu_usage_percent {
                             if cpu >= *threshold_percent {
@@ -332,8 +345,7 @@ impl AlertingService {
                     threshold_percent,
                     server_id,
                 } => {
-                    let applies = server_id.is_none()
-                        || server_id.as_deref() == Some(server_db_id);
+                    let applies = server_id.is_none() || server_id.as_deref() == Some(server_db_id);
                     if applies {
                         if let Some(mem) = metric.mem_usage_percent {
                             if mem >= *threshold_percent {
@@ -359,8 +371,7 @@ impl AlertingService {
                     mount,
                     server_id,
                 } => {
-                    let applies = server_id.is_none()
-                        || server_id.as_deref() == Some(server_db_id);
+                    let applies = server_id.is_none() || server_id.as_deref() == Some(server_db_id);
                     if applies {
                         if let Some(ref disks_str) = metric.disks_json {
                             let disks: Vec<serde_json::Value> =
@@ -370,8 +381,8 @@ impl AlertingService {
                             for disk in &disks {
                                 let disk_mount = disk["mount"].as_str().unwrap_or("");
                                 let usage = disk["usage_percent"].as_f64().unwrap_or(0.0);
-                                let mount_matches = mount.is_none()
-                                    || mount.as_deref() == Some(disk_mount);
+                                let mount_matches =
+                                    mount.is_none() || mount.as_deref() == Some(disk_mount);
                                 if mount_matches && usage >= *threshold_percent {
                                     triggered = true;
                                     msg = format!(
@@ -394,13 +405,9 @@ impl AlertingService {
 
             if matches {
                 // Cooldown: check if we've already fired this rule+server within 15 minutes
-                let recent_log = AlertLogRepository::find_recent(
-                    &self.pool,
-                    &rule.id,
-                    Some(server_db_id),
-                    15,
-                )
-                .await;
+                let recent_log =
+                    AlertLogRepository::find_recent(&self.pool, &rule.id, Some(server_db_id), 15)
+                        .await;
 
                 if let Ok(Some(_)) = recent_log {
                     // Already fired recently, skip
@@ -458,13 +465,9 @@ impl AlertingService {
 
             if matches {
                 // Cooldown check
-                let recent_log = AlertLogRepository::find_recent(
-                    &self.pool,
-                    &rule.id,
-                    Some(&server.id),
-                    15,
-                )
-                .await;
+                let recent_log =
+                    AlertLogRepository::find_recent(&self.pool, &rule.id, Some(&server.id), 15)
+                        .await;
 
                 if let Ok(Some(_)) = recent_log {
                     continue;
@@ -502,6 +505,20 @@ impl AlertingService {
 
     /// Send alert to all configured channels
     async fn send_alert(&self, rule_id: &str, actions_json: &str, payload: &AlertPayload) {
+        // Check mute status
+        let rule = AlertRuleRepository::find_by_id(&self.pool, rule_id).await;
+        if let Ok(Some(rule)) = &rule {
+            if let Some(muted_until) = rule.muted_until {
+                if muted_until > chrono::Utc::now() {
+                    info!(
+                        "Alert rule '{}' is muted until {}, skipping",
+                        rule.name, muted_until
+                    );
+                    return;
+                }
+            }
+        }
+
         let channel_ids: Vec<String> = match serde_json::from_str(actions_json) {
             Ok(ids) => ids,
             Err(e) => {
@@ -510,27 +527,40 @@ impl AlertingService {
             }
         };
 
-        info!("Sending alert to {} channels: {:?}", channel_ids.len(), channel_ids);
+        info!(
+            "Sending alert to {} channels: {:?}",
+            channel_ids.len(),
+            channel_ids
+        );
 
         if channel_ids.is_empty() {
             info!("No channels configured for this alert rule");
             return;
         }
 
-        for channel_id in channel_ids {
-            let channel = match NotificationChannelRepository::find_by_id(&self.pool, &channel_id).await
-            {
-                Ok(Some(c)) if c.is_active => c,
-                Ok(Some(c)) => {
+        // Batch-fetch all channels in a single query instead of N+1
+        let channels =
+            match NotificationChannelRepository::find_by_ids(&self.pool, &channel_ids).await {
+                Ok(c) => c,
+                Err(e) => {
+                    error!("Failed to batch-fetch channels: {}", e);
+                    return;
+                }
+            };
+
+        // Index channels by ID for quick lookup
+        let channel_map: std::collections::HashMap<String, _> =
+            channels.into_iter().map(|c| (c.id.clone(), c)).collect();
+
+        for channel_id in &channel_ids {
+            let channel = match channel_map.get(channel_id) {
+                Some(c) if c.is_active => c,
+                Some(c) => {
                     info!("Channel '{}' is inactive, skipping", c.name);
                     continue;
                 }
-                Ok(None) => {
+                None => {
                     error!("Channel {} not found", channel_id);
-                    continue;
-                }
-                Err(e) => {
-                    error!("Failed to fetch channel {}: {}", channel_id, e);
                     continue;
                 }
             };
@@ -539,7 +569,7 @@ impl AlertingService {
             let log = match AlertLogRepository::create(
                 &self.pool,
                 rule_id,
-                Some(&channel_id),
+                Some(channel_id),
                 &payload.trigger_type,
                 payload.trigger_id.as_deref(),
                 &payload.message,
@@ -554,7 +584,7 @@ impl AlertingService {
             };
 
             // Send notification
-            match self.notification_service.send(&channel, payload).await {
+            match self.notification_service.send(channel, payload).await {
                 Ok(action) => {
                     if let Err(e) = AlertLogRepository::mark_sent(&self.pool, &log.id).await {
                         error!("Failed to mark log as sent: {}", e);
@@ -567,15 +597,27 @@ impl AlertingService {
                     // Handle webhook response actions (resolve/ignore)
                     if let Some(action) = action {
                         if let Some(issue_id) = &payload.trigger_id {
-                            if payload.trigger_type == "new_issue" || payload.trigger_type == "issue_frequency" {
+                            if payload.trigger_type == "new_issue"
+                                || payload.trigger_type == "issue_frequency"
+                            {
                                 let new_status = match action.as_str() {
                                     "resolve" => "resolved",
                                     "ignore" => "ignored",
                                     _ => continue,
                                 };
-                                match IssueRepository::update_status(&self.pool, issue_id, new_status).await {
-                                    Ok(_) => info!("Webhook action '{}' applied to issue {}", action, issue_id),
-                                    Err(e) => error!("Failed to apply webhook action '{}' to issue {}: {}", action, issue_id, e),
+                                match IssueRepository::update_status(
+                                    &self.pool, issue_id, new_status,
+                                )
+                                .await
+                                {
+                                    Ok(_) => info!(
+                                        "Webhook action '{}' applied to issue {}",
+                                        action, issue_id
+                                    ),
+                                    Err(e) => error!(
+                                        "Failed to apply webhook action '{}' to issue {}: {}",
+                                        action, issue_id, e
+                                    ),
                                 }
                             }
                         }

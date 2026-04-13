@@ -48,7 +48,7 @@ impl ServerRepository {
     /// List all servers for a project
     pub async fn list_by_project(pool: &DbPool, project_id: &str) -> Result<Vec<Server>> {
         let servers = sqlx::query_as::<_, Server>(
-            "SELECT * FROM servers WHERE project_id = $1 ORDER BY last_seen DESC"
+            "SELECT * FROM servers WHERE project_id = $1 ORDER BY last_seen DESC",
         )
         .bind(project_id)
         .fetch_all(pool)
@@ -64,7 +64,7 @@ impl ServerRepository {
         server_id: &str,
     ) -> Result<Option<Server>> {
         let server = sqlx::query_as::<_, Server>(
-            "SELECT * FROM servers WHERE project_id = $1 AND server_id = $2"
+            "SELECT * FROM servers WHERE project_id = $1 AND server_id = $2",
         )
         .bind(project_id)
         .bind(server_id)
@@ -76,36 +76,31 @@ impl ServerRepository {
 
     /// Find a server by its database ID
     pub async fn find_by_id(pool: &DbPool, id: &str) -> Result<Option<Server>> {
-        let server = sqlx::query_as::<_, Server>(
-            "SELECT * FROM servers WHERE id = $1"
-        )
-        .bind(id)
-        .fetch_optional(pool)
-        .await?;
+        let server = sqlx::query_as::<_, Server>("SELECT * FROM servers WHERE id = $1")
+            .bind(id)
+            .fetch_optional(pool)
+            .await?;
 
         Ok(server)
     }
 
     /// Check if a project has any servers registered
     pub async fn has_servers(pool: &DbPool, project_id: &str) -> Result<bool> {
-        let exists: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM servers WHERE project_id = $1)"
-        )
-        .bind(project_id)
-        .fetch_one(pool)
-        .await?;
+        let exists: bool =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM servers WHERE project_id = $1)")
+                .bind(project_id)
+                .fetch_one(pool)
+                .await?;
 
         Ok(exists)
     }
 
     /// Count servers for a project
     pub async fn count_by_project(pool: &DbPool, project_id: &str) -> Result<i64> {
-        let count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM servers WHERE project_id = $1"
-        )
-        .bind(project_id)
-        .fetch_one(pool)
-        .await?;
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM servers WHERE project_id = $1")
+            .bind(project_id)
+            .fetch_one(pool)
+            .await?;
 
         Ok(count)
     }
@@ -115,7 +110,7 @@ impl ServerRepository {
         let servers = sqlx::query_as::<_, Server>(
             "UPDATE servers SET is_active = FALSE
              WHERE is_active = TRUE AND last_seen < $1
-             RETURNING *"
+             RETURNING *",
         )
         .bind(threshold)
         .fetch_all(pool)
@@ -208,7 +203,7 @@ impl ServerMetricsRepository {
         let metrics = sqlx::query_as::<_, ServerMetric>(
             "SELECT * FROM server_metrics
              WHERE server_db_id = $1 AND recorded_at >= $2 AND recorded_at <= $3
-             ORDER BY recorded_at ASC"
+             ORDER BY recorded_at ASC",
         )
         .bind(server_db_id)
         .bind(from)
@@ -222,7 +217,7 @@ impl ServerMetricsRepository {
     /// Cleanup metrics older than given number of days
     pub async fn cleanup_old_metrics(pool: &DbPool, retention_days: i32) -> Result<u64> {
         let result = sqlx::query(
-            "DELETE FROM server_metrics WHERE recorded_at < NOW() - make_interval(days => $1)"
+            "DELETE FROM server_metrics WHERE recorded_at < NOW() - make_interval(days => $1)",
         )
         .bind(retention_days)
         .execute(pool)

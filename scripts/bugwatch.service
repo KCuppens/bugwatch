@@ -1,0 +1,28 @@
+[Unit]
+Description=Bugwatch Application Stack
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/bugwatch
+
+# Start infrastructure first (Caddy, Postgres, autoheal)
+ExecStart=/usr/bin/docker compose -p bugwatch-infra -f docker-compose.caddy.yml up -d
+
+# Start the active color's app containers
+ExecStart=/bin/bash -c '\
+    COLOR=$(cat /opt/bugwatch/.active-color 2>/dev/null || echo "blue"); \
+    /usr/bin/docker compose -p "bugwatch-${COLOR}" -f "docker-compose.${COLOR}.yml" up -d'
+
+# On stop, bring down app containers (infra stays up by default)
+ExecStop=/bin/bash -c '\
+    COLOR=$(cat /opt/bugwatch/.active-color 2>/dev/null || echo "blue"); \
+    /usr/bin/docker compose -p "bugwatch-${COLOR}" -f "docker-compose.${COLOR}.yml" down'
+
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import {
   ArrowLeft,
@@ -22,6 +22,7 @@ interface VerificationStepProps {
   apiKey: string;
   onComplete: () => void;
   onBack: () => void;
+  backDisabled?: boolean;
 }
 
 type VerificationStatus = "idle" | "checking" | "success" | "timeout";
@@ -33,10 +34,12 @@ export function VerificationStep({
   apiKey,
   onComplete,
   onBack,
+  backDisabled,
 }: VerificationStepProps) {
   const [status, setStatus] = useState<VerificationStatus>("idle");
   const [eventCount, setEventCount] = useState(0);
   const [pollCount, setPollCount] = useState(0);
+  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const sdkContent = getSDKContent(platform, framework);
 
@@ -56,6 +59,12 @@ export function VerificationStep({
   }, [projectId]);
 
   const startVerification = useCallback(async () => {
+    // Clear any existing interval
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current);
+      pollIntervalRef.current = null;
+    }
+
     setStatus("checking");
     setPollCount(0);
 
@@ -63,32 +72,34 @@ export function VerificationStep({
     const immediate = await checkForEvents();
     if (immediate) return;
 
-    // Poll every 2 seconds for up to 60 seconds (30 attempts)
-    const maxAttempts = 30;
+    // Poll every 2 seconds for up to 120 seconds (60 attempts)
     let attempts = 0;
+    const maxAttempts = 60;
 
-    const pollInterval = setInterval(async () => {
+    pollIntervalRef.current = setInterval(async () => {
       attempts++;
       setPollCount(attempts);
 
       const found = await checkForEvents();
-      if (found) {
-        clearInterval(pollInterval);
-        return;
-      }
-
-      if (attempts >= maxAttempts) {
-        clearInterval(pollInterval);
-        setStatus("timeout");
+      if (found || attempts >= maxAttempts) {
+        if (pollIntervalRef.current) {
+          clearInterval(pollIntervalRef.current);
+          pollIntervalRef.current = null;
+        }
+        if (!found) setStatus("timeout");
       }
     }, 2000);
-
-    return () => clearInterval(pollInterval);
   }, [checkForEvents]);
 
   // Auto-start verification on mount
   useEffect(() => {
     startVerification();
+    return () => {
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+        pollIntervalRef.current = null;
+      }
+    };
   }, [startVerification]);
 
   const handleSkip = async () => {
@@ -119,7 +130,7 @@ export function VerificationStep({
             <PartyPopper className="h-10 w-10 text-green-600 dark:text-green-400" />
           </div>
           <div className="text-center space-y-2">
-            <h2 className="text-2xl font-bold">You&apos;re All Set!</h2>
+            <h2 className="font-display text-heading-lg">You&apos;re All Set!</h2>
             <p className="text-muted-foreground max-w-md">
               We received {eventCount} event{eventCount > 1 ? "s" : ""} from your
               application. Bugwatch is now monitoring your project for errors.
@@ -143,7 +154,7 @@ export function VerificationStep({
   return (
     <div className="space-y-8">
       <div className="space-y-2 text-center">
-        <h2 className="text-2xl font-bold">Verify Your Installation</h2>
+        <h2 className="font-display text-heading-lg">Verify Your Installation</h2>
         <p className="text-muted-foreground">
           Send a test error to confirm everything is working
         </p>
@@ -154,12 +165,23 @@ export function VerificationStep({
         <div className="flex flex-col items-center justify-center space-y-4 py-8 rounded-lg border bg-muted/30">
           {status === "checking" && (
             <>
-              <Loader2 className="h-12 w-12 animate-spin text-primary" />
+              <Loader2 className="h-12 w-12 animate-spin text-accent-2" />
               <div className="text-center">
                 <p className="font-medium">Listening for events...</p>
                 <p className="text-sm text-muted-foreground">
                   Waiting for your first error ({pollCount * 2}s)
                 </p>
+                {pollCount * 2 >= 60 && (
+                  <a
+                    href={sdkContent?.docsUrl || "/docs"}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-sm text-accent hover:underline mt-2 inline-flex items-center gap-1"
+                  >
+                    Still waiting? Check the installation guide
+                    <ExternalLink className="h-3 w-3" />
+                  </a>
+                )}
               </div>
             </>
           )}
@@ -210,7 +232,7 @@ export function VerificationStep({
         {/* Help link */}
         <div className="flex items-center justify-center gap-2 pt-4">
           <a
-            href={sdkContent?.docsUrl || "https://docs.bugwatch.dev"}
+            href={sdkContent?.docsUrl || "/docs"}
             target="_blank"
             rel="noopener noreferrer"
             className="text-sm text-muted-foreground hover:text-foreground transition-colors inline-flex items-center gap-1"
@@ -222,10 +244,17 @@ export function VerificationStep({
       </div>
 
       <div className="flex justify-between pt-4">
-        <Button variant="ghost" onClick={onBack}>
-          <ArrowLeft className="mr-2 h-4 w-4" />
-          Back
-        </Button>
+        <div className="relative group">
+          <Button variant="ghost" onClick={onBack} disabled={backDisabled}>
+            <ArrowLeft className="mr-2 h-4 w-4" />
+            Back
+          </Button>
+          {backDisabled && (
+            <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover:block whitespace-nowrap rounded bg-popover px-2 py-1 text-xs text-popover-foreground border shadow-sm">
+              Project already created
+            </span>
+          )}
+        </div>
         <Button variant="outline" onClick={handleSkip}>
           Skip & Finish Later
         </Button>

@@ -1,0 +1,213 @@
+---
+title: Rust SDK
+description: Install and configure the Bugwatch Rust SDK to capture panics, errors, and diagnostic events from your Rust applications.
+---
+
+# Rust SDK
+
+The Bugwatch Rust SDK provides native error capture for Rust applications. It supports both async and blocking workflows, integrates with the panic hook for automatic crash reporting, and delivers events with minimal overhead.
+
+## Installation
+
+Add `bugwatch` to your `Cargo.toml`:
+
+```toml
+[dependencies]
+bugwatch = "0.1"
+```
+
+Both the `async` and `blocking` features are enabled by default. To use only one, disable default features and enable what you need:
+
+```toml
+# Async only
+bugwatch = { version = "0.1", default-features = false, features = ["async"] }
+
+# Blocking only
+bugwatch = { version = "0.1", default-features = false, features = ["blocking"] }
+```
+
+## Quick Start
+
+Initialize the client at the start of your program:
+
+```rust
+use bugwatch::{BugwatchClient, BugwatchOptions};
+
+fn main() {
+    let client = BugwatchClient::init(BugwatchOptions {
+        api_key: "your-api-key".to_string(),
+        environment: Some("production".to_string()),
+        release: Some("1.0.0".to_string()),
+        ..Default::default()
+    });
+
+    // Install the panic hook to automatically capture panics
+    bugwatch::install_panic_hook(&client);
+
+    // Your application code...
+
+    // Flush before exiting
+    client.flush(std::time::Duration::from_secs(5));
+}
+```
+
+Or read the API key from the `BUGWATCH_API_KEY` environment variable:
+
+```rust
+use bugwatch::{BugwatchClient, BugwatchOptions};
+
+fn main() {
+    let client = BugwatchClient::from_env(BugwatchOptions {
+        environment: Some("production".to_string()),
+        ..Default::default()
+    });
+
+    bugwatch::install_panic_hook(&client);
+
+    // ...
+}
+```
+
+## Automatic Panic Capture
+
+Calling `install_panic_hook` replaces the default panic handler. When a panic occurs, the SDK captures the panic message, location (file, line, column), and a backtrace, then sends the event before the process exits.
+
+```rust
+bugwatch::install_panic_hook(&client);
+
+// This panic will be captured and reported automatically
+panic!("something went wrong");
+```
+
+## Manual Error Reporting
+
+### Capture an Error
+
+Report any type implementing `std::error::Error`:
+
+```rust
+use bugwatch;
+
+fn load_config(path: &str) -> Result<Config, Box<dyn std::error::Error>> {
+    let content = std::fs::read_to_string(path)?;
+    let config: Config = toml::from_str(&content)?;
+    Ok(config)
+}
+
+fn main() {
+    let client = bugwatch::init(/* ... */);
+
+    if let Err(e) = load_config("config.toml") {
+        bugwatch::capture_error(&client, &*e);
+    }
+}
+```
+
+### Capture a Message
+
+Send an informational or warning message:
+
+```rust
+use bugwatch::Level;
+
+bugwatch::capture_message(&client, "Cache miss rate above 80%", Level::Warning);
+```
+
+## Key Types
+
+| Type | Description |
+| --- | --- |
+| `BugwatchClient` | The main client that manages event transport and configuration |
+| `BugwatchOptions` | Configuration struct passed to `init()` |
+| `Level` | Severity level: `Debug`, `Info`, `Warning`, `Error`, `Fatal` |
+| `Breadcrumb` | A single breadcrumb entry for event context |
+| `UserContext` | User information attached to events |
+
+## Enriching Events
+
+### Breadcrumbs
+
+Add breadcrumbs to build an event trail:
+
+```rust
+use bugwatch::Breadcrumb;
+
+client.add_breadcrumb(Breadcrumb {
+    category: Some("db".to_string()),
+    message: Some("Connected to primary database".to_string()),
+    level: bugwatch::Level::Info,
+    ..Default::default()
+});
+```
+
+### User Context
+
+Attach user information to events:
+
+```rust
+use bugwatch::UserContext;
+
+client.set_user(UserContext {
+    id: Some("usr_123".to_string()),
+    email: Some("alice@example.com".to_string()),
+    username: Some("alice".to_string()),
+    ..Default::default()
+});
+```
+
+### Tags
+
+Add searchable key-value tags:
+
+```rust
+client.set_tag("region", "us-east-1");
+client.set_tag("service", "payments");
+```
+
+### Extra Data
+
+Attach arbitrary key-value data for debugging:
+
+```rust
+client.set_extra("request_id", "req_abc123");
+```
+
+## Global Functions
+
+For convenience, the SDK provides global functions that operate on a globally initialized client:
+
+```rust
+// Initialize the global client
+bugwatch::init(BugwatchOptions {
+    api_key: "your-api-key".to_string(),
+    ..Default::default()
+});
+
+// Use global functions
+bugwatch::capture_error(&e);
+bugwatch::capture_message("event processed", Level::Info);
+```
+
+## Shutdown
+
+Before your application exits, flush pending events:
+
+```rust
+client.flush(std::time::Duration::from_secs(5));
+```
+
+For server applications, hook into the shutdown signal:
+
+```rust
+// Example with ctrlc crate
+let client_clone = client.clone();
+ctrlc::set_handler(move || {
+    client_clone.flush(std::time::Duration::from_secs(5));
+    std::process::exit(0);
+}).expect("Error setting Ctrl-C handler");
+```
+
+## Next Steps
+
+- [Async Rust](/docs/sdks/rust/async) -- non-blocking error capture with tokio and async-std
+- [Blocking Rust](/docs/sdks/rust/blocking) -- synchronous API for CLI tools and scripts

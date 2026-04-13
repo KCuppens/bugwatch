@@ -1,0 +1,223 @@
+---
+title: Java SDK
+description: Install and configure the Bugwatch Java SDK to capture exceptions, uncaught errors, and diagnostic events from your Java applications.
+---
+
+# Java SDK
+
+The Bugwatch Java SDK provides automatic and manual error capture for Java applications. It hooks into the JVM's uncaught exception handler to catch crashes, and provides a simple API for reporting handled exceptions, messages, and context.
+
+## Installation
+
+### Maven
+
+Add the dependency to your `pom.xml`:
+
+```xml
+<dependency>
+    <groupId>dev.bugwatch</groupId>
+    <artifactId>bugwatch-java</artifactId>
+    <version>0.1.0</version>
+</dependency>
+```
+
+### Gradle
+
+Add the dependency to your `build.gradle`:
+
+```groovy
+implementation 'dev.bugwatch:bugwatch-java:0.1.0'
+```
+
+Or with Kotlin DSL in `build.gradle.kts`:
+
+```kotlin
+implementation("dev.bugwatch:bugwatch-java:0.1.0")
+```
+
+## Quick Start
+
+Initialize the SDK as early as possible in your application's lifecycle:
+
+```java
+import dev.bugwatch.Bugwatch;
+import dev.bugwatch.BugwatchOptions;
+
+public class Application {
+    public static void main(String[] args) {
+        Bugwatch.init(BugwatchOptions.builder()
+            .apiKey("bw_live_xxxxx")
+            .environment("production")
+            .release("1.0.0")
+            .build());
+
+        // Your application code...
+    }
+}
+```
+
+## Automatic Uncaught Exception Capture
+
+The SDK installs a default uncaught exception handler on initialization. Any exception that escapes a thread without being caught is automatically reported to Bugwatch:
+
+```java
+Bugwatch.init(BugwatchOptions.builder()
+    .apiKey("bw_live_xxxxx")
+    .build());
+
+// This uncaught exception will be captured and reported automatically
+Thread.setDefaultUncaughtExceptionHandler(Bugwatch.getUncaughtExceptionHandler());
+```
+
+<Callout type="info">
+By default, `Bugwatch.init()` installs the uncaught exception handler automatically. If you need to chain it with your own handler, use `Bugwatch.getUncaughtExceptionHandler()` and call it from your custom handler.
+</Callout>
+
+## Manual Error Reporting
+
+### Capture an Exception
+
+Report a caught exception:
+
+```java
+try {
+    processPayment(order);
+} catch (PaymentException e) {
+    Bugwatch.captureException(e);
+}
+```
+
+Pass additional context with the exception:
+
+```java
+try {
+    processPayment(order);
+} catch (PaymentException e) {
+    Bugwatch.captureException(e, scope -> {
+        scope.setTag("order_id", order.getId());
+        scope.setExtra("amount", order.getTotal());
+    });
+}
+```
+
+### Capture a Message
+
+Send informational or warning messages:
+
+```java
+Bugwatch.captureMessage("Cache miss rate above 80%", Bugwatch.Level.WARNING);
+```
+
+## Enriching Events
+
+### User Context
+
+Attach user information to all subsequent events:
+
+```java
+Bugwatch.setUser(User.builder()
+    .id("usr_123")
+    .email("alice@example.com")
+    .username("alice")
+    .build());
+```
+
+### Tags
+
+Add searchable key-value tags:
+
+```java
+Bugwatch.setTag("region", "us-east-1");
+Bugwatch.setTag("service", "payments");
+```
+
+### Breadcrumbs
+
+Add breadcrumbs to build an event trail:
+
+```java
+Bugwatch.addBreadcrumb(Breadcrumb.builder()
+    .category("db")
+    .message("Connected to primary database")
+    .level(Bugwatch.Level.INFO)
+    .build());
+```
+
+### Extra Data
+
+Attach arbitrary data for debugging:
+
+```java
+Bugwatch.setExtra("request_id", "req_abc123");
+Bugwatch.setExtra("retry_count", 3);
+```
+
+## Configuration
+
+Pass options to `Bugwatch.init()` to configure the SDK:
+
+```java
+Bugwatch.init(BugwatchOptions.builder()
+    .apiKey("bw_live_xxxxx")
+    .environment("production")
+    .release("1.0.0")
+    .endpoint("https://ingest.bugwatch.dev")
+    .debug(false)
+    .sampleRate(1.0)
+    .maxBreadcrumbs(100)
+    .beforeSend(event -> {
+        // Drop events from test classes
+        if (event.getException().getClassName().startsWith("test.")) {
+            return null;
+        }
+        return event;
+    })
+    .build());
+```
+
+### Options Reference
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `apiKey` | `String` | -- | **Required.** Your Bugwatch project API key. |
+| `endpoint` | `String` | `https://ingest.bugwatch.dev` | Ingestion endpoint URL. Override for self-hosted instances. |
+| `environment` | `String` | `null` | Environment name (e.g., `production`, `staging`). |
+| `release` | `String` | `null` | Release or version identifier. |
+| `debug` | `boolean` | `false` | When `true`, the SDK logs diagnostics to `java.util.logging`. |
+| `sampleRate` | `double` | `1.0` | Fraction of events to send (between `0.0` and `1.0`). |
+| `maxBreadcrumbs` | `int` | `100` | Maximum number of breadcrumbs to keep. |
+| `beforeSend` | `Function<Event, Event>` | `null` | Callback invoked before an event is sent. Return `null` to drop. |
+
+## Shutdown
+
+Before your application exits, flush pending events:
+
+```java
+Bugwatch.flush(5000); // timeout in milliseconds
+Bugwatch.close();
+```
+
+For server applications, register a shutdown hook:
+
+```java
+Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+    Bugwatch.flush(5000);
+    Bugwatch.close();
+}));
+```
+
+## Environment Variables
+
+The SDK reads the following environment variables as fallback values. Explicit options passed to `init()` always take precedence.
+
+| Variable | Maps To | Example |
+| --- | --- | --- |
+| `BUGWATCH_API_KEY` | `apiKey` | `bw_live_xxxxx` |
+| `BUGWATCH_ENVIRONMENT` | `environment` | `production` |
+| `BUGWATCH_RELEASE` | `release` | `1.0.0` |
+| `BUGWATCH_DEBUG` | `debug` | `true` |
+| `BUGWATCH_ENDPOINT` | `endpoint` | `https://ingest.self-hosted.example.com` |
+
+## Next Steps
+
+- [Spring Boot Integration](/docs/sdks/java/spring) -- auto-configuration for Spring Boot applications

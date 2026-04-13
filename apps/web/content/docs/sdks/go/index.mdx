@@ -1,0 +1,202 @@
+---
+title: Go SDK
+description: Install and configure the Bugwatch Go SDK to capture errors, panics, and diagnostic events from your Go applications.
+---
+
+# Go SDK
+
+The Bugwatch Go SDK provides automatic panic recovery and manual error reporting for Go applications. It integrates with `net/http` out of the box and offers dedicated middleware for popular frameworks like Gin and Echo.
+
+## Installation
+
+```bash
+go get github.com/KCuppens/bugwatch-go
+```
+
+## Quick Start
+
+Initialize the SDK as early as possible in your application's `main()` function:
+
+```go
+package main
+
+import (
+	"log"
+
+	"github.com/KCuppens/bugwatch-go"
+)
+
+func main() {
+	err := bugwatch.Init(bugwatch.Options{
+		APIKey:      "bw_live_xxxxx",
+		Environment: "production",
+		Release:     "1.0.0",
+	})
+	if err != nil {
+		log.Fatalf("failed to initialize bugwatch: %v", err)
+	}
+	defer bugwatch.Flush(5 * time.Second)
+
+	// Your application code...
+}
+```
+
+## Automatic Panic Recovery
+
+The SDK provides a `RecoverAndCapture` helper that recovers from panics and reports them to Bugwatch. Use it in goroutines to prevent silent crashes:
+
+```go
+go func() {
+	defer bugwatch.RecoverAndCapture()
+	riskyOperation()
+}()
+```
+
+## Manual Error Reporting
+
+### Capture an Error
+
+Report any Go `error` value:
+
+```go
+result, err := db.Query("SELECT * FROM users WHERE id = $1", userID)
+if err != nil {
+	bugwatch.CaptureException(err)
+}
+```
+
+### Capture a Message
+
+Send informational or warning messages:
+
+```go
+bugwatch.CaptureMessage("Cache miss rate above 80%", bugwatch.LevelWarning)
+```
+
+## net/http Middleware
+
+Wrap your HTTP handlers to automatically capture panics and attach request context:
+
+```go
+package main
+
+import (
+	"net/http"
+
+	"github.com/KCuppens/bugwatch-go"
+)
+
+func main() {
+	bugwatch.Init(bugwatch.Options{
+		APIKey: "bw_live_xxxxx",
+	})
+	defer bugwatch.Flush(5 * time.Second)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", homeHandler)
+	mux.HandleFunc("/api/users", usersHandler)
+
+	// Wrap the entire mux with Bugwatch middleware
+	http.ListenAndServe(":8080", bugwatch.HTTPHandler(mux))
+}
+
+func homeHandler(w http.ResponseWriter, r *http.Request) {
+	w.Write([]byte("Hello, world!"))
+}
+
+func usersHandler(w http.ResponseWriter, r *http.Request) {
+	users, err := fetchUsers()
+	if err != nil {
+		bugwatch.CaptureException(err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+	json.NewEncoder(w).Encode(users)
+}
+```
+
+The middleware captures panics during request handling, attaches request context (URL, method, headers, remote address), and re-panics after reporting so your recovery middleware still works.
+
+## Enriching Events
+
+### User Context
+
+Attach user information to all subsequent events:
+
+```go
+bugwatch.SetUser(bugwatch.User{
+	ID:       "usr_123",
+	Email:    "alice@example.com",
+	Username: "alice",
+})
+```
+
+### Tags
+
+Add searchable key-value tags:
+
+```go
+bugwatch.SetTag("region", "us-east-1")
+bugwatch.SetTag("service", "payments")
+```
+
+### Breadcrumbs
+
+Add breadcrumbs to build an event trail:
+
+```go
+bugwatch.AddBreadcrumb(bugwatch.Breadcrumb{
+	Category: "db",
+	Message:  "Connected to primary database",
+	Level:    bugwatch.LevelInfo,
+})
+```
+
+## Shutdown
+
+Before your application exits, flush pending events to ensure nothing is lost:
+
+```go
+defer bugwatch.Flush(5 * time.Second)
+```
+
+For HTTP servers, hook into the graceful shutdown sequence:
+
+```go
+ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+defer stop()
+
+srv := &http.Server{Addr: ":8080", Handler: bugwatch.HTTPHandler(mux)}
+go srv.ListenAndServe()
+
+<-ctx.Done()
+bugwatch.Flush(5 * time.Second)
+srv.Shutdown(context.Background())
+```
+
+## Environment Variables
+
+The SDK reads the following environment variables as fallback values. Explicit options passed to `Init()` always take precedence.
+
+| Variable | Maps To | Example |
+| --- | --- | --- |
+| `BUGWATCH_API_KEY` | `APIKey` | `bw_live_xxxxx` |
+| `BUGWATCH_ENVIRONMENT` | `Environment` | `production` |
+| `BUGWATCH_RELEASE` | `Release` | `1.0.0` |
+| `BUGWATCH_DEBUG` | `Debug` | `true` |
+| `BUGWATCH_ENDPOINT` | `Endpoint` | `https://ingest.self-hosted.example.com` |
+
+```bash
+export BUGWATCH_API_KEY="bw_live_xxxxx"
+export BUGWATCH_ENVIRONMENT="production"
+```
+
+```go
+// No options needed -- everything is read from the environment
+bugwatch.Init(bugwatch.Options{})
+```
+
+## Next Steps
+
+- [Gin Integration](/docs/sdks/go/gin) -- middleware for the Gin web framework
+- [Echo Integration](/docs/sdks/go/echo) -- middleware for the Echo web framework

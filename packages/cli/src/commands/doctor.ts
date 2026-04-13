@@ -135,7 +135,7 @@ async function checkEnvVariable(varName: string): Promise<boolean> {
   try {
     const envPath = path.join(process.cwd(), ".env.local");
     const content = await fs.readFile(envPath, "utf-8");
-    return content.includes(`${varName}=`) && !content.includes(`${varName}=\n`);
+    return new RegExp(`^${varName}=.+`, "m").test(content);
   } catch {
     return false;
   }

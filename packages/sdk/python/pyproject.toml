@@ -4,15 +4,15 @@ build-backend = "hatchling.build"
 
 [project]
 name = "bugwatch-sdk"
-version = "0.4.0"
+version = "0.4.1"
 description = "Official Python SDK for Bugwatch - AI-Powered Error Tracking"
 readme = "README.md"
-license = "MIT"
+license = "FSL-1.1-Apache-2.0"
 authors = [
-    { name = "Bugwatch Team", email = "support@bugwatch.io" }
+    { name = "Bugwatch Team", email = "support@bugwatch.dev" }
 ]
 maintainers = [
-    { name = "Bugwatch Team", email = "support@bugwatch.io" }
+    { name = "Bugwatch Team", email = "support@bugwatch.dev" }
 ]
 keywords = [
     "bugwatch",
@@ -26,7 +26,7 @@ keywords = [
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
+    "License :: Other/Proprietary License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.9",
@@ -69,11 +69,11 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://bugwatch.io"
-Documentation = "https://docs.bugwatch.io/sdk/python"
-Repository = "https://github.com/bugwatch/bugwatch"
-Changelog = "https://github.com/bugwatch/bugwatch/blob/main/CHANGELOG.md"
-Issues = "https://github.com/bugwatch/bugwatch/issues"
+Homepage = "https://bugwatch.dev"
+Documentation = "https://bugwatch.dev/docs/sdks/python"
+Repository = "https://github.com/KCuppens/bugwatch"
+Changelog = "https://github.com/KCuppens/bugwatch/blob/main/CHANGELOG.md"
+Issues = "https://github.com/KCuppens/bugwatch/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["bugwatch"]

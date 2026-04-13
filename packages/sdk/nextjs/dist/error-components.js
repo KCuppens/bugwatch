@@ -45,8 +45,10 @@ var styles = {
 function BugwatchError({ error, reset }) {
   react.useEffect(() => {
     core.captureException(error, {
-      tags: { mechanism: "app-router-error-boundary" },
-      extra: { digest: error.digest }
+      tags: {
+        mechanism: "app-router-error-boundary",
+        ...error.digest && { "next.digest": error.digest }
+      }
     });
   }, [error]);
   return /* @__PURE__ */ jsxRuntime.jsxs("div", { style: styles.container, children: [
@@ -71,8 +73,10 @@ function BugwatchError({ error, reset }) {
 function BugwatchGlobalError({ error, reset }) {
   react.useEffect(() => {
     core.captureException(error, {
-      tags: { mechanism: "global-error-boundary" },
-      extra: { digest: error.digest }
+      tags: {
+        mechanism: "global-error-boundary",
+        ...error.digest && { "next.digest": error.digest }
+      }
     });
   }, [error]);
   return /* @__PURE__ */ jsxRuntime.jsx("html", { lang: "en", children: /* @__PURE__ */ jsxRuntime.jsx("body", { children: /* @__PURE__ */ jsxRuntime.jsxs(
@@ -117,8 +121,11 @@ function CustomBugwatchError({
 }) {
   react.useEffect(() => {
     core.captureException(error, {
-      tags: { mechanism: "custom-error-boundary", ...tags },
-      extra: { digest: error.digest }
+      tags: {
+        mechanism: "custom-error-boundary",
+        ...error.digest && { "next.digest": error.digest },
+        ...tags
+      }
     });
   }, [error, tags]);
   return /* @__PURE__ */ jsxRuntime.jsxs("div", { style: { ...styles.container, ...containerStyle }, children: [

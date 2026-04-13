@@ -1,0 +1,300 @@
+---
+title: "@bugwatch/core"
+description: The foundational JavaScript SDK for Bugwatch. Use it directly in browser apps or as the building block for framework-specific SDKs.
+---
+
+# @bugwatch/core
+
+`@bugwatch/core` is the foundational JavaScript SDK. It provides the low-level error capture, context management, and transport layer that all other JavaScript SDKs build on. Use it directly when you need full control or when no framework-specific SDK exists for your stack.
+
+<Callout type="info">
+Most developers should use a framework-specific SDK (`@bugwatch/nextjs`, `@bugwatch/react`, `@bugwatch/express`) instead of `@bugwatch/core` directly. The core package is for custom integrations or unsupported frameworks.
+</Callout>
+
+## Installation
+
+```bash
+npm install @bugwatch/core
+```
+
+```bash
+yarn add @bugwatch/core
+```
+
+```bash
+pnpm add @bugwatch/core
+```
+
+## Quick Start
+
+```js
+import { init, captureException } from "@bugwatch/core";
+
+init({
+  apiKey: "bw_live_xxxxx",
+  environment: "production",
+});
+
+try {
+  riskyOperation();
+} catch (error) {
+  captureException(error);
+}
+```
+
+## Configuration
+
+Pass an options object to `init()` to configure the SDK. Only `apiKey` is required.
+
+```js
+import { init } from "@bugwatch/core";
+
+init({
+  // Required
+  apiKey: "bw_live_xxxxx",
+
+  // Optional
+  endpoint: "https://ingest.bugwatch.dev",
+  environment: "production",
+  release: "1.4.0",
+  debug: false,
+  sampleRate: 1.0,
+  maxBreadcrumbs: 100,
+  beforeSend: (event) => event,
+  ignoreErrors: [/ResizeObserver loop/],
+});
+```
+
+### Options Reference
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `apiKey` | `string` | -- | **Required.** Your Bugwatch project API key. |
+| `endpoint` | `string` | `https://ingest.bugwatch.dev` | Ingestion endpoint URL. Override for self-hosted instances. |
+| `environment` | `string` | `undefined` | Environment name (e.g., `production`, `staging`). |
+| `release` | `string` | `undefined` | Release or version identifier. |
+| `debug` | `boolean` | `false` | When `true`, the SDK logs internal diagnostics to the console. |
+| `sampleRate` | `number` | `1.0` | A value between `0.0` and `1.0` controlling what fraction of events are sent. `1.0` sends everything. |
+| `maxBreadcrumbs` | `number` | `100` | Maximum number of breadcrumbs to keep in the buffer. Older entries are dropped when the limit is reached. |
+| `beforeSend` | `(event) => event \| null` | `undefined` | Callback invoked before an event is sent. Return `null` to drop the event. |
+| `ignoreErrors` | `Array<string \| RegExp>` | `[]` | Error messages matching any entry in this list are silently dropped. Strings use exact match; RegExp patterns use `.test()`. |
+
+## Core APIs
+
+### captureException
+
+Capture an error and send it to Bugwatch. Optionally pass additional context.
+
+```js
+import { captureException } from "@bugwatch/core";
+
+try {
+  JSON.parse(malformedInput);
+} catch (error) {
+  captureException(error, {
+    tags: { parser: "json" },
+    extra: { input: malformedInput },
+  });
+}
+```
+
+### captureMessage
+
+Send a text message as an event. Useful for tracking logical errors or notable conditions that are not exceptions.
+
+```js
+import { captureMessage } from "@bugwatch/core";
+
+captureMessage("User exceeded rate limit", "warning");
+```
+
+The second argument is the severity level: `"fatal"`, `"error"`, `"warning"`, `"info"`, or `"debug"`.
+
+### addBreadcrumb
+
+Manually record a breadcrumb. Breadcrumbs are included with the next captured event to provide context about what happened leading up to the error.
+
+```js
+import { addBreadcrumb } from "@bugwatch/core";
+
+addBreadcrumb({
+  category: "auth",
+  message: "User logged in",
+  level: "info",
+  data: { userId: "usr_12345" },
+});
+```
+
+### setUser
+
+Attach user identity to all subsequent events. Pass `null` to clear the user.
+
+```js
+import { setUser } from "@bugwatch/core";
+
+setUser({
+  id: "usr_12345",
+  email: "alice@example.com",
+  username: "alice",
+});
+
+// Clear user on logout
+setUser(null);
+```
+
+### setTag
+
+Set a key-value tag on all subsequent events. Tags are indexed and searchable in the Bugwatch dashboard.
+
+```js
+import { setTag } from "@bugwatch/core";
+
+setTag("region", "us-east-1");
+setTag("feature-flag", "new-checkout");
+```
+
+### setExtra
+
+Attach arbitrary extra data to all subsequent events. Extra data is not indexed but is visible in the event detail view.
+
+```js
+import { setExtra } from "@bugwatch/core";
+
+setExtra("cart", { itemCount: 3, total: 59.99 });
+```
+
+### flush
+
+Force-send all pending events. Returns a promise that resolves when the queue is drained. Call this before your process exits to avoid losing events.
+
+```js
+import { flush } from "@bugwatch/core";
+
+await flush();
+```
+
+### close
+
+Flush pending events and disable the SDK. No further events will be captured after calling `close()`.
+
+```js
+import { close } from "@bugwatch/core";
+
+await close();
+```
+
+## Transports
+
+Transports control how events are delivered to the Bugwatch ingestion endpoint. The SDK ships with three built-in transports.
+
+### HttpTransport (default)
+
+Sends events over HTTPS. This is the default transport and works in both browser and Node.js environments.
+
+```js
+import { init, HttpTransport } from "@bugwatch/core";
+
+init({
+  apiKey: "bw_live_xxxxx",
+  transport: new HttpTransport({ endpoint: "https://ingest.bugwatch.dev" }),
+});
+```
+
+### ConsoleTransport
+
+Logs events to the console instead of sending them over the network. Useful during development and testing.
+
+```js
+import { init, ConsoleTransport } from "@bugwatch/core";
+
+init({
+  apiKey: "bw_live_xxxxx",
+  transport: new ConsoleTransport(),
+});
+```
+
+### BatchTransport
+
+Wraps another transport and batches events together, reducing the number of HTTP requests. Events are flushed when the batch reaches a size threshold or a time interval elapses.
+
+```js
+import { init, HttpTransport, BatchTransport } from "@bugwatch/core";
+
+init({
+  apiKey: "bw_live_xxxxx",
+  transport: new BatchTransport({
+    transport: new HttpTransport(),
+    maxBatchSize: 10,
+    flushInterval: 5000, // milliseconds
+  }),
+});
+```
+
+## Context Isolation
+
+When handling concurrent requests in a server environment, you need to isolate context (user, tags, breadcrumbs) per request. The core SDK provides two helpers for this.
+
+### runWithContext
+
+Run a synchronous function with an isolated context scope. Any calls to `setUser`, `setTag`, `addBreadcrumb`, etc. inside the callback only apply to events captured within that scope.
+
+```js
+import { runWithContext, setUser, captureException } from "@bugwatch/core";
+
+runWithContext(() => {
+  setUser({ id: "usr_12345" });
+  try {
+    handleRequest();
+  } catch (error) {
+    // This event will include the user set above
+    captureException(error);
+  }
+});
+```
+
+### runWithContextAsync
+
+The async variant for use with `async/await`. Context is preserved across `await` boundaries.
+
+```js
+import { runWithContextAsync, setUser, setTag } from "@bugwatch/core";
+
+await runWithContextAsync(async () => {
+  setUser({ id: "usr_67890" });
+  setTag("route", "/api/orders");
+  const orders = await fetchOrders();
+  // Context is preserved here
+});
+```
+
+## Environment Variables
+
+The SDK reads the following environment variables as fallback values. Explicit options passed to `init()` always take precedence.
+
+| Variable | Maps To | Example |
+| --- | --- | --- |
+| `BUGWATCH_API_KEY` | `apiKey` | `bw_live_xxxxx` |
+| `BUGWATCH_ENVIRONMENT` | `environment` | `production` |
+| `BUGWATCH_RELEASE` | `release` | `1.4.0` |
+| `BUGWATCH_DEBUG` | `debug` | `true` |
+| `BUGWATCH_ENDPOINT` | `endpoint` | `https://ingest.self-hosted.example.com` |
+
+```bash
+# .env
+BUGWATCH_API_KEY=bw_live_xxxxx
+BUGWATCH_ENVIRONMENT=production
+BUGWATCH_RELEASE=1.4.0
+```
+
+```js
+import { init } from "@bugwatch/core";
+
+// No options needed -- everything is read from the environment
+init();
+```
+
+## Next Steps
+
+- [Node.js SDK](/docs/sdks/javascript/node) -- automatic process-level error capture for Node.js
+- [React SDK](/docs/sdks/javascript/react) -- error boundaries and hooks for React apps
+- [Next.js SDK](/docs/sdks/javascript/nextjs) -- full-stack integration for Next.js

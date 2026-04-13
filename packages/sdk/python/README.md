@@ -1,6 +1,6 @@
 # Bugwatch Python SDK
 
-Official Python SDK for [Bugwatch](https://bugwatch.io) - AI-Powered Error Tracking.
+Official Python SDK for [Bugwatch](https://bugwatch.dev) - AI-Powered Error Tracking.
 
 ## Installation
 
@@ -154,7 +154,7 @@ Initialize the SDK. If `api_key` is not provided, reads from `BUGWATCH_API_KEY` 
 
 Options:
 - `api_key` (str): Your Bugwatch API key
-- `endpoint` (str): API endpoint (default: https://api.bugwatch.io)
+- `endpoint` (str): API endpoint (default: https://api.bugwatch.dev)
 - `environment` (str): Environment name
 - `release` (str): Release/version identifier
 - `debug` (bool): Enable debug logging

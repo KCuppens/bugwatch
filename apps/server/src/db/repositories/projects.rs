@@ -1,6 +1,14 @@
 use crate::db::{models::Project, DbPool};
 use anyhow::Result;
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
+
+/// Compute SHA-256 hash of an API key for constant-time lookups
+fn hash_api_key(api_key: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(api_key.as_bytes());
+    hex::encode(hasher.finalize())
+}
 
 pub struct ProjectRepository;
 
@@ -15,11 +23,12 @@ impl ProjectRepository {
     ) -> Result<Project> {
         let id = Uuid::new_v4().to_string();
         let api_key = format!("bw_live_{}", Uuid::new_v4().to_string().replace("-", ""));
+        let api_key_hash = hash_api_key(&api_key);
 
         sqlx::query_as::<_, Project>(
             r#"
-            INSERT INTO projects (id, name, slug, api_key, owner_id, platform, framework)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            INSERT INTO projects (id, name, slug, api_key, api_key_hash, owner_id, platform, framework)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             RETURNING *
             "#,
         )
@@ -27,6 +36,7 @@ impl ProjectRepository {
         .bind(name)
         .bind(slug)
         .bind(&api_key)
+        .bind(&api_key_hash)
         .bind(owner_id)
         .bind(platform)
         .bind(framework)
@@ -44,14 +54,21 @@ impl ProjectRepository {
     }
 
     pub async fn find_by_api_key(pool: &DbPool, api_key: &str) -> Result<Option<Project>> {
-        sqlx::query_as::<_, Project>("SELECT * FROM projects WHERE api_key = $1")
-            .bind(api_key)
+        // Use hash-based lookup for constant-time comparison
+        let key_hash = hash_api_key(api_key);
+        sqlx::query_as::<_, Project>("SELECT * FROM projects WHERE api_key_hash = $1")
+            .bind(&key_hash)
             .fetch_optional(pool)
             .await
             .map_err(Into::into)
     }
 
-    pub async fn find_by_owner(pool: &DbPool, owner_id: &str, limit: i64, offset: i64) -> Result<Vec<Project>> {
+    pub async fn find_by_owner(
+        pool: &DbPool,
+        owner_id: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<Project>> {
         sqlx::query_as::<_, Project>(
             "SELECT * FROM projects WHERE owner_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
         )
@@ -72,7 +89,12 @@ impl ProjectRepository {
     }
 
     /// Find projects by organization ID (for agent key access)
-    pub async fn find_by_organization(pool: &DbPool, organization_id: &str, limit: i64, offset: i64) -> Result<Vec<Project>> {
+    pub async fn find_by_organization(
+        pool: &DbPool,
+        organization_id: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<Project>> {
         sqlx::query_as::<_, Project>(
             "SELECT * FROM projects WHERE organization_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
         )
@@ -86,10 +108,11 @@ impl ProjectRepository {
 
     /// Count projects by organization ID
     pub async fn count_by_organization(pool: &DbPool, organization_id: &str) -> Result<i64> {
-        let result: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM projects WHERE organization_id = $1")
-            .bind(organization_id)
-            .fetch_one(pool)
-            .await?;
+        let result: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM projects WHERE organization_id = $1")
+                .bind(organization_id)
+                .fetch_one(pool)
+                .await?;
         Ok(result.0)
     }
 
@@ -104,8 +127,10 @@ impl ProjectRepository {
 
     pub async fn rotate_api_key(pool: &DbPool, id: &str) -> Result<String> {
         let new_key = format!("bw_live_{}", Uuid::new_v4().to_string().replace("-", ""));
-        sqlx::query("UPDATE projects SET api_key = $1 WHERE id = $2")
+        let new_hash = hash_api_key(&new_key);
+        sqlx::query("UPDATE projects SET api_key = $1, api_key_hash = $2 WHERE id = $3")
             .bind(&new_key)
+            .bind(&new_hash)
             .bind(id)
             .execute(pool)
             .await?;

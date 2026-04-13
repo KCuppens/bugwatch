@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useEffect, useCallback } from "react";
-import { Search, X, Command, Loader2, Filter } from "lucide-react";
+import { Search, X, Loader2, Filter } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useSearch } from "@/hooks/useSearch";
 import { useKeyboardNavigation } from "@/hooks/useKeyboardNavigation";
@@ -85,12 +85,6 @@ export function IssueSearchBar({
   // Global keyboard shortcut for focusing search
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Cmd/Ctrl + K to focus search
-      if ((e.metaKey || e.ctrlKey) && e.key === "k") {
-        e.preventDefault();
-        inputRef.current?.focus();
-        setAutocompleteOpen(true);
-      }
       // "/" to focus search (vim-style)
       if (e.key === "/" && !isInputFocused()) {
         e.preventDefault();
@@ -138,7 +132,7 @@ export function IssueSearchBar({
 
   return (
     <div className={cn("relative", className)}>
-      <div className="flex items-center gap-3 px-4 py-3 rounded-xl border bg-card/50 backdrop-blur transition-all hover:border-primary/30 hover:bg-card focus-within:border-primary/50 focus-within:ring-2 focus-within:ring-primary/20">
+      <div className="flex items-center gap-3 px-4 py-3 rounded-xl border border-border-subtle bg-surface-2 transition-all hover:border-accent-2/40 focus-within:border-accent-2/60 focus-within:ring-2 focus-within:ring-accent-2/20">
         {isLoading ? (
           <Loader2 className="h-4 w-4 text-muted-foreground animate-spin" />
         ) : (
@@ -161,6 +155,7 @@ export function IssueSearchBar({
                   {token.field}:{token.value}
                   <button
                     type="button"
+                    aria-label={`Remove ${token.field} filter`}
                     onClick={(e) => {
                       e.stopPropagation();
                       // Remove this filter from query
@@ -180,7 +175,7 @@ export function IssueSearchBar({
         <input
           ref={inputRef}
           type="text"
-          placeholder="Search issues... (⌘K)"
+          placeholder="Search issues... (/)"
           value={query}
           onChange={handleInputChange}
           onFocus={handleInputFocus}
@@ -241,7 +236,7 @@ export function IssueSearchBar({
 
         {/* Keyboard shortcut hint */}
         <kbd className="hidden sm:inline-flex h-5 items-center gap-1 rounded border bg-muted px-1.5 text-[10px] font-medium text-muted-foreground">
-          <Command className="h-3 w-3" />K
+          /
         </kbd>
       </div>
 
@@ -275,7 +270,7 @@ function getFilterColorClass(field: string, value: string): string {
       return `${colors.bg} ${colors.text}`;
     }
   }
-  return "bg-primary/10 text-primary";
+  return "bg-accent-2/10 text-accent-2";
 }
 
 /**

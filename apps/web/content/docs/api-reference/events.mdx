@@ -1,0 +1,187 @@
+---
+title: Events
+description: API endpoint for ingesting error events from Bugwatch SDKs or custom integrations.
+---
+
+# Event Ingestion
+
+The event ingestion endpoint receives error events from Bugwatch SDKs. Events are automatically grouped into issues based on their fingerprint (derived from exception type and stack trace). You typically do not need to call this endpoint directly -- the SDKs handle it automatically.
+
+## POST /events
+
+Submit an error event for processing.
+
+**Authentication:** Project API key via `Authorization: Bearer YOUR_API_KEY`
+
+**Rate Limits:** Subject to your plan's rate limit (100/min Free, 1,000/min Pro, 5,000/min Team, 10,000/min Enterprise)
+
+### Request Body
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `event_id` | string | Yes | Unique event identifier (UUID) |
+| `timestamp` | string | Yes | ISO 8601 timestamp |
+| `level` | string | Yes | Severity level: `fatal`, `error`, `warning`, `info`, or `debug` |
+| `message` | string | No | Error message (used for fingerprinting if no exception) |
+| `exception` | object | No | Exception details (see below) |
+| `environment` | string | No | Environment name (defaults to `production`) |
+| `release` | string | No | Release/version identifier |
+| `server_name` | string | No | Server hostname |
+| `request` | object | No | HTTP request context |
+| `user` | object | No | User context |
+| `tags` | object | No | Custom key-value tags (indexed, searchable) |
+| `extra` | object | No | Extra context data (not indexed) |
+| `breadcrumbs` | array | No | Trail of events leading to the error |
+| `sdk` | object | No | SDK name and version |
+| `platform` | string | No | Platform identifier (e.g., `javascript`, `python`, `node`) |
+| `runtime` | object | No | Runtime name and version |
+
+### Exception Object
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `type` | string | Yes | Exception class/type name |
+| `value` | string | Yes | Exception message |
+| `stacktrace` | array | Yes | Array of stack frames (see below) |
+
+### Stack Frame Object
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `filename` | string | Yes | Source file path |
+| `function` | string | Yes | Function/method name |
+| `lineno` | integer | Yes | Line number |
+| `colno` | integer | No | Column number |
+| `abs_path` | string | No | Absolute file path |
+| `context_line` | string | No | The line of source code |
+| `pre_context` | array | No | Lines before the context line |
+| `post_context` | array | No | Lines after the context line |
+| `in_app` | boolean | Yes | Whether this frame is from application code |
+
+### Request Context Object
+
+| Field | Type | Description |
+|---|---|---|
+| `url` | string | Request URL |
+| `method` | string | HTTP method |
+| `headers` | object | Request headers (sensitive values are redacted) |
+| `query_string` | string | Query string |
+| `data` | object | Request body |
+
+### User Context Object
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | string | User ID |
+| `email` | string | User email |
+| `username` | string | Username |
+| `ip_address` | string | IP address |
+
+### Breadcrumb Object
+
+| Field | Type | Description |
+|---|---|---|
+| `timestamp` | string | ISO 8601 timestamp |
+| `type` | string | Breadcrumb type (e.g., `http`, `navigation`, `ui`, `default`) |
+| `category` | string | Category (e.g., `console`, `fetch`, `xhr`) |
+| `message` | string | Description |
+| `data` | object | Additional data |
+| `level` | string | Severity level |
+
+### Example
+
+```bash
+curl -X POST https://api.bugwatch.dev/api/v1/events \
+  -H "Authorization: Bearer YOUR_PROJECT_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "event_id": "550e8400-e29b-41d4-a716-446655440000",
+    "timestamp": "2025-01-15T14:22:00Z",
+    "level": "error",
+    "environment": "production",
+    "release": "1.2.3",
+    "platform": "javascript",
+    "exception": {
+      "type": "TypeError",
+      "value": "Cannot read properties of undefined (reading '\''map'\'')",
+      "stacktrace": [
+        {
+          "filename": "src/components/Dashboard.tsx",
+          "function": "renderItems",
+          "lineno": 42,
+          "colno": 18,
+          "context_line": "  return items.map(item => <Item key={item.id} />);",
+          "in_app": true
+        },
+        {
+          "filename": "node_modules/react/cjs/react.development.js",
+          "function": "renderWithHooks",
+          "lineno": 1234,
+          "colno": 5,
+          "in_app": false
+        }
+      ]
+    },
+    "request": {
+      "url": "https://app.example.com/dashboard",
+      "method": "GET",
+      "headers": {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"
+      }
+    },
+    "user": {
+      "id": "user_123",
+      "email": "user@example.com"
+    },
+    "tags": {
+      "browser": "Chrome 120",
+      "os": "macOS 14.2"
+    },
+    "breadcrumbs": [
+      {
+        "timestamp": "2025-01-15T14:21:55Z",
+        "type": "navigation",
+        "category": "navigation",
+        "message": "Navigated to /dashboard"
+      },
+      {
+        "timestamp": "2025-01-15T14:21:58Z",
+        "type": "http",
+        "category": "fetch",
+        "message": "GET /api/items",
+        "data": {
+          "status_code": 200
+        }
+      }
+    ]
+  }'
+```
+
+### Response `202 Accepted`
+
+```json
+{
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "status": "accepted"
+}
+```
+
+If the event ID has already been processed, the endpoint returns the same `202 Accepted` response with `"status": "duplicate"` to ensure idempotency.
+
+### How Events Are Grouped
+
+When an event is ingested, Bugwatch generates a fingerprint based on:
+
+1. **Exception type** (e.g., `TypeError`, `ValueError`)
+2. **In-app stack frames** (filenames, function names, line numbers from your code)
+3. **Exception message** (if no stack frames are available)
+
+Events with the same fingerprint are grouped into a single **issue**. The first event creates the issue; subsequent events increment the event count and update the "last seen" timestamp.
+
+### Errors
+
+| Status | Description |
+|---|---|
+| `401` | Missing or invalid API key |
+| `429` | Rate limit exceeded |
+| `500` | Internal processing error |

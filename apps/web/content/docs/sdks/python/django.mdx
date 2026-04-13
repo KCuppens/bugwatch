@@ -1,0 +1,152 @@
+---
+title: Django Integration
+description: Integrate the Bugwatch Python SDK with Django to automatically capture request errors, attach user context, and monitor your Django application.
+---
+
+# Django Integration
+
+The Bugwatch Django integration adds middleware that automatically captures unhandled exceptions during request processing, attaches request context (URL, method, headers), and identifies the authenticated user.
+
+## Installation
+
+Install the SDK with the Django extras:
+
+```bash
+pip install bugwatch-sdk[django]
+```
+
+## Configuration
+
+### 1. Initialize the SDK
+
+Add the following to your `settings.py`:
+
+```python
+import bugwatch
+
+bugwatch.init(
+    api_key="your-api-key",
+    environment="production",
+    release="1.0.0",
+)
+```
+
+Or use an environment variable for the API key:
+
+```bash
+export BUGWATCH_API_KEY="your-api-key"
+```
+
+```python
+import bugwatch
+
+bugwatch.init(
+    environment="production",
+    release="1.0.0",
+)
+```
+
+### 2. Add the Middleware
+
+Add `BugwatchMiddleware` to the top of your `MIDDLEWARE` list in `settings.py` so it wraps all other middleware:
+
+```python
+MIDDLEWARE = [
+    "bugwatch.integrations.django.BugwatchMiddleware",
+    "django.middleware.security.SecurityMiddleware",
+    "django.contrib.sessions.middleware.SessionMiddleware",
+    "django.middleware.common.CommonMiddleware",
+    "django.middleware.csrf.CsrfViewMiddleware",
+    "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "django.contrib.messages.middleware.MessageMiddleware",
+    "django.middleware.clickjacking.XFrameOptionsMiddleware",
+]
+```
+
+## What Gets Captured Automatically
+
+Once the middleware is in place, the SDK captures:
+
+- **Unhandled exceptions** raised during request processing
+- **Request context** including URL, HTTP method, headers, query parameters, and body (if available)
+- **User information** from `request.user` when Django authentication is configured (user ID, email, and username)
+
+## Manual Reporting in Views
+
+You can still report errors manually inside your views:
+
+```python
+from django.http import JsonResponse
+import bugwatch
+
+def checkout_view(request):
+    try:
+        result = process_checkout(request)
+        return JsonResponse({"status": "ok", "order_id": result.id})
+    except PaymentDeclinedError as e:
+        bugwatch.capture_exception(e)
+        return JsonResponse({"status": "error", "message": "Payment declined"}, status=402)
+```
+
+## Adding Breadcrumbs in Views
+
+Build an event trail to help with debugging:
+
+```python
+import bugwatch
+
+def order_view(request, order_id):
+    bugwatch.add_breadcrumb(
+        category="navigation",
+        message=f"User viewed order {order_id}",
+        level="info",
+    )
+    order = get_object_or_404(Order, pk=order_id)
+    return render(request, "orders/detail.html", {"order": order})
+```
+
+## Custom User Context
+
+If you need to override the automatically captured user information:
+
+```python
+import bugwatch
+
+def my_view(request):
+    bugwatch.set_user({
+        "id": str(request.user.pk),
+        "email": request.user.email,
+        "subscription": request.user.profile.plan,
+    })
+    # ...
+```
+
+## Configuration Options
+
+Pass additional options to `bugwatch.init()` in your `settings.py`:
+
+```python
+bugwatch.init(
+    api_key="your-api-key",
+    environment="production",
+    release="1.0.0",
+    send_default_pii=True,        # Include cookies and form data
+    max_breadcrumbs=50,            # Number of breadcrumbs to keep (default: 100)
+    traces_sample_rate=0.2,        # Sample 20% of requests for performance data
+)
+```
+
+## Django Management Commands
+
+To verify your integration, use the built-in test command:
+
+```bash
+python manage.py bugwatch_test
+```
+
+This sends a test exception to your Bugwatch project and confirms connectivity.
+
+## Next Steps
+
+- [Python SDK Overview](/docs/sdks/python) -- core SDK functions and configuration
+- [Celery Integration](/docs/sdks/python/celery) -- capture background task failures alongside your Django app

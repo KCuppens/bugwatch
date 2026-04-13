@@ -1,0 +1,10 @@
+User-agent: *
+Allow: /
+Disallow: /dashboard/
+Disallow: /api/
+
+Sitemap: https://bugwatch.dev/sitemap.xml
+
+# LLM context files
+# https://bugwatch.dev/llms.txt
+# https://bugwatch.dev/llms-full.txt

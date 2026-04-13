@@ -1,0 +1,194 @@
+---
+title: Manual Setup
+description: Build Bugwatch from source and deploy the API server and web app manually. Ideal for custom environments or when Docker is not available.
+---
+
+# Manual Setup
+
+This guide covers building Bugwatch from source and running each component directly on your host. Use this approach if you need fine-grained control over the deployment or cannot use Docker.
+
+## Prerequisites
+
+- **Rust** 1.75+ with `cargo`
+- **Node.js** 18+ with `npm`
+- **PostgreSQL** 15+
+- **Git**
+
+## Step 1: Clone the Repository
+
+```bash
+git clone https://github.com/KCuppens/bugwatch.git
+cd bugwatch
+```
+
+## Step 2: Set Up PostgreSQL
+
+Create a database and user for Bugwatch:
+
+```sql
+CREATE USER bugwatch WITH PASSWORD 'your_secure_password';
+CREATE DATABASE bugwatch OWNER bugwatch;
+```
+
+Note the connection string -- you will need it in the next step:
+
+```
+postgresql://bugwatch:your_secure_password@localhost:5432/bugwatch
+```
+
+## Step 3: Build the API Server
+
+```bash
+cd apps/server
+
+# Set the database URL
+export DATABASE_URL="postgresql://bugwatch:your_secure_password@localhost:5432/bugwatch"
+
+# Run database migrations
+cargo run -- migrate
+
+# Build the release binary
+cargo build --release
+```
+
+The compiled binary will be at `target/release/bugwatch-server`.
+
+## Step 4: Configure the API Server
+
+Set the required environment variables (or create a `.env` file in `apps/server`):
+
+```bash
+export DATABASE_URL="postgresql://bugwatch:your_secure_password@localhost:5432/bugwatch"
+export JWT_SECRET="your-secure-random-secret"
+export CORS_ORIGINS="https://bugwatch.yourcompany.com"
+export HOST="0.0.0.0"
+export PORT="8080"
+```
+
+Start the server:
+
+```bash
+./target/release/bugwatch-server
+```
+
+## Step 5: Build the Web App
+
+```bash
+cd apps/web
+
+# Install dependencies
+npm install
+
+# Set environment variables
+export NEXT_PUBLIC_API_URL="https://api.bugwatch.yourcompany.com"
+export NEXT_PUBLIC_SITE_URL="https://bugwatch.yourcompany.com"
+
+# Build the production bundle
+npm run build
+```
+
+Start the web app:
+
+```bash
+npm start
+```
+
+By default, the web app listens on port 3000.
+
+## Step 6: Set Up a Reverse Proxy
+
+Use Nginx, Caddy, or a similar reverse proxy to expose both services with TLS.
+
+**Example Nginx configuration:**
+
+```nginx
+# Web app
+server {
+    listen 443 ssl;
+    server_name bugwatch.yourcompany.com;
+
+    ssl_certificate /etc/ssl/certs/bugwatch.pem;
+    ssl_certificate_key /etc/ssl/private/bugwatch.key;
+
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+
+# API server
+server {
+    listen 443 ssl;
+    server_name api.bugwatch.yourcompany.com;
+
+    ssl_certificate /etc/ssl/certs/bugwatch.pem;
+    ssl_certificate_key /etc/ssl/private/bugwatch.key;
+
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+## Running as a System Service
+
+Create systemd service files to keep both components running:
+
+**API Server (`/etc/systemd/system/bugwatch-api.service`):**
+
+```ini
+[Unit]
+Description=Bugwatch API Server
+After=network.target postgresql.service
+
+[Service]
+Type=simple
+User=bugwatch
+WorkingDirectory=/opt/bugwatch/apps/server
+ExecStart=/opt/bugwatch/apps/server/target/release/bugwatch-server
+EnvironmentFile=/etc/bugwatch/api.env
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+**Web App (`/etc/systemd/system/bugwatch-web.service`):**
+
+```ini
+[Unit]
+Description=Bugwatch Web App
+After=network.target
+
+[Service]
+Type=simple
+User=bugwatch
+WorkingDirectory=/opt/bugwatch/apps/web
+ExecStart=/usr/bin/npm start
+EnvironmentFile=/etc/bugwatch/web.env
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Enable and start the services:
+
+```bash
+sudo systemctl enable bugwatch-api bugwatch-web
+sudo systemctl start bugwatch-api bugwatch-web
+```
+
+## Next Steps
+
+- [Configuration](/docs/self-hosting/configuration) -- full environment variables reference
+- [Upgrading](/docs/self-hosting/upgrading) -- keep your instance up to date

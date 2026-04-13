@@ -1,0 +1,155 @@
+---
+title: API Overview
+description: Introduction to the Bugwatch REST API, including base URL, authentication, rate limits, and response formats.
+---
+
+# API Overview
+
+The Bugwatch API is a RESTful JSON API that powers the Bugwatch dashboard and SDKs. You can use it directly to build custom integrations, automate workflows, or extend Bugwatch functionality.
+
+## Base URL
+
+All API endpoints are served under the `/api/v1` prefix.
+
+| Environment | Base URL |
+|---|---|
+| Bugwatch Cloud | `https://api.bugwatch.dev/api/v1` |
+| Self-Hosted | `https://your-domain.com/api/v1` |
+
+## Authentication
+
+The API supports two authentication methods depending on the endpoint.
+
+### Bearer Token (User Authentication)
+
+Most endpoints require a Bearer token obtained from the login or signup endpoints. Include it in the `Authorization` header:
+
+```bash
+curl https://api.bugwatch.dev/api/v1/projects \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+```
+
+Access tokens expire after a configured period. Use the [refresh endpoint](/docs/api-reference/authentication#post-authrefresh) to obtain a new token pair without re-authenticating.
+
+### API Key (Ingestion Authentication)
+
+The event ingestion (`POST /events`) and server metrics ingestion (`POST /metrics`) endpoints authenticate via the project API key. Pass it as a Bearer token in the `Authorization` header or via the `X-API-Key` header:
+
+```bash
+# Using Authorization header
+curl https://api.bugwatch.dev/api/v1/events \
+  -H "Authorization: Bearer YOUR_PROJECT_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{ ... }'
+
+# Using X-API-Key header
+curl https://api.bugwatch.dev/api/v1/metrics \
+  -H "X-API-Key: YOUR_PROJECT_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{ ... }'
+```
+
+You can find your project API key in the Bugwatch dashboard under **Project Settings**.
+
+## Rate Limits
+
+Rate limits are enforced per API key using a token bucket algorithm. Limits vary by tier and endpoint category:
+
+| Endpoint Category | Free | Pro | Team | Enterprise |
+|---|---|---|---|---|
+| Event/Metrics Ingestion | 100 req/min | 1,000 req/min | 5,000 req/min | 10,000 req/min |
+| General API | Same bucket as ingestion | Same bucket | Same bucket | Same bucket |
+
+When you exceed the rate limit, the API returns a `429 Too Many Requests` response with a `Retry-After` header indicating how many seconds to wait.
+
+```json
+{
+  "error": {
+    "message": "Rate limit exceeded",
+    "code": "rate_limit_exceeded",
+    "details": {
+      "retry_after_secs": 60,
+      "limit": 100,
+      "remaining": 0
+    }
+  }
+}
+```
+
+## Response Format
+
+### Success Responses
+
+All successful responses wrap data in a `data` field:
+
+```json
+{
+  "data": {
+    "id": "proj_abc123",
+    "name": "My Project",
+    "slug": "my-project-a1b2c3d4"
+  }
+}
+```
+
+### Paginated Responses
+
+Endpoints that return lists include a `pagination` object:
+
+```json
+{
+  "data": [ ... ],
+  "pagination": {
+    "page": 1,
+    "per_page": 20,
+    "total": 142,
+    "total_pages": 8
+  }
+}
+```
+
+Use the `page` and `per_page` query parameters to navigate through results. The maximum value for `per_page` is `100`.
+
+### Error Responses
+
+Errors return an `error` object with a human-readable `message` and optional `code` and `details` fields:
+
+```json
+{
+  "error": {
+    "message": "Project not found",
+    "code": "not_found",
+    "details": null
+  }
+}
+```
+
+## HTTP Status Codes
+
+| Status Code | Meaning |
+|---|---|
+| `200 OK` | Request succeeded. Response body contains the requested data. |
+| `201 Created` | Resource was created successfully. |
+| `202 Accepted` | Request was accepted for processing (used for event ingestion). |
+| `204 No Content` | Request succeeded with no response body (used for deletes). |
+| `400 Bad Request` | The request body or parameters are invalid. |
+| `401 Unauthorized` | Missing or invalid authentication credentials. |
+| `402 Payment Required` | The requested feature requires a higher-tier plan. |
+| `403 Forbidden` | You do not have permission to access this resource. |
+| `404 Not Found` | The requested resource does not exist. |
+| `409 Conflict` | The request conflicts with existing state (e.g., duplicate email). |
+| `429 Too Many Requests` | Rate limit exceeded. Check the `Retry-After` header. |
+| `500 Internal Server Error` | An unexpected server error occurred. |
+
+## Content Type
+
+All request bodies must be sent as JSON with the `Content-Type: application/json` header. All responses are returned as JSON.
+
+## Pagination Parameters
+
+For paginated endpoints, the following query parameters are available:
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `page` | integer | `1` | Page number (1-indexed) |
+| `per_page` | integer | `20` | Items per page (max 100) |

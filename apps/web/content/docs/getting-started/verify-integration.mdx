@@ -1,0 +1,143 @@
+---
+title: Verify Integration
+description: Send a test error to Bugwatch and confirm it appears in your dashboard. Includes troubleshooting steps for common setup issues.
+---
+
+# Verify Your Integration
+
+After installing an SDK and initializing it with your API key, the final step is to confirm that errors flow from your application to the Bugwatch dashboard.
+
+## Send a Test Error
+
+Trigger an unhandled exception in your application. The SDK will automatically capture it and send it to Bugwatch.
+
+### JavaScript
+
+```js
+// Add this temporarily to any route or component
+throw new Error("Bugwatch test error");
+```
+
+For Next.js, you can trigger it from a page component:
+
+```tsx
+// app/test/page.tsx (remove after testing)
+export default function TestPage() {
+  throw new Error("Bugwatch test error");
+  return null;
+}
+```
+
+Or capture an error manually without crashing:
+
+```js
+import { captureException } from "@bugwatch/nextjs";
+
+captureException(new Error("Bugwatch manual test error"));
+```
+
+### Python
+
+```python
+# Add this to any route handler temporarily
+raise Exception("Bugwatch test error")
+```
+
+Or capture without raising:
+
+```python
+import bugwatch
+
+bugwatch.capture_exception(Exception("Bugwatch manual test error"))
+```
+
+### Rust
+
+```rust
+bugwatch::capture_error("Bugwatch test error");
+```
+
+## Check Your Dashboard
+
+1. Open your [Bugwatch dashboard](https://bugwatch.dev/dashboard)
+2. Select the project you configured
+3. You should see the test error appear in the **Issues** list within a few seconds
+4. Click on the issue to view the full stack trace, metadata, and context
+
+If the error appears, your integration is working correctly. Delete the test code before deploying to production.
+
+## Troubleshooting
+
+<Callout type="warn">
+Events may take up to 30 seconds to appear in the dashboard. If you still don't see them after a minute, check the troubleshooting steps below.
+</Callout>
+
+If the test error does not appear in your dashboard, work through these checks.
+
+### 1. Verify Your API Key
+
+Make sure the API key passed to `init()` matches the key shown in **Dashboard > Project Settings > API Keys**. Keys follow the format `bw_live_xxxxx`.
+
+```js
+// Double-check the key is loaded correctly
+console.log("Bugwatch API key:", process.env.BUGWATCH_API_KEY);
+```
+
+### 2. Check Network Connectivity
+
+The SDK sends events to `api.bugwatch.dev` (or your self-hosted API URL). Verify your application can reach this endpoint:
+
+```bash
+curl -I https://api.bugwatch.dev/health
+```
+
+If you are behind a corporate firewall or proxy, you may need to allowlist `api.bugwatch.dev` on port 443.
+
+### 3. Look for SDK Errors
+
+Enable debug mode to see what the SDK is doing:
+
+```js
+import { init } from "@bugwatch/nextjs";
+
+init({
+  apiKey: "bw_live_xxxxx",
+  debug: true,
+});
+```
+
+```python
+bugwatch.init(api_key="bw_live_xxxxx", debug=True)
+```
+
+Debug mode logs all SDK activity to the console, including event serialization and HTTP requests.
+
+### 4. Confirm the SDK Is Initialized
+
+The SDK must be initialized before any errors occur. Make sure `init()` is called as early as possible in your application's startup:
+
+- **Next.js** -- call `init()` in your `instrumentation.ts` or root layout
+- **Express / Fastify** -- call `init()` before registering routes
+- **Django** -- add Bugwatch to the top of `MIDDLEWARE` in `settings.py`
+- **Flask** -- call `init()` before creating the Flask app
+
+### 5. Check for Rate Limiting
+
+If your project has hit its event rate limit, new events will be dropped. Check **Dashboard > Project Settings** for current usage against your plan limits.
+
+### 6. Self-Hosted: Check Server Logs
+
+If you are running a self-hosted instance, check the Bugwatch server logs for ingestion errors:
+
+```bash
+docker logs bugwatch-server
+```
+
+## Next Steps
+
+Your integration is verified. Here is what to do next:
+
+- [Set up alerting](/docs/alerting) to get notified on Slack, email, or webhooks when new errors occur
+- [Install the server agent](/docs/server-agent) to monitor host-level metrics
+- [Explore the REST API](/docs/api-reference) to automate your error tracking workflows
+- Remove any test error code before deploying to production

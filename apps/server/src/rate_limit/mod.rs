@@ -6,42 +6,9 @@ use token_bucket::TokenBucket;
 use dashmap::DashMap;
 use std::sync::Arc;
 
+use crate::billing::tiers::{self, Tier};
+use crate::config::DeploymentMode;
 use crate::db::{repositories::OrganizationRepository, DbPool};
-
-/// Tier-based rate limits (events per minute)
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Tier {
-    /// Free tier: 5 events/minute (hobby projects, evaluation)
-    Free,
-    /// Pro tier: 60 events/minute (small startups, indie developers)
-    Pro,
-    /// Team tier: 300 events/minute (growing startups, SMBs)
-    Team,
-    /// Enterprise tier: 3,000 events/minute (large companies)
-    Enterprise,
-}
-
-impl Tier {
-    /// Get the rate limit (events per minute) for this tier
-    pub fn rate_limit(&self) -> u32 {
-        match self {
-            Tier::Free => 5,
-            Tier::Pro => 60,
-            Tier::Team => 300,
-            Tier::Enterprise => 3_000,
-        }
-    }
-
-    /// Parse tier from string (database value)
-    pub fn from_str(s: &str) -> Self {
-        match s.to_lowercase().as_str() {
-            "pro" => Tier::Pro,
-            "team" => Tier::Team,
-            "enterprise" => Tier::Enterprise,
-            _ => Tier::Free,
-        }
-    }
-}
 
 /// Thread-safe rate limiter using token bucket algorithm
 ///
@@ -76,31 +43,40 @@ impl RateLimiter {
     ///
     /// # Returns
     /// `RateLimitResult` indicating if the request is allowed and remaining quota
-    pub async fn check_with_tier_lookup(&self, api_key: &str, db: &DbPool) -> RateLimitResult {
-        // Look up the tier from the database
-        let tier = match OrganizationRepository::get_tier_by_api_key(db, api_key).await {
-            Ok(tier_str) => Tier::from_str(&tier_str),
-            Err(_) => Tier::Free, // Default to free tier on error
+    pub async fn check_with_tier_lookup(
+        &self,
+        api_key: &str,
+        db: &DbPool,
+        deployment_mode: DeploymentMode,
+        config_rate_limit: u32,
+    ) -> RateLimitResult {
+        // Self-hosted mode: use the configured rate limit for all keys
+        let rate_limit = if deployment_mode.is_self_hosted() {
+            config_rate_limit
+        } else {
+            // SaaS mode: look up the tier from the database
+            let tier = match OrganizationRepository::get_tier_by_api_key(db, api_key).await {
+                Ok(tier_str) => Tier::from_str(&tier_str),
+                Err(_) => Tier::Free,
+            };
+            tiers::get_tier_limits(tier).rate_limit_per_minute
         };
 
-        self.check(api_key, tier)
+        self.check(api_key, rate_limit)
     }
 
     /// Check if a request should be allowed based on rate limits
     ///
     /// # Arguments
     /// * `key` - Unique identifier for the rate limit bucket (API key or project ID)
-    /// * `tier` - The tier determining the rate limit
+    /// * `rate_limit_per_minute` - The rate limit (events per minute)
     ///
     /// # Returns
     /// `RateLimitResult` indicating if the request is allowed and remaining quota
-    pub fn check(&self, key: &str, tier: Tier) -> RateLimitResult {
-        let rate_limit = tier.rate_limit();
-
+    pub fn check(&self, key: &str, rate_limit_per_minute: u32) -> RateLimitResult {
         let mut bucket = self.buckets.entry(key.to_string()).or_insert_with(|| {
-            // Allow burst up to 2x the per-minute rate, but rate limited to tier.rate_limit/min
-            let burst_capacity = rate_limit.min(1000); // Cap burst at 1000
-            TokenBucket::new(burst_capacity, rate_limit)
+            let burst_capacity = rate_limit_per_minute.min(1000); // Cap burst at 1000
+            TokenBucket::new(burst_capacity, rate_limit_per_minute)
         });
 
         bucket.try_consume()
@@ -156,40 +132,39 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_tier_rate_limits() {
-        assert_eq!(Tier::Free.rate_limit(), 5);
-        assert_eq!(Tier::Pro.rate_limit(), 60);
-        assert_eq!(Tier::Team.rate_limit(), 300);
-        assert_eq!(Tier::Enterprise.rate_limit(), 3_000);
-    }
+    fn test_tier_rate_limits_from_billing() {
+        let free = tiers::get_tier_limits(Tier::Free);
+        assert_eq!(free.rate_limit_per_minute, 100);
 
-    #[test]
-    fn test_tier_from_str() {
-        assert_eq!(Tier::from_str("free"), Tier::Free);
-        assert_eq!(Tier::from_str("pro"), Tier::Pro);
-        assert_eq!(Tier::from_str("Pro"), Tier::Pro);
-        assert_eq!(Tier::from_str("enterprise"), Tier::Enterprise);
-        assert_eq!(Tier::from_str("unknown"), Tier::Free);
+        let pro = tiers::get_tier_limits(Tier::Pro);
+        assert_eq!(pro.rate_limit_per_minute, 1000);
+
+        let team = tiers::get_tier_limits(Tier::Team);
+        assert_eq!(team.rate_limit_per_minute, 5000);
+
+        let enterprise = tiers::get_tier_limits(Tier::Enterprise);
+        assert_eq!(enterprise.rate_limit_per_minute, 10000);
     }
 
     #[test]
     fn test_rate_limiter_allows_requests() {
         let limiter = RateLimiter::new();
-        let result = limiter.check("test_key", Tier::Free);
+        let free_limit = tiers::get_tier_limits(Tier::Free).rate_limit_per_minute;
+        let result = limiter.check("test_key", free_limit);
         assert!(result.allowed);
     }
 
     #[test]
     fn test_rate_limiter_separate_buckets() {
         let limiter = RateLimiter::new();
+        let free_limit = tiers::get_tier_limits(Tier::Free).rate_limit_per_minute;
 
         // Different keys should have separate buckets
-        let result1 = limiter.check("key1", Tier::Free);
-        let result2 = limiter.check("key2", Tier::Free);
+        let result1 = limiter.check("key1", free_limit);
+        let result2 = limiter.check("key2", free_limit);
 
         assert!(result1.allowed);
         assert!(result2.allowed);
-        // Both should have similar remaining (accounting for the one consumed)
         assert_eq!(result1.remaining, result2.remaining);
     }
 }

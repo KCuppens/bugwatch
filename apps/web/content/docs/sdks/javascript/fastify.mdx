@@ -1,0 +1,287 @@
+---
+title: "@bugwatch/fastify"
+description: Bugwatch SDK for Fastify. Plugin-based integration that captures route errors and provides per-request access to the Bugwatch client.
+---
+
+# @bugwatch/fastify
+
+`@bugwatch/fastify` integrates Bugwatch into Fastify as a native plugin. It hooks into Fastify's error lifecycle, captures unhandled route errors, and decorates each request with a Bugwatch client for manual error capture and context management.
+
+## Installation
+
+```bash
+npm install @bugwatch/fastify
+```
+
+```bash
+yarn add @bugwatch/fastify
+```
+
+```bash
+pnpm add @bugwatch/fastify
+```
+
+## Quick Start (One-Liner)
+
+The `setup()` function initializes the SDK and registers the Bugwatch plugin in a single call.
+
+```js
+import Fastify from "fastify";
+import { setup } from "@bugwatch/fastify";
+
+const fastify = Fastify({ logger: true });
+
+await setup(fastify, {
+  apiKey: "bw_live_xxxxx",
+  environment: "production",
+});
+
+fastify.get("/", async (request, reply) => {
+  return { status: "ok" };
+});
+
+await fastify.listen({ port: 3000 });
+```
+
+After `setup()`, any unhandled error in a route handler is automatically captured and sent to Bugwatch.
+
+## Manual Plugin Registration
+
+For more control over plugin ordering and encapsulation, register the Bugwatch plugin manually.
+
+```js
+import Fastify from "fastify";
+import { init } from "@bugwatch/core";
+import { bugwatchPlugin } from "@bugwatch/fastify";
+
+// Initialize the SDK
+init({ apiKey: "bw_live_xxxxx" });
+
+const fastify = Fastify({ logger: true });
+
+// Register the plugin
+await fastify.register(bugwatchPlugin, {
+  // Optional plugin-specific options
+  captureBody: false,
+});
+
+fastify.get("/api/data", async (request, reply) => {
+  const data = await fetchData();
+  return data;
+});
+
+await fastify.listen({ port: 3000 });
+```
+
+## What Gets Captured Automatically
+
+Once the plugin is registered, the SDK hooks into Fastify's `onError` lifecycle event and captures:
+
+- **Route handler errors** -- any error thrown or rejected in an `async` route handler
+- **Request context** -- method, URL, headers, query parameters, and client IP
+- **Breadcrumbs** -- request lifecycle events (received, parsed, completed) are recorded as breadcrumbs
+
+```js
+// This error is captured automatically
+fastify.get("/api/users/:id", async (request, reply) => {
+  const user = await db.users.findById(request.params.id);
+  if (!user) {
+    throw new Error("User not found");
+  }
+  return user;
+});
+```
+
+## Per-Request Access
+
+The plugin decorates every Fastify `request` object with a `bugwatch` property. Use it to manually capture errors, set user context, or add breadcrumbs scoped to the current request.
+
+### captureError
+
+Manually capture an error within a route handler. The error is enriched with the current request context.
+
+```js
+fastify.post("/api/orders", async (request, reply) => {
+  try {
+    const order = await processOrder(request.body);
+    return { orderId: order.id };
+  } catch (error) {
+    // Capture the error but return a user-friendly response
+    request.bugwatch.captureError(error);
+    reply.status(500).send({ error: "Order processing failed" });
+  }
+});
+```
+
+### setUser
+
+Attach user identity to all errors captured during this request.
+
+```js
+fastify.addHook("onRequest", async (request) => {
+  const user = await authenticateRequest(request);
+  if (user) {
+    request.bugwatch.setUser({
+      id: user.id,
+      email: user.email,
+    });
+  }
+});
+```
+
+### addBreadcrumb
+
+Record a breadcrumb scoped to the current request.
+
+```js
+fastify.post("/api/checkout", async (request, reply) => {
+  request.bugwatch.addBreadcrumb({
+    category: "checkout",
+    message: "Validating payment method",
+  });
+
+  await validatePayment(request.body.paymentMethod);
+
+  request.bugwatch.addBreadcrumb({
+    category: "checkout",
+    message: "Charging customer",
+    data: { amount: request.body.amount },
+  });
+
+  const charge = await chargeCustomer(request.body);
+  return { chargeId: charge.id };
+});
+```
+
+### setTag / setExtra
+
+Attach tags and extra data to events captured during this request.
+
+```js
+fastify.get("/api/projects/:id", async (request, reply) => {
+  request.bugwatch.setTag("projectId", request.params.id);
+  request.bugwatch.setExtra("query", request.query);
+
+  const project = await db.projects.findById(request.params.id);
+  return project;
+});
+```
+
+## Plugin Options
+
+The `bugwatchPlugin` accepts the following options in addition to all [`@bugwatch/core` options](/docs/sdks/javascript/core#configuration).
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `captureBody` | `boolean` | `false` | Include the request body in captured events. Disabled by default to avoid capturing sensitive data. |
+| `extractUser` | `(request) => User \| null` | `undefined` | Extract user information from the request object. Called on every request. |
+
+```js
+await fastify.register(bugwatchPlugin, {
+  captureBody: true,
+  extractUser: (request) => request.user ?? null,
+});
+```
+
+## Encapsulation
+
+The Bugwatch plugin respects Fastify's encapsulation model. If you register it at the root level, it applies to all routes. You can also register it in a scoped context to limit its scope.
+
+```js
+// Global -- applies to all routes
+await fastify.register(bugwatchPlugin);
+
+// Scoped -- applies only to routes in this plugin
+fastify.register(async (instance) => {
+  await instance.register(bugwatchPlugin, {
+    captureBody: true,
+  });
+
+  instance.post("/api/sensitive", async (request, reply) => {
+    // Body capture is enabled only for routes in this scope
+    return { ok: true };
+  });
+});
+```
+
+## Graceful Shutdown
+
+Flush pending events before the server shuts down to avoid losing errors captured in the final moments.
+
+```js
+import { flush } from "@bugwatch/core";
+
+fastify.addHook("onClose", async () => {
+  await flush();
+});
+
+// Or handle process signals directly
+const signals = ["SIGINT", "SIGTERM"];
+for (const signal of signals) {
+  process.on(signal, async () => {
+    await flush();
+    await fastify.close();
+    process.exit(0);
+  });
+}
+```
+
+## Full Example
+
+```js
+import Fastify from "fastify";
+import { setup } from "@bugwatch/fastify";
+import { flush } from "@bugwatch/core";
+
+const fastify = Fastify({ logger: true });
+
+// Initialize Bugwatch
+await setup(fastify, {
+  apiKey: "bw_live_xxxxx",
+  environment: "production",
+});
+
+// Attach user to requests
+fastify.addHook("onRequest", async (request) => {
+  const token = request.headers.authorization?.replace("Bearer ", "");
+  if (token) {
+    const user = await verifyToken(token);
+    request.bugwatch.setUser({ id: user.id, email: user.email });
+  }
+});
+
+// Routes
+fastify.get("/api/health", async () => {
+  return { status: "healthy" };
+});
+
+fastify.get("/api/projects", async (request, reply) => {
+  request.bugwatch.setTag("endpoint", "list-projects");
+  const projects = await db.projects.findAll();
+  return projects;
+});
+
+fastify.post("/api/projects", async (request, reply) => {
+  request.bugwatch.addBreadcrumb({
+    category: "project",
+    message: "Creating new project",
+    data: { name: request.body.name },
+  });
+
+  const project = await db.projects.create(request.body);
+  reply.status(201).send(project);
+});
+
+// Graceful shutdown
+fastify.addHook("onClose", async () => {
+  await flush();
+});
+
+await fastify.listen({ port: 3000 });
+```
+
+## Next Steps
+
+- [Express SDK](/docs/sdks/javascript/express) -- middleware-based integration for Express.js
+- [Node.js SDK](/docs/sdks/javascript/node) -- process-level error capture
+- [Core SDK](/docs/sdks/javascript/core) -- full API reference

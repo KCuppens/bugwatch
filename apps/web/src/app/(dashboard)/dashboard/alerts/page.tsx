@@ -25,6 +25,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
+import { EmptyState } from "@/components/ui/empty-state";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { toast } from "sonner";
 import {
@@ -221,6 +222,16 @@ export default function AlertsPage() {
 
   // Open edit channel dialog
   function openEditChannel(channel: NotificationChannel) {
+    // The edit dialog UI only renders inputs for email/webhook/slack; other
+    // channel types (pagerduty, opsgenie) are created via their dedicated flows.
+    if (
+      channel.channel_type !== "email" &&
+      channel.channel_type !== "webhook" &&
+      channel.channel_type !== "slack"
+    ) {
+      return;
+    }
+
     setEditingChannel(channel);
     const cfg = channel.config;
     let emails = "";
@@ -460,8 +471,8 @@ export default function AlertsPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold">Alerts</h1>
-          <p className="text-muted-foreground">
+          <h1 className="font-display text-heading-lg">Alerts</h1>
+          <p className="text-body-sm text-muted-foreground mt-1">
             Configure alert rules and notification channels
           </p>
         </div>
@@ -503,14 +514,12 @@ export default function AlertsPage() {
 
                 {rules.length === 0 && channels.length > 0 ? (
                   <Card>
-                    <CardContent className="flex flex-col items-center justify-center py-16">
-                      <div className="rounded-full bg-muted p-4">
-                        <Bell className="h-8 w-8 text-muted-foreground" />
-                      </div>
-                      <h3 className="mt-4 text-lg font-medium">No alert rules</h3>
-                      <p className="mt-2 text-center text-muted-foreground">
-                        Create alert rules to get notified about issues and monitor events.
-                      </p>
+                    <CardContent className="p-0">
+                      <EmptyState
+                        icon={<Bell />}
+                        title="No alert rules"
+                        description="Create alert rules to get notified about issues and monitor events."
+                      />
                     </CardContent>
                   </Card>
                 ) : (
@@ -582,14 +591,12 @@ export default function AlertsPage() {
 
                 {channels.length === 0 ? (
                   <Card>
-                    <CardContent className="flex flex-col items-center justify-center py-16">
-                      <div className="rounded-full bg-muted p-4">
-                        <Mail className="h-8 w-8 text-muted-foreground" />
-                      </div>
-                      <h3 className="mt-4 text-lg font-medium">No notification channels</h3>
-                      <p className="mt-2 text-center text-muted-foreground">
-                        Add email, webhook, or Slack channels to receive alerts.
-                      </p>
+                    <CardContent className="p-0">
+                      <EmptyState
+                        icon={<Mail />}
+                        title="No notification channels"
+                        description="Add email, webhook, or Slack channels to receive alerts."
+                      />
                     </CardContent>
                   </Card>
                 ) : (
@@ -598,7 +605,7 @@ export default function AlertsPage() {
                       <CardContent className="p-4">
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-4">
-                            <div className={`rounded-full p-2 ${channel.is_active ? "bg-primary/10" : "bg-gray-100 dark:bg-gray-800"}`}>
+                            <div className={`rounded-full p-2 ${channel.is_active ? "bg-accent-2/10" : "bg-gray-100 dark:bg-gray-800"}`}>
                               {getChannelIcon(channel.channel_type)}
                             </div>
                             <div>
@@ -662,14 +669,12 @@ export default function AlertsPage() {
               <div className="space-y-4">
                 {logs.length === 0 ? (
                   <Card>
-                    <CardContent className="flex flex-col items-center justify-center py-16">
-                      <div className="rounded-full bg-muted p-4">
-                        <Clock className="h-8 w-8 text-muted-foreground" />
-                      </div>
-                      <h3 className="mt-4 text-lg font-medium">No alert activity</h3>
-                      <p className="mt-2 text-center text-muted-foreground">
-                        Alert notifications will appear here when they are triggered.
-                      </p>
+                    <CardContent className="p-0">
+                      <EmptyState
+                        icon={<Clock />}
+                        title="No alert activity"
+                        description="Alert notifications will appear here when they are triggered."
+                      />
                     </CardContent>
                   </Card>
                 ) : (
@@ -836,7 +841,7 @@ export default function AlertsPage() {
                           setRuleForm({ ...ruleForm, channelIds: ruleForm.channelIds.filter((id) => id !== channel.id) });
                         }
                       }}
-                      className="h-4 w-4 rounded border-border text-primary focus:ring-primary focus:ring-offset-background"
+                      className="h-4 w-4 rounded border-border text-accent-2 focus:ring-accent-2 focus:ring-offset-background"
                     />
                     <span className="text-sm">{channel.name}</span>
                     <span className="text-xs text-muted-foreground capitalize">({channel.channel_type})</span>
@@ -975,7 +980,7 @@ export default function AlertsPage() {
                           }}
                           className={`px-2 py-1 text-xs rounded ${
                             block.enabled
-                              ? "bg-primary text-primary-foreground"
+                              ? "bg-accent-2 text-accent-2-foreground"
                               : "bg-muted text-muted-foreground"
                           }`}
                         >
@@ -1018,7 +1023,7 @@ export default function AlertsPage() {
                       }}
                       className={`px-3 py-1.5 text-xs rounded border ${
                         slackTemplate.actions.some((a) => a.action_type === "view_issue")
-                          ? "bg-primary text-primary-foreground border-primary"
+                          ? "bg-accent-2 text-accent-2-foreground border-accent-2"
                           : "bg-card border-muted-foreground/20"
                       }`}
                     >

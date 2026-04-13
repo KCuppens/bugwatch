@@ -1,6 +1,9 @@
-use crate::db::{models::{AlertRule, NotificationChannel, AlertLog, EmailRateLimit}, DbPool};
-use chrono::{DateTime, Utc};
+use crate::db::{
+    models::{AlertLog, AlertRule, EmailRateLimit, NotificationChannel},
+    DbPool,
+};
 use anyhow::Result;
+use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use uuid::Uuid;
 
@@ -71,38 +74,25 @@ impl AlertRuleRepository {
         actions: Option<&str>,
         is_active: Option<bool>,
     ) -> Result<AlertRule> {
-        if let Some(n) = name {
-            sqlx::query("UPDATE alert_rules SET name = $1 WHERE id = $2")
-                .bind(n)
-                .bind(id)
-                .execute(pool)
-                .await?;
-        }
-        if let Some(c) = condition {
-            sqlx::query("UPDATE alert_rules SET condition = $1 WHERE id = $2")
-                .bind(c)
-                .bind(id)
-                .execute(pool)
-                .await?;
-        }
-        if let Some(a) = actions {
-            sqlx::query("UPDATE alert_rules SET actions = $1 WHERE id = $2")
-                .bind(a)
-                .bind(id)
-                .execute(pool)
-                .await?;
-        }
-        if let Some(active) = is_active {
-            sqlx::query("UPDATE alert_rules SET is_active = $1 WHERE id = $2")
-                .bind(active)
-                .bind(id)
-                .execute(pool)
-                .await?;
-        }
-
-        Self::find_by_id(pool, id)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("Alert rule not found"))
+        // Single UPDATE with COALESCE so a None field is left untouched.
+        // Collapses up-to-4 UPDATEs + 1 SELECT into one round trip.
+        sqlx::query_as::<_, AlertRule>(
+            "UPDATE alert_rules
+             SET name = COALESCE($1, name),
+                 condition = COALESCE($2, condition),
+                 actions = COALESCE($3, actions),
+                 is_active = COALESCE($4, is_active)
+             WHERE id = $5
+             RETURNING *",
+        )
+        .bind(name)
+        .bind(condition)
+        .bind(actions)
+        .bind(is_active)
+        .bind(id)
+        .fetch_optional(pool)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("Alert rule not found"))
     }
 
     pub async fn delete(pool: &DbPool, id: &str) -> Result<()> {
@@ -111,6 +101,35 @@ impl AlertRuleRepository {
             .execute(pool)
             .await?;
         Ok(())
+    }
+
+    pub async fn mute(
+        pool: &DbPool,
+        id: &str,
+        muted_until: DateTime<Utc>,
+        duration_minutes: i32,
+    ) -> Result<AlertRule> {
+        sqlx::query(
+            "UPDATE alert_rules SET muted_until = $1, snooze_duration_minutes = $2 WHERE id = $3",
+        )
+        .bind(muted_until)
+        .bind(duration_minutes)
+        .bind(id)
+        .execute(pool)
+        .await?;
+        Self::find_by_id(pool, id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Alert rule not found"))
+    }
+
+    pub async fn unmute(pool: &DbPool, id: &str) -> Result<AlertRule> {
+        sqlx::query("UPDATE alert_rules SET muted_until = NULL, snooze_duration_minutes = NULL WHERE id = $1")
+            .bind(id)
+            .execute(pool)
+            .await?;
+        Self::find_by_id(pool, id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Alert rule not found"))
     }
 }
 
@@ -146,14 +165,19 @@ impl NotificationChannelRepository {
     }
 
     pub async fn find_by_id(pool: &DbPool, id: &str) -> Result<Option<NotificationChannel>> {
-        sqlx::query_as::<_, NotificationChannel>("SELECT * FROM notification_channels WHERE id = $1")
-            .bind(id)
-            .fetch_optional(pool)
-            .await
-            .map_err(Into::into)
+        sqlx::query_as::<_, NotificationChannel>(
+            "SELECT * FROM notification_channels WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_optional(pool)
+        .await
+        .map_err(Into::into)
     }
 
-    pub async fn list_by_project(pool: &DbPool, project_id: &str) -> Result<Vec<NotificationChannel>> {
+    pub async fn list_by_project(
+        pool: &DbPool,
+        project_id: &str,
+    ) -> Result<Vec<NotificationChannel>> {
         sqlx::query_as::<_, NotificationChannel>(
             "SELECT * FROM notification_channels WHERE project_id = $1 ORDER BY created_at DESC",
         )
@@ -203,6 +227,31 @@ impl NotificationChannelRepository {
             .execute(pool)
             .await?;
         Ok(())
+    }
+
+    /// Batch fetch notification channels by IDs (eliminates N+1 queries)
+    pub async fn find_by_ids(pool: &DbPool, ids: &[String]) -> Result<Vec<NotificationChannel>> {
+        if ids.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let placeholders: Vec<String> = ids
+            .iter()
+            .enumerate()
+            .map(|(i, _)| format!("${}", i + 1))
+            .collect();
+
+        let query = format!(
+            "SELECT * FROM notification_channels WHERE id IN ({})",
+            placeholders.join(",")
+        );
+
+        let mut q = sqlx::query_as::<_, NotificationChannel>(&query);
+        for id in ids {
+            q = q.bind(id);
+        }
+
+        q.fetch_all(pool).await.map_err(Into::into)
     }
 }
 
@@ -395,12 +444,11 @@ impl AlertLogRepository {
 
     /// Cleanup old alert logs to prevent database bloat
     pub async fn cleanup_old_logs(pool: &DbPool, days: i32) -> Result<u64> {
-        let result = sqlx::query(
-            "DELETE FROM alert_logs WHERE created_at < NOW() - INTERVAL '1 day' * $1",
-        )
-        .bind(days)
-        .execute(pool)
-        .await?;
+        let result =
+            sqlx::query("DELETE FROM alert_logs WHERE created_at < NOW() - INTERVAL '1 day' * $1")
+                .bind(days)
+                .execute(pool)
+                .await?;
 
         Ok(result.rows_affected())
     }

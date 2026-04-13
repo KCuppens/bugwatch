@@ -1,3 +1,3 @@
 pub mod tier_guard;
 
-pub use tier_guard::{require_tier, require_feature, TierGuard};
+pub use tier_guard::{require_feature, require_tier, TierGuard};

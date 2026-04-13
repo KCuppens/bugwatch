@@ -1,13 +1,13 @@
 [package]
 name = "bugwatch"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2021"
-authors = ["Bugwatch Team <support@bugwatch.io>"]
+authors = ["Bugwatch Team <support@bugwatch.dev>"]
 description = "Official Rust SDK for Bugwatch - AI-Powered Error Tracking"
-documentation = "https://docs.bugwatch.io/sdk/rust"
-homepage = "https://bugwatch.io"
-repository = "https://github.com/bugwatch/bugwatch"
-license = "MIT"
+documentation = "https://bugwatch.dev/docs/sdks/rust"
+homepage = "https://bugwatch.dev"
+repository = "https://github.com/KCuppens/bugwatch"
+license = "FSL-1.1-Apache-2.0"
 readme = "README.md"
 keywords = ["bugwatch", "error-tracking", "monitoring", "logging", "observability"]
 categories = ["development-tools::debugging", "development-tools::profiling"]

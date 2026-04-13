@@ -1,11 +1,11 @@
 use anyhow::{anyhow, Result};
 use serde::Serialize;
 use stripe::{
-    BillingPortalSession, CheckoutSession, CheckoutSessionMode, Client,
+    BillingPortalSession, CheckoutSession, CheckoutSessionMode, Client, Coupon, CouponId,
     CreateBillingPortalSession, CreateCheckoutSession, CreateCheckoutSessionLineItems,
-    CreateCustomer, CreatePaymentIntent, CreateSetupIntent, Currency, Customer, CustomerId,
-    Invoice, InvoiceId, PaymentIntent, PaymentIntentStatus, PaymentMethod, PaymentMethodId,
-    SetupIntent, SubscriptionId, Coupon, CouponId, PromotionCode,
+    CreateCustomer, CreateSetupIntent, Currency, Customer, CustomerId, Invoice, InvoiceId,
+    PaymentIntent, PaymentIntentStatus, PaymentMethod, PaymentMethodId, PromotionCode, SetupIntent,
+    SubscriptionId,
 };
 
 use crate::config::Config;
@@ -82,7 +82,13 @@ impl StripeClient {
             _ => return Err(anyhow!("Invalid tier for subscription: {}", tier)),
         };
 
-        price_id.ok_or_else(|| anyhow!("Price ID not configured for tier: {} (annual: {})", tier, annual))
+        price_id.ok_or_else(|| {
+            anyhow!(
+                "Price ID not configured for tier: {} (annual: {})",
+                tier,
+                annual
+            )
+        })
     }
 
     /// Create a Stripe Checkout session for subscription
@@ -137,7 +143,12 @@ impl StripeClient {
         let id: SubscriptionId = subscription_id.parse()?;
 
         if immediately {
-            let subscription = stripe::Subscription::cancel(&self.client, &id, stripe::CancelSubscription::default()).await?;
+            let subscription = stripe::Subscription::cancel(
+                &self.client,
+                &id,
+                stripe::CancelSubscription::default(),
+            )
+            .await?;
             Ok(subscription)
         } else {
             // Cancel at period end
@@ -158,7 +169,10 @@ impl StripeClient {
         let subscription = stripe::Subscription::retrieve(&self.client, &id, &[]).await?;
 
         // Get the first subscription item
-        let item = subscription.items.data.first()
+        let item = subscription
+            .items
+            .data
+            .first()
             .ok_or_else(|| anyhow!("No subscription items found"))?;
 
         // Update the quantity on the subscription item
@@ -171,74 +185,6 @@ impl StripeClient {
         // Re-fetch the updated subscription
         let updated = stripe::Subscription::retrieve(&self.client, &id, &[]).await?;
         Ok(updated)
-    }
-
-    /// Create a payment intent for credit purchase (one-time payment)
-    pub async fn create_credit_payment_intent(
-        &self,
-        customer_id: &str,
-        amount_cents: i64,
-        credits: i32,
-    ) -> Result<PaymentIntent> {
-        let customer: CustomerId = customer_id.parse()?;
-
-        let mut params = CreatePaymentIntent::new(amount_cents, Currency::USD);
-        params.customer = Some(customer);
-        params.metadata = Some(
-            [
-                ("type".to_string(), "credit_purchase".to_string()),
-                ("credits".to_string(), credits.to_string()),
-            ]
-            .into_iter()
-            .collect(),
-        );
-
-        let intent = PaymentIntent::create(&self.client, params).await?;
-        Ok(intent)
-    }
-
-    /// Create a Stripe Checkout session for credit purchase (one-time payment)
-    pub async fn create_credit_checkout_session(
-        &self,
-        customer_id: &str,
-        package: &CreditPackage,
-        purchase_id: &str,
-        success_url: &str,
-        cancel_url: &str,
-    ) -> Result<CheckoutSession> {
-        let customer: CustomerId = customer_id.parse()?;
-
-        let mut params = CreateCheckoutSession::new();
-        params.customer = Some(customer);
-        params.mode = Some(CheckoutSessionMode::Payment);
-        params.success_url = Some(success_url);
-        params.cancel_url = Some(cancel_url);
-        params.line_items = Some(vec![CreateCheckoutSessionLineItems {
-            price_data: Some(stripe::CreateCheckoutSessionLineItemsPriceData {
-                currency: Currency::USD,
-                product_data: Some(stripe::CreateCheckoutSessionLineItemsPriceDataProductData {
-                    name: format!("{} AI Fix Credits", package.credits),
-                    description: Some(format!("Purchase {} AI fix credits for BugWatch", package.credits)),
-                    ..Default::default()
-                }),
-                unit_amount: Some(package.price_cents as i64),
-                ..Default::default()
-            }),
-            quantity: Some(1),
-            ..Default::default()
-        }]);
-        params.metadata = Some(
-            [
-                ("type".to_string(), "credit_purchase".to_string()),
-                ("purchase_id".to_string(), purchase_id.to_string()),
-                ("credits".to_string(), package.credits.to_string()),
-            ]
-            .into_iter()
-            .collect(),
-        );
-
-        let session = CheckoutSession::create(&self.client, params).await?;
-        Ok(session)
     }
 
     /// Check if a payment intent succeeded
@@ -272,7 +218,10 @@ impl StripeClient {
         let subscription = stripe::Subscription::retrieve(&self.client, &id, &[]).await?;
 
         // Get the first subscription item
-        let item = subscription.items.data.first()
+        let item = subscription
+            .items
+            .data
+            .first()
             .ok_or_else(|| anyhow!("No subscription items found"))?;
 
         // Update the subscription with new price and quantity
@@ -304,7 +253,10 @@ impl StripeClient {
         let subscription = stripe::Subscription::retrieve(&self.client, &id, &[]).await?;
 
         // Get the first subscription item
-        let item = subscription.items.data.first()
+        let item = subscription
+            .items
+            .data
+            .first()
             .ok_or_else(|| anyhow!("No subscription items found"))?;
 
         // Create an upcoming invoice preview with the changes
@@ -312,17 +264,20 @@ impl StripeClient {
         // Note: This is a simplified preview. For accurate proration, use Invoice::upcoming
 
         // Get the current price for comparison
-        let current_amount = subscription.items.data.iter()
+        let current_amount = subscription
+            .items
+            .data
+            .iter()
             .filter_map(|item| item.price.as_ref())
             .filter_map(|price| price.unit_amount)
             .sum::<i64>();
 
         // Calculate new amount (simplified)
         let new_unit_amount = match (new_tier, annual) {
-            ("pro", false) => 1200,   // $12/seat/month
-            ("pro", true) => 840,     // $8.40/seat/month (30% off)
-            ("team", false) => 2500,  // $25/seat/month
-            ("team", true) => 1750,   // $17.50/seat/month (30% off)
+            ("pro", false) => 1200,  // $12/seat/month
+            ("pro", true) => 840,    // $8.40/seat/month (30% off)
+            ("team", false) => 2500, // $25/seat/month
+            ("team", true) => 1750,  // $17.50/seat/month (30% off)
             _ => 0,
         };
         let new_amount = new_unit_amount * seats;
@@ -353,8 +308,10 @@ impl StripeClient {
 
         let invoices = Invoice::list(&self.client, &params).await?;
 
-        let summaries: Vec<InvoiceSummary> = invoices.data.into_iter().map(|inv| {
-            InvoiceSummary {
+        let summaries: Vec<InvoiceSummary> = invoices
+            .data
+            .into_iter()
+            .map(|inv| InvoiceSummary {
                 id: inv.id.to_string(),
                 number: inv.number,
                 status: inv.status.map(|s| format!("{:?}", s)),
@@ -366,8 +323,8 @@ impl StripeClient {
                 period_end: inv.period_end.map(|t| t.to_string()),
                 invoice_pdf: inv.invoice_pdf,
                 hosted_invoice_url: inv.hosted_invoice_url,
-            }
-        }).collect();
+            })
+            .collect();
 
         Ok(summaries)
     }
@@ -377,15 +334,27 @@ impl StripeClient {
         let id: InvoiceId = invoice_id.parse()?;
         let invoice = Invoice::retrieve(&self.client, &id, &[]).await?;
 
-        let line_items: Vec<InvoiceLineItem> = invoice.lines.as_ref()
+        let line_items: Vec<InvoiceLineItem> = invoice
+            .lines
+            .as_ref()
             .map(|lines| {
-                lines.data.iter().map(|line| InvoiceLineItem {
-                    description: line.description.clone(),
-                    amount: line.amount,
-                    quantity: line.quantity,
-                    period_start: line.period.as_ref().and_then(|p| p.start.map(|s| s.to_string())),
-                    period_end: line.period.as_ref().and_then(|p| p.end.map(|e| e.to_string())),
-                }).collect()
+                lines
+                    .data
+                    .iter()
+                    .map(|line| InvoiceLineItem {
+                        description: line.description.clone(),
+                        amount: line.amount,
+                        quantity: line.quantity,
+                        period_start: line
+                            .period
+                            .as_ref()
+                            .and_then(|p| p.start.map(|s| s.to_string())),
+                        period_end: line
+                            .period
+                            .as_ref()
+                            .and_then(|p| p.end.map(|e| e.to_string())),
+                    })
+                    .collect()
             })
             .unwrap_or_default();
 
@@ -415,7 +384,10 @@ impl StripeClient {
     // =========================================================================
 
     /// List payment methods for a customer
-    pub async fn list_payment_methods(&self, customer_id: &str) -> Result<Vec<PaymentMethodSummary>> {
+    pub async fn list_payment_methods(
+        &self,
+        customer_id: &str,
+    ) -> Result<Vec<PaymentMethodSummary>> {
         let customer: CustomerId = customer_id.parse()?;
 
         let mut params = stripe::ListPaymentMethods::new();
@@ -423,8 +395,12 @@ impl StripeClient {
 
         let methods = PaymentMethod::list(&self.client, &params).await?;
 
-        let summaries: Vec<PaymentMethodSummary> = methods.data.into_iter()
-            .filter(|pm| pm.customer.as_ref().map(|c| c.id().to_string()) == Some(customer_id.to_string()))
+        let summaries: Vec<PaymentMethodSummary> = methods
+            .data
+            .into_iter()
+            .filter(|pm| {
+                pm.customer.as_ref().map(|c| c.id().to_string()) == Some(customer_id.to_string())
+            })
             .map(|pm| {
                 let card_info = pm.card.as_ref().map(|card| CardInfo {
                     brand: card.brand.clone(),
@@ -511,7 +487,8 @@ impl StripeClient {
 
         // Try as a direct coupon ID
         let coupon_id: CouponId = code.parse().map_err(|_| anyhow!("Invalid coupon code"))?;
-        let coupon = Coupon::retrieve(&self.client, &coupon_id, &[]).await
+        let coupon = Coupon::retrieve(&self.client, &coupon_id, &[])
+            .await
             .map_err(|_| anyhow!("Coupon not found or invalid"))?;
 
         Ok(CouponInfo {
@@ -535,7 +512,10 @@ impl StripeClient {
     }
 
     /// Retrieve a subscription by ID
-    pub async fn retrieve_subscription(&self, subscription_id: &str) -> Result<stripe::Subscription> {
+    pub async fn retrieve_subscription(
+        &self,
+        subscription_id: &str,
+    ) -> Result<stripe::Subscription> {
         let id: SubscriptionId = subscription_id.parse()?;
         let subscription = stripe::Subscription::retrieve(&self.client, &id, &[]).await?;
         Ok(subscription)
@@ -590,9 +570,8 @@ impl StripeClient {
         }
 
         // Enable tax ID collection
-        params.tax_id_collection = Some(stripe::CreateCheckoutSessionTaxIdCollection {
-            enabled: true,
-        });
+        params.tax_id_collection =
+            Some(stripe::CreateCheckoutSessionTaxIdCollection { enabled: true });
 
         let session = CheckoutSession::create(&self.client, params).await?;
         Ok(session)
@@ -602,60 +581,29 @@ impl StripeClient {
     // Tax ID Management
     // =========================================================================
 
-    /// Add a tax ID to a customer
-    /// Note: Tax ID management API has changed - needs update for async-stripe 0.39+
+    /// Add a tax ID to a customer.
+    ///
+    /// Known limitation: Tax ID management requires async-stripe 0.39+ API changes.
+    /// See: https://docs.stripe.com/api/tax_ids
     pub async fn add_tax_id(
         &self,
         _customer_id: &str,
         type_: &str,
         _value: &str,
     ) -> Result<stripe::TaxId> {
-        // TODO: Update for new Stripe API - TaxId management has changed
-        Err(anyhow!("Tax ID management temporarily unavailable - API update needed for type: {}", type_))
+        Err(anyhow!(
+            "Tax ID management temporarily unavailable - API update needed for type: {}",
+            type_
+        ))
     }
 
-    /// List tax IDs for a customer
-    /// Note: Tax ID management API has changed - needs update for async-stripe 0.39+
+    /// List tax IDs for a customer.
+    ///
+    /// Known limitation: Tax ID management requires async-stripe 0.39+ API changes.
+    /// See: https://docs.stripe.com/api/tax_ids
     pub async fn list_tax_ids(&self, _customer_id: &str) -> Result<Vec<TaxIdInfo>> {
-        // TODO: Update for new Stripe API - TaxId management has changed
         Ok(Vec::new())
     }
-}
-
-/// Credit package definitions
-#[derive(Debug, Clone)]
-pub struct CreditPackage {
-    pub credits: i32,
-    pub price_cents: i32,
-    pub name: &'static str,
-}
-
-pub const CREDIT_PACKAGES: &[CreditPackage] = &[
-    CreditPackage {
-        credits: 10,
-        price_cents: 1500,
-        name: "10 Credits",
-    },
-    CreditPackage {
-        credits: 25,
-        price_cents: 3500,
-        name: "25 Credits",
-    },
-    CreditPackage {
-        credits: 50,
-        price_cents: 6500,
-        name: "50 Credits",
-    },
-    CreditPackage {
-        credits: 100,
-        price_cents: 12000,
-        name: "100 Credits",
-    },
-];
-
-/// Get a credit package by credits count
-pub fn get_credit_package(credits: i32) -> Option<&'static CreditPackage> {
-    CREDIT_PACKAGES.iter().find(|p| p.credits == credits)
 }
 
 // =============================================================================

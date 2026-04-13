@@ -1,0 +1,50 @@
+---
+title: Server Agent
+description: Learn about the Bugwatch server monitoring agent -- a lightweight daemon that collects host-level metrics and sends them to your Bugwatch dashboard.
+---
+
+# Server Agent
+
+The Bugwatch server agent is a lightweight monitoring daemon that runs on your Linux hosts and reports system-level metrics to your Bugwatch dashboard. It gives you infrastructure visibility alongside your application error tracking -- all in one place.
+
+## What It Monitors
+
+The agent collects the following metrics every reporting interval (default: 60 seconds):
+
+| Metric | Description |
+|--------|-------------|
+| **CPU** | Overall CPU utilization percentage across all cores |
+| **Memory** | Used, available, and total RAM |
+| **Disk** | Usage percentage and available space per mount point |
+| **Network** | Bytes sent and received per network interface |
+| **Load** | 1-minute, 5-minute, and 15-minute load averages |
+| **Processes** | Total running processes and top consumers |
+| **Docker Containers** | Container status, CPU, and memory usage (optional) |
+| **Uptime** | Host uptime since last boot |
+
+## How It Works
+
+1. The agent installs as a systemd service (or cron job on systems without systemd)
+2. Every 60 seconds (configurable), it collects system metrics from `/proc`, `/sys`, and the Docker API
+3. Metrics are sent as a JSON payload via `POST /api/v1/metrics` to the Bugwatch API
+4. The API authenticates the request using your project API key
+5. Metrics appear on the **Server** tab of your project dashboard
+
+```
+┌──────────────┐       HTTPS POST        ┌──────────────────┐
+│  Your Server │  ───────────────────►    │   Bugwatch API   │
+│  (agent)     │   /api/v1/metrics        │                  │
+└──────────────┘                          └──────────────────┘
+```
+
+## Requirements
+
+- **Linux** (Ubuntu 18.04+, Debian 10+, CentOS 7+, Amazon Linux 2, or any distribution with systemd or cron)
+- **Outbound HTTPS** access to `api.bugwatch.dev` (or your self-hosted API endpoint)
+- **Root or sudo** access for installation
+
+## Next Steps
+
+- [Installation](/docs/server-agent/installation) -- install the agent with a single command
+- [Configuration](/docs/server-agent/configuration) -- customize the agent behavior
+- [Troubleshooting](/docs/server-agent/troubleshooting) -- resolve common issues

@@ -21,7 +21,7 @@ export function AuthGuard({ children }: AuthGuardProps) {
   if (isLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2" role="status" aria-live="polite">
           <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
           <span className="text-muted-foreground">Loading...</span>
         </div>
@@ -30,7 +30,14 @@ export function AuthGuard({ children }: AuthGuardProps) {
   }
 
   if (!isAuthenticated) {
-    return null;
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="flex items-center gap-2" role="status" aria-live="polite">
+          <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+          <span className="text-muted-foreground">Redirecting...</span>
+        </div>
+      </div>
+    );
   }
 
   return <>{children}</>;
@@ -53,7 +60,7 @@ export function GuestGuard({ children }: GuestGuardProps) {
   if (isLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2" role="status" aria-live="polite">
           <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
           <span className="text-muted-foreground">Loading...</span>
         </div>
@@ -62,7 +69,14 @@ export function GuestGuard({ children }: GuestGuardProps) {
   }
 
   if (isAuthenticated) {
-    return null;
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="flex items-center gap-2" role="status" aria-live="polite">
+          <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+          <span className="text-muted-foreground">Redirecting...</span>
+        </div>
+      </div>
+    );
   }
 
   return <>{children}</>;

@@ -26,6 +26,7 @@ pub struct NotificationService {
     client: Client,
     email_transport: Option<EmailTransport>,
     from_email: String,
+    circuit_breaker: crate::utils::CircuitBreaker,
 }
 
 /// Alert payload sent to notification channels
@@ -116,6 +117,24 @@ pub struct SlackConfig {
     pub message_template: Option<SlackMessageTemplate>,
 }
 
+/// PagerDuty configuration
+#[derive(Debug, Deserialize)]
+pub struct PagerDutyConfig {
+    pub routing_key: String,
+    #[serde(default)]
+    pub severity_mapping: Option<std::collections::HashMap<String, String>>,
+}
+
+/// OpsGenie configuration
+#[derive(Debug, Deserialize)]
+pub struct OpsGenieConfig {
+    pub api_key: String,
+    #[serde(default)]
+    pub team: Option<String>,
+    #[serde(default)]
+    pub priority_mapping: Option<std::collections::HashMap<String, String>>,
+}
+
 /// Template for customizing Slack message layout
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SlackMessageTemplate {
@@ -130,18 +149,28 @@ impl Default for SlackMessageTemplate {
     fn default() -> Self {
         Self {
             blocks: vec![
-                SlackBlockConfig { block_type: SlackBlockType::Header, enabled: true },
-                SlackBlockConfig { block_type: SlackBlockType::Message, enabled: true },
-                SlackBlockConfig { block_type: SlackBlockType::StackTrace, enabled: true },
-                SlackBlockConfig { block_type: SlackBlockType::Context, enabled: true },
-            ],
-            actions: vec![
-                SlackActionConfig {
-                    action_type: SlackActionType::ViewIssue,
-                    label: "View in Bugwatch".to_string(),
-                    style: Some("primary".to_string()),
+                SlackBlockConfig {
+                    block_type: SlackBlockType::Header,
+                    enabled: true,
+                },
+                SlackBlockConfig {
+                    block_type: SlackBlockType::Message,
+                    enabled: true,
+                },
+                SlackBlockConfig {
+                    block_type: SlackBlockType::StackTrace,
+                    enabled: true,
+                },
+                SlackBlockConfig {
+                    block_type: SlackBlockType::Context,
+                    enabled: true,
                 },
             ],
+            actions: vec![SlackActionConfig {
+                action_type: SlackActionType::ViewIssue,
+                label: "View in Bugwatch".to_string(),
+                style: Some("primary".to_string()),
+            }],
         }
     }
 }
@@ -210,13 +239,14 @@ impl NotificationService {
             client,
             email_transport,
             from_email,
+            // Open after 5 consecutive failures, try again after 60 seconds
+            circuit_breaker: crate::utils::CircuitBreaker::new("notifications", 5, 60),
         }
     }
 
     /// Initialize SMTP transport from environment variables
     fn init_smtp_transport() -> Result<AsyncSmtpTransport<Tokio1Executor>> {
-        let host = std::env::var("SMTP_HOST")
-            .map_err(|_| anyhow!("SMTP_HOST not set"))?;
+        let host = std::env::var("SMTP_HOST").map_err(|_| anyhow!("SMTP_HOST not set"))?;
         let port: u16 = std::env::var("SMTP_PORT")
             .ok()
             .and_then(|v| v.parse().ok())
@@ -279,13 +309,46 @@ impl NotificationService {
     ///
     /// Returns `Ok(Some(action))` when a webhook responds with
     /// `{"action": "resolve"}` or `{"action": "ignore"}`.
-    pub async fn send(&self, channel: &NotificationChannel, payload: &AlertPayload) -> Result<Option<String>> {
-        match channel.channel_type.as_str() {
-            "email" => { self.send_email(channel, payload).await?; Ok(None) }
-            "webhook" => self.send_webhook(channel, payload).await,
-            "slack" => { self.send_slack(channel, payload).await?; Ok(None) }
-            _ => Err(anyhow!("Unknown channel type: {}", channel.channel_type)),
+    pub async fn send(
+        &self,
+        channel: &NotificationChannel,
+        payload: &AlertPayload,
+    ) -> Result<Option<String>> {
+        if !self.circuit_breaker.allow_request() {
+            warn!(
+                "Circuit breaker open for notifications — skipping {} alert",
+                channel.channel_type
+            );
+            return Err(anyhow!("Notification circuit breaker is open"));
         }
+
+        let result = match channel.channel_type.as_str() {
+            "email" => {
+                self.send_email(channel, payload).await?;
+                Ok(None)
+            }
+            "webhook" => self.send_webhook(channel, payload).await,
+            "slack" => {
+                self.send_slack(channel, payload).await?;
+                Ok(None)
+            }
+            "pagerduty" => {
+                self.send_pagerduty(channel, payload).await?;
+                Ok(None)
+            }
+            "opsgenie" => {
+                self.send_opsgenie(channel, payload).await?;
+                Ok(None)
+            }
+            _ => Err(anyhow!("Unknown channel type: {}", channel.channel_type)),
+        };
+
+        match &result {
+            Ok(_) => self.circuit_breaker.record_success(),
+            Err(_) => self.circuit_breaker.record_failure(),
+        }
+
+        result
     }
 
     /// Send an alert with rate limiting support (for email)
@@ -366,7 +429,11 @@ impl NotificationService {
     }
 
     /// Send email notification via configured transport (SMTP or SES)
-    async fn send_email(&self, channel: &NotificationChannel, payload: &AlertPayload) -> Result<()> {
+    async fn send_email(
+        &self,
+        channel: &NotificationChannel,
+        payload: &AlertPayload,
+    ) -> Result<()> {
         let config: EmailConfig = serde_json::from_str(&channel.config)?;
 
         if config.recipients.is_empty() {
@@ -410,8 +477,14 @@ impl NotificationService {
         let html_body = self.build_email_html(payload);
 
         let email = LettreMessage::builder()
-            .from(self.from_email.parse().map_err(|e| anyhow!("Invalid from address: {}", e))?)
-            .to(recipient.parse().map_err(|e| anyhow!("Invalid recipient address: {}", e))?)
+            .from(
+                self.from_email
+                    .parse()
+                    .map_err(|e| anyhow!("Invalid from address: {}", e))?,
+            )
+            .to(recipient
+                .parse()
+                .map_err(|e| anyhow!("Invalid recipient address: {}", e))?)
             .subject(subject)
             .header(ContentType::TEXT_HTML)
             .body(html_body)
@@ -427,7 +500,12 @@ impl NotificationService {
 
     /// Send email via AWS SES (SaaS)
     #[cfg(feature = "saas")]
-    async fn send_via_ses(&self, ses: &SesClient, recipient: &str, payload: &AlertPayload) -> Result<()> {
+    async fn send_via_ses(
+        &self,
+        ses: &SesClient,
+        recipient: &str,
+        payload: &AlertPayload,
+    ) -> Result<()> {
         let subject = format!("[Bugwatch] {}", payload.title);
 
         // Build HTML email body
@@ -457,11 +535,7 @@ impl NotificationService {
 
         ses.send_email()
             .from_email_address(&self.from_email)
-            .destination(
-                Destination::builder()
-                    .to_addresses(recipient)
-                    .build(),
-            )
+            .destination(Destination::builder().to_addresses(recipient).build())
             .content(email_content)
             .send()
             .await
@@ -535,7 +609,11 @@ impl NotificationService {
     ///
     /// Returns `Ok(Some(action))` when the webhook responds with
     /// `{"action": "resolve"}` or `{"action": "ignore"}`.
-    async fn send_webhook(&self, channel: &NotificationChannel, payload: &AlertPayload) -> Result<Option<String>> {
+    async fn send_webhook(
+        &self,
+        channel: &NotificationChannel,
+        payload: &AlertPayload,
+    ) -> Result<Option<String>> {
         let config: WebhookConfig = serde_json::from_str(&channel.config)?;
 
         let mut request = self.client.post(&config.url).json(payload);
@@ -573,15 +651,24 @@ impl NotificationService {
     }
 
     /// Send Slack notification
-    async fn send_slack(&self, channel: &NotificationChannel, payload: &AlertPayload) -> Result<()> {
-        info!("Attempting to send Slack notification to channel '{}'", channel.name);
-        let config: SlackConfig = serde_json::from_str(&channel.config)
-            .map_err(|e| {
-                error!("Failed to parse Slack config: {}", e);
-                anyhow!("Invalid Slack config: {}", e)
-            })?;
+    async fn send_slack(
+        &self,
+        channel: &NotificationChannel,
+        payload: &AlertPayload,
+    ) -> Result<()> {
+        info!(
+            "Attempting to send Slack notification to channel '{}'",
+            channel.name
+        );
+        let config: SlackConfig = serde_json::from_str(&channel.config).map_err(|e| {
+            error!("Failed to parse Slack config: {}", e);
+            anyhow!("Invalid Slack config: {}", e)
+        })?;
 
-        info!("Slack webhook URL configured: {}...", &config.webhook_url.chars().take(50).collect::<String>());
+        info!(
+            "Slack webhook URL configured: {}...",
+            &config.webhook_url.chars().take(50).collect::<String>()
+        );
 
         // Get template (use default if not configured)
         let template = config.message_template.unwrap_or_default();
@@ -643,10 +730,9 @@ impl NotificationService {
                 }
                 SlackBlockType::Context => {
                     // Slack context text limit: 3000 chars
-                    let context_text = format!("*Project:* {} | *Severity:* {} | *Time:* {}",
-                        payload.project_name,
-                        payload.severity,
-                        payload.timestamp
+                    let context_text = format!(
+                        "*Project:* {} | *Severity:* {} | *Time:* {}",
+                        payload.project_name, payload.severity, payload.timestamp
                     );
                     blocks.push(serde_json::json!({
                         "type": "context",
@@ -712,7 +798,10 @@ impl NotificationService {
             }));
         }
 
-        let fallback_text = format!("[{}] {}: {}", payload.severity, payload.title, payload.message);
+        let fallback_text = format!(
+            "[{}] {}: {}",
+            payload.severity, payload.title, payload.message
+        );
 
         // Incoming webhooks do NOT support blocks inside attachments (that's
         // only available via chat.postMessage). Use top-level blocks for content
@@ -744,8 +833,147 @@ impl NotificationService {
             return Err(anyhow!("Slack webhook failed: {} - {}", status, body));
         }
 
-        info!("Slack notification sent successfully to channel '{}'", channel.name);
+        info!(
+            "Slack notification sent successfully to channel '{}'",
+            channel.name
+        );
         Ok(())
+    }
+
+    /// Send PagerDuty notification via Events API v2
+    async fn send_pagerduty(
+        &self,
+        channel: &NotificationChannel,
+        payload: &AlertPayload,
+    ) -> Result<()> {
+        let config: PagerDutyConfig = serde_json::from_str(&channel.config)?;
+
+        if config.routing_key.trim().is_empty() {
+            return Err(anyhow!("PagerDuty routing_key is empty"));
+        }
+
+        let pd_severity = if let Some(ref mapping) = config.severity_mapping {
+            mapping
+                .get(&payload.severity)
+                .cloned()
+                .unwrap_or_else(|| Self::map_to_pd_severity(&payload.severity))
+        } else {
+            Self::map_to_pd_severity(&payload.severity)
+        };
+
+        let pd_payload = serde_json::json!({
+            "routing_key": config.routing_key,
+            "event_action": "trigger",
+            "payload": {
+                "summary": format!("[{}] {}: {}", payload.project_name, payload.title, payload.message),
+                "severity": pd_severity,
+                "source": format!("bugwatch/{}", payload.project_name),
+                "component": payload.trigger_type,
+                "group": payload.project_name,
+                "custom_details": {
+                    "project": payload.project_name,
+                    "trigger_type": payload.trigger_type,
+                    "severity": payload.severity,
+                    "url": payload.url,
+                    "timestamp": payload.timestamp,
+                }
+            },
+            "links": payload.url.as_ref().map(|u| vec![serde_json::json!({"href": u, "text": "View in Bugwatch"})]).unwrap_or_default(),
+        });
+
+        let response = self
+            .client
+            .post("https://events.pagerduty.com/v2/enqueue")
+            .json(&pd_payload)
+            .send()
+            .await?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            return Err(anyhow!("PagerDuty failed: {} - {}", status, body));
+        }
+
+        info!("PagerDuty notification sent");
+        Ok(())
+    }
+
+    fn map_to_pd_severity(severity: &str) -> String {
+        match severity {
+            "fatal" => "critical".to_string(),
+            "error" => "error".to_string(),
+            "warning" => "warning".to_string(),
+            _ => "info".to_string(),
+        }
+    }
+
+    /// Send OpsGenie notification via Alerts API
+    async fn send_opsgenie(
+        &self,
+        channel: &NotificationChannel,
+        payload: &AlertPayload,
+    ) -> Result<()> {
+        let config: OpsGenieConfig = serde_json::from_str(&channel.config)?;
+
+        if config.api_key.trim().is_empty() {
+            return Err(anyhow!("OpsGenie api_key is empty"));
+        }
+
+        let priority = if let Some(ref mapping) = config.priority_mapping {
+            mapping
+                .get(&payload.severity)
+                .cloned()
+                .unwrap_or_else(|| Self::map_to_og_priority(&payload.severity))
+        } else {
+            Self::map_to_og_priority(&payload.severity)
+        };
+
+        let mut og_payload = serde_json::json!({
+            "message": format!("[{}] {}", payload.project_name, payload.title),
+            "description": payload.message,
+            "priority": priority,
+            "source": "Bugwatch",
+            "tags": ["bugwatch", &payload.trigger_type],
+            "details": {
+                "project": payload.project_name,
+                "trigger_type": payload.trigger_type,
+                "severity": payload.severity,
+                "timestamp": payload.timestamp,
+            },
+        });
+
+        if let Some(url) = &payload.url {
+            og_payload["details"]["url"] = serde_json::json!(url);
+        }
+        if let Some(ref team) = config.team {
+            og_payload["responders"] = serde_json::json!([{"type": "team", "name": team}]);
+        }
+
+        let response = self
+            .client
+            .post("https://api.opsgenie.com/v2/alerts")
+            .header("Authorization", format!("GenieKey {}", config.api_key))
+            .json(&og_payload)
+            .send()
+            .await?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            return Err(anyhow!("OpsGenie failed: {} - {}", status, body));
+        }
+
+        info!("OpsGenie notification sent");
+        Ok(())
+    }
+
+    fn map_to_og_priority(severity: &str) -> String {
+        match severity {
+            "fatal" => "P1".to_string(),
+            "error" => "P2".to_string(),
+            "warning" => "P3".to_string(),
+            _ => "P5".to_string(),
+        }
     }
 }
 
@@ -782,14 +1010,14 @@ fn html_escape(s: &str) -> String {
 }
 
 /// Compute HMAC-SHA256 signature for webhook payloads
-fn compute_hmac_signature(payload: &str, secret: &str) -> String {
+pub(crate) fn compute_hmac_signature(payload: &str, secret: &str) -> String {
     use hmac::{Hmac, Mac};
     use sha2::Sha256;
 
     type HmacSha256 = Hmac<Sha256>;
 
-    let mut mac = HmacSha256::new_from_slice(secret.as_bytes())
-        .expect("HMAC can take key of any size");
+    let mut mac =
+        HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC can take key of any size");
     mac.update(payload.as_bytes());
 
     let result = mac.finalize();
@@ -802,8 +1030,6 @@ fn compute_hmac_signature(payload: &str, secret: &str) -> String {
 impl Default for NotificationService {
     fn default() -> Self {
         // Use blocking runtime for default initialization
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(Self::new())
-        })
+        tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(Self::new()))
     }
 }

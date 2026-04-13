@@ -1,0 +1,195 @@
+---
+title: Alert Rules
+description: Create and manage alert rules in Bugwatch. Define conditions based on error frequency, monitor status, or server metrics to trigger notifications when something needs attention.
+---
+
+# Alert Rules
+
+Alert rules define the conditions under which Bugwatch sends notifications. Each rule belongs to a project and can be connected to one or more notification channels.
+
+## Creating a Rule
+
+1. Open your project in the Bugwatch dashboard
+2. Navigate to **Settings** > **Alert Rules**
+3. Click **Create Rule**
+4. Select a **condition type**
+5. Configure the condition parameters
+6. Attach one or more **notification channels**
+7. Click **Save**
+
+You can also create rules via the API:
+
+```bash
+curl -X POST https://api.bugwatch.dev/api/v1/projects/{project_id}/alert-rules \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "New fatal errors",
+    "condition_type": "new_issue",
+    "condition_config": { "level": "fatal" },
+    "channel_ids": ["channel-uuid-here"]
+  }'
+```
+
+## Condition Types
+
+### new_issue
+
+Fires when a new (previously unseen) issue is created in the project.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `level` | string | No | Filter by error level: `error`, `warning`, or `fatal`. If omitted, fires for all levels. |
+
+**Example:** Alert only on fatal errors:
+
+```json
+{
+  "condition_type": "new_issue",
+  "condition_config": {
+    "level": "fatal"
+  }
+}
+```
+
+### issue_frequency
+
+Fires when an issue occurs more than a given number of times within a time window.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `threshold` | integer | Yes | Number of occurrences to trigger the alert |
+| `window_minutes` | integer | Yes | Time window in minutes |
+
+**Example:** Alert when any issue occurs more than 50 times in 10 minutes:
+
+```json
+{
+  "condition_type": "issue_frequency",
+  "condition_config": {
+    "threshold": 50,
+    "window_minutes": 10
+  }
+}
+```
+
+### monitor_down
+
+Fires when an uptime monitor detects that a target is down.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `monitor_id` | string | No | Restrict to a specific monitor. If omitted, fires for any monitor in the project. |
+
+**Example:** Alert when a specific monitor goes down:
+
+```json
+{
+  "condition_type": "monitor_down",
+  "condition_config": {
+    "monitor_id": "monitor-uuid-here"
+  }
+}
+```
+
+### monitor_recovery
+
+Fires when an uptime monitor detects that a previously-down target has recovered.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `monitor_id` | string | No | Restrict to a specific monitor. If omitted, fires for any monitor in the project. |
+
+**Example:** Alert on any monitor recovery:
+
+```json
+{
+  "condition_type": "monitor_recovery",
+  "condition_config": {}
+}
+```
+
+### server_cpu_high (Pro+)
+
+Fires when a server's CPU utilization exceeds a threshold.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `threshold_percent` | integer | Yes | CPU percentage to trigger the alert (1--100) |
+
+**Example:** Alert when CPU exceeds 90%:
+
+```json
+{
+  "condition_type": "server_cpu_high",
+  "condition_config": {
+    "threshold_percent": 90
+  }
+}
+```
+
+### server_memory_high (Pro+)
+
+Fires when a server's memory utilization exceeds a threshold.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `threshold_percent` | integer | Yes | Memory percentage to trigger the alert (1--100) |
+
+**Example:** Alert when memory exceeds 85%:
+
+```json
+{
+  "condition_type": "server_memory_high",
+  "condition_config": {
+    "threshold_percent": 85
+  }
+}
+```
+
+### server_disk_high (Pro+)
+
+Fires when a server's disk utilization exceeds a threshold.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `threshold_percent` | integer | Yes | Disk percentage to trigger the alert (1--100) |
+
+**Example:** Alert when disk exceeds 95%:
+
+```json
+{
+  "condition_type": "server_disk_high",
+  "condition_config": {
+    "threshold_percent": 95
+  }
+}
+```
+
+### server_offline (Pro+)
+
+Fires when a server stops reporting metrics for a specified duration.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `missing_minutes` | integer | Yes | Number of minutes without metrics before the alert fires |
+
+**Example:** Alert when a server has been offline for 5 minutes:
+
+```json
+{
+  "condition_type": "server_offline",
+  "condition_config": {
+    "missing_minutes": 5
+  }
+}
+```
+
+## Managing Rules
+
+You can edit, disable, or delete rules from the **Alert Rules** settings page. Disabled rules are retained but stop evaluating conditions until re-enabled.
+
+## Next Steps
+
+- [Notification Channels](/docs/alerting/notification-channels) -- configure where alerts are delivered
+- [Webhooks](/docs/alerting/webhooks) -- send structured payloads to external systems

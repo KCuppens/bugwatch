@@ -1,0 +1,24 @@
+{$DOMAIN:localhost} {
+    # API routes -> server
+    handle /api/* {
+        reverse_proxy server:3000
+    }
+
+    # Health check
+    handle /health {
+        reverse_proxy server:3000
+    }
+
+    # Agent install scripts
+    handle /install.sh {
+        reverse_proxy server:3000
+    }
+    handle /agent/* {
+        reverse_proxy server:3000
+    }
+
+    # Everything else -> web
+    handle {
+        reverse_proxy web:3001
+    }
+}

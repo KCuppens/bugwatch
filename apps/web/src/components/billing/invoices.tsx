@@ -5,8 +5,9 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
-import { FileText, Download, ExternalLink, ChevronDown, ChevronUp } from 'lucide-react';
+import { FileText, Download, ExternalLink, ChevronDown, ChevronUp, AlertTriangle } from 'lucide-react';
 import { billingApi, type Invoice, type InvoiceDetail } from '@/lib/api';
+import { toast } from 'sonner';
 
 export function Invoices() {
   const [invoices, setInvoices] = useState<Invoice[]>([]);
@@ -14,14 +15,17 @@ export function Invoices() {
   const [expandedInvoice, setExpandedInvoice] = useState<string | null>(null);
   const [invoiceDetails, setInvoiceDetails] = useState<Record<string, InvoiceDetail>>({});
   const [loadingDetails, setLoadingDetails] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     async function fetchInvoices() {
       try {
         const response = await billingApi.listInvoices();
         setInvoices(response.invoices);
-      } catch (error) {
-        console.error('Failed to load invoices:', error);
+      } catch (err) {
+        console.error('Failed to load invoices:', err);
+        setError('Failed to load invoices');
+        toast.error('Failed to load invoices');
       } finally {
         setLoading(false);
       }
@@ -43,8 +47,9 @@ export function Invoices() {
       try {
         const details = await billingApi.getInvoice(invoiceId);
         setInvoiceDetails(prev => ({ ...prev, [invoiceId]: details }));
-      } catch (error) {
-        console.error('Failed to load invoice details:', error);
+      } catch (err) {
+        console.error('Failed to load invoice details:', err);
+        toast.error('Failed to load invoice details');
       } finally {
         setLoadingDetails(null);
       }
@@ -98,6 +103,23 @@ export function Invoices() {
               <Skeleton key={i} className="h-16 w-full" />
             ))}
           </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (error) {
+    return (
+      <Card>
+        <CardContent className="flex items-center gap-3 p-6">
+          <AlertTriangle className="h-5 w-5 text-amber-500 shrink-0" />
+          <div className="flex-1">
+            <p className="text-sm font-medium">Failed to load invoices</p>
+            <p className="text-xs text-muted-foreground mt-0.5">Please try refreshing the page.</p>
+          </div>
+          <Button variant="outline" size="sm" onClick={() => window.location.reload()}>
+            Retry
+          </Button>
         </CardContent>
       </Card>
     );

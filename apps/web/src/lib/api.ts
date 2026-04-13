@@ -1,13 +1,21 @@
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000";
 
+if (process.env.NODE_ENV === "production" && API_BASE_URL && !API_BASE_URL.startsWith("https://")) {
+  console.warn("[Bugwatch] API URL is not using HTTPS in production:", API_BASE_URL);
+}
+
 export class ApiError extends Error {
+  public retryAfterSeconds?: number;
+
   constructor(
     public status: number,
     public code: string,
-    message: string
+    message: string,
+    retryAfterSeconds?: number,
   ) {
     super(message);
     this.name = "ApiError";
+    this.retryAfterSeconds = retryAfterSeconds;
   }
 }
 
@@ -131,10 +139,23 @@ async function handleResponse<T>(response: Response): Promise<T> {
         // Response wasn't valid JSON
       }
     }
+
+    // Extract Retry-After for rate limit responses
+    let retryAfterSeconds: number | undefined;
+    if (response.status === 429) {
+      const retryAfter = response.headers.get("Retry-After");
+      if (retryAfter) {
+        retryAfterSeconds = parseInt(retryAfter, 10) || undefined;
+      }
+    }
+
     throw new ApiError(
       response.status,
       errorData?.error?.code || "unknown_error",
-      errorData?.error?.message || `Request failed with status ${response.status}`
+      response.status === 429 && retryAfterSeconds
+        ? `Rate limit exceeded. Try again in ${retryAfterSeconds} seconds.`
+        : errorData?.error?.message || `Request failed with status ${response.status}`,
+      retryAfterSeconds,
     );
   }
 
@@ -196,32 +217,36 @@ async function fetchWithAuth(
 }
 
 export const api = {
-  async get<T>(endpoint: string): Promise<T> {
+  async get<T>(endpoint: string, options?: { signal?: AbortSignal }): Promise<T> {
     const response = await fetchWithAuth(`${API_BASE_URL}${endpoint}`, {
       method: "GET",
+      signal: options?.signal,
     });
     return handleResponse<T>(response);
   },
 
-  async post<T>(endpoint: string, data?: unknown): Promise<T> {
+  async post<T>(endpoint: string, data?: unknown, options?: { signal?: AbortSignal }): Promise<T> {
     const response = await fetchWithAuth(`${API_BASE_URL}${endpoint}`, {
       method: "POST",
       body: data ? JSON.stringify(data) : undefined,
+      signal: options?.signal,
     });
     return handleResponse<T>(response);
   },
 
-  async patch<T>(endpoint: string, data?: unknown): Promise<T> {
+  async patch<T>(endpoint: string, data?: unknown, options?: { signal?: AbortSignal }): Promise<T> {
     const response = await fetchWithAuth(`${API_BASE_URL}${endpoint}`, {
       method: "PATCH",
       body: data ? JSON.stringify(data) : undefined,
+      signal: options?.signal,
     });
     return handleResponse<T>(response);
   },
 
-  async delete<T>(endpoint: string): Promise<T> {
+  async delete<T>(endpoint: string, options?: { signal?: AbortSignal }): Promise<T> {
     const response = await fetchWithAuth(`${API_BASE_URL}${endpoint}`, {
       method: "DELETE",
+      signal: options?.signal,
     });
     return handleResponse<T>(response);
   },
@@ -261,6 +286,17 @@ export const authApi = {
   async me() {
     return api.get<{ data: User }>("/api/v1/auth/me");
   },
+
+  async updateProfile(data: { name?: string }) {
+    return api.patch<{ data: { message: string } }>("/api/v1/auth/me", data);
+  },
+
+  async changePassword(currentPassword: string, newPassword: string) {
+    return api.post<{ data: { message: string } }>("/api/v1/auth/change-password", {
+      current_password: currentPassword,
+      new_password: newPassword,
+    });
+  },
 };
 
 // Types
@@ -280,7 +316,6 @@ export interface User {
   email: string;
   name: string | null;
   created_at: string;
-  credits: number;
   organization: Organization | null;
 }
 
@@ -432,12 +467,16 @@ export interface Project {
   onboarding_completed_at: string | null;
 }
 
-export type Platform = "javascript" | "python" | "rust";
+export type Platform = "javascript" | "python" | "rust" | "go" | "java" | "ruby" | "php";
 
-export type JavaScriptFramework = "nextjs" | "react" | "node" | "core";
+export type JavaScriptFramework = "nextjs" | "react" | "node" | "express" | "fastify" | "core";
 export type PythonFramework = "django" | "flask" | "fastapi" | "celery";
 export type RustFramework = "blocking" | "async";
-export type Framework = JavaScriptFramework | PythonFramework | RustFramework;
+export type GoFramework = "net_http" | "gin" | "echo";
+export type JavaFramework = "spring";
+export type RubyFramework = "rack" | "rails" | "sidekiq";
+export type PhpFramework = "laravel" | "symfony";
+export type Framework = JavaScriptFramework | PythonFramework | RustFramework | GoFramework | JavaFramework | RubyFramework | PhpFramework;
 
 export interface Issue {
   id: string;
@@ -570,39 +609,6 @@ export interface IssueComment {
   updated_at: string;
 }
 
-// AI Fix types
-export interface AiFixRequest {
-  error_type: string;
-  error_message: string;
-  stack_trace: StackFrameInput[];
-  environment?: string;
-  runtime?: string;
-}
-
-export interface StackFrameInput {
-  filename: string;
-  function: string;
-  lineno: number;
-  colno: number;
-  context_line?: string;
-  pre_context?: string[];
-  post_context?: string[];
-  in_app: boolean;
-}
-
-export interface AiFix {
-  explanation: string;
-  fix_code: string;
-  recommendations: string[];
-  confidence: number;
-}
-
-export interface AiFixResponse {
-  fix: AiFix;
-  credits_used: number;
-  credits_remaining: number;
-}
-
 export interface PaginatedResponse<T> {
   data: T[];
   pagination: {
@@ -721,10 +727,11 @@ export const issuesApi = {
     );
   },
 
-  async search(projectId: string, request: SearchRequest) {
+  async search(projectId: string, request: SearchRequest, options?: { signal?: AbortSignal }) {
     return api.post<SearchResponse>(
       `/api/v1/projects/${projectId}/issues/_search`,
-      request
+      request,
+      options
     );
   },
 
@@ -789,20 +796,6 @@ export const issuesApi = {
     return api.delete<{ data: { message: string } }>(
       `/api/v1/projects/${projectId}/issues/${issueId}/comments/${commentId}`
     );
-  },
-};
-
-// AI Fix API
-export const aiFixApi = {
-  async generateFix(projectId: string, issueId: string, request: AiFixRequest) {
-    return api.post<AiFixResponse>(
-      `/api/v1/projects/${projectId}/issues/${issueId}/ai-fix`,
-      request
-    );
-  },
-
-  async generateFixStandalone(request: AiFixRequest) {
-    return api.post<AiFixResponse>("/api/v1/ai/generate-fix", request);
   },
 };
 
@@ -991,6 +984,7 @@ export interface AlertRule {
   channel_ids: string[];
   is_active: boolean;
   created_at: string;
+  muted_until: string | null;
 }
 
 export type AlertCondition =
@@ -1007,7 +1001,7 @@ export interface NotificationChannel {
   id: string;
   project_id: string;
   name: string;
-  channel_type: "email" | "webhook" | "slack";
+  channel_type: "email" | "webhook" | "slack" | "pagerduty" | "opsgenie";
   config: ChannelConfig;
   is_active: boolean;
   created_at: string;
@@ -1021,7 +1015,9 @@ export interface SlackMessageTemplate {
 export type ChannelConfig =
   | { recipients: string[] }
   | { url: string; secret?: string }
-  | { webhook_url: string; channel?: string; message_template?: SlackMessageTemplate };
+  | { webhook_url: string; channel?: string; message_template?: SlackMessageTemplate }
+  | { routing_key: string; severity_mapping?: Record<string, string> }
+  | { api_key: string; team?: string; priority_mapping?: Record<string, string> };
 
 export interface AlertLog {
   id: string;
@@ -1044,7 +1040,7 @@ export interface CreateAlertRuleRequest {
 
 export interface CreateChannelRequest {
   name: string;
-  channel_type: "email" | "webhook" | "slack";
+  channel_type: "email" | "webhook" | "slack" | "pagerduty" | "opsgenie";
   config: ChannelConfig;
 }
 
@@ -1088,6 +1084,18 @@ export const alertsApi = {
 
   async listLogs(projectId: string, limit = 50) {
     return api.get<AlertLog[]>(`/api/v1/projects/${projectId}/alerts/logs?limit=${limit}`);
+  },
+
+  async muteRule(projectId: string, ruleId: string, durationMinutes: number) {
+    return api.post<AlertRule>(`/api/v1/projects/${projectId}/alerts/${ruleId}/mute`, { duration_minutes: durationMinutes });
+  },
+
+  async unmuteRule(projectId: string, ruleId: string) {
+    return api.post<AlertRule>(`/api/v1/projects/${projectId}/alerts/${ruleId}/unmute`);
+  },
+
+  async testRule(projectId: string, ruleId: string) {
+    return api.post<{ message: string }>(`/api/v1/projects/${projectId}/alerts/${ruleId}/test`);
   },
 };
 
@@ -1196,15 +1204,6 @@ export const billingApi = {
 
   async cancelSubscription(immediately: boolean = false) {
     return api.post<{ message: string }>('/api/v1/billing/cancel', { immediately });
-  },
-
-  // Credits
-  async getCredits() {
-    return api.get<{ credits: number }>('/api/v1/billing/credits');
-  },
-
-  async purchaseCredits(credits: number) {
-    return api.post<{ checkout_url: string }>('/api/v1/billing/credits', { credits });
   },
 
   // Usage
@@ -1379,6 +1378,172 @@ export const serversApi = {
   async getLatest(projectId: string, serverId: string) {
     return api.get<{ data: ServerMetricData | null; server: ServerInfo }>(
       `/api/v1/projects/${projectId}/servers/${serverId}/metrics/latest`
+    );
+  },
+};
+
+// ============================================================================
+// Performance Monitoring Types
+// ============================================================================
+
+export interface PerformanceSummary {
+  p50: number;
+  p75: number;
+  p95: number;
+  p99: number;
+  throughput: number;
+  error_rate: number;
+  total_transactions: number;
+}
+
+export interface TransactionAggregate {
+  transaction_name: string;
+  count: number;
+  p50: number;
+  p95: number;
+  error_rate: number;
+  avg_duration_ms: number;
+}
+
+export interface TimeSeriesPoint {
+  timestamp: string;
+  p50: number;
+  p75: number;
+  p95: number;
+  p99: number;
+  throughput: number;
+  error_count: number;
+}
+
+// Performance Monitoring API
+export const performanceApi = {
+  async getSummary(projectId: string, start?: string, end?: string) {
+    const params = new URLSearchParams();
+    if (start) params.set('start', start);
+    if (end) params.set('end', end);
+    return api.get<{ data: PerformanceSummary }>(
+      `/api/v1/projects/${projectId}/performance/summary?${params}`
+    );
+  },
+
+  async listTransactions(projectId: string, start?: string, end?: string, limit = 20) {
+    const params = new URLSearchParams();
+    if (start) params.set('start', start);
+    if (end) params.set('end', end);
+    params.set('limit', String(limit));
+    return api.get<{ data: TransactionAggregate[] }>(
+      `/api/v1/projects/${projectId}/performance/transactions?${params}`
+    );
+  },
+
+  async getCharts(projectId: string, start?: string, end?: string, interval = '1h') {
+    const params = new URLSearchParams();
+    if (start) params.set('start', start);
+    if (end) params.set('end', end);
+    params.set('interval', interval);
+    return api.get<{ data: TimeSeriesPoint[] }>(
+      `/api/v1/projects/${projectId}/performance/charts?${params}`
+    );
+  },
+};
+
+// ============================================================================
+// Integrations Types & API
+// ============================================================================
+
+export interface IntegrationInfo {
+  id: string;
+  organization_id: string;
+  provider: 'github' | 'jira' | 'linear';
+  external_username?: string;
+  config: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface IssueLinkInfo {
+  id: string;
+  issue_id: string;
+  integration_id: string;
+  provider: string;
+  external_issue_id: string;
+  external_issue_key: string;
+  external_issue_url: string;
+  external_status?: string;
+  sync_enabled: boolean;
+  created_at: string;
+}
+
+export const integrationsApi = {
+  async list() {
+    return api.get<{ data: IntegrationInfo[] }>('/api/v1/integrations');
+  },
+  async getOAuthUrl(provider: string) {
+    return api.get<{ data: { url: string } }>(`/api/v1/integrations/oauth/${provider}/authorize`);
+  },
+  async disconnect(integrationId: string) {
+    return api.delete<{ data: { message: string } }>(`/api/v1/integrations/${integrationId}`);
+  },
+  async listIssueLinks(projectId: string, issueId: string) {
+    return api.get<{ data: IssueLinkInfo[] }>(`/api/v1/projects/${projectId}/issues/${issueId}/links`);
+  },
+  async createIssueLink(projectId: string, issueId: string, data: { provider: string; config: Record<string, string> }) {
+    return api.post<{ data: IssueLinkInfo }>(`/api/v1/projects/${projectId}/issues/${issueId}/links`, data);
+  },
+  async deleteIssueLink(projectId: string, issueId: string, linkId: string) {
+    return api.delete<{ data: { message: string } }>(`/api/v1/projects/${projectId}/issues/${issueId}/links/${linkId}`);
+  },
+};
+
+// ============================================================================
+// Session Replay Types & API
+// ============================================================================
+
+export interface SessionRecording {
+  id: string;
+  project_id: string;
+  session_id: string;
+  user_id?: string;
+  started_at: string;
+  duration_ms?: number;
+  is_complete: boolean;
+  segment_count: number;
+  total_size_bytes: number;
+  environment?: string;
+  release?: string;
+  user_agent?: string;
+  screen_width?: number;
+  screen_height?: number;
+}
+
+export interface SegmentData {
+  segment_index: number;
+  data: string; // base64 encoded
+  size_bytes: number;
+}
+
+export const replayApi = {
+  async listRecordings(projectId: string, limit = 20, offset = 0) {
+    return api.get<{ data: SessionRecording[]; total: number }>(
+      `/api/v1/projects/${projectId}/replay?limit=${limit}&offset=${offset}`,
+    );
+  },
+
+  async getRecording(projectId: string, recordingId: string) {
+    return api.get<{ data: SessionRecording }>(
+      `/api/v1/projects/${projectId}/replay/${recordingId}`,
+    );
+  },
+
+  async getSegments(projectId: string, recordingId: string) {
+    return api.get<SegmentData[]>(
+      `/api/v1/projects/${projectId}/replay/${recordingId}/segments`,
+    );
+  },
+
+  async getIssueReplay(projectId: string, issueId: string) {
+    return api.get<{ data: SessionRecording | null }>(
+      `/api/v1/projects/${projectId}/issues/${issueId}/replay`,
     );
   },
 };

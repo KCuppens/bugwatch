@@ -268,11 +268,20 @@ impl Config {
             if self.x402_wallet_address.is_empty() {
                 panic!("FATAL: X402_WALLET_ADDRESS must be set when X402_ENABLED=true");
             }
-            if !self.x402_wallet_address.starts_with("0x") || self.x402_wallet_address.len() != 42 {
+            if !self.x402_wallet_address.starts_with("0x")
+                || self.x402_wallet_address.len() != 42
+                || !self.x402_wallet_address[2..].chars().all(|c| c.is_ascii_hexdigit())
+            {
                 panic!("FATAL: X402_WALLET_ADDRESS must be a valid Ethereum address (0x + 40 hex chars)");
             }
             if self.x402_rpc_url.is_empty() {
                 panic!("FATAL: X402_RPC_URL must be set when X402_ENABLED=true");
+            }
+            if !self.x402_usdc_address.starts_with("0x")
+                || self.x402_usdc_address.len() != 42
+                || !self.x402_usdc_address[2..].chars().all(|c| c.is_ascii_hexdigit())
+            {
+                panic!("FATAL: X402_USDC_ADDRESS must be a valid Ethereum address (0x + 40 hex chars)");
             }
         }
 

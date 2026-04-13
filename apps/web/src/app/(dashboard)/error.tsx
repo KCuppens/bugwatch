@@ -39,7 +39,7 @@ export default function DashboardError({
         <div className="p-3 rounded-full bg-destructive/10">
           <AlertTriangle className="h-6 w-6 text-destructive" />
         </div>
-        <h2 className="text-xl font-semibold">Something went wrong</h2>
+        <h2 className="font-display text-heading-md">Something went wrong</h2>
         <p className="text-muted-foreground">
           An error occurred while loading this page. Our team has been notified
           and is working to resolve the issue.

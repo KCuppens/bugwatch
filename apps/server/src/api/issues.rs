@@ -82,20 +82,20 @@ pub async fn list(
     let per_page = params.per_page.min(100).max(1);
     let offset = ((page - 1) * per_page) as i64;
 
-    let issues = IssueRepository::find_by_project(
-        &state.db,
-        &project_id,
-        filters.status.as_deref(),
-        filters.level.as_deref(),
-        filters.environment.as_deref(),
-        per_page as i64,
-        offset,
-    )
-    .await?;
-
-    let total =
-        IssueRepository::count_by_project(&state.db, &project_id, filters.status.as_deref())
-            .await?;
+    // Run list + count in parallel — they share no dependency, so serializing
+    // them just doubled the wall time for no reason.
+    let (issues, total) = tokio::try_join!(
+        IssueRepository::find_by_project(
+            &state.db,
+            &project_id,
+            filters.status.as_deref(),
+            filters.level.as_deref(),
+            filters.environment.as_deref(),
+            per_page as i64,
+            offset,
+        ),
+        IssueRepository::count_by_project(&state.db, &project_id, filters.status.as_deref()),
+    )?;
     let total_pages = ((total as f64) / (per_page as f64)).ceil() as u32;
 
     Ok(Json(PaginatedResponse {
@@ -275,15 +275,16 @@ pub async fn get(
     // Get recent events
     let events = EventRepository::find_by_issue(&state.db, &issue_id, 10, 0).await?;
 
-    // Parse all context from the most recent event
+    // Parse all context from the most recent event (parse once, reuse for every helper)
     let (exception, tags, breadcrumbs, request, user, extra) = if let Some(event) = events.first() {
+        let json = parse_payload_value(&event.payload);
         (
-            parse_exception_from_payload(&event.payload),
-            parse_tags_from_payload(&event.payload),
-            parse_breadcrumbs_from_payload(&event.payload),
-            parse_request_context_from_payload(&event.payload),
-            parse_user_context_from_payload(&event.payload),
-            parse_extra_from_payload(&event.payload),
+            parse_exception_from_payload(&json),
+            parse_tags_from_payload(&json),
+            parse_breadcrumbs_from_payload(&json),
+            parse_request_context_from_payload(&json),
+            parse_user_context_from_payload(&json),
+            parse_extra_from_payload(&json),
         )
     } else {
         (None, HashMap::new(), vec![], None, None, None)
@@ -292,7 +293,7 @@ pub async fn get(
     let recent_events: Vec<EventSummary> = events
         .iter()
         .map(|e| {
-            let payload: serde_json::Value = serde_json::from_str(&e.payload).unwrap_or_default();
+            let payload = parse_payload_value(&e.payload);
             EventSummary {
                 id: e.id.clone(),
                 timestamp: e.timestamp.to_rfc3339(),
@@ -467,16 +468,14 @@ pub async fn get_event(
         )));
     }
 
-    // Parse all context from the event
-    let exception = parse_exception_from_payload(&event.payload);
-    let tags = parse_tags_from_payload(&event.payload);
-    let breadcrumbs = parse_breadcrumbs_from_payload(&event.payload);
-    let request = parse_request_context_from_payload(&event.payload);
-    let user = parse_user_context_from_payload(&event.payload);
-    let extra = parse_extra_from_payload(&event.payload);
-
-    // Parse additional metadata
-    let payload: serde_json::Value = serde_json::from_str(&event.payload).unwrap_or_default();
+    // Parse all context from the event (one JSON parse, reused by every helper)
+    let payload = parse_payload_value(&event.payload);
+    let exception = parse_exception_from_payload(&payload);
+    let tags = parse_tags_from_payload(&payload);
+    let breadcrumbs = parse_breadcrumbs_from_payload(&payload);
+    let request = parse_request_context_from_payload(&payload);
+    let user = parse_user_context_from_payload(&payload);
+    let extra = parse_extra_from_payload(&payload);
     let release = payload
         .get("release")
         .and_then(|v| v.as_str())
@@ -704,8 +703,11 @@ pub struct UserContextDetail {
     pub extra: Option<serde_json::Value>,
 }
 
-fn parse_exception_from_payload(payload: &str) -> Option<ExceptionDetail> {
-    let json: serde_json::Value = serde_json::from_str(payload).ok()?;
+fn parse_payload_value(payload: &str) -> serde_json::Value {
+    serde_json::from_str(payload).unwrap_or(serde_json::Value::Null)
+}
+
+fn parse_exception_from_payload(json: &serde_json::Value) -> Option<ExceptionDetail> {
     let exception_obj = json.get("exception")?;
 
     // Try Sentry format first: exception.values[0]
@@ -782,10 +784,10 @@ fn parse_exception_from_payload(payload: &str) -> Option<ExceptionDetail> {
     })
 }
 
-fn parse_tags_from_payload(payload: &str) -> HashMap<String, String> {
+fn parse_tags_from_payload(json: &serde_json::Value) -> HashMap<String, String> {
     let mut tags = HashMap::new();
 
-    if let Ok(json) = serde_json::from_str::<serde_json::Value>(payload) {
+    {
         // Extract common tags
         if let Some(tags_obj) = json.get("tags").and_then(|v| v.as_object()) {
             for (key, value) in tags_obj {
@@ -847,12 +849,7 @@ fn parse_tags_from_payload(payload: &str) -> HashMap<String, String> {
     tags
 }
 
-fn parse_breadcrumbs_from_payload(payload: &str) -> Vec<BreadcrumbDetail> {
-    let json: serde_json::Value = match serde_json::from_str(payload) {
-        Ok(v) => v,
-        Err(_) => return vec![],
-    };
-
+fn parse_breadcrumbs_from_payload(json: &serde_json::Value) -> Vec<BreadcrumbDetail> {
     let breadcrumbs = match json.get("breadcrumbs").and_then(|v| v.as_array()) {
         Some(arr) => arr,
         None => return vec![],
@@ -889,9 +886,7 @@ fn parse_breadcrumbs_from_payload(payload: &str) -> Vec<BreadcrumbDetail> {
         .collect()
 }
 
-fn parse_request_context_from_payload(payload: &str) -> Option<RequestContextDetail> {
-    let json: serde_json::Value = serde_json::from_str(payload).ok()?;
-
+fn parse_request_context_from_payload(json: &serde_json::Value) -> Option<RequestContextDetail> {
     // Try top-level "request" first, then fall back to "extra.request" (Django SDK format)
     let request = json
         .get("request")
@@ -934,8 +929,7 @@ fn parse_request_context_from_payload(payload: &str) -> Option<RequestContextDet
     })
 }
 
-fn parse_user_context_from_payload(payload: &str) -> Option<UserContextDetail> {
-    let json: serde_json::Value = serde_json::from_str(payload).ok()?;
+fn parse_user_context_from_payload(json: &serde_json::Value) -> Option<UserContextDetail> {
     let user = json.get("user")?;
 
     Some(UserContextDetail {
@@ -953,8 +947,7 @@ fn parse_user_context_from_payload(payload: &str) -> Option<UserContextDetail> {
     })
 }
 
-fn parse_extra_from_payload(payload: &str) -> Option<serde_json::Value> {
-    let json: serde_json::Value = serde_json::from_str(payload).ok()?;
+fn parse_extra_from_payload(json: &serde_json::Value) -> Option<serde_json::Value> {
     json.get("extra").cloned()
 }
 

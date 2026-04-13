@@ -1,0 +1,202 @@
+---
+title: Spring Boot Integration
+description: Integrate the Bugwatch Java SDK with Spring Boot for automatic exception capture, request context, and zero-config setup via auto-configuration.
+---
+
+# Spring Boot Integration
+
+The Bugwatch Spring Boot integration provides auto-configuration that sets up error capture with zero boilerplate. It installs a servlet filter for request context, an exception resolver for controller errors, and hooks into Spring's error handling lifecycle.
+
+## Installation
+
+### Maven
+
+```xml
+<dependency>
+    <groupId>dev.bugwatch</groupId>
+    <artifactId>bugwatch-spring-boot-starter</artifactId>
+    <version>0.1.0</version>
+</dependency>
+```
+
+### Gradle
+
+```groovy
+implementation 'dev.bugwatch:bugwatch-spring-boot-starter:0.1.0'
+```
+
+## Configuration
+
+Add your Bugwatch configuration to `application.yml`:
+
+```yaml
+bugwatch:
+  api-key: bw_live_xxxxx
+  environment: production
+  release: 1.0.0
+  debug: false
+  sample-rate: 1.0
+```
+
+Or use `application.properties`:
+
+```properties
+bugwatch.api-key=bw_live_xxxxx
+bugwatch.environment=production
+bugwatch.release=1.0.0
+```
+
+<Callout type="info">
+The starter auto-discovers and configures itself via Spring Boot's `spring.factories` mechanism. No `@EnableBugwatch` annotation or manual bean registration is required.
+</Callout>
+
+## What Gets Captured Automatically
+
+Once the starter is on the classpath and configured, the SDK captures:
+
+- **Controller exceptions** via a `HandlerExceptionResolver` that intercepts errors thrown from `@Controller` and `@RestController` methods
+- **Filter-level exceptions** via a servlet filter that wraps the entire request lifecycle
+- **Request context** including URL, HTTP method, headers, query parameters, and client IP
+- **User information** from the Spring Security `SecurityContext` (if Spring Security is on the classpath)
+- **Async exceptions** from `@Async` methods and `CompletableFuture` handlers
+
+## Automatic User Detection
+
+When Spring Security is present, the SDK automatically extracts the authenticated user from the `SecurityContext` and attaches it to events:
+
+```yaml
+# No additional configuration needed -- user detection works automatically
+bugwatch:
+  api-key: bw_live_xxxxx
+```
+
+The SDK reads the principal's name, and if the principal implements `UserDetails`, it also captures the username. To customize user extraction, provide a `BugwatchUserProvider` bean:
+
+```java
+@Bean
+public BugwatchUserProvider userProvider() {
+    return authentication -> {
+        CustomUser user = (CustomUser) authentication.getPrincipal();
+        return User.builder()
+            .id(user.getId())
+            .email(user.getEmail())
+            .username(user.getUsername())
+            .build();
+    };
+}
+```
+
+## Manual Capture in Controllers
+
+You can still capture errors manually inside your controllers:
+
+```java
+@RestController
+@RequestMapping("/api/orders")
+public class OrderController {
+
+    @PostMapping
+    public ResponseEntity<Order> createOrder(@RequestBody OrderRequest request) {
+        try {
+            Order order = orderService.create(request);
+            return ResponseEntity.status(201).body(order);
+        } catch (PaymentException e) {
+            Bugwatch.captureException(e, scope -> {
+                scope.setTag("order_type", request.getType());
+            });
+            return ResponseEntity.status(402).build();
+        }
+    }
+}
+```
+
+## Adding Context with Annotations
+
+Use the `@BugwatchTag` annotation to automatically add tags to all errors captured within a controller:
+
+```java
+@RestController
+@RequestMapping("/api/billing")
+@BugwatchTag(key = "service", value = "billing")
+public class BillingController {
+    // All errors from this controller will have the "service:billing" tag
+}
+```
+
+## Custom Exception Filtering
+
+Not all exceptions should be reported. Configure which exceptions to ignore:
+
+```yaml
+bugwatch:
+  api-key: bw_live_xxxxx
+  ignore-exceptions:
+    - org.springframework.web.servlet.NoHandlerFoundException
+    - org.springframework.security.access.AccessDeniedException
+```
+
+Or provide a `BeforeSend` callback bean:
+
+```java
+@Bean
+public BugwatchBeforeSend beforeSend() {
+    return event -> {
+        // Drop 404 errors
+        if (event.getTag("http.status_code") != null
+            && event.getTag("http.status_code").equals("404")) {
+            return null;
+        }
+        return event;
+    };
+}
+```
+
+## Scheduled Tasks
+
+The integration automatically captures exceptions from `@Scheduled` methods:
+
+```java
+@Component
+public class CleanupTask {
+
+    @Scheduled(cron = "0 0 2 * * *")
+    public void cleanupExpiredSessions() {
+        // Exceptions thrown here are automatically captured
+        sessionRepository.deleteExpired();
+    }
+}
+```
+
+## Verifying the Integration
+
+Start your application and trigger a test error:
+
+```java
+@RestController
+public class DebugController {
+
+    @GetMapping("/bugwatch-test")
+    public String testBugwatch() {
+        throw new RuntimeException("Bugwatch test exception");
+    }
+}
+```
+
+Visit `/bugwatch-test` in your browser and check your Bugwatch dashboard for the event.
+
+## Configuration Reference
+
+| Property | Type | Default | Description |
+| --- | --- | --- | --- |
+| `bugwatch.api-key` | `String` | -- | **Required.** Your Bugwatch project API key. |
+| `bugwatch.environment` | `String` | `null` | Environment name. |
+| `bugwatch.release` | `String` | `null` | Release version. |
+| `bugwatch.debug` | `boolean` | `false` | Enable SDK debug logging. |
+| `bugwatch.sample-rate` | `double` | `1.0` | Fraction of events to send. |
+| `bugwatch.endpoint` | `String` | `https://ingest.bugwatch.dev` | Ingestion endpoint. |
+| `bugwatch.ignore-exceptions` | `List<String>` | `[]` | Fully qualified exception class names to ignore. |
+| `bugwatch.send-default-pii` | `boolean` | `false` | Include cookies and request body in events. |
+
+## Next Steps
+
+- [Java SDK Overview](/docs/sdks/java) -- core SDK functions and configuration

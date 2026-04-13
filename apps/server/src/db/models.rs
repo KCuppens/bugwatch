@@ -40,6 +40,7 @@ pub struct Project {
     pub framework: Option<String>,
     pub onboarding_completed_at: Option<DateTime<Utc>>,
     pub organization_id: Option<String>,
+    pub api_key_hash: String,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
@@ -111,10 +112,12 @@ pub struct AlertRule {
     pub id: String,
     pub project_id: String,
     pub name: String,
-    pub condition: String,  // JSON: { "type": "new_issue" | "issue_frequency" | "monitor_down", ... }
-    pub actions: String,    // JSON: array of channel IDs
+    pub condition: String, // JSON: { "type": "new_issue" | "issue_frequency" | "monitor_down", ... }
+    pub actions: String,   // JSON: array of channel IDs
     pub is_active: bool,
     pub created_at: DateTime<Utc>,
+    pub muted_until: Option<DateTime<Utc>>,
+    pub snooze_duration_minutes: Option<i32>,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
@@ -122,8 +125,8 @@ pub struct NotificationChannel {
     pub id: String,
     pub project_id: String,
     pub name: String,
-    pub channel_type: String,  // 'email', 'webhook', 'slack'
-    pub config: String,        // JSON config
+    pub channel_type: String, // 'email', 'webhook', 'slack'
+    pub config: String,       // JSON config
     pub is_active: bool,
     pub created_at: DateTime<Utc>,
 }
@@ -181,6 +184,11 @@ pub struct Organization {
     pub tax_exempt: Option<bool>,
     pub billing_country: Option<String>,
     pub billing_address: Option<String>,
+    // x402 micropayment grant columns
+    pub x402_extra_projects: i32,
+    pub x402_extra_monitors: i32,
+    pub x402_extra_storage_bytes: i64,
+    pub x402_extra_retention_days: i32,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
@@ -283,6 +291,117 @@ pub struct AgentAuditLog {
     pub resource_id: Option<String>,
     pub metadata: Option<String>,
     pub ip_address: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+// ============================================================================
+// Performance Monitoring
+// ============================================================================
+
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct Transaction {
+    pub id: String,
+    pub project_id: String,
+    pub transaction_name: String,
+    pub trace_id: String,
+    pub span_id: String,
+    pub parent_span_id: Option<String>,
+    pub op: String,
+    pub description: Option<String>,
+    pub status: String,
+    pub duration_ms: f64,
+    pub started_at: DateTime<Utc>,
+    pub finished_at: DateTime<Utc>,
+    pub environment: Option<String>,
+    pub release: Option<String>,
+    pub tags: Option<String>,
+    pub data: Option<String>,
+    pub user_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct Span {
+    pub id: String,
+    pub transaction_id: String,
+    pub span_id: String,
+    pub parent_span_id: Option<String>,
+    pub op: String,
+    pub description: Option<String>,
+    pub status: Option<String>,
+    pub duration_ms: f64,
+    pub started_at: DateTime<Utc>,
+    pub finished_at: DateTime<Utc>,
+    pub data: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+// ============================================================================
+// Integrations
+// ============================================================================
+
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct Integration {
+    pub id: String,
+    pub organization_id: String,
+    pub provider: String,
+    pub access_token: String,
+    pub refresh_token: Option<String>,
+    pub token_expires_at: Option<DateTime<Utc>>,
+    pub external_user_id: Option<String>,
+    pub external_username: Option<String>,
+    pub config: String,
+    pub created_by: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct IssueLink {
+    pub id: String,
+    pub issue_id: String,
+    pub integration_id: String,
+    pub provider: String,
+    pub external_issue_id: String,
+    pub external_issue_key: String,
+    pub external_issue_url: String,
+    pub external_status: Option<String>,
+    pub sync_enabled: bool,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+// ============================================================================
+// Session Replay
+// ============================================================================
+
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct SessionRecording {
+    pub id: String,
+    pub project_id: String,
+    pub session_id: String,
+    pub user_id: Option<String>,
+    pub started_at: DateTime<Utc>,
+    pub duration_ms: Option<i32>,
+    pub is_complete: bool,
+    pub segment_count: i32,
+    pub total_size_bytes: i64,
+    pub environment: Option<String>,
+    pub release: Option<String>,
+    pub user_agent: Option<String>,
+    pub screen_width: Option<i32>,
+    pub screen_height: Option<i32>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct SessionSegment {
+    pub id: String,
+    pub recording_id: String,
+    pub segment_index: i32,
+    #[serde(skip)]
+    pub data: Vec<u8>,
+    pub size_bytes: i32,
     pub created_at: DateTime<Utc>,
 }
 

@@ -41,6 +41,7 @@ export function CodeBlock({
               size="icon"
               className="h-6 w-6"
               onClick={handleCopy}
+              aria-label={copied ? "Copied" : "Copy code"}
             >
               {copied ? (
                 <Check className="h-3 w-3 text-green-500" />
@@ -61,6 +62,7 @@ export function CodeBlock({
             size="icon"
             className="absolute right-2 top-2 h-7 w-7"
             onClick={handleCopy}
+            aria-label={copied ? "Copied" : "Copy code"}
           >
             {copied ? (
               <Check className="h-3 w-3 text-green-500" />
@@ -126,6 +128,7 @@ export function InstallCommand({ commands }: InstallCommandProps) {
           size="icon"
           className="mr-1 h-7 w-7"
           onClick={handleCopy}
+          aria-label={copied ? "Copied" : "Copy install command"}
         >
           {copied ? (
             <Check className="h-3 w-3 text-green-500" />
