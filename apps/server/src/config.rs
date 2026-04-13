@@ -301,6 +301,9 @@ impl Config {
             if self.allowed_origins.is_empty() {
                 panic!("FATAL: ALLOWED_ORIGINS must be set in production (comma-separated list of allowed origins)");
             }
+            if self.encryption_key.is_none() {
+                panic!("FATAL: BUGWATCH_ENCRYPTION_KEY must be set in production to encrypt integration tokens at rest");
+            }
         }
     }
 

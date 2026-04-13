@@ -359,6 +359,39 @@ fn create_app(state: AppState) -> Router {
         )
         .layer(cors)
         .layer(DefaultBodyLimit::max(2 * 1024 * 1024)) // 2MB max body size
+        // Security headers — prevent clickjacking, MIME sniffing, and control referrer
+        .layer(axum::middleware::from_fn(security_headers))
+}
+
+/// Security headers middleware — sets X-Frame-Options, X-Content-Type-Options,
+/// Referrer-Policy, and X-XSS-Protection on every response.
+async fn security_headers(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let mut response = next.run(req).await;
+    let headers = response.headers_mut();
+    headers.insert(
+        header::X_FRAME_OPTIONS,
+        HeaderValue::from_static("DENY"),
+    );
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(
+        HeaderName::from_static("referrer-policy"),
+        HeaderValue::from_static("strict-origin-when-cross-origin"),
+    );
+    headers.insert(
+        HeaderName::from_static("x-xss-protection"),
+        HeaderValue::from_static("1; mode=block"),
+    );
+    headers.insert(
+        HeaderName::from_static("permissions-policy"),
+        HeaderValue::from_static("camera=(), microphone=(), geolocation=()"),
+    );
+    response
 }
 
 async fn health_check(State(state): State<AppState>) -> axum::response::Response {

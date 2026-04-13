@@ -538,11 +538,13 @@ export default function DashboardPage() {
   // Ignore with undo (single)
   const handleIgnore = useCallback(async (issueId: string) => {
     if (!selectedProject) return;
-    const issue = issues.find(i => i.id === issueId);
-    if (!issue) return;
-    const previousStatus = issue.status;
+    let previousStatus = "unresolved";
 
-    setIssues(prev => prev.map(i => i.id === issueId ? { ...i, status: "ignored" } : i));
+    setIssues(prev => {
+      const issue = prev.find(i => i.id === issueId);
+      if (issue) previousStatus = issue.status;
+      return prev.map(i => i.id === issueId ? { ...i, status: "ignored" } : i);
+    });
 
     toast.success("Issue ignored", {
       action: {
@@ -564,17 +566,18 @@ export default function DashboardPage() {
       setIssues(prev => prev.map(i => i.id === issueId ? { ...i, status: previousStatus } : i));
       toast.error("Failed to ignore issue");
     }
-  }, [selectedProject, issues]);
+  }, [selectedProject]);
 
   // Resolve with undo
   const handleResolve = useCallback(async (issueId: string) => {
     if (!selectedProject) return;
-    const issue = issues.find(i => i.id === issueId);
-    if (!issue) return;
-    const previousStatus = issue.status;
+    let previousStatus = "unresolved";
 
-    // Optimistic update
-    setIssues(prev => prev.map(i => i.id === issueId ? { ...i, status: "resolved" } : i));
+    setIssues(prev => {
+      const issue = prev.find(i => i.id === issueId);
+      if (issue) previousStatus = issue.status;
+      return prev.map(i => i.id === issueId ? { ...i, status: "resolved" } : i);
+    });
 
     toast.success("Issue resolved", {
       action: {
@@ -596,7 +599,7 @@ export default function DashboardPage() {
       setIssues(prev => prev.map(i => i.id === issueId ? { ...i, status: previousStatus } : i));
       toast.error("Failed to resolve issue");
     }
-  }, [selectedProject, issues]);
+  }, [selectedProject]);
 
   // Bulk resolve with undo
   const handleBulkResolve = useCallback(async () => {

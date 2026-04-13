@@ -4,6 +4,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::{AppError, AppResult};
 
+/// JWT issuer claim — identifies this server as the token source.
+const JWT_ISSUER: &str = "bugwatch-server";
+/// JWT audience claim — prevents tokens from one deployment being accepted by another.
+const JWT_AUDIENCE: &str = "bugwatch";
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Claims {
     /// Subject (user ID)
@@ -18,6 +23,12 @@ pub struct Claims {
     /// Session ID (for refresh tokens only)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub jti: Option<String>,
+    /// Issuer
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub iss: Option<String>,
+    /// Audience
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub aud: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -45,6 +56,8 @@ pub fn generate_tokens(
         iat: now.timestamp(),
         token_type: "access".to_string(),
         jti: None,
+        iss: Some(JWT_ISSUER.to_string()),
+        aud: Some(JWT_AUDIENCE.to_string()),
     };
 
     let access_token = encode(
@@ -61,6 +74,8 @@ pub fn generate_tokens(
         iat: now.timestamp(),
         token_type: "refresh".to_string(),
         jti: Some(session_id.to_string()),
+        iss: Some(JWT_ISSUER.to_string()),
+        aud: Some(JWT_AUDIENCE.to_string()),
     };
 
     let refresh_token = encode(
@@ -82,6 +97,9 @@ pub fn generate_tokens(
 pub fn validate_token(token: &str, secret: &str) -> AppResult<Claims> {
     let mut validation = Validation::new(jsonwebtoken::Algorithm::HS256);
     validation.set_required_spec_claims(&["exp", "iat", "sub"]);
+    // Validate audience and issuer to prevent cross-deployment token reuse
+    validation.set_audience(&[JWT_AUDIENCE]);
+    validation.set_issuer(&[JWT_ISSUER]);
 
     let token_data = decode::<Claims>(
         token,
