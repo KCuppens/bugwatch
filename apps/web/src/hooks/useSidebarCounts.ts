@@ -34,8 +34,26 @@ export function useSidebarCounts() {
 
   useEffect(() => {
     fetchCounts();
-    const interval = setInterval(fetchCounts, 60000);
-    return () => clearInterval(interval);
+    let interval: ReturnType<typeof setInterval> | null = null;
+
+    function handleVisibility() {
+      if (document.hidden) {
+        if (interval) { clearInterval(interval); interval = null; }
+      } else {
+        fetchCounts();
+        if (!interval) interval = setInterval(fetchCounts, 60000);
+      }
+    }
+
+    if (!document.hidden) {
+      interval = setInterval(fetchCounts, 60000);
+    }
+    document.addEventListener("visibilitychange", handleVisibility);
+
+    return () => {
+      if (interval) clearInterval(interval);
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
   }, [fetchCounts]);
 
   return counts;

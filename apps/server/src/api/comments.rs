@@ -70,21 +70,28 @@ pub async fn list(
     let comments =
         CommentRepository::find_by_issue(&state.db, &issue_id, per_page as i64, offset).await?;
 
-    // Fetch user info for each comment
-    let mut response_comments = Vec::with_capacity(comments.len());
-    for comment in comments {
-        let user = UserRepository::find_by_id(&state.db, &comment.user_id).await?;
-        response_comments.push(CommentResponse {
-            id: comment.id,
-            issue_id: comment.issue_id,
-            user_id: comment.user_id,
-            user_name: user.as_ref().and_then(|u| u.name.clone()),
-            user_email: user.map(|u| u.email).unwrap_or_default(),
-            content: comment.content,
-            created_at: comment.created_at.to_rfc3339(),
-            updated_at: comment.updated_at.to_rfc3339(),
-        });
-    }
+    // Batch-load all comment authors in a single query instead of N+1
+    let user_ids: Vec<String> = comments.iter().map(|c| c.user_id.clone()).collect();
+    let users = UserRepository::find_by_ids(&state.db, &user_ids).await?;
+    let user_map: std::collections::HashMap<String, _> =
+        users.into_iter().map(|u| (u.id.clone(), u)).collect();
+
+    let response_comments: Vec<CommentResponse> = comments
+        .into_iter()
+        .map(|comment| {
+            let user = user_map.get(&comment.user_id);
+            CommentResponse {
+                id: comment.id,
+                issue_id: comment.issue_id,
+                user_id: comment.user_id,
+                user_name: user.and_then(|u| u.name.clone()),
+                user_email: user.map(|u| u.email.clone()).unwrap_or_default(),
+                content: comment.content,
+                created_at: comment.created_at.to_rfc3339(),
+                updated_at: comment.updated_at.to_rfc3339(),
+            }
+        })
+        .collect();
 
     Ok(Json(ApiResponse {
         data: response_comments,

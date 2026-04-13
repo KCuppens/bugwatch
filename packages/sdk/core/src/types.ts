@@ -42,6 +42,11 @@ export interface BugwatchOptions {
   sanitize?: SanitizeOptions;
   /** Offline event queue config — persists events when network is unavailable */
   offline?: OfflineOptions;
+  /**
+   * Called whenever an event is dropped (rate limited, sampled out, beforeSend returned null, etc.).
+   * Use this to monitor SDK health in production — silent drops are the #1 source of "the SDK isn't working" bugs.
+   */
+  onDropped?: (eventId: string, reason: "rate_limited" | "sample_rate" | "not_initialized" | "before_send" | "network_error") => void;
 }
 
 /**

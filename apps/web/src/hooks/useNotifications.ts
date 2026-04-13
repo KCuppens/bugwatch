@@ -35,8 +35,26 @@ export function useNotifications() {
 
   useEffect(() => {
     fetchNotifications();
-    const interval = setInterval(fetchNotifications, 60000);
-    return () => clearInterval(interval);
+    let interval: ReturnType<typeof setInterval> | null = null;
+
+    function handleVisibility() {
+      if (document.hidden) {
+        if (interval) { clearInterval(interval); interval = null; }
+      } else {
+        fetchNotifications();
+        if (!interval) interval = setInterval(fetchNotifications, 60000);
+      }
+    }
+
+    if (!document.hidden) {
+      interval = setInterval(fetchNotifications, 60000);
+    }
+    document.addEventListener("visibilitychange", handleVisibility);
+
+    return () => {
+      if (interval) clearInterval(interval);
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
   }, [fetchNotifications]);
 
   return { notifications, unreadCount, markAllRead };

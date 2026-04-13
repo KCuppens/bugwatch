@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from .fingerprint import fingerprint_from_exception
+from .scrubbing import scrub_event
 from .transport import HttpTransport, Transport
 from .types import (
     Breadcrumb,
@@ -124,6 +125,24 @@ class BugwatchClient:
 
         # Generate fingerprint
         event.fingerprint = fingerprint_from_exception(exception_info)
+
+        # Apply PII scrubbing before before_send
+        sanitize_opts = getattr(self.options, "sanitize", None)
+        if sanitize_opts is not False:
+            import dataclasses
+            event_dict = dataclasses.asdict(event)
+            scrubbed = scrub_event(event_dict, sanitize_opts if isinstance(sanitize_opts, dict) else None)
+            # Apply scrubbed fields back to event
+            if event.extra:
+                event.extra = scrubbed.get("extra", event.extra)
+            if event.tags:
+                event.tags = scrubbed.get("tags", event.tags)
+            if event.user:
+                event.user = scrubbed.get("user", event.user)
+            if event.request:
+                event.request = scrubbed.get("request", event.request)
+            if event.breadcrumbs:
+                event.breadcrumbs = scrubbed.get("breadcrumbs", event.breadcrumbs)
 
         # Apply before_send hook
         if self.options.before_send:

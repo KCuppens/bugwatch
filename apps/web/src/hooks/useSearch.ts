@@ -45,7 +45,7 @@ interface UseSearchReturn {
 export function useSearch({
   projectId,
   initialQuery = "",
-  debounceMs = 150,
+  debounceMs = 300,
 }: UseSearchOptions): UseSearchReturn {
   // Query state
   const [query, setQuery] = useState(initialQuery);

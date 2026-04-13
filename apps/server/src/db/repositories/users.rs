@@ -37,6 +37,18 @@ impl UserRepository {
             .map_err(Into::into)
     }
 
+    /// Batch-load users by IDs in a single query.
+    pub async fn find_by_ids(pool: &DbPool, ids: &[String]) -> Result<Vec<User>> {
+        if ids.is_empty() {
+            return Ok(vec![]);
+        }
+        sqlx::query_as::<_, User>("SELECT * FROM users WHERE id = ANY($1)")
+            .bind(ids)
+            .fetch_all(pool)
+            .await
+            .map_err(Into::into)
+    }
+
     pub async fn find_by_email(pool: &DbPool, email: &str) -> Result<Option<User>> {
         sqlx::query_as::<_, User>("SELECT * FROM users WHERE email = $1")
             .bind(email)

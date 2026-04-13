@@ -90,12 +90,14 @@ export class HttpTransport implements Transport {
   private rateLimitedUntil: number = 0;
   private persistentQueue: PersistentQueue;
   private drainPromise: Promise<void> | null = null;
+  private onDropped?: BugwatchOptions["onDropped"];
 
   constructor(options: BugwatchOptions) {
     this.endpoint = options.endpoint || DEFAULT_ENDPOINT;
     this.apiKey = options.apiKey;
     this.debug = options.debug || false;
     this.timeoutMs = DEFAULT_TIMEOUT_MS;
+    this.onDropped = options.onDropped;
     this.persistentQueue = createPersistentQueue(options.offline);
     // Drain on init — fire and forget. Failures are silent.
     this.drainPersistentQueue();

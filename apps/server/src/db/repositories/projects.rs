@@ -1,7 +1,17 @@
 use crate::db::{models::Project, DbPool};
 use anyhow::Result;
+use dashmap::DashMap;
 use sha2::{Digest, Sha256};
+use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 use uuid::Uuid;
+
+const PROJECT_CACHE_TTL: Duration = Duration::from_secs(300);
+
+fn project_cache() -> &'static DashMap<String, (Project, Instant)> {
+    static CACHE: OnceLock<DashMap<String, (Project, Instant)>> = OnceLock::new();
+    CACHE.get_or_init(DashMap::new)
+}
 
 /// Compute SHA-256 hash of an API key for constant-time lookups
 fn hash_api_key(api_key: &str) -> String {
@@ -46,11 +56,23 @@ impl ProjectRepository {
     }
 
     pub async fn find_by_id(pool: &DbPool, id: &str) -> Result<Option<Project>> {
-        sqlx::query_as::<_, Project>("SELECT * FROM projects WHERE id = $1")
+        if let Some(entry) = project_cache().get(id) {
+            let (project, inserted_at) = entry.value();
+            if inserted_at.elapsed() < PROJECT_CACHE_TTL {
+                return Ok(Some(project.clone()));
+            }
+        }
+
+        let result = sqlx::query_as::<_, Project>("SELECT * FROM projects WHERE id = $1")
             .bind(id)
             .fetch_optional(pool)
-            .await
-            .map_err(Into::into)
+            .await?;
+
+        if let Some(ref project) = result {
+            project_cache().insert(id.to_string(), (project.clone(), Instant::now()));
+        }
+
+        Ok(result)
     }
 
     pub async fn find_by_api_key(pool: &DbPool, api_key: &str) -> Result<Option<Project>> {
@@ -122,6 +144,7 @@ impl ProjectRepository {
             .bind(id)
             .execute(pool)
             .await?;
+        project_cache().remove(id);
         Ok(())
     }
 
@@ -142,6 +165,7 @@ impl ProjectRepository {
             .bind(id)
             .execute(pool)
             .await?;
+        project_cache().remove(id);
         Ok(())
     }
 

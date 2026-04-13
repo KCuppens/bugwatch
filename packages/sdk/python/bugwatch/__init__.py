@@ -148,6 +148,45 @@ def _bugwatch_threading_excepthook(args):
         _original_threading_excepthook(args)
 
 
+def _bugwatch_task_done_callback(task):
+    """Callback on every asyncio.Task — captures unhandled exceptions immediately."""
+    if task.cancelled():
+        return
+    try:
+        exc = task.exception()
+    except (asyncio.CancelledError, asyncio.InvalidStateError):
+        return
+    if exc is None or _client is None:
+        return
+    if getattr(task, "_bugwatch_captured", False):
+        return
+    task._bugwatch_captured = True
+    try:
+        _client.capture_exception(
+            exc,
+            level=Level.ERROR,
+            extra={
+                "asyncio.task_name": getattr(task, "get_name", lambda: str(task))(),
+                "asyncio.mechanism": "task_done_callback",
+            },
+        )
+    except Exception:
+        pass
+
+
+_original_task_factory = None
+
+
+def _bugwatch_task_factory(loop, coro, **kwargs):
+    """Custom task factory that adds done callback to every task."""
+    if _original_task_factory is not None:
+        task = _original_task_factory(loop, coro, **kwargs)
+    else:
+        task = asyncio.tasks.Task(coro, loop=loop, **kwargs)
+    task.add_done_callback(_bugwatch_task_done_callback)
+    return task
+
+
 def _bugwatch_asyncio_handler(loop, context):
     """Asyncio exception handler for task exceptions."""
     exception = context.get("exception")
@@ -171,52 +210,6 @@ def _bugwatch_asyncio_handler(loop, context):
     else:
         # Default behavior: log to stderr
         loop.default_exception_handler(context)
-
-
-def _bugwatch_task_done_callback(task):
-    """Callback added to every asyncio.Task to capture unhandled exceptions.
-
-    The loop's exception handler only fires when a Task is garbage-collected
-    with an unretreived exception. This callback fires immediately when the
-    task finishes, so we get the exception faster AND with a better stack.
-    We skip CancelledError (normal cancellation, not a bug).
-    """
-    if task.cancelled():
-        return
-    exc = task.exception() if not task.cancelled() else None
-    if exc is None:
-        return
-    if _client is None:
-        return
-    # Avoid double-capture: only capture if the exception hasn't been retrieved
-    # by user code. We use a flag on the task to track this.
-    if getattr(task, "_bugwatch_captured", False):
-        return
-    task._bugwatch_captured = True
-    try:
-        _client.capture_exception(
-            exc,
-            level=Level.ERROR,
-            extra={
-                "asyncio.task_name": getattr(task, "get_name", lambda: str(task))(),
-                "asyncio.mechanism": "task_done_callback",
-            },
-        )
-    except Exception:
-        pass
-
-
-_original_task_factory = None
-
-
-def _bugwatch_task_factory(loop, coro, **kwargs):
-    """Custom task factory that wraps the default and adds our done callback."""
-    if _original_task_factory is not None:
-        task = _original_task_factory(loop, coro, **kwargs)
-    else:
-        task = asyncio.tasks.Task(coro, loop=loop, **kwargs)
-    task.add_done_callback(_bugwatch_task_done_callback)
-    return task
 
 
 def _install_excepthook():

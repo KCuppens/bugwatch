@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { memo, useState, useEffect, useMemo, useCallback, useRef } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
@@ -98,6 +98,160 @@ function formatRelativeTime(dateString: string): string {
 }
 
 type SortOption = "recent" | "frequent" | "users" | "trending";
+
+interface IssueRowProps {
+  issue: Issue;
+  index: number;
+  isHovered: boolean;
+  isFocused: boolean;
+  isSelected: boolean;
+  isNew: boolean;
+  sparkData: number[];
+  density: "comfortable" | "compact";
+  projectId: string | undefined;
+  onHover: (id: string | null) => void;
+  onFocus: (index: number) => void;
+  onToggleSelect: (id: string) => void;
+  onResolve: (id: string) => void;
+}
+
+const IssueRow = memo(function IssueRow({
+  issue,
+  index,
+  isHovered,
+  isFocused,
+  isSelected,
+  isNew,
+  sparkData,
+  density,
+  projectId,
+  onHover,
+  onFocus,
+  onToggleSelect,
+  onResolve,
+}: IssueRowProps) {
+  const config = levelConfig[issue.level as keyof typeof levelConfig] || levelConfig.error;
+  const Icon = config.icon;
+  const isRecent = Date.now() - new Date(issue.last_seen).getTime() < 1000 * 60 * 5;
+  const isSevere = issue.level === "fatal" || issue.level === "error";
+
+  return (
+    <div
+      data-issue-row
+      className={`group relative flex items-center gap-4 rounded-lg border-l-4 ${config.border} bg-card transition-all duration-200
+        ${isHovered && isSevere ? `shadow-lg ${config.glow}` : isHovered ? "shadow-md" : "hover:bg-muted/30"}
+        ${isFocused ? `ring-2 ${config.focusRing}` : ""}
+        ${isSelected ? "ring-2 ring-accent-2/30 bg-accent-2/5" : ""}
+        ${issue.status === "resolved" ? "opacity-50" : ""}
+        ${isNew ? "animate-slide-in-new" : ""}
+      `}
+      onMouseEnter={() => onHover(issue.id)}
+      onMouseLeave={() => onHover(null)}
+      onClick={() => onFocus(index)}
+    >
+      <div className="pl-3">
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleSelect(issue.id);
+          }}
+          className={`w-4 h-4 rounded border-2 flex items-center justify-center transition-all
+            ${isSelected ? "bg-accent-2 border-accent-2" : "border-muted-foreground/30 hover:border-accent-2/50"}
+          `}
+        >
+          {isSelected && <Check className="h-3 w-3 text-accent-2-foreground" />}
+        </button>
+      </div>
+
+      <Link
+        href={`/dashboard/issues/${issue.id}?project=${projectId}`}
+        className={`flex-1 flex items-center gap-4 pr-4 ${density === "compact" ? "py-2" : "py-3.5"}`}
+      >
+        <div className={`shrink-0 p-2 rounded-lg ${config.bg} transition-transform group-hover:scale-110`}>
+          <Icon className={`h-4 w-4 ${config.color}`} aria-hidden="true" />
+          <span className="sr-only">{issue.level} severity</span>
+        </div>
+
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <p className="font-medium text-[15px] tracking-tight truncate">{issue.title}</p>
+            {issue.environment && issue.environment !== "production" && (
+              <span
+                className={`shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-medium ${
+                  (ENVIRONMENT_COLORS[issue.environment] ?? ENVIRONMENT_COLORS.production)!.bg
+                } ${(ENVIRONMENT_COLORS[issue.environment] ?? ENVIRONMENT_COLORS.production)!.text}`}
+              >
+                {issue.environment}
+              </span>
+            )}
+            {isRecent && (
+              <span className="shrink-0 flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-bug/10 text-bug text-[10px] font-medium">
+                <span className="w-1.5 h-1.5 rounded-full bg-bug animate-pulse" />
+                NEW
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground">
+            <span className="font-mono">{issue.fingerprint.slice(0, 8)}</span>
+            <span className="flex items-center gap-1">
+              <Activity className="h-3 w-3" />
+              {issue.count.toLocaleString()}
+            </span>
+            <span className="flex items-center gap-1">
+              <Users className="h-3 w-3" />
+              {issue.user_count}
+            </span>
+          </div>
+        </div>
+
+        <div className="hidden sm:flex items-center gap-3 shrink-0">
+          <div
+            className={`transition-opacity ${isHovered && issue.status !== "resolved" ? "opacity-0 w-0 overflow-hidden" : "opacity-100 w-auto"}`}
+          >
+            <Sparkline data={sparkData} width={56} height={16} showTrend={true} />
+          </div>
+          <span
+            className={`text-xs text-muted-foreground text-right transition-opacity ${isHovered && issue.status !== "resolved" ? "opacity-0 w-0 overflow-hidden" : "opacity-100 w-16"}`}
+          >
+            {formatRelativeTime(issue.last_seen)}
+          </span>
+          {issue.status === "resolved" && (
+            <span className="px-2 py-0.5 rounded-full bg-accent text-accent-foreground text-[10px] font-medium uppercase">
+              Resolved
+            </span>
+          )}
+          {issue.status === "ignored" && (
+            <span className="px-2 py-0.5 rounded-full bg-muted text-muted-foreground text-[10px] font-medium uppercase">
+              Ignored
+            </span>
+          )}
+          {issue.status !== "resolved" && issue.status !== "ignored" && (
+            <div
+              className={`flex items-center gap-1 transition-all ${isHovered ? "opacity-100 w-auto" : "opacity-0 w-0 overflow-hidden"}`}
+            >
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-7 px-2 text-xs"
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onResolve(issue.id);
+                }}
+              >
+                <Check className="h-3 w-3 mr-1" />
+                Resolve
+              </Button>
+            </div>
+          )}
+          {issue.status === "unresolved" && !isHovered && (
+            <ChevronRight className="h-4 w-4 text-muted-foreground" />
+          )}
+        </div>
+      </Link>
+    </div>
+  );
+});
 
 // Built-in quick filters
 const BUILT_IN_FILTERS = [
@@ -364,15 +518,22 @@ export default function DashboardPage() {
     };
   }, [isLive, selectedProject]);
 
-  const toggleIssueSelection = (id: string) => {
-    const newSelected = new Set(selectedIssues);
-    if (newSelected.has(id)) {
-      newSelected.delete(id);
-    } else {
-      newSelected.add(id);
-    }
-    setSelectedIssues(newSelected);
-  };
+  const toggleIssueSelection = useCallback((id: string) => {
+    setSelectedIssues(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const handleHover = useCallback((id: string | null) => {
+    setHoveredIssue(id);
+  }, []);
+
+  const handleFocus = useCallback((index: number) => {
+    setFocusedIndex(index);
+  }, []);
 
   // Ignore with undo (single)
   const handleIgnore = useCallback(async (issueId: string) => {
@@ -898,136 +1059,24 @@ export default function DashboardPage() {
               </div>
             )
           ) : (
-            displayIssues.slice(0, renderCap).map((issue, index) => {
-              const config = levelConfig[issue.level as keyof typeof levelConfig] || levelConfig.error;
-              const Icon = config.icon;
-              const isHovered = hoveredIssue === issue.id;
-              const isFocused = focusedIndex === index;
-              const isSelected = selectedIssues.has(issue.id);
-              const isNew = newIssueIds.has(issue.id);
-              const isRecent = (Date.now() - new Date(issue.last_seen).getTime()) < 1000 * 60 * 5;
-              const sparkData = sparklineCache.get(issue.id) || [];
-              const isSevere = issue.level === "fatal" || issue.level === "error";
-
-              return (
-                <div
-                  key={issue.id}
-                  data-issue-row
-                  className={`group relative flex items-center gap-4 rounded-lg border-l-4 ${config.border} bg-card transition-all duration-200
-                    ${isHovered && isSevere ? `shadow-lg ${config.glow}` : isHovered ? 'shadow-md' : 'hover:bg-muted/30'}
-                    ${isFocused ? `ring-2 ${config.focusRing}` : ''}
-                    ${isSelected ? 'ring-2 ring-accent-2/30 bg-accent-2/5' : ''}
-                    ${issue.status === "resolved" ? "opacity-50" : ""}
-                    ${isNew ? "animate-slide-in-new" : ""}
-                  `}
-                  onMouseEnter={() => setHoveredIssue(issue.id)}
-                  onMouseLeave={() => setHoveredIssue(null)}
-                  onClick={() => setFocusedIndex(index)}
-                >
-                  {/* Selection Checkbox */}
-                  <div className="pl-3">
-                    <button
-                      onClick={(e) => { e.stopPropagation(); toggleIssueSelection(issue.id); }}
-                      className={`w-4 h-4 rounded border-2 flex items-center justify-center transition-all
-                        ${isSelected ? 'bg-accent-2 border-accent-2' : 'border-muted-foreground/30 hover:border-accent-2/50'}
-                      `}
-                    >
-                      {isSelected && <Check className="h-3 w-3 text-accent-2-foreground" />}
-                    </button>
-                  </div>
-
-                  {/* Main Content */}
-                  <Link
-                    href={`/dashboard/issues/${issue.id}?project=${selectedProject?.id}`}
-                    className={`flex-1 flex items-center gap-4 pr-4 ${density === "compact" ? "py-2" : "py-3.5"}`}
-                  >
-                    {/* Icon */}
-                    <div className={`shrink-0 p-2 rounded-lg ${config.bg} transition-transform group-hover:scale-110`}>
-                      <Icon className={`h-4 w-4 ${config.color}`} aria-hidden="true" />
-                      <span className="sr-only">{issue.level} severity</span>
-                    </div>
-
-                    {/* Title & Meta */}
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <p className="font-medium text-[15px] tracking-tight truncate">{issue.title}</p>
-                        {issue.environment && issue.environment !== "production" && (
-                          <span className={`shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-medium ${
-                            (ENVIRONMENT_COLORS[issue.environment] ?? ENVIRONMENT_COLORS.production)!.bg
-                          } ${
-                            (ENVIRONMENT_COLORS[issue.environment] ?? ENVIRONMENT_COLORS.production)!.text
-                          }`}>
-                            {issue.environment}
-                          </span>
-                        )}
-                        {isRecent && (
-                          <span className="shrink-0 flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-bug/10 text-bug text-[10px] font-medium">
-                            <span className="w-1.5 h-1.5 rounded-full bg-bug animate-pulse" />
-                            NEW
-                          </span>
-                        )}
-                      </div>
-                      <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground">
-                        <span className="font-mono">{issue.fingerprint.slice(0, 8)}</span>
-                        <span className="flex items-center gap-1">
-                          <Activity className="h-3 w-3" />
-                          {issue.count.toLocaleString()}
-                        </span>
-                        <span className="flex items-center gap-1">
-                          <Users className="h-3 w-3" />
-                          {issue.user_count}
-                        </span>
-                      </div>
-                    </div>
-
-                    {/* Sparkline + Time + Actions (hidden on mobile) */}
-                    <div className="hidden sm:flex items-center gap-3 shrink-0">
-                      {/* Sparkline - hide on hover when showing actions */}
-                      <div className={`transition-opacity ${isHovered && issue.status !== "resolved" ? 'opacity-0 w-0 overflow-hidden' : 'opacity-100 w-auto'}`}>
-                        <Sparkline data={sparkData} width={56} height={16} showTrend={true} />
-                      </div>
-
-                      {/* Time - hide on hover */}
-                      <span className={`text-xs text-muted-foreground text-right transition-opacity ${isHovered && issue.status !== "resolved" ? 'opacity-0 w-0 overflow-hidden' : 'opacity-100 w-16'}`}>
-                        {formatRelativeTime(issue.last_seen)}
-                      </span>
-
-                      {/* Status Badge */}
-                      {issue.status === "resolved" && (
-                        <span className="px-2 py-0.5 rounded-full bg-accent text-accent-foreground text-[10px] font-medium uppercase">
-                          Resolved
-                        </span>
-                      )}
-                      {issue.status === "ignored" && (
-                        <span className="px-2 py-0.5 rounded-full bg-muted text-muted-foreground text-[10px] font-medium uppercase">
-                          Ignored
-                        </span>
-                      )}
-
-                      {/* Quick Actions - show on hover */}
-                      {issue.status !== "resolved" && issue.status !== "ignored" && (
-                        <div className={`flex items-center gap-1 transition-all ${isHovered ? 'opacity-100 w-auto' : 'opacity-0 w-0 overflow-hidden'}`}>
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            className="h-7 px-2 text-xs"
-                            onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleResolve(issue.id); }}
-                          >
-                            <Check className="h-3 w-3 mr-1" />
-                            Resolve
-                          </Button>
-                        </div>
-                      )}
-
-                      {/* Chevron when not hovered and not resolved */}
-                      {issue.status === "unresolved" && !isHovered && (
-                        <ChevronRight className="h-4 w-4 text-muted-foreground" />
-                      )}
-                    </div>
-                  </Link>
-                </div>
-              );
-            })
+            displayIssues.slice(0, renderCap).map((issue, index) => (
+              <IssueRow
+                key={issue.id}
+                issue={issue}
+                index={index}
+                isHovered={hoveredIssue === issue.id}
+                isFocused={focusedIndex === index}
+                isSelected={selectedIssues.has(issue.id)}
+                isNew={newIssueIds.has(issue.id)}
+                sparkData={sparklineCache.get(issue.id) || []}
+                density={density}
+                projectId={selectedProject?.id}
+                onHover={handleHover}
+                onFocus={handleFocus}
+                onToggleSelect={toggleIssueSelection}
+                onResolve={handleResolve}
+              />
+            ))
           )}
         </div>
       )}

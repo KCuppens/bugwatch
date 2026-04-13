@@ -323,16 +323,7 @@ function setupConsoleErrorCapture(): void {
           try { return String(a); } catch { return "[unstringifiable]"; }
         }).join(" ");
 
-        const lowerText = text.toLowerCase();
-        if (
-          lowerText.includes("error") ||
-          lowerText.includes("failed") ||
-          lowerText.includes("exception") ||
-          lowerText.includes("timeout") ||
-          lowerText.includes("eacces") ||
-          lowerText.includes("enoent") ||
-          lowerText.includes("econnrefused")
-        ) {
+        if (/error|failed|exception|timeout|eacces|enoent|econnrefused/i.test(text)) {
           client.captureMessage(text.slice(0, 1000), "warning");
         }
       }

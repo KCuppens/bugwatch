@@ -3,7 +3,17 @@ use crate::db::{
     DbPool,
 };
 use anyhow::Result;
+use dashmap::DashMap;
+use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 use uuid::Uuid;
+
+const ORG_USER_CACHE_TTL: Duration = Duration::from_secs(300);
+
+fn org_user_cache() -> &'static DashMap<String, (Option<Organization>, Instant)> {
+    static CACHE: OnceLock<DashMap<String, (Option<Organization>, Instant)>> = OnceLock::new();
+    CACHE.get_or_init(DashMap::new)
+}
 
 pub struct OrganizationRepository;
 
@@ -51,23 +61,24 @@ impl OrganizationRepository {
             .map_err(Into::into)
     }
 
-    /// Get organization for a user (as owner or member)
+    /// Get organization for a user (as owner or member).
+    /// Cached for 5 minutes per user_id to avoid repeated DB lookups in
+    /// tier_guard middleware and rate limiting.
     pub async fn find_by_user(pool: &DbPool, user_id: &str) -> Result<Option<Organization>> {
-        // First check if user owns an org
-        let owned = sqlx::query_as::<_, Organization>(
-            "SELECT * FROM organizations WHERE owner_id = $1 LIMIT 1",
-        )
-        .bind(user_id)
-        .fetch_optional(pool)
-        .await?;
-
-        if owned.is_some() {
-            return Ok(owned);
+        // Check cache first
+        if let Some(entry) = org_user_cache().get(user_id) {
+            let (org, inserted_at) = entry.value();
+            if inserted_at.elapsed() < ORG_USER_CACHE_TTL {
+                return Ok(org.clone());
+            }
         }
 
-        // Check if user is a member of an org
-        sqlx::query_as::<_, Organization>(
+        // Single query: prefer owned org, fall back to membership.
+        // Collapses the old two-query pattern (check owned, then check member).
+        let result = sqlx::query_as::<_, Organization>(
             r#"
+            SELECT * FROM organizations WHERE owner_id = $1
+            UNION ALL
             SELECT o.* FROM organizations o
             JOIN organization_members om ON o.id = om.organization_id
             WHERE om.user_id = $1
@@ -76,8 +87,10 @@ impl OrganizationRepository {
         )
         .bind(user_id)
         .fetch_optional(pool)
-        .await
-        .map_err(Into::into)
+        .await?;
+
+        org_user_cache().insert(user_id.to_string(), (result.clone(), Instant::now()));
+        Ok(result)
     }
 
     /// Update organization name

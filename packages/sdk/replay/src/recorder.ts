@@ -33,7 +33,12 @@ export class ReplayRecorder {
       const rrweb = await import('rrweb');
       this.stopFn = rrweb.record({
         emit: (event: unknown) => {
-          this.events.push(event);
+          // Cap buffered events to prevent unbounded growth between flushes.
+          // A busy page can generate hundreds of mutations/sec; 5 000 events
+          // is enough for a full segment without risking a multi-MB stringify.
+          if (this.events.length < 5000) {
+            this.events.push(event);
+          }
         },
         maskAllInputs: this.options.maskAllInputs,
         maskTextSelector: this.options.maskAllText ? '*' : undefined,

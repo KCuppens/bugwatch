@@ -4,11 +4,19 @@ pub use token_bucket::RateLimitResult;
 use token_bucket::TokenBucket;
 
 use dashmap::DashMap;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
+use std::time::{Duration, Instant};
 
 use crate::billing::tiers::{self, Tier};
 use crate::config::DeploymentMode;
 use crate::db::{repositories::OrganizationRepository, DbPool};
+
+const TIER_CACHE_TTL: Duration = Duration::from_secs(300);
+
+fn tier_cache() -> &'static DashMap<String, (u32, Instant)> {
+    static CACHE: OnceLock<DashMap<String, (u32, Instant)>> = OnceLock::new();
+    CACHE.get_or_init(DashMap::new)
+}
 
 /// Thread-safe rate limiter using token bucket algorithm
 ///
@@ -54,15 +62,33 @@ impl RateLimiter {
         let rate_limit = if deployment_mode.is_self_hosted() {
             config_rate_limit
         } else {
-            // SaaS mode: look up the tier from the database
-            let tier = match OrganizationRepository::get_tier_by_api_key(db, api_key).await {
-                Ok(tier_str) => Tier::from_str(&tier_str),
-                Err(_) => Tier::Free,
-            };
-            tiers::get_tier_limits(tier).rate_limit_per_minute
+            // SaaS mode: check tier cache first, then DB
+            if let Some(entry) = tier_cache().get(api_key) {
+                let (cached_limit, inserted_at) = entry.value();
+                if inserted_at.elapsed() < TIER_CACHE_TTL {
+                    *cached_limit
+                } else {
+                    drop(entry);
+                    let limit = Self::resolve_tier_limit(db, api_key).await;
+                    tier_cache().insert(api_key.to_string(), (limit, Instant::now()));
+                    limit
+                }
+            } else {
+                let limit = Self::resolve_tier_limit(db, api_key).await;
+                tier_cache().insert(api_key.to_string(), (limit, Instant::now()));
+                limit
+            }
         };
 
         self.check(api_key, rate_limit)
+    }
+
+    async fn resolve_tier_limit(db: &DbPool, api_key: &str) -> u32 {
+        let tier = match OrganizationRepository::get_tier_by_api_key(db, api_key).await {
+            Ok(tier_str) => Tier::from_str(&tier_str),
+            Err(_) => Tier::Free,
+        };
+        tiers::get_tier_limits(tier).rate_limit_per_minute
     }
 
     /// Check if a request should be allowed based on rate limits
