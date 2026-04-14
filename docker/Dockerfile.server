@@ -15,6 +15,9 @@ COPY apps/server/Cargo.toml apps/server/Cargo.lock* ./
 # Copy migrations early (needed for include_str! at compile time)
 COPY apps/server/migrations ./migrations
 
+# Copy openapi spec (needed for include_str! at compile time)
+COPY apps/server/openapi.yaml ./openapi.yaml
+
 # Copy agent scripts (needed for include_str! at compile time)
 COPY apps/agent /apps/agent
 
