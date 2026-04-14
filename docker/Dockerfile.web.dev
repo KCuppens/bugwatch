@@ -11,6 +11,11 @@ COPY packages/ ./packages/
 # Install dependencies
 RUN npm ci
 
+# Build local SDK packages (required before Next.js can resolve them)
+RUN npm run build --workspace=@bugwatch/core \
+    && npm run build --workspace=@bugwatch/node \
+    && npm run build --workspace=@bugwatch/nextjs
+
 # Copy source code
 COPY apps/web ./apps/web
 COPY tsconfig.base.json ./
