@@ -19,7 +19,7 @@ export function FeaturesGrid() {
       <StaggerContainer className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6 max-w-5xl mx-auto">
         {/* Large card - spans 2 columns */}
         <StaggerItem className="md:col-span-2 md:row-span-2">
-          <div className="p-8 h-full liquid-glass-card card-hover transform-gpu">
+          <div className="p-8 h-full liquid-glass-card transform-gpu">
             <span className="inline-flex h-12 w-12 items-center justify-center rounded-xl bg-accent/15 text-accent mb-6">
               <Infinity className="h-6 w-6" strokeWidth={1.75} />
             </span>
@@ -27,7 +27,7 @@ export function FeaturesGrid() {
             <p className="text-body-lg text-muted-foreground">
               No event limits. No throttling. Track every error without worrying about caps or surprise bills.
             </p>
-            <div className="mt-8 p-4 rounded-xl bg-surface-3 border border-border-subtle">
+            <div className="mt-8 p-4 rounded-xl bg-white/5 border border-white/10">
               <div className="flex items-center justify-between text-body-sm">
                 <span className="text-muted-foreground">Errors this month</span>
                 <span className="font-mono font-bold text-accent tabular-nums">1,247,832</span>
@@ -42,7 +42,7 @@ export function FeaturesGrid() {
 
         {/* Medium cards */}
         <StaggerItem>
-          <div className="p-6 h-full liquid-glass-card card-hover transform-gpu">
+          <div className="p-6 h-full liquid-glass-card transform-gpu">
             <span className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-accent-2/10 text-accent-2 mb-4">
               <Activity className="h-5 w-5" strokeWidth={1.75} />
             </span>
@@ -54,7 +54,7 @@ export function FeaturesGrid() {
         </StaggerItem>
 
         <StaggerItem>
-          <div className="p-6 h-full liquid-glass-card card-hover transform-gpu">
+          <div className="p-6 h-full liquid-glass-card transform-gpu">
             <span className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-accent-2/10 text-accent-2 mb-4">
               <Zap className="h-5 w-5" strokeWidth={1.75} />
             </span>
@@ -67,7 +67,7 @@ export function FeaturesGrid() {
 
         {/* Small cards row */}
         <StaggerItem>
-          <div className="p-6 h-full liquid-glass-card card-hover transform-gpu">
+          <div className="p-6 h-full liquid-glass-card transform-gpu">
             <span className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-accent-2/10 text-accent-2 mb-4">
               <GitFork className="h-5 w-5" strokeWidth={1.75} />
             </span>
@@ -79,7 +79,7 @@ export function FeaturesGrid() {
         </StaggerItem>
 
         <StaggerItem>
-          <div className="p-6 h-full liquid-glass-card card-hover transform-gpu">
+          <div className="p-6 h-full liquid-glass-card transform-gpu">
             <span className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-accent-2/10 text-accent-2 mb-4">
               <Server className="h-5 w-5" strokeWidth={1.75} />
             </span>
@@ -89,7 +89,7 @@ export function FeaturesGrid() {
         </StaggerItem>
 
         <StaggerItem>
-          <div className="p-6 h-full liquid-glass-card card-hover transform-gpu">
+          <div className="p-6 h-full liquid-glass-card transform-gpu">
             <span className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-accent-2/10 text-accent-2 mb-4">
               <Bell className="h-5 w-5" strokeWidth={1.75} />
             </span>

@@ -61,7 +61,7 @@ export function Header() {
             href="https://github.com/KCuppens/bugwatch"
             target="_blank"
             rel="noopener noreferrer"
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-surface-2 border border-border-subtle text-sm text-muted-foreground hover:text-foreground transition-colors"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full liquid-glass text-sm text-muted-foreground hover:text-foreground hover:border-white/16 hover:shadow-glow-blue-sm transition-all"
           >
             <Github className="h-4 w-4" />
             <Star className="h-3 w-3" />
@@ -118,7 +118,7 @@ export function Header() {
         role="dialog"
         aria-modal="true"
         aria-label="Navigation menu"
-        className={`fixed top-0 right-0 h-full w-72 bg-background border-l border-border-subtle z-50 transform transition-transform duration-300 ease-in-out md:hidden ${
+        className={`fixed top-0 right-0 h-full w-72 liquid-glass-strong border-l border-white/10 z-50 transform transition-transform duration-300 ease-in-out md:hidden ${
           mobileOpen ? "translate-x-0" : "translate-x-full"
         }`}
       >

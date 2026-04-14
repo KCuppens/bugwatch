@@ -1,6 +1,6 @@
 "use client";
 
-import { Component, type ReactNode } from "react";
+import { Component, type ErrorInfo, type ReactNode } from "react";
 
 interface Props {
   children: ReactNode;
@@ -21,7 +21,7 @@ export class ErrorBoundary extends Component<Props, State> {
     return { hasError: true };
   }
 
-  override componentDidCatch(error: Error, info: { componentStack: string }) {
+  override componentDidCatch(error: Error, info: ErrorInfo) {
     // Log to console in dev; in production this is where you'd call an error
     // tracking service (Bugwatch itself, Sentry, etc.)
     console.error("[ErrorBoundary] Caught render error:", error, info.componentStack);

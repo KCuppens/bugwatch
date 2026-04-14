@@ -85,9 +85,7 @@
     --border-subtle: 220 20% 12%;
     --border-strong: 220 20% 24%;
   }
-}
 
-@layer base {
   * {
     @apply border-border;
   }
@@ -107,11 +105,6 @@
 
 /* Modern Design Utilities */
 @layer utilities {
-  /* Accent text */
-  .text-accent {
-    @apply text-[hsl(var(--accent))];
-  }
-
   /* True liquid glass — backdrop-filter with specular highlight.
    * NOTE: These utilities are dark-mode only (dark rgba backgrounds, dark shadows).
    * They rely on ThemeProvider defaultTheme="dark" / enableSystem=false in layout.tsx.
@@ -133,7 +126,7 @@
     box-shadow:
       inset 0 1px 0 rgba(255, 255, 255, 0.12),
       0 4px 24px rgba(0, 0, 0, 0.4);
-    will-change: transform;
+    contain: paint;
   }
 
   .liquid-glass-strong {
@@ -146,7 +139,6 @@
       inset 0 0 0 1px rgba(255, 255, 255, 0.04),
       0 8px 40px rgba(0, 0, 0, 0.5),
       0 2px 8px rgba(0, 0, 0, 0.3);
-    will-change: transform;
   }
 
   .liquid-glass-card {
@@ -158,10 +150,11 @@
       inset 0 1px 0 rgba(255, 255, 255, 0.14),
       0 4px 32px rgba(0, 0, 0, 0.45);
     border-radius: 16px;
+    contain: paint;
     transition:
       box-shadow 0.2s ease,
-      border-color 0.2s ease;
-    will-change: transform;
+      border-color 0.2s ease,
+      transform 0.2s ease;
   }
   .liquid-glass-card:hover {
     border-color: rgba(255, 255, 255, 0.16);
@@ -169,6 +162,7 @@
       inset 0 1px 0 rgba(255, 255, 255, 0.2),
       0 8px 48px rgba(0, 0, 0, 0.55),
       0 0 0 1px rgba(96, 165, 250, 0.15);
+    transform: translateY(-1px);
   }
 
   /* Solid surface cards — kept for light mode / backwards compat */
@@ -189,15 +183,9 @@
       0 12px 20px hsl(0 0% 0% / 0.04);
   }
 
-  /* Dark mode: glass-card becomes real glass */
+  /* Dark mode: glass-card becomes real glass — delegates to liquid-glass-card */
   .dark .glass-card {
-    background: rgba(255, 255, 255, 0.05);
-    backdrop-filter: blur(24px) saturate(1.6);
-    -webkit-backdrop-filter: blur(24px) saturate(1.6);
-    border: 1px solid rgba(255, 255, 255, 0.09);
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.14),
-      0 4px 32px rgba(0, 0, 0, 0.45);
+    @apply liquid-glass-card;
   }
 
   /* Elevation system — in dark mode all elevations use liquid glass */
@@ -231,29 +219,17 @@
       0 20px 48px hsl(0 0% 0% / 0.12);
   }
 
-  /* Dark mode elevations → liquid glass */
+  /* Dark mode elevations → liquid glass (elev-3 gets the stronger treatment) */
   .dark .elev-0,
   .dark .elev-1,
-  .dark .elev-2,
-  .dark .elev-3 {
-    background: rgba(255, 255, 255, 0.05);
-    backdrop-filter: blur(24px) saturate(1.6);
-    -webkit-backdrop-filter: blur(24px) saturate(1.6);
+  .dark .elev-2 {
+    /* Solid semi-transparent — no backdrop-filter to limit concurrent blur layers */
+    background: rgba(255, 255, 255, 0.06);
     border: 1px solid rgba(255, 255, 255, 0.09);
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.14),
-      0 4px 32px rgba(0, 0, 0, 0.45);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
   }
   .dark .elev-3 {
-    background: rgba(255, 255, 255, 0.07);
-    backdrop-filter: blur(40px) saturate(2);
-    -webkit-backdrop-filter: blur(40px) saturate(2);
-    border: 1px solid rgba(255, 255, 255, 0.12);
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.18),
-      inset 0 0 0 1px rgba(255, 255, 255, 0.04),
-      0 8px 40px rgba(0, 0, 0, 0.5),
-      0 2px 8px rgba(0, 0, 0, 0.3);
+    @apply liquid-glass-strong;
   }
 
   /* Accent border */
@@ -280,8 +256,7 @@
     filter: blur(60px);
     pointer-events: none;
     z-index: 0;
-    /* Promote to own compositor layer to avoid scroll-triggered repaints */
-    will-change: transform;
+    /* translateZ(0) promotes to compositor layer; will-change is redundant here */
     transform: translateZ(0);
   }
   .bg-gradient-mesh::after {
@@ -289,16 +264,18 @@
     position: fixed;
     bottom: -100px;
     left: -100px;
-    width: 500px;
-    height: 500px;
+    width: 600px;
+    height: 600px;
     border-radius: 50%;
     background:
-      radial-gradient(ellipse at 30% 70%, hsla(270, 80%, 65%, 0.14) 0%, transparent 60%),
-      radial-gradient(ellipse at 70% 30%, hsla(217, 91%, 60%, 0.1) 0%, transparent 55%);
+      /* bottom-left purple orb */
+      radial-gradient(ellipse at 30% 70%, hsla(270, 80%, 65%, 0.14) 0%, transparent 55%),
+      /* center-screen blue orb — fills the viewport middle that the other two miss */
+        radial-gradient(ellipse at 120% -20%, hsla(217, 91%, 60%, 0.12) 0%, transparent 60%),
+      radial-gradient(ellipse at 70% 30%, hsla(217, 91%, 60%, 0.08) 0%, transparent 50%);
     filter: blur(60px);
     pointer-events: none;
     z-index: 0;
-    will-change: transform;
     transform: translateZ(0);
   }
 
@@ -309,14 +286,6 @@
       0 1px 3px hsl(0 0% 0% / 0.1);
   }
 
-  .glow-blue {
-    box-shadow: 0 0 20px rgba(96, 165, 250, 0.35);
-  }
-
-  .glow-blue-sm {
-    box-shadow: 0 0 10px rgba(96, 165, 250, 0.25);
-  }
-
   /* Inset highlight for buttons */
   .btn-inset {
     box-shadow:
@@ -324,9 +293,12 @@
       0 1px 2px hsl(0 0% 0% / 0.15);
   }
 
-  /* Card hover lift effect */
+  /* Card hover lift effect — for non-glass cards; glass cards use liquid-glass-card:hover */
   .card-hover {
-    transition: all 0.2s ease;
+    transition:
+      transform 0.2s ease,
+      box-shadow 0.2s ease,
+      border-color 0.2s ease;
   }
   .card-hover:hover {
     border-color: hsl(var(--border-strong));
@@ -336,9 +308,9 @@
     transform: translateY(-1px);
   }
 
-  /* Gradient text */
+  /* Gradient text — white core → electric blue; dark-mode only */
   .gradient-text {
-    background: linear-gradient(135deg, #fff 0%, #bfdbfe 50%, #60a5fa 100%);
+    background: linear-gradient(135deg, #ffffff 0%, #93c5fd 35%, #3b82f6 70%, #1d4ed8 100%);
     -webkit-background-clip: text;
     background-clip: text;
     -webkit-text-fill-color: transparent;

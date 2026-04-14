@@ -134,11 +134,11 @@ export function Sidebar({ open, onClose }: SidebarProps) {
                 className={cn(
                   "flex items-center gap-3 rounded-lg px-3 h-9 text-sm font-medium tracking-tight transition-all",
                   isActive
-                    ? "bg-accent-2/12 text-accent-2 shadow-sm shadow-accent-2/10"
-                    : "text-muted-foreground hover:bg-surface-3 hover:text-foreground"
+                    ? "bg-accent/10 text-accent border border-accent/20 shadow-[0_0_12px_rgba(96,165,250,0.15)] pl-[11px]"
+                    : "text-muted-foreground hover:bg-white/5 hover:text-foreground border border-transparent"
                 )}
               >
-                <span className={isActive ? "text-accent-2" : ""}>{item.icon}</span>
+                <span className={isActive ? "text-accent" : ""}>{item.icon}</span>
                 {item.label}
                 {item.label === "Issues" && safeUnresolved > 0 && (
                   <span
@@ -167,7 +167,9 @@ export function Sidebar({ open, onClose }: SidebarProps) {
             <div
               className={cn(
                 "rounded-lg p-3 transition-all",
-                isPro ? "bg-accent/10 border border-accent/20" : "bg-surface-3 border border-border-subtle"
+                isPro
+                  ? "bg-accent/10 border border-accent/25 shadow-[inset_0_1px_0_rgba(255,255,255,0.1),0_0_12px_rgba(96,165,250,0.1)]"
+                  : "bg-white/4 border border-white/8 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]"
               )}
             >
               <div className="flex items-center gap-1.5">

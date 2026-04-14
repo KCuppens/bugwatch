@@ -34,26 +34,26 @@ function DashboardPreview() {
         <div className="p-6">
           {/* Stats row */}
           <div className="grid grid-cols-4 gap-4 mb-6">
-            <div className="p-4 rounded-xl bg-surface-3 border border-border-subtle">
+            <div className="p-4 rounded-xl bg-white/5 border border-white/10">
               <div className="text-2xl font-bold">1,247</div>
               <div className="text-xs text-muted-foreground">Total Errors</div>
             </div>
-            <div className="p-4 rounded-xl bg-surface-3 border border-border-subtle">
+            <div className="p-4 rounded-xl bg-white/5 border border-white/10">
               <div className="text-2xl font-bold text-red-500">23</div>
               <div className="text-xs text-muted-foreground">Unresolved</div>
             </div>
-            <div className="p-4 rounded-xl bg-surface-3 border border-border-subtle">
+            <div className="p-4 rounded-xl bg-white/5 border border-white/10">
               <div className="text-2xl font-bold text-accent">98.2%</div>
               <div className="text-xs text-muted-foreground">Uptime</div>
             </div>
-            <div className="p-4 rounded-xl bg-surface-3 border border-border-subtle">
+            <div className="p-4 rounded-xl bg-white/5 border border-white/10">
               <div className="text-2xl font-bold">$0</div>
               <div className="text-xs text-muted-foreground">This Month</div>
             </div>
           </div>
 
           {/* Issues list */}
-          <div className="rounded-xl bg-surface-2 border border-border-subtle overflow-hidden">
+          <div className="rounded-xl bg-white/4 border border-white/8 overflow-hidden">
             <div className="px-4 py-3 border-b border-border-subtle">
               <span className="font-medium">Recent Issues</span>
             </div>
@@ -123,7 +123,7 @@ export function Hero() {
               href="https://github.com/KCuppens/bugwatch"
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center justify-center gap-2 h-12 px-7 rounded-xl bg-surface-2 border border-border-subtle text-base font-medium hover:bg-surface-3 hover:border-border-strong transition-all"
+              className="inline-flex items-center justify-center gap-2 h-12 px-7 rounded-xl liquid-glass text-base font-medium hover:border-white/16 hover:shadow-glow-blue-sm transition-all"
             >
               Self-Host on GitHub
             </Link>
