@@ -5,6 +5,7 @@ WORKDIR /app
 
 # Copy package files
 COPY package.json package-lock.json* ./
+COPY tsconfig.base.json ./
 COPY apps/web/package.json ./apps/web/
 COPY packages/ ./packages/
 
@@ -18,7 +19,6 @@ RUN npm run build --workspace=@bugwatch/core \
 
 # Copy source code
 COPY apps/web ./apps/web
-COPY tsconfig.base.json ./
 
 ENV NODE_ENV=development
 ENV NEXT_TELEMETRY_DISABLED=1
