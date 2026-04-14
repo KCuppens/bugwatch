@@ -9,6 +9,14 @@ const withBundleAnalyzer = bundleAnalyzer({ enabled: process.env.ANALYZE === "tr
 const nextConfig: NextConfig = {
   reactStrictMode: true,
   transpilePackages: ["@bugwatch/nextjs", "@bugwatch/core", "@bugwatch/node"],
+  webpack(config, { dev }) {
+    if (dev) {
+      // Use cheap-module-source-map instead of the default eval-based devtool
+      // so that CSP script-src does not need 'unsafe-eval' in development.
+      config.devtool = "cheap-module-source-map";
+    }
+    return config;
+  },
   output: "standalone",
   // Tree-shake icon libs so each page only pulls the icons it actually uses
   // instead of the whole barrel export.
@@ -27,6 +35,12 @@ const nextConfig: NextConfig = {
     },
   },
   async headers() {
+    const isDev = process.env.NODE_ENV === "development";
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000";
+    // In dev, HMR needs a WebSocket connection back to the dev server.
+    const connectSrc = isDev
+      ? `connect-src 'self' ${apiUrl} ws://localhost:3001 ws://localhost:3000`
+      : `connect-src 'self' ${apiUrl}`;
     return [
       {
         source: "/(.*)",
@@ -46,7 +60,7 @@ const nextConfig: NextConfig = {
               "script-src 'self' 'unsafe-inline'",
               "style-src 'self' 'unsafe-inline'",
               "img-src 'self' data: blob:",
-              `connect-src 'self' ${process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000"}`,
+              connectSrc,
               "font-src 'self'",
               "frame-ancestors 'none'",
             ].join("; "),
