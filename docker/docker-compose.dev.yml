@@ -19,11 +19,15 @@ services:
       # Mount source code for hot reloading
       - ../apps/web/src:/app/apps/web/src
       - ../apps/web/public:/app/apps/web/public:ro
+      # Mount config files so changes don't require an image rebuild
+      - ../apps/web/next.config.ts:/app/apps/web/next.config.ts:ro
+      - ../apps/web/tailwind.config.ts:/app/apps/web/tailwind.config.ts:ro
     environment:
       - NODE_ENV=development
       - NEXT_PUBLIC_API_URL=http://localhost:3000
       - WATCHPACK_POLLING=true
       - CHOKIDAR_USEPOLLING=true
+      - CHOKIDAR_INTERVAL=1000
     depends_on:
       server:
         condition: service_started
