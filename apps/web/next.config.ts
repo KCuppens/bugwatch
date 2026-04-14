@@ -11,9 +11,6 @@ const nextConfig: NextConfig = {
   transpilePackages: ["@bugwatch/nextjs", "@bugwatch/core", "@bugwatch/node"],
   webpack(config, { dev }) {
     if (dev) {
-      // Use cheap-module-source-map instead of the default eval-based devtool
-      // so that CSP script-src does not need 'unsafe-eval' in development.
-      config.devtool = "cheap-module-source-map";
       // Docker on Windows doesn't relay inotify events — force polling so
       // webpack detects file changes without native FS events.
       config.watchOptions = {
