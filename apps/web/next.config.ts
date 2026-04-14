@@ -14,6 +14,12 @@ const nextConfig: NextConfig = {
       // Use cheap-module-source-map instead of the default eval-based devtool
       // so that CSP script-src does not need 'unsafe-eval' in development.
       config.devtool = "cheap-module-source-map";
+      // Docker on Windows doesn't relay inotify events — force polling so
+      // webpack detects file changes without native FS events.
+      config.watchOptions = {
+        poll: 1000,
+        aggregateTimeout: 300,
+      };
     }
     return config;
   },
