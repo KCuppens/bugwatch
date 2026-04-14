@@ -46,7 +46,10 @@ export interface BugwatchOptions {
    * Called whenever an event is dropped (rate limited, sampled out, beforeSend returned null, etc.).
    * Use this to monitor SDK health in production — silent drops are the #1 source of "the SDK isn't working" bugs.
    */
-  onDropped?: (eventId: string, reason: "rate_limited" | "sample_rate" | "not_initialized" | "before_send" | "network_error") => void;
+  onDropped?: (
+    eventId: string,
+    reason: "rate_limited" | "sample_rate" | "not_initialized" | "before_send" | "network_error" | "ignored"
+  ) => void;
 }
 
 /**
@@ -182,6 +185,13 @@ export interface ErrorEvent {
   runtime?: RuntimeInfo;
   /** Session ID for linking to session replay */
   session_id?: string;
+  /**
+   * Pre-computed fingerprint for grouping.
+   * When set, the server uses this value instead of re-computing the
+   * fingerprint from the exception — allows SDK-side custom grouping without
+   * burying the value inside `tags`.
+   */
+  fingerprint?: string;
 }
 
 /**
