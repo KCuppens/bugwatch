@@ -12,6 +12,7 @@ const urbanist = Urbanist({
 import { ThemeProvider } from "@/components/theme-provider";
 import { AuthProvider } from "@/lib/auth-context";
 import { BugwatchProvider } from "@/components/bugwatch-provider";
+import { ErrorBoundary } from "@/components/error-boundary";
 import { Toaster } from "@/components/ui/sonner";
 import "./globals.css";
 
@@ -52,10 +53,29 @@ export default function RootLayout({
     <html lang="en" suppressHydrationWarning>
       <body className={`${GeistSans.variable} ${GeistMono.variable} ${urbanist.variable} font-sans antialiased`}>
         <ThemeProvider attribute="class" defaultTheme="dark" enableSystem={false} disableTransitionOnChange>
-          <AuthProvider>
-            <BugwatchProvider>{children}</BugwatchProvider>
-          </AuthProvider>
-          <Toaster />
+          <ErrorBoundary
+            fallback={
+              <div className="min-h-screen flex items-center justify-center p-8 text-center">
+                <div>
+                  <p className="text-lg font-semibold mb-2">Something went wrong</p>
+                  <p className="text-sm text-muted-foreground mb-4">Please refresh the page to try again.</p>
+                  <button
+                    onClick={() => window.location.reload()}
+                    className="px-4 py-2 rounded-lg bg-accent text-accent-foreground text-sm font-medium hover:bg-accent/90 transition-colors"
+                  >
+                    Refresh
+                  </button>
+                </div>
+              </div>
+            }
+          >
+            <AuthProvider>
+              <BugwatchProvider>
+                {children}
+                <Toaster />
+              </BugwatchProvider>
+            </AuthProvider>
+          </ErrorBoundary>
         </ThemeProvider>
       </body>
     </html>
