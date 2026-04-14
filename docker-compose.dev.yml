@@ -55,6 +55,12 @@ services:
       - web_node_modules:/app/apps/web/node_modules
     environment:
       - NEXT_PUBLIC_API_URL=http://localhost:3000
+      # On Windows, Docker Desktop does not relay inotify events into the
+      # container, so webpack's native watcher never fires. Polling is slower
+      # but reliable — changes are picked up within ~1–2 seconds.
+      - WATCHPACK_POLLING=true
+      - CHOKIDAR_USEPOLLING=true
+      - CHOKIDAR_INTERVAL=1000
     depends_on:
       - server
 
