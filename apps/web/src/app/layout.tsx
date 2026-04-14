@@ -16,6 +16,9 @@ import { Toaster } from "@/components/ui/sonner";
 import "./globals.css";
 
 const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || "https://bugwatch.dev";
+if (process.env.NODE_ENV === "production" && !process.env.NEXT_PUBLIC_SITE_URL) {
+  console.warn("[layout] NEXT_PUBLIC_SITE_URL is not set — OG/canonical URLs default to https://bugwatch.dev");
+}
 
 export const metadata: Metadata = {
   metadataBase: new URL(siteUrl),
@@ -48,12 +51,7 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <body className={`${GeistSans.variable} ${GeistMono.variable} ${urbanist.variable} font-sans antialiased`}>
-        <ThemeProvider
-          attribute="class"
-          defaultTheme="system"
-          enableSystem
-          disableTransitionOnChange
-        >
+        <ThemeProvider attribute="class" defaultTheme="dark" enableSystem={false} disableTransitionOnChange>
           <AuthProvider>
             <BugwatchProvider>{children}</BugwatchProvider>
           </AuthProvider>

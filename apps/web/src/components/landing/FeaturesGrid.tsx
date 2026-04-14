@@ -7,8 +7,7 @@ export function FeaturesGrid() {
       <FadeUp>
         <div className="text-center max-w-2xl mx-auto mb-16">
           <h2 className="font-display text-display-md md:text-display-lg mb-4">
-            Everything you need.{" "}
-            <span className="text-accent">Nothing you don't.</span>
+            Everything you need. <span className="text-accent">Nothing you don't.</span>
           </h2>
           <p className="text-body-lg text-muted-foreground">
             Powerful error tracking without the complexity or the bill shock.
@@ -20,7 +19,7 @@ export function FeaturesGrid() {
       <StaggerContainer className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6 max-w-5xl mx-auto">
         {/* Large card - spans 2 columns */}
         <StaggerItem className="md:col-span-2 md:row-span-2">
-          <div className="p-8 h-full elev-2 border-accent/20 card-hover transform-gpu">
+          <div className="p-8 h-full liquid-glass-card card-hover transform-gpu">
             <span className="inline-flex h-12 w-12 items-center justify-center rounded-xl bg-accent/15 text-accent mb-6">
               <Infinity className="h-6 w-6" strokeWidth={1.75} />
             </span>
@@ -43,7 +42,7 @@ export function FeaturesGrid() {
 
         {/* Medium cards */}
         <StaggerItem>
-          <div className="p-6 h-full elev-1 card-hover transform-gpu">
+          <div className="p-6 h-full liquid-glass-card card-hover transform-gpu">
             <span className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-accent-2/10 text-accent-2 mb-4">
               <Activity className="h-5 w-5" strokeWidth={1.75} />
             </span>
@@ -55,7 +54,7 @@ export function FeaturesGrid() {
         </StaggerItem>
 
         <StaggerItem>
-          <div className="p-6 h-full elev-1 card-hover transform-gpu">
+          <div className="p-6 h-full liquid-glass-card card-hover transform-gpu">
             <span className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-accent-2/10 text-accent-2 mb-4">
               <Zap className="h-5 w-5" strokeWidth={1.75} />
             </span>
@@ -68,7 +67,7 @@ export function FeaturesGrid() {
 
         {/* Small cards row */}
         <StaggerItem>
-          <div className="p-6 h-full elev-1 card-hover transform-gpu">
+          <div className="p-6 h-full liquid-glass-card card-hover transform-gpu">
             <span className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-accent-2/10 text-accent-2 mb-4">
               <GitFork className="h-5 w-5" strokeWidth={1.75} />
             </span>
@@ -80,26 +79,22 @@ export function FeaturesGrid() {
         </StaggerItem>
 
         <StaggerItem>
-          <div className="p-6 h-full elev-1 card-hover transform-gpu">
+          <div className="p-6 h-full liquid-glass-card card-hover transform-gpu">
             <span className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-accent-2/10 text-accent-2 mb-4">
               <Server className="h-5 w-5" strokeWidth={1.75} />
             </span>
             <h3 className="text-heading-sm mb-1">Self-Host Option</h3>
-            <p className="text-muted-foreground text-body-sm">
-              Single binary. Run on your own servers.
-            </p>
+            <p className="text-muted-foreground text-body-sm">Single binary. Run on your own servers.</p>
           </div>
         </StaggerItem>
 
         <StaggerItem>
-          <div className="p-6 h-full elev-1 card-hover transform-gpu">
+          <div className="p-6 h-full liquid-glass-card card-hover transform-gpu">
             <span className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-accent-2/10 text-accent-2 mb-4">
               <Bell className="h-5 w-5" strokeWidth={1.75} />
             </span>
             <h3 className="text-heading-sm mb-1">Smart Alerts</h3>
-            <p className="text-muted-foreground text-body-sm">
-              PagerDuty, Slack, Discord, webhooks.
-            </p>
+            <p className="text-muted-foreground text-body-sm">PagerDuty, Slack, Discord, webhooks.</p>
           </div>
         </StaggerItem>
       </StaggerContainer>

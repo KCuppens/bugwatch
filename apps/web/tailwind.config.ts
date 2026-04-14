@@ -1,5 +1,6 @@
 import type { Config } from "tailwindcss";
 import { createPreset } from "fumadocs-ui/tailwind-plugin";
+import tailwindcssAnimate from "tailwindcss-animate";
 
 const config: Config = {
   darkMode: ["class"],
@@ -78,10 +79,10 @@ const config: Config = {
         pill: "100px",
       },
       spacing: {
-        '18': '4.5rem',
-        '22': '5.5rem',
-        '26': '6.5rem',
-        '30': '7.5rem',
+        "18": "4.5rem",
+        "22": "5.5rem",
+        "26": "6.5rem",
+        "30": "7.5rem",
       },
       fontFamily: {
         sans: ["var(--font-geist-sans)"],
@@ -143,9 +144,14 @@ const config: Config = {
         "fade-in-up": "fade-in-up 0.3s ease-out",
         "count-up": "count-up 0.3s ease-out",
       },
+      boxShadow: {
+        "glow-blue": "0 0 20px rgba(96, 165, 250, 0.35), 0 4px 24px rgba(96, 165, 250, 0.2)",
+        "glow-blue-sm": "0 0 10px rgba(96, 165, 250, 0.25)",
+        "glow-blue-lg": "0 0 40px rgba(96, 165, 250, 0.4), 0 8px 40px rgba(96, 165, 250, 0.25)",
+      },
     },
   },
-  plugins: [require("tailwindcss-animate")],
+  plugins: [tailwindcssAnimate],
 };
 
 export default config;

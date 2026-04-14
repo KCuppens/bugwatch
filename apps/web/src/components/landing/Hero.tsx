@@ -5,8 +5,17 @@ import { FadeUp, ScaleIn } from "./motion";
 function DashboardPreview() {
   return (
     <div className="relative mx-auto w-full max-w-5xl mt-16 overflow-hidden">
+      {/* Ambient glow behind the preview — decorative, no semantic content */}
+      <div
+        aria-hidden="true"
+        className="absolute inset-0 -z-10 opacity-50"
+        style={{
+          background: "radial-gradient(ellipse, rgba(96,165,250,0.28) 0%, rgba(139,92,246,0.15) 50%, transparent 70%)",
+          willChange: "transform",
+        }}
+      />
       {/* Browser chrome */}
-      <div className="rounded-2xl elev-3 overflow-hidden">
+      <div className="rounded-2xl liquid-glass-strong overflow-hidden">
         {/* Title bar */}
         <div className="flex items-center gap-2 px-4 py-3 border-b border-border-subtle">
           <div className="flex gap-1.5">
@@ -97,8 +106,7 @@ export function Hero() {
             Open source · v1.0 shipping
           </div>
           <h1 className="font-display text-display-md sm:text-display-lg md:text-display-xl mb-6">
-            Error tracking that doesn't{" "}
-            <span className="text-accent">punish growth</span>
+            Error tracking that doesn't <span className="gradient-text">punish growth</span>
           </h1>
           <p className="text-body-lg md:text-xl text-muted-foreground mb-10 max-w-[620px] mx-auto">
             Unlimited errors. Zero surprise bills. Open source.
@@ -106,7 +114,7 @@ export function Hero() {
           <div className="flex flex-col sm:flex-row gap-4 justify-center">
             <Link
               href="/signup"
-              className="inline-flex items-center justify-center gap-2 h-12 px-7 rounded-xl bg-accent text-accent-foreground text-base font-medium shadow-lg shadow-accent/25 hover:bg-accent/90 transition-all btn-inset focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-2/60 focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+              className="inline-flex items-center justify-center gap-2 h-12 px-7 rounded-xl bg-accent text-accent-foreground text-base font-medium shadow-glow-blue hover:shadow-glow-blue-lg hover:bg-accent/90 transition-all btn-inset focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 focus-visible:ring-offset-2 focus-visible:ring-offset-background"
             >
               Get Started Free
               <ArrowRight className="h-4 w-4" />
@@ -125,11 +133,21 @@ export function Hero() {
               Trusted by engineering teams shipping fast
             </p>
             <div className="flex items-center gap-8 opacity-60 grayscale text-muted-foreground text-sm font-semibold">
-              <span>◆ Vercel</span>
-              <span>▲ Railway</span>
-              <span>● Fly.io</span>
-              <span className="hidden sm:inline">◇ Render</span>
-              <span className="hidden sm:inline">★ Supabase</span>
+              <span>
+                <span aria-hidden="true">◆</span> Vercel
+              </span>
+              <span>
+                <span aria-hidden="true">▲</span> Railway
+              </span>
+              <span>
+                <span aria-hidden="true">●</span> Fly.io
+              </span>
+              <span className="hidden sm:inline">
+                <span aria-hidden="true">◇</span> Render
+              </span>
+              <span className="hidden sm:inline">
+                <span aria-hidden="true">★</span> Supabase
+              </span>
             </div>
           </div>
         </div>
