@@ -1,7 +1,7 @@
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000";
 
 if (process.env.NODE_ENV === "production" && API_BASE_URL && !API_BASE_URL.startsWith("https://")) {
-  console.warn("[Bugwatch] API URL is not using HTTPS in production:", API_BASE_URL);
+  throw new Error(`[Bugwatch] API URL must use HTTPS in production. Got: ${API_BASE_URL}`);
 }
 
 export class ApiError extends Error {
@@ -11,7 +11,7 @@ export class ApiError extends Error {
     public status: number,
     public code: string,
     message: string,
-    retryAfterSeconds?: number,
+    retryAfterSeconds?: number
   ) {
     super(message);
     this.name = "ApiError";
@@ -34,49 +34,32 @@ interface ApiErrorResponse {
 let refreshPromise: Promise<boolean> | null = null;
 
 /**
- * Check if a JWT token is expired (with 30 second buffer)
+ * Save tokens — no-op, httpOnly cookies are set by the server automatically.
+ * @deprecated Migration to httpOnly cookies is complete. Remove call sites and this function.
  */
-export function isTokenExpired(token: string): boolean {
-  try {
-    const parts = token.split('.');
-    const payloadPart = parts[1];
-    if (!payloadPart) return true;
-    const payload = JSON.parse(atob(payloadPart));
-    // Add 30 second buffer to avoid edge cases
-    return payload.exp * 1000 < Date.now() + 30000;
-  } catch {
-    return true;
-  }
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+export function saveTokens(_accessToken: string, _refreshToken: string): void {
+  // httpOnly cookies are managed by the server via Set-Cookie headers.
+  // No client-side storage needed.
 }
 
 /**
- * Save tokens to localStorage
- */
-export function saveTokens(accessToken: string, refreshToken: string): void {
-  if (typeof window === "undefined") return;
-  localStorage.setItem("access_token", accessToken);
-  localStorage.setItem("refresh_token", refreshToken);
-}
-
-/**
- * Clear tokens from localStorage
+ * Clear tokens — no-op for httpOnly cookies (cleared on logout via server).
+ * Cleans up any legacy localStorage entries.
  */
 export function clearTokens(): void {
   if (typeof window === "undefined") return;
+  // Clean up legacy localStorage entries if they exist
   localStorage.removeItem("access_token");
   localStorage.removeItem("refresh_token");
 }
 
 /**
- * Get the current access token if valid
+ * Get the current access token — always returns null.
+ * Auth is now handled via httpOnly cookies sent automatically by the browser.
  */
 export function getAccessToken(): string | null {
-  if (typeof window === "undefined") return null;
-  const token = localStorage.getItem("access_token");
-  if (!token) return null;
-  // Return null if token is expired
-  if (isTokenExpired(token)) return null;
-  return token;
+  return null;
 }
 
 /**
@@ -92,28 +75,22 @@ export async function refreshTokens(): Promise<boolean> {
 
   refreshPromise = (async () => {
     try {
-      const refreshToken = localStorage.getItem("refresh_token");
-      if (!refreshToken) return false;
-
+      // httpOnly refresh cookie is sent automatically via credentials: "include".
+      // No body needed — the server reads exclusively from the cookie.
       const response = await fetch(`${API_BASE_URL}/api/v1/auth/refresh`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ refresh_token: refreshToken }),
       });
 
       if (!response.ok) {
-        // Only clear tokens on 401 (invalid/expired refresh token)
         if (response.status === 401) {
           clearTokens();
         }
         return false;
       }
 
-      const data = await response.json();
-      saveTokens(data.data.access_token, data.data.refresh_token);
+      // Server sets new httpOnly cookies automatically via Set-Cookie headers
       return true;
     } catch {
       // Network error - don't clear tokens, might be temporary
@@ -156,7 +133,7 @@ async function handleResponse<T>(response: Response): Promise<T> {
       response.status === 429 && retryAfterSeconds
         ? `Rate limit exceeded. Try again in ${retryAfterSeconds} seconds.`
         : errorData?.error?.message || `Request failed with status ${response.status}`,
-      retryAfterSeconds,
+      retryAfterSeconds
     );
   }
 
@@ -168,53 +145,33 @@ async function handleResponse<T>(response: Response): Promise<T> {
   try {
     return JSON.parse(text) as T;
   } catch {
-    throw new ApiError(
-      response.status,
-      "parse_error",
-      "Failed to parse server response"
-    );
+    throw new ApiError(response.status, "parse_error", "Failed to parse server response");
   }
 }
 
 function getAuthHeaders(): HeadersInit {
-  if (typeof window === "undefined") return {};
-  const token = getAccessToken(); // Uses the new function that checks expiry
-  return token ? { Authorization: `Bearer ${token}` } : {};
+  // Auth is handled via httpOnly cookies sent automatically by the browser.
+  return {};
 }
 
 /**
- * Fetch with automatic 401 retry - attempts token refresh on 401 and retries once
+ * Fetch with automatic 401 retry - attempts token refresh on 401 and retries once.
+ * Auth is handled via httpOnly cookies (credentials: "include").
  */
-async function fetchWithAuth(
-  url: string,
-  options: RequestInit = {}
-): Promise<Response> {
+async function fetchWithAuth(url: string, options: RequestInit = {}): Promise<Response> {
   const headers = {
     "Content-Type": "application/json",
     ...getAuthHeaders(),
     ...(options.headers || {}),
   };
 
-  // Include credentials so httpOnly cookies are sent automatically.
-  // The Authorization header is still set as a fallback for SSR / CLI / agents.
   let response = await fetch(url, { ...options, headers, credentials: "include" });
 
-  // If 401 and we have a refresh token (localStorage or cookie), try to refresh and retry
-  if (response.status === 401) {
-    const hasRefreshToken = typeof window !== "undefined" && localStorage.getItem("refresh_token");
-    // Always attempt refresh — even without a localStorage token, the httpOnly
-    // refresh cookie may be present.
-    if (hasRefreshToken || typeof window !== "undefined") {
-      const refreshed = await refreshTokens();
-      if (refreshed) {
-        // Retry with new token (headers may have updated from localStorage)
-        const newHeaders = {
-          "Content-Type": "application/json",
-          ...getAuthHeaders(),
-          ...(options.headers || {}),
-        };
-        response = await fetch(url, { ...options, headers: newHeaders, credentials: "include" });
-      }
+  // If 401, try to refresh via httpOnly cookie and retry once
+  if (response.status === 401 && typeof window !== "undefined") {
+    const refreshed = await refreshTokens();
+    if (refreshed) {
+      response = await fetch(url, { ...options, headers, credentials: "include" });
     }
   }
 
@@ -260,32 +217,26 @@ export const api = {
 // Auth API endpoints
 export const authApi = {
   async signup(email: string, password: string, name?: string) {
-    return api.post<{ data: { user: User; tokens: TokenPair } }>(
-      "/api/v1/auth/signup",
-      { email, password, name }
-    );
+    return api.post<{ data: { user: User } }>("/api/v1/auth/signup", { email, password, name });
   },
 
   async login(email: string, password: string) {
-    return api.post<{ data: { user: User; tokens: TokenPair } }>(
-      "/api/v1/auth/login",
-      { email, password }
-    );
+    return api.post<{ data: { user: User } }>("/api/v1/auth/login", { email, password });
   },
 
   async logout() {
     return api.post<{ data: { message: string } }>("/api/v1/auth/logout");
   },
 
-  async refresh(refreshToken: string) {
+  async refresh() {
+    // Sends no body — the httpOnly refresh cookie is sent automatically
+    // by the browser. The server ignores any body content.
     const response = await fetch(`${API_BASE_URL}/api/v1/auth/refresh`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ refresh_token: refreshToken }),
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
     });
-    return handleResponse<{ data: TokenPair }>(response);
+    return handleResponse<{ data: { expires_in: number } }>(response);
   },
 
   async me() {
@@ -302,6 +253,17 @@ export const authApi = {
       new_password: newPassword,
     });
   },
+
+  async forgotPassword(email: string) {
+    return api.post<{ data: { message: string } }>("/api/v1/auth/forgot-password", { email });
+  },
+
+  async resetPassword(token: string, newPassword: string) {
+    return api.post<{ data: { message: string } }>("/api/v1/auth/reset-password", {
+      token,
+      new_password: newPassword,
+    });
+  },
 };
 
 // Types
@@ -309,7 +271,7 @@ export interface Organization {
   id: string;
   name: string;
   slug: string;
-  tier: 'free' | 'pro' | 'team' | 'enterprise';
+  tier: "free" | "pro" | "team" | "enterprise";
   seats: number;
   subscription_status: string;
   current_period_end: string | null;
@@ -481,7 +443,14 @@ export type GoFramework = "net_http" | "gin" | "echo";
 export type JavaFramework = "spring";
 export type RubyFramework = "rack" | "rails" | "sidekiq";
 export type PhpFramework = "laravel" | "symfony";
-export type Framework = JavaScriptFramework | PythonFramework | RustFramework | GoFramework | JavaFramework | RubyFramework | PhpFramework;
+export type Framework =
+  | JavaScriptFramework
+  | PythonFramework
+  | RustFramework
+  | GoFramework
+  | JavaFramework
+  | RubyFramework
+  | PhpFramework;
 
 export interface Issue {
   id: string;
@@ -547,7 +516,7 @@ export interface StackFrameDetail {
   pre_context?: string[];
   post_context?: string[];
   in_app: boolean;
-  vars?: Record<string, unknown>;  // Local variables at this frame
+  vars?: Record<string, unknown>; // Local variables at this frame
 }
 
 export interface EventSummary {
@@ -627,9 +596,7 @@ export interface PaginatedResponse<T> {
 // Projects API
 export const projectsApi = {
   async list(page = 1, perPage = 20) {
-    return api.get<PaginatedResponse<Project>>(
-      `/api/v1/projects?page=${page}&per_page=${perPage}`
-    );
+    return api.get<PaginatedResponse<Project>>(`/api/v1/projects?page=${page}&per_page=${perPage}`);
   },
 
   async get(id: string) {
@@ -644,10 +611,7 @@ export const projectsApi = {
     });
   },
 
-  async update(
-    id: string,
-    data: { name?: string; platform?: string; framework?: string }
-  ) {
+  async update(id: string, data: { name?: string; platform?: string; framework?: string }) {
     return api.patch<{ data: Project }>(`/api/v1/projects/${id}`, data);
   },
 
@@ -660,15 +624,11 @@ export const projectsApi = {
   },
 
   async completeOnboarding(id: string) {
-    return api.post<{ data: Project }>(
-      `/api/v1/projects/${id}/onboarding/complete`
-    );
+    return api.post<{ data: Project }>(`/api/v1/projects/${id}/onboarding/complete`);
   },
 
   async verifyEvents(id: string) {
-    return api.get<{ data: { status: string; event_count: number } }>(
-      `/api/v1/projects/${id}/verify`
-    );
+    return api.get<{ data: { status: string; event_count: number } }>(`/api/v1/projects/${id}/verify`);
   },
 };
 
@@ -727,42 +687,27 @@ export const issuesApi = {
     if (params?.page) searchParams.set("page", String(params.page));
     if (params?.status) searchParams.set("status", params.status);
     const query = searchParams.toString();
-    return api.get<PaginatedResponse<Issue>>(
-      `/api/v1/projects/${projectId}/issues${query ? `?${query}` : ""}`
-    );
+    return api.get<PaginatedResponse<Issue>>(`/api/v1/projects/${projectId}/issues${query ? `?${query}` : ""}`);
   },
 
   async search(projectId: string, request: SearchRequest, options?: { signal?: AbortSignal }) {
-    return api.post<SearchResponse>(
-      `/api/v1/projects/${projectId}/issues/_search`,
-      request,
-      options
-    );
+    return api.post<SearchResponse>(`/api/v1/projects/${projectId}/issues/_search`, request, options);
   },
 
   async get(projectId: string, issueId: string) {
-    return api.get<{ data: IssueDetail }>(
-      `/api/v1/projects/${projectId}/issues/${issueId}`
-    );
+    return api.get<{ data: IssueDetail }>(`/api/v1/projects/${projectId}/issues/${issueId}`);
   },
 
   async update(projectId: string, issueId: string, status: string) {
-    return api.patch<{ data: Issue }>(
-      `/api/v1/projects/${projectId}/issues/${issueId}`,
-      { status }
-    );
+    return api.patch<{ data: Issue }>(`/api/v1/projects/${projectId}/issues/${issueId}`, { status });
   },
 
   async delete(projectId: string, issueId: string) {
-    return api.delete<{ data: { message: string } }>(
-      `/api/v1/projects/${projectId}/issues/${issueId}`
-    );
+    return api.delete<{ data: { message: string } }>(`/api/v1/projects/${projectId}/issues/${issueId}`);
   },
 
   async getEvent(projectId: string, issueId: string, eventId: string) {
-    return api.get<{ data: EventDetail }>(
-      `/api/v1/projects/${projectId}/issues/${issueId}/events/${eventId}`
-    );
+    return api.get<{ data: EventDetail }>(`/api/v1/projects/${projectId}/issues/${issueId}/events/${eventId}`);
   },
 
   async getFrequency(projectId: string, issueId: string, period: "24h" | "7d" | "30d" = "24h") {
@@ -772,29 +717,21 @@ export const issuesApi = {
   },
 
   async getImpact(projectId: string, issueId: string) {
-    return api.get<{ data: ImpactData }>(
-      `/api/v1/projects/${projectId}/issues/${issueId}/impact`
-    );
+    return api.get<{ data: ImpactData }>(`/api/v1/projects/${projectId}/issues/${issueId}/impact`);
   },
 
   async listComments(projectId: string, issueId: string, page = 1) {
-    return api.get<{ data: IssueComment[] }>(
-      `/api/v1/projects/${projectId}/issues/${issueId}/comments?page=${page}`
-    );
+    return api.get<{ data: IssueComment[] }>(`/api/v1/projects/${projectId}/issues/${issueId}/comments?page=${page}`);
   },
 
   async createComment(projectId: string, issueId: string, content: string) {
-    return api.post<{ data: IssueComment }>(
-      `/api/v1/projects/${projectId}/issues/${issueId}/comments`,
-      { content }
-    );
+    return api.post<{ data: IssueComment }>(`/api/v1/projects/${projectId}/issues/${issueId}/comments`, { content });
   },
 
   async updateComment(projectId: string, issueId: string, commentId: string, content: string) {
-    return api.patch<{ data: IssueComment }>(
-      `/api/v1/projects/${projectId}/issues/${issueId}/comments/${commentId}`,
-      { content }
-    );
+    return api.patch<{ data: IssueComment }>(`/api/v1/projects/${projectId}/issues/${issueId}/comments/${commentId}`, {
+      content,
+    });
   },
 
   async deleteComment(projectId: string, issueId: string, commentId: string) {
@@ -887,9 +824,7 @@ export const overviewApi = {
     if (params?.page) searchParams.set("page", String(params.page));
     if (params?.limit) searchParams.set("limit", String(params.limit));
     const query = searchParams.toString();
-    return api.get<AcrossProjectsResponse>(
-      `/api/v1/issues/across-projects${query ? `?${query}` : ""}`
-    );
+    return api.get<AcrossProjectsResponse>(`/api/v1/issues/across-projects${query ? `?${query}` : ""}`);
   },
 
   async getStatsByProject() {
@@ -897,15 +832,11 @@ export const overviewApi = {
   },
 
   async getAlertLogsAcrossProjects(limit = 10) {
-    return api.get<{ data: AlertLogWithProjectInfo[] }>(
-      `/api/v1/alerts/across-projects?limit=${limit}`
-    );
+    return api.get<{ data: AlertLogWithProjectInfo[] }>(`/api/v1/alerts/across-projects?limit=${limit}`);
   },
 
   async getMonitorsAcrossProjects() {
-    return api.get<{ data: MonitorWithProjectInfo[]; summary: MonitorsSummary }>(
-      `/api/v1/monitors/across-projects`
-    );
+    return api.get<{ data: MonitorWithProjectInfo[]; summary: MonitorsSummary }>(`/api/v1/monitors/across-projects`);
   },
 };
 
@@ -1075,7 +1006,11 @@ export const alertsApi = {
     return api.post<NotificationChannel>(`/api/v1/projects/${projectId}/channels`, data);
   },
 
-  async updateChannel(projectId: string, channelId: string, data: Partial<CreateChannelRequest> & { is_active?: boolean }) {
+  async updateChannel(
+    projectId: string,
+    channelId: string,
+    data: Partial<CreateChannelRequest> & { is_active?: boolean }
+  ) {
     return api.patch<NotificationChannel>(`/api/v1/projects/${projectId}/channels/${channelId}`, data);
   },
 
@@ -1092,7 +1027,9 @@ export const alertsApi = {
   },
 
   async muteRule(projectId: string, ruleId: string, durationMinutes: number) {
-    return api.post<AlertRule>(`/api/v1/projects/${projectId}/alerts/${ruleId}/mute`, { duration_minutes: durationMinutes });
+    return api.post<AlertRule>(`/api/v1/projects/${projectId}/alerts/${ruleId}/mute`, {
+      duration_minutes: durationMinutes,
+    });
   },
 
   async unmuteRule(projectId: string, ruleId: string) {
@@ -1113,35 +1050,23 @@ export const monitorsApi = {
   },
 
   async get(projectId: string, monitorId: string) {
-    return api.get<MonitorDetailResponse>(
-      `/api/v1/projects/${projectId}/monitors/${monitorId}`
-    );
+    return api.get<MonitorDetailResponse>(`/api/v1/projects/${projectId}/monitors/${monitorId}`);
   },
 
   async create(projectId: string, data: CreateMonitorRequest) {
-    return api.post<MonitorResponse>(
-      `/api/v1/projects/${projectId}/monitors`,
-      data
-    );
+    return api.post<MonitorResponse>(`/api/v1/projects/${projectId}/monitors`, data);
   },
 
   async update(projectId: string, monitorId: string, data: UpdateMonitorRequest) {
-    return api.patch<MonitorResponse>(
-      `/api/v1/projects/${projectId}/monitors/${monitorId}`,
-      data
-    );
+    return api.patch<MonitorResponse>(`/api/v1/projects/${projectId}/monitors/${monitorId}`, data);
   },
 
   async delete(projectId: string, monitorId: string) {
-    return api.delete<{ message: string }>(
-      `/api/v1/projects/${projectId}/monitors/${monitorId}`
-    );
+    return api.delete<{ message: string }>(`/api/v1/projects/${projectId}/monitors/${monitorId}`);
   },
 
   async listChecks(projectId: string, monitorId: string, limit = 100) {
-    return api.get<MonitorCheck[]>(
-      `/api/v1/projects/${projectId}/monitors/${monitorId}/checks?limit=${limit}`
-    );
+    return api.get<MonitorCheck[]>(`/api/v1/projects/${projectId}/monitors/${monitorId}/checks?limit=${limit}`);
   },
 };
 
@@ -1150,26 +1075,24 @@ export const monitorsApi = {
 export const billingApi = {
   // Organization
   async getOrganization() {
-    return api.get<{ organization: Organization; members_count: number; is_owner: boolean }>(
-      '/api/v1/organization'
-    );
+    return api.get<{ organization: Organization; members_count: number; is_owner: boolean }>("/api/v1/organization");
   },
 
   async createOrganization(name: string) {
-    return api.post<Organization>('/api/v1/organization', { name });
+    return api.post<Organization>("/api/v1/organization", { name });
   },
 
   async updateOrganization(name: string) {
-    return api.patch<Organization>('/api/v1/organization', { name });
+    return api.patch<Organization>("/api/v1/organization", { name });
   },
 
   // Members
   async listMembers() {
-    return api.get<OrganizationMember[]>('/api/v1/organization/members');
+    return api.get<OrganizationMember[]>("/api/v1/organization/members");
   },
 
-  async addMember(email: string, role: string = 'member') {
-    return api.post<OrganizationMember>('/api/v1/organization/members', { email, role });
+  async addMember(email: string, role: string = "member") {
+    return api.post<OrganizationMember>("/api/v1/organization/members", { email, role });
   },
 
   async removeMember(userId: string) {
@@ -1182,11 +1105,11 @@ export const billingApi = {
 
   // Subscription
   async getSubscription() {
-    return api.get<Subscription>('/api/v1/billing/subscription');
+    return api.get<Subscription>("/api/v1/billing/subscription");
   },
 
   async createCheckout(tier: string, seats: number, annual: boolean, successUrl: string, cancelUrl: string) {
-    return api.post<{ checkout_url: string }>('/api/v1/billing/checkout', {
+    return api.post<{ checkout_url: string }>("/api/v1/billing/checkout", {
       tier,
       seats,
       annual,
@@ -1196,31 +1119,29 @@ export const billingApi = {
   },
 
   async verifyCheckout(sessionId: string) {
-    return api.post<VerifyCheckoutResponse>('/api/v1/billing/verify-checkout', {
+    return api.post<VerifyCheckoutResponse>("/api/v1/billing/verify-checkout", {
       session_id: sessionId,
     });
   },
 
   async createPortal(returnUrl: string) {
-    return api.post<{ portal_url: string }>('/api/v1/billing/portal', {
+    return api.post<{ portal_url: string }>("/api/v1/billing/portal", {
       return_url: returnUrl,
     });
   },
 
   async cancelSubscription(immediately: boolean = false) {
-    return api.post<{ message: string }>('/api/v1/billing/cancel', { immediately });
+    return api.post<{ message: string }>("/api/v1/billing/cancel", { immediately });
   },
 
   // Usage
   async getUsage() {
-    return api.get<{ usage: UsageRecord[]; period_start: string; period_end: string }>(
-      '/api/v1/billing/usage'
-    );
+    return api.get<{ usage: UsageRecord[]; period_start: string; period_end: string }>("/api/v1/billing/usage");
   },
 
   // Plan changes
   async changePlan(tier: string, seats: number, annual: boolean, couponCode?: string) {
-    return api.post<{ subscription: Subscription; message: string }>('/api/v1/billing/change-plan', {
+    return api.post<{ subscription: Subscription; message: string }>("/api/v1/billing/change-plan", {
       tier,
       seats,
       annual,
@@ -1229,7 +1150,7 @@ export const billingApi = {
   },
 
   async previewPlanChange(tier: string, seats: number, annual: boolean) {
-    return api.post<ProrationPreview>('/api/v1/billing/preview-change', {
+    return api.post<ProrationPreview>("/api/v1/billing/preview-change", {
       tier,
       seats,
       annual,
@@ -1237,12 +1158,12 @@ export const billingApi = {
   },
 
   async updateSeats(seats: number) {
-    return api.post<{ subscription: Subscription; message: string }>('/api/v1/billing/seats', { seats });
+    return api.post<{ subscription: Subscription; message: string }>("/api/v1/billing/seats", { seats });
   },
 
   // Invoices
   async listInvoices() {
-    return api.get<{ invoices: Invoice[] }>('/api/v1/billing/invoices');
+    return api.get<{ invoices: Invoice[] }>("/api/v1/billing/invoices");
   },
 
   async getInvoice(invoiceId: string) {
@@ -1251,15 +1172,17 @@ export const billingApi = {
 
   // Payment methods
   async listPaymentMethods() {
-    return api.get<{ payment_methods: PaymentMethod[]; default_payment_method: string | null }>('/api/v1/billing/payment-methods');
+    return api.get<{ payment_methods: PaymentMethod[]; default_payment_method: string | null }>(
+      "/api/v1/billing/payment-methods"
+    );
   },
 
   async createSetupIntent() {
-    return api.post<{ client_secret: string }>('/api/v1/billing/setup-intent');
+    return api.post<{ client_secret: string }>("/api/v1/billing/setup-intent");
   },
 
   async setDefaultPaymentMethod(paymentMethodId: string) {
-    return api.post<{ success: boolean }>('/api/v1/billing/payment-methods/default', {
+    return api.post<{ success: boolean }>("/api/v1/billing/payment-methods/default", {
       payment_method_id: paymentMethodId,
     });
   },
@@ -1270,25 +1193,25 @@ export const billingApi = {
 
   // Coupons
   async validateCoupon(code: string) {
-    return api.post<CouponInfo>('/api/v1/billing/validate-coupon', { code });
+    return api.post<CouponInfo>("/api/v1/billing/validate-coupon", { code });
   },
 
   // Tax IDs
   async getTaxIds() {
-    return api.get<{ tax_ids: TaxIdInfo[] }>('/api/v1/billing/tax-ids');
+    return api.get<{ tax_ids: TaxIdInfo[] }>("/api/v1/billing/tax-ids");
   },
 
   async addTaxId(type: string, value: string) {
-    return api.post<TaxIdInfo>('/api/v1/billing/tax-ids', { type, value });
+    return api.post<TaxIdInfo>("/api/v1/billing/tax-ids", { type, value });
   },
 
   // Dashboard
   async getBillingDashboard() {
-    return api.get<BillingDashboard>('/api/v1/billing/dashboard');
+    return api.get<BillingDashboard>("/api/v1/billing/dashboard");
   },
 
   async getUsageHistory() {
-    return api.get<{ history: UsageHistoryRecord[] }>('/api/v1/billing/usage/history');
+    return api.get<{ history: UsageHistoryRecord[] }>("/api/v1/billing/usage/history");
   },
 };
 
@@ -1363,15 +1286,11 @@ export interface ServerStatus {
 // Server Monitoring API
 export const serversApi = {
   async listServers(projectId: string) {
-    return api.get<{ data: ServerInfo[] }>(
-      `/api/v1/projects/${projectId}/servers`
-    );
+    return api.get<{ data: ServerInfo[] }>(`/api/v1/projects/${projectId}/servers`);
   },
 
   async hasAgent(projectId: string) {
-    return api.get<ServerStatus>(
-      `/api/v1/projects/${projectId}/servers/status`
-    );
+    return api.get<ServerStatus>(`/api/v1/projects/${projectId}/servers/status`);
   },
 
   async getMetrics(projectId: string, serverId: string, period: string = "1h") {
@@ -1424,31 +1343,27 @@ export interface TimeSeriesPoint {
 export const performanceApi = {
   async getSummary(projectId: string, start?: string, end?: string) {
     const params = new URLSearchParams();
-    if (start) params.set('start', start);
-    if (end) params.set('end', end);
-    return api.get<{ data: PerformanceSummary }>(
-      `/api/v1/projects/${projectId}/performance/summary?${params}`
-    );
+    if (start) params.set("start", start);
+    if (end) params.set("end", end);
+    return api.get<{ data: PerformanceSummary }>(`/api/v1/projects/${projectId}/performance/summary?${params}`);
   },
 
   async listTransactions(projectId: string, start?: string, end?: string, limit = 20) {
     const params = new URLSearchParams();
-    if (start) params.set('start', start);
-    if (end) params.set('end', end);
-    params.set('limit', String(limit));
+    if (start) params.set("start", start);
+    if (end) params.set("end", end);
+    params.set("limit", String(limit));
     return api.get<{ data: TransactionAggregate[] }>(
       `/api/v1/projects/${projectId}/performance/transactions?${params}`
     );
   },
 
-  async getCharts(projectId: string, start?: string, end?: string, interval = '1h') {
+  async getCharts(projectId: string, start?: string, end?: string, interval = "1h") {
     const params = new URLSearchParams();
-    if (start) params.set('start', start);
-    if (end) params.set('end', end);
-    params.set('interval', interval);
-    return api.get<{ data: TimeSeriesPoint[] }>(
-      `/api/v1/projects/${projectId}/performance/charts?${params}`
-    );
+    if (start) params.set("start", start);
+    if (end) params.set("end", end);
+    params.set("interval", interval);
+    return api.get<{ data: TimeSeriesPoint[] }>(`/api/v1/projects/${projectId}/performance/charts?${params}`);
   },
 };
 
@@ -1459,7 +1374,7 @@ export const performanceApi = {
 export interface IntegrationInfo {
   id: string;
   organization_id: string;
-  provider: 'github' | 'jira' | 'linear';
+  provider: "github" | "jira" | "linear";
   external_username?: string;
   config: Record<string, unknown>;
   created_at: string;
@@ -1481,7 +1396,7 @@ export interface IssueLinkInfo {
 
 export const integrationsApi = {
   async list() {
-    return api.get<{ data: IntegrationInfo[] }>('/api/v1/integrations');
+    return api.get<{ data: IntegrationInfo[] }>("/api/v1/integrations");
   },
   async getOAuthUrl(provider: string) {
     return api.get<{ data: { url: string } }>(`/api/v1/integrations/oauth/${provider}/authorize`);
@@ -1492,7 +1407,11 @@ export const integrationsApi = {
   async listIssueLinks(projectId: string, issueId: string) {
     return api.get<{ data: IssueLinkInfo[] }>(`/api/v1/projects/${projectId}/issues/${issueId}/links`);
   },
-  async createIssueLink(projectId: string, issueId: string, data: { provider: string; config: Record<string, string> }) {
+  async createIssueLink(
+    projectId: string,
+    issueId: string,
+    data: { provider: string; config: Record<string, string> }
+  ) {
     return api.post<{ data: IssueLinkInfo }>(`/api/v1/projects/${projectId}/issues/${issueId}/links`, data);
   },
   async deleteIssueLink(projectId: string, issueId: string, linkId: string) {
@@ -1530,25 +1449,19 @@ export interface SegmentData {
 export const replayApi = {
   async listRecordings(projectId: string, limit = 20, offset = 0) {
     return api.get<{ data: SessionRecording[]; total: number }>(
-      `/api/v1/projects/${projectId}/replay?limit=${limit}&offset=${offset}`,
+      `/api/v1/projects/${projectId}/replay?limit=${limit}&offset=${offset}`
     );
   },
 
   async getRecording(projectId: string, recordingId: string) {
-    return api.get<{ data: SessionRecording }>(
-      `/api/v1/projects/${projectId}/replay/${recordingId}`,
-    );
+    return api.get<{ data: SessionRecording }>(`/api/v1/projects/${projectId}/replay/${recordingId}`);
   },
 
   async getSegments(projectId: string, recordingId: string) {
-    return api.get<SegmentData[]>(
-      `/api/v1/projects/${projectId}/replay/${recordingId}/segments`,
-    );
+    return api.get<SegmentData[]>(`/api/v1/projects/${projectId}/replay/${recordingId}/segments`);
   },
 
   async getIssueReplay(projectId: string, issueId: string) {
-    return api.get<{ data: SessionRecording | null }>(
-      `/api/v1/projects/${projectId}/issues/${issueId}/replay`,
-    );
+    return api.get<{ data: SessionRecording | null }>(`/api/v1/projects/${projectId}/issues/${issueId}/replay`);
   },
 };

@@ -40,7 +40,23 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               </ErrorBoundary>
               <Topbar />
               <main id="main-content" className="ml-0 md:ml-14 pt-12">
-                <div className="p-6 animate-fade-in-up">{children}</div>
+                <ErrorBoundary
+                  fallback={
+                    <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4 text-center p-8">
+                      <p className="text-[hsl(var(--muted-foreground))] text-sm">
+                        Something went wrong loading this page.
+                      </p>
+                      <button
+                        onClick={() => window.location.reload()}
+                        className="px-4 py-2 rounded-lg bg-[hsl(var(--accent))] text-[hsl(var(--accent-foreground))] text-sm font-medium hover:bg-[hsl(var(--accent))]/90 transition-colors"
+                      >
+                        Reload page
+                      </button>
+                    </div>
+                  }
+                >
+                  <div className="p-6 animate-fade-in-up">{children}</div>
+                </ErrorBoundary>
               </main>
             </div>
             <PaywallModal />

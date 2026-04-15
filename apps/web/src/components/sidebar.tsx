@@ -2,7 +2,7 @@
 
 import { useMemo } from "react";
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { Bug, Activity, Settings, FolderOpen, Bell, LayoutGrid, Server, Gauge, Video } from "lucide-react";
 import { useFeature } from "@/hooks/use-feature";
@@ -41,7 +41,6 @@ function BWMark({ className }: { className?: string }) {
 
 export function Sidebar() {
   const pathname = usePathname();
-  const router = useRouter();
   const { openPaywall } = usePaywall();
   const { unresolvedCount, monitorsDownCount } = useSidebarCounts();
   const hasPerformance = useFeature("performance_monitoring");
@@ -153,25 +152,14 @@ export function Sidebar() {
         {navItems.map((item) => {
           const active = isActive(item.href);
           const showBadge = item.badgeCount !== undefined && item.badgeCount > 0;
-
-          return (
-            <button
-              key={item.href}
-              onClick={() => {
-                if (item.proGated) {
-                  openPaywall();
-                } else {
-                  router.push(item.href);
-                }
-              }}
-              title={item.label}
-              className={cn(
-                "group/item relative flex items-center h-9 rounded-md px-2 text-sm font-medium transition-all duration-150 w-full text-left",
-                active
-                  ? "bg-[hsl(var(--accent))]/10 text-[hsl(var(--accent))] border-l-[3px] border-[hsl(var(--accent))] pl-[5px]"
-                  : "text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--surface-3))] hover:text-[hsl(var(--foreground))] border-l-[3px] border-transparent"
-              )}
-            >
+          const itemClassName = cn(
+            "group/item relative flex items-center h-9 rounded-md px-2 text-sm font-medium transition-all duration-150 w-full text-left",
+            active
+              ? "bg-[hsl(var(--accent))]/10 text-[hsl(var(--accent))] border-l-[3px] border-[hsl(var(--accent))] pl-[5px]"
+              : "text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--surface-3))] hover:text-[hsl(var(--foreground))] border-l-[3px] border-transparent"
+          );
+          const itemContent = (
+            <>
               {/* Icon — always visible, fixed width */}
               <span className="shrink-0 flex items-center justify-center w-5 h-5 relative">
                 {item.icon}
@@ -195,7 +183,17 @@ export function Sidebar() {
                 {item.label}
                 {item.proGated && <span className="ml-1.5 text-[10px] text-[hsl(var(--accent))] font-medium">Pro</span>}
               </span>
+            </>
+          );
+
+          return item.proGated ? (
+            <button key={item.href} onClick={() => openPaywall()} title={item.label} className={itemClassName}>
+              {itemContent}
             </button>
+          ) : (
+            <Link key={item.href} href={item.href} title={item.label} className={itemClassName}>
+              {itemContent}
+            </Link>
           );
         })}
       </nav>

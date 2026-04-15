@@ -6,27 +6,27 @@
   /* Dark is the baseline — prevents FOUC before ThemeProvider's JS class toggle */
   :root {
     color-scheme: dark;
-    --background: 220 30% 4%;
+    --background: 220 28% 5%;
     --foreground: 210 40% 96%;
-    --card: 220 25% 8%;
+    --card: 220 24% 7%;
     --card-foreground: 210 40% 96%;
-    --popover: 220 28% 7%;
+    --popover: 220 22% 10%;
     --popover-foreground: 210 40% 96%;
     --primary: 210 40% 96%;
-    --primary-foreground: 220 30% 4%;
-    --secondary: 220 25% 12%;
+    --primary-foreground: 220 28% 5%;
+    --secondary: 220 22% 10%;
     --secondary-foreground: 210 40% 96%;
-    --muted: 220 25% 12%;
-    --muted-foreground: 215 25% 58%;
-    --accent: 217 91% 60%;
-    --accent-foreground: 0 0% 100%;
-    --accent-2: 239 80% 72%;
-    --accent-2-foreground: 0 0% 100%;
+    --muted: 220 22% 10%;
+    --muted-foreground: 220 20% 51%;
+    --accent: 68 100% 64%;
+    --accent-foreground: 220 28% 5%;
+    --accent-2: 68 77% 45%;
+    --accent-2-foreground: 220 28% 5%;
     --destructive: 0 62.8% 30.6%;
     --destructive-foreground: 210 40% 98%;
-    --border: 220 20% 16%;
-    --input: 220 20% 16%;
-    --ring: 217 91% 60%;
+    --border: 220 26% 17%;
+    --input: 220 25% 14%;
+    --ring: 68 100% 64%;
     --radius: 0.5rem;
 
     /* Severity colors */
@@ -36,15 +36,15 @@
     --info: 217 91% 60%;
 
     /* Brand colors */
-    --bug: 217 91% 60%;
-    --bug-foreground: 0 0% 100%;
+    --bug: 68 100% 64%;
+    --bug-foreground: 220 28% 5%;
 
     /* Surface/border tokens */
-    --surface-1: 220 28% 7%;
-    --surface-2: 220 25% 10%;
-    --surface-3: 220 22% 14%;
-    --border-subtle: 220 20% 12%;
-    --border-strong: 220 20% 24%;
+    --surface-1: 220 24% 7%;
+    --surface-2: 220 22% 10%;
+    --surface-3: 220 25% 14%;
+    --border-subtle: 220 26% 17%;
+    --border-strong: 220 23% 23%;
   }
 
   /* Light mode override */
@@ -62,15 +62,15 @@
     --secondary-foreground: 222.2 47.4% 11.2%;
     --muted: 210 40% 96.1%;
     --muted-foreground: 215.4 16.3% 46.9%;
-    --accent: 217 91% 60%;
-    --accent-foreground: 0 0% 100%;
-    --accent-2: 239 68% 62%;
-    --accent-2-foreground: 0 0% 100%;
+    --accent: 68 100% 64%;
+    --accent-foreground: 220 28% 5%;
+    --accent-2: 68 77% 45%;
+    --accent-2-foreground: 220 28% 5%;
     --destructive: 0 84.2% 60.2%;
     --destructive-foreground: 210 40% 98%;
     --border: 214.3 31.8% 91.4%;
     --input: 214.3 31.8% 91.4%;
-    --ring: 217 91% 60%;
+    --ring: 68 100% 64%;
 
     /* Severity colors */
     --fatal: 0 84% 60%;
@@ -79,8 +79,8 @@
     --info: 217 91% 60%;
 
     /* Brand colors */
-    --bug: 217 91% 60%;
-    --bug-foreground: 0 0% 100%;
+    --bug: 68 100% 64%;
+    --bug-foreground: 220 28% 5%;
 
     /* Surface/border tokens */
     --surface-1: 40 15% 96%;
@@ -93,27 +93,27 @@
   /* .dark kept for ThemeProvider compatibility — same values as :root */
   .dark {
     color-scheme: dark;
-    --background: 220 30% 4%;
+    --background: 220 28% 5%;
     --foreground: 210 40% 96%;
-    --card: 220 25% 8%;
+    --card: 220 24% 7%;
     --card-foreground: 210 40% 96%;
-    --popover: 220 28% 7%;
+    --popover: 220 22% 10%;
     --popover-foreground: 210 40% 96%;
     --primary: 210 40% 96%;
-    --primary-foreground: 220 30% 4%;
-    --secondary: 220 25% 12%;
+    --primary-foreground: 220 28% 5%;
+    --secondary: 220 22% 10%;
     --secondary-foreground: 210 40% 96%;
-    --muted: 220 25% 12%;
-    --muted-foreground: 215 25% 58%;
-    --accent: 217 91% 60%;
-    --accent-foreground: 0 0% 100%;
-    --accent-2: 239 80% 72%;
-    --accent-2-foreground: 0 0% 100%;
+    --muted: 220 22% 10%;
+    --muted-foreground: 220 20% 51%;
+    --accent: 68 100% 64%;
+    --accent-foreground: 220 28% 5%;
+    --accent-2: 68 77% 45%;
+    --accent-2-foreground: 220 28% 5%;
     --destructive: 0 62.8% 30.6%;
     --destructive-foreground: 210 40% 98%;
-    --border: 220 20% 16%;
-    --input: 220 20% 16%;
-    --ring: 217 91% 60%;
+    --border: 220 26% 17%;
+    --input: 220 25% 14%;
+    --ring: 68 100% 64%;
 
     /* Severity colors */
     --fatal: 0 84% 60%;
@@ -122,15 +122,15 @@
     --info: 217 91% 60%;
 
     /* Brand colors */
-    --bug: 217 91% 60%;
-    --bug-foreground: 0 0% 100%;
+    --bug: 68 100% 64%;
+    --bug-foreground: 220 28% 5%;
 
     /* Surface/border tokens */
-    --surface-1: 220 28% 7%;
-    --surface-2: 220 25% 10%;
-    --surface-3: 220 22% 14%;
-    --border-subtle: 220 20% 12%;
-    --border-strong: 220 20% 24%;
+    --surface-1: 220 24% 7%;
+    --surface-2: 220 22% 10%;
+    --surface-3: 220 25% 14%;
+    --border-subtle: 220 26% 17%;
+    --border-strong: 220 23% 23%;
   }
 
   * {
@@ -138,6 +138,7 @@
   }
   body {
     @apply bg-background text-foreground;
+    font-family: var(--font-sans), system-ui, sans-serif;
   }
 
   :focus-visible {
@@ -150,144 +151,72 @@
   }
 }
 
-/* Modern Design Utilities */
+/* Design Utilities */
 @layer utilities {
-  /* True liquid glass — backdrop-filter with specular highlight.
-   * NOTE: These utilities are dark-mode only (dark rgba backgrounds, dark shadows).
-   * They rely on ThemeProvider defaultTheme="dark" / enableSystem=false in layout.tsx.
-   * If light mode support is re-enabled, add :root light overrides for each class.
-   *
-   * Usage guide:
-   *   liquid-glass       → subtle panel (header, sidebar, nav)
-   *   liquid-glass-strong → prominent overlay (modals, hero preview card)
-   *   liquid-glass-card  → standalone card with hover interaction (feature cards)
-   *   elev-0..elev-3     → elevation scale; auto-upgrades to liquid glass in dark mode
-   *   gradient-text      → white→blue gradient heading; dark-mode only
-   *   bg-gradient-mesh   → ambient blue/purple viewport orbs via ::before/::after
-   */
-  .liquid-glass {
-    background: rgba(255, 255, 255, 0.04);
-    backdrop-filter: blur(20px) saturate(1.8);
-    -webkit-backdrop-filter: blur(20px) saturate(1.8);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.12),
-      0 4px 24px rgba(0, 0, 0, 0.4);
-    contain: paint;
+  /* Surface elevation system — solid surfaces with 1px borders (replaces glassmorphism) */
+  .surface-card {
+    background: hsl(var(--surface-1));
+    border: 1px solid hsl(var(--border-subtle));
+    border-radius: 8px;
   }
 
-  .liquid-glass-strong {
-    background: rgba(255, 255, 255, 0.07);
-    backdrop-filter: blur(40px) saturate(2);
-    -webkit-backdrop-filter: blur(40px) saturate(2);
-    border: 1px solid rgba(255, 255, 255, 0.12);
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.18),
-      inset 0 0 0 1px rgba(255, 255, 255, 0.04),
-      0 8px 40px rgba(0, 0, 0, 0.5),
-      0 2px 8px rgba(0, 0, 0, 0.3);
+  .surface-panel {
+    background: hsl(var(--surface-2));
+    border: 1px solid hsl(var(--border-subtle));
   }
 
-  .liquid-glass-card {
-    /* No backdrop-filter at rest — keeps concurrent blur layers at 2 (sidebar + header).
-     * Blur activates on :hover only, so GPU overdraw only occurs on user interaction. */
-    background: rgba(255, 255, 255, 0.05);
-    border: 1px solid rgba(255, 255, 255, 0.09);
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.14),
-      0 4px 32px rgba(0, 0, 0, 0.45);
-    border-radius: 16px;
-    contain: paint;
-    transition:
-      box-shadow 0.2s ease,
-      border-color 0.2s ease,
-      transform 0.2s ease,
-      backdrop-filter 0.2s ease;
-  }
-  .liquid-glass-card:hover {
-    backdrop-filter: blur(24px) saturate(1.6);
-    -webkit-backdrop-filter: blur(24px) saturate(1.6);
-    border-color: rgba(255, 255, 255, 0.16);
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.2),
-      0 8px 48px rgba(0, 0, 0, 0.55),
-      0 0 0 1px rgba(96, 165, 250, 0.15);
-    transform: translateY(-1px);
+  .surface-raised {
+    background: hsl(var(--surface-2));
+    border: 1px solid hsl(var(--border-strong));
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
   }
 
-  /* Solid surface cards — kept for light mode / backwards compat */
+  /* Legacy aliases — kept so components still compile during migration */
   .glass {
     background-color: hsl(var(--surface-2));
     border: 1px solid hsl(var(--border-subtle));
-    box-shadow:
-      0 1px 2px hsl(0 0% 0% / 0.05),
-      0 4px 12px hsl(0 0% 0% / 0.08);
   }
 
   .glass-card {
-    background-color: hsl(var(--surface-2));
-    border: 1px solid hsl(var(--border-subtle));
-    border-radius: 12px;
-    box-shadow:
-      0 2px 4px hsl(0 0% 0% / 0.06),
-      0 12px 20px hsl(0 0% 0% / 0.04);
+    @apply surface-card;
   }
 
-  /* Dark mode: glass-card becomes real glass — delegates to liquid-glass-card */
-  .dark .glass-card {
-    @apply liquid-glass-card;
+  .liquid-glass {
+    @apply surface-panel;
   }
 
-  /* Elevation system — in dark mode all elevations use liquid glass */
-  .elev-0 {
-    background-color: hsl(var(--surface-2));
-    border: 1px solid hsl(var(--border-subtle));
-    border-radius: 12px;
+  .liquid-glass-strong {
+    @apply surface-raised;
   }
-  .elev-1 {
-    background-color: hsl(var(--surface-2));
-    border: 1px solid hsl(var(--border-subtle));
-    border-radius: 12px;
-    box-shadow:
-      0 2px 4px hsl(0 0% 0% / 0.06),
-      0 12px 20px hsl(0 0% 0% / 0.04);
+
+  .liquid-glass-card {
+    @apply surface-card;
+    transition:
+      border-color 0.15s ease,
+      box-shadow 0.15s ease;
   }
-  .elev-2 {
-    background-color: hsl(var(--surface-2));
-    border: 1px solid hsl(var(--border-subtle));
-    border-radius: 14px;
-    box-shadow:
-      0 4px 12px hsl(0 0% 0% / 0.06),
-      0 8px 24px hsl(0 0% 0% / 0.08);
+
+  .liquid-glass-card:hover {
+    border-color: hsl(var(--border-strong));
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
   }
+
+  .elev-0,
+  .elev-1,
+  .elev-2,
   .elev-3 {
-    background-color: hsl(var(--surface-2));
-    border: 1px solid hsl(var(--border-subtle));
-    border-radius: 16px;
-    box-shadow:
-      0 10px 24px hsl(0 0% 0% / 0.08),
-      0 20px 48px hsl(0 0% 0% / 0.12);
+    @apply surface-card;
   }
 
-  /* Dark mode elevations → liquid glass (elev-3 gets the stronger treatment) */
-  .dark .elev-0,
-  .dark .elev-1,
-  .dark .elev-2 {
-    /* Solid semi-transparent — no backdrop-filter to limit concurrent blur layers */
-    background: rgba(255, 255, 255, 0.06);
-    border: 1px solid rgba(255, 255, 255, 0.09);
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
-  }
-  .dark .elev-3 {
-    @apply liquid-glass-strong;
+  /* Grid pattern background — replaces gradient mesh orbs on landing hero */
+  .bg-grid-pattern {
+    background-image:
+      linear-gradient(rgba(240, 244, 248, 0.04) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(240, 244, 248, 0.04) 1px, transparent 1px);
+    background-size: 64px 64px;
   }
 
-  /* Accent border */
-  .accent-border {
-    @apply border-[hsl(var(--accent))]/30;
-  }
-
-  /* Gradient mesh background — dramatic blue/purple orbs */
+  /* Subtle ambient background — kept for dashboard, reduced from 18% to 8% opacity */
   .bg-gradient-mesh {
     position: relative;
   }
@@ -300,13 +229,11 @@
     height: 700px;
     border-radius: 50%;
     background:
-      radial-gradient(ellipse at 80% 10%, hsla(217, 91%, 60%, 0.18) 0%, transparent 60%),
-      radial-gradient(ellipse at 20% 60%, hsla(270, 80%, 65%, 0.12) 0%, transparent 55%),
-      radial-gradient(ellipse at 60% 90%, hsla(200, 90%, 55%, 0.08) 0%, transparent 50%);
+      radial-gradient(ellipse at 80% 10%, hsla(68, 100%, 64%, 0.06) 0%, transparent 60%),
+      radial-gradient(ellipse at 20% 60%, hsla(220, 50%, 40%, 0.06) 0%, transparent 55%);
     filter: blur(60px);
     pointer-events: none;
     z-index: 0;
-    /* translateZ(0) promotes to compositor layer; will-change is redundant here */
     transform: translateZ(0);
   }
   .bg-gradient-mesh::after {
@@ -318,82 +245,88 @@
     height: 600px;
     border-radius: 50%;
     background:
-      /* bottom-left purple orb */
-      radial-gradient(ellipse at 30% 70%, hsla(270, 80%, 65%, 0.14) 0%, transparent 55%),
-      /* center-screen blue orb — fills the viewport middle that the other two miss */
-        radial-gradient(ellipse at 120% -20%, hsla(217, 91%, 60%, 0.12) 0%, transparent 60%),
-      radial-gradient(ellipse at 70% 30%, hsla(217, 91%, 60%, 0.08) 0%, transparent 50%);
+      radial-gradient(ellipse at 30% 70%, hsla(220, 50%, 40%, 0.05) 0%, transparent 55%),
+      radial-gradient(ellipse at 70% 30%, hsla(68, 100%, 64%, 0.04) 0%, transparent 50%);
     filter: blur(60px);
     pointer-events: none;
     z-index: 0;
     transform: translateZ(0);
   }
 
-  /* Glow effects */
+  /* Accent glow — yellow variant */
   .glow {
     box-shadow:
-      0 4px 24px hsl(217 91% 60% / 0.25),
+      0 4px 24px hsl(68 100% 64% / 0.2),
       0 1px 3px hsl(0 0% 0% / 0.1);
   }
 
-  /* Inset highlight for buttons */
+  /* Accent border */
+  .accent-border {
+    @apply border-[hsl(var(--accent))]/30;
+  }
+
+  /* Button inset highlight */
   .btn-inset {
     box-shadow:
       inset 0 1px 0 hsl(0 0% 100% / 0.1),
       0 1px 2px hsl(0 0% 0% / 0.15);
   }
 
-  /* Card hover lift effect — for non-glass cards; glass cards use liquid-glass-card:hover */
+  /* Card hover lift */
   .card-hover {
     transition:
-      transform 0.2s ease,
-      box-shadow 0.2s ease,
-      border-color 0.2s ease;
+      transform 0.15s ease,
+      box-shadow 0.15s ease,
+      border-color 0.15s ease;
   }
   .card-hover:hover {
     border-color: hsl(var(--border-strong));
-    box-shadow:
-      0 4px 16px hsl(0 0% 0% / 0.1),
-      0 2px 4px hsl(0 0% 0% / 0.06);
+    box-shadow: 0 4px 16px hsl(0 0% 0% / 0.2);
     transform: translateY(-1px);
   }
 
-  /* Gradient text — white core → electric blue; dark-mode only */
+  /* Gradient text — yellow accent variant */
   .gradient-text {
-    background: linear-gradient(135deg, #ffffff 0%, #93c5fd 35%, #3b82f6 70%, #1d4ed8 100%);
+    background: linear-gradient(135deg, #ffffff 0%, #e8ff47 60%, #b8cc1a 100%);
     -webkit-background-clip: text;
     background-clip: text;
     -webkit-text-fill-color: transparent;
   }
+
+  /* New issue glow — acid yellow pulse replacing the "NEW" badge */
+  .new-issue-glow {
+    box-shadow: inset 3px 0 8px rgba(232, 255, 71, 0.3);
+    animation: new-glow-fade 5s ease-out forwards;
+  }
 }
 
-/* Fumadocs theme overrides */
-:root {
+/* Fumadocs theme overrides — scoped to docs pages only to avoid polluting the design system */
+[data-docs="true"] {
   --fd-background: hsl(0 0% 100%);
   --fd-foreground: hsl(222.2 84% 4.9%);
   --fd-muted: hsl(210 40% 96.1%);
   --fd-muted-foreground: hsl(215.4 16.3% 46.9%);
   --fd-card: hsl(0 0% 100%);
   --fd-border: hsl(214.3 31.8% 91.4%);
-  --fd-primary: hsl(217 91% 60%);
-  --fd-primary-foreground: hsl(0 0% 100%);
+  --fd-primary: hsl(68 100% 64%);
+  --fd-primary-foreground: hsl(220 28% 5%);
   --fd-accent: hsl(210 40% 96.1%);
   --fd-accent-foreground: hsl(222.2 47.4% 11.2%);
-  --fd-ring: hsl(217 91% 60%);
+  --fd-ring: hsl(68 100% 64%);
 }
 
-.dark {
-  --fd-background: hsl(220 30% 4%);
+.dark [data-docs="true"] {
+  --fd-background: hsl(220 28% 5%);
   --fd-foreground: hsl(210 40% 96%);
-  --fd-muted: hsl(220 25% 12%);
-  --fd-muted-foreground: hsl(215 25% 58%);
-  --fd-card: hsl(220 25% 8%);
-  --fd-border: hsl(220 20% 16%);
-  --fd-primary: hsl(217 91% 60%);
-  --fd-primary-foreground: hsl(0 0% 100%);
-  --fd-accent: hsl(220 25% 12%);
+  --fd-muted: hsl(220 22% 10%);
+  --fd-muted-foreground: hsl(220 20% 51%);
+  --fd-card: hsl(220 24% 7%);
+  --fd-border: hsl(220 26% 17%);
+  --fd-primary: hsl(68 100% 64%);
+  --fd-primary-foreground: hsl(220 28% 5%);
+  --fd-accent: hsl(220 22% 10%);
   --fd-accent-foreground: hsl(210 40% 96%);
-  --fd-ring: hsl(217 91% 60%);
+  --fd-ring: hsl(68 100% 64%);
 }
 
 /* Accessibility: respect reduced motion preferences */

@@ -20,8 +20,13 @@ jobs:
         include:
           - image: ghcr.io/kcuppens/bugwatch-server
             dockerfile: apps/server/Dockerfile
+            cache_scope: server
+          # apps/web/Dockerfile — pnpm monorepo build, published to GHCR for
+          # managed/cloud deployments. For self-hosted installs, docker/Dockerfile.web
+          # is the standalone npm build (validated by ci.yml docker-build job).
           - image: ghcr.io/kcuppens/bugwatch-web
             dockerfile: apps/web/Dockerfile
+            cache_scope: web
 
     steps:
       - name: Checkout repository
@@ -49,12 +54,29 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Build and push Docker image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: .
           file: ${{ matrix.dockerfile }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=${{ matrix.cache_scope }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.cache_scope }}
+
+  validate-self-hosted-dockerfile:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Validate self-hosted web Dockerfile builds
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.web
+          push: false
+          tags: bugwatch-web-selfhosted:ci

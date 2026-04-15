@@ -88,9 +88,10 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
 
   const goBack = () => {
     // Prevent going back before step 4 once project is created
-    if (project && currentStep <= 4) return;
+    const nextStep = currentStep - 1;
+    if (project && nextStep < 4) return;
     if (currentStep > 1) {
-      setCurrentStep(currentStep - 1);
+      setCurrentStep(nextStep);
     }
   };
 

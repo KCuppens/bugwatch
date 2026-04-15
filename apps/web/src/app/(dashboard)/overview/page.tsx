@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { formatRelativeTime } from "@/lib/format";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
@@ -11,8 +11,6 @@ import {
   Info,
   Bug,
   Users,
-  TrendingUp,
-  TrendingDown,
   Zap,
   Check,
   ChevronRight,
@@ -88,15 +86,6 @@ function stringToColor(str: string): string {
     "bg-amber-500/15 text-amber-400 border-amber-500/30",
   ] as const;
   return colors[Math.abs(hash) % colors.length] ?? colors[0];
-}
-
-function generateTrendData(count: number, firstSeen: string): { trend: "up" | "down" | "stable"; percentage: number } {
-  const hoursSinceFirst = (Date.now() - new Date(firstSeen).getTime()) / (1000 * 60 * 60);
-  const eventsPerDay = count / Math.max(hoursSinceFirst / 24, 1);
-  if (hoursSinceFirst < 2) return { trend: "up", percentage: Math.min(500, Math.round(count * 10)) };
-  if (hoursSinceFirst < 24) return { trend: "up", percentage: Math.round(Math.min(200, eventsPerDay)) };
-  if (count > 100) return { trend: "stable", percentage: 0 };
-  return { trend: "down", percentage: Math.round(Math.min(40, (count / Math.max(hoursSinceFirst, 1)) * 10)) };
 }
 
 // ---------- Skeleton Components ----------
@@ -194,6 +183,16 @@ export default function OverviewPage() {
   const [hoveredIssue, setHoveredIssue] = useState<string | null>(null);
   const [resolvingIssue, setResolvingIssue] = useState<string | null>(null);
 
+  // Track mount state and in-flight request to prevent stale state updates
+  const mountedRef = useRef(true);
+  const abortControllerRef = useRef<AbortController | null>(null);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
   // Filter issues by search query
   const filteredIssues = useMemo(() => {
     if (!searchQuery.trim()) return issues;
@@ -205,6 +204,11 @@ export default function OverviewPage() {
 
   // Fetch data — core (issues/stats) must succeed; alerts/monitors degrade gracefully
   const fetchData = useCallback(async () => {
+    // Cancel any in-flight fetch before starting a new one
+    abortControllerRef.current?.abort();
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
     try {
       setError(null);
 
@@ -213,6 +217,8 @@ export default function OverviewPage() {
         overviewApi.getIssuesAcrossProjects({ status: "unresolved", limit: 10 }),
         overviewApi.getStatsByProject(),
       ]);
+
+      if (controller.signal.aborted || !mountedRef.current) return;
 
       setIssues(issuesRes.data);
       setStats(statsRes.data);
@@ -233,23 +239,29 @@ export default function OverviewPage() {
         }),
       ]);
 
+      if (controller.signal.aborted || !mountedRef.current) return;
+
       setAlertLogs(alertsRes.data);
       setMonitors(monitorsRes.data);
       setMonitorsSummary(monitorsRes.summary);
     } catch (err) {
+      if (!mountedRef.current) return;
       setError(err instanceof Error ? err.message : "Failed to load overview data");
       toast.error("Failed to load overview data");
     } finally {
-      setIsLoading(false);
+      if (mountedRef.current) setIsLoading(false);
     }
   }, []);
 
   // Initial fetch
   useEffect(() => {
     fetchData();
+    return () => {
+      abortControllerRef.current?.abort();
+    };
   }, [fetchData]);
 
-  // Polling every 30 seconds
+  // Polling every 30 seconds — pause when tab is hidden
   useEffect(() => {
     let interval: ReturnType<typeof setInterval> | null = null;
 
@@ -261,11 +273,13 @@ export default function OverviewPage() {
         }
       } else {
         fetchData();
-        interval = setInterval(fetchData, 30000);
+        if (!interval) interval = setInterval(fetchData, 30000);
       }
     }
 
-    interval = setInterval(fetchData, 30000);
+    if (!document.hidden) {
+      interval = setInterval(fetchData, 30000);
+    }
     document.addEventListener("visibilitychange", handleVisibility);
 
     return () => {
@@ -507,7 +521,6 @@ export default function OverviewPage() {
                     const config = levelConfig[issue.level as keyof typeof levelConfig] || levelConfig.error;
                     const Icon = config.icon;
                     const isHovered = hoveredIssue === issue.id;
-                    const trend = generateTrendData(issue.count, issue.first_seen);
                     const isRecent = Date.now() - new Date(issue.last_seen).getTime() < 1000 * 60 * 5;
                     const projectColor = stringToColor(issue.project_slug || issue.project_name);
 
@@ -573,32 +586,8 @@ export default function OverviewPage() {
                             </div>
                           </div>
 
-                          {/* Trend & Time */}
+                          {/* Time */}
                           <div className="flex items-center gap-3 shrink-0">
-                            <div
-                              className={cn(
-                                "flex items-center gap-1 text-xs font-medium transition-opacity",
-                                isHovered ? "opacity-0 w-0 overflow-hidden" : "opacity-100 w-auto",
-                                trend.trend === "up"
-                                  ? "text-red-500"
-                                  : trend.trend === "down"
-                                    ? "text-accent"
-                                    : "text-muted-foreground"
-                              )}
-                            >
-                              {trend.trend === "up" ? (
-                                <TrendingUp className="h-3 w-3" />
-                              ) : trend.trend === "down" ? (
-                                <TrendingDown className="h-3 w-3" />
-                              ) : null}
-                              {trend.percentage > 0 && (
-                                <span>
-                                  {trend.trend === "up" ? "+" : "-"}
-                                  {trend.percentage}%
-                                </span>
-                              )}
-                            </div>
-
                             <span
                               className={cn(
                                 "text-xs text-muted-foreground text-right transition-opacity",
