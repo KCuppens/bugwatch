@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { useState, useRef, useEffect } from "react";
+import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import { Code2, Users, Server, Rocket, Bug, Activity, GitBranch, LayoutGrid } from "lucide-react";
 import type { OnboardingProfile } from "@/lib/onboarding-context";
 
@@ -97,17 +97,33 @@ export function WelcomeScreen({ onComplete, onSkip }: WelcomeScreenProps) {
   const [role, setRole] = useState<Role | null>(null);
   const [useCase, setUseCase] = useState<UseCase | null>(null);
   const [teamSize, setTeamSize] = useState<TeamSize | null>(null);
+  const prefersReducedMotion = useReducedMotion();
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Clean up any pending auto-advance timer on unmount
+  useEffect(
+    () => () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    },
+    []
+  );
 
   const handleRoleSelect = (value: Role) => {
     setRole(value);
-    // Auto-advance
-    setTimeout(() => setStep(1), 180);
+    if (prefersReducedMotion) {
+      setStep(1);
+      return;
+    }
+    timerRef.current = setTimeout(() => setStep(1), 180);
   };
 
   const handleUseCaseSelect = (value: UseCase) => {
     setUseCase(value);
-    // Auto-advance
-    setTimeout(() => setStep(2), 180);
+    if (prefersReducedMotion) {
+      setStep(2);
+      return;
+    }
+    timerRef.current = setTimeout(() => setStep(2), 180);
   };
 
   const handleGetStarted = () => {
@@ -161,6 +177,8 @@ export function WelcomeScreen({ onComplete, onSkip }: WelcomeScreenProps) {
                       key={value}
                       type="button"
                       onClick={() => handleRoleSelect(value)}
+                      aria-label={`${label}${role === value ? " — selected" : ""}`}
+                      aria-pressed={role === value}
                       className={`${cardBase} ${role === value ? cardSelected : ""}`}
                     >
                       <span className={`text-[hsl(var(--accent))] ${role === value ? "opacity-100" : "opacity-70"}`}>
@@ -208,6 +226,8 @@ export function WelcomeScreen({ onComplete, onSkip }: WelcomeScreenProps) {
                       key={value}
                       type="button"
                       onClick={() => handleUseCaseSelect(value)}
+                      aria-label={`${label}${useCase === value ? " — selected" : ""}`}
+                      aria-pressed={useCase === value}
                       className={`${cardBase} ${useCase === value ? cardSelected : ""}`}
                     >
                       <span className={`text-[hsl(var(--accent))] ${useCase === value ? "opacity-100" : "opacity-70"}`}>
@@ -253,6 +273,8 @@ export function WelcomeScreen({ onComplete, onSkip }: WelcomeScreenProps) {
                       key={value}
                       type="button"
                       onClick={() => setTeamSize(value)}
+                      aria-label={`${label} — ${sublabel}${teamSize === value ? " — selected" : ""}`}
+                      aria-pressed={teamSize === value}
                       className={`flex flex-col items-center gap-1 px-6 py-3 rounded-full border font-sans text-sm font-medium transition-all duration-150 cursor-pointer select-none ${
                         teamSize === value
                           ? "bg-[hsl(var(--accent))] text-[hsl(var(--accent-foreground))] border-[hsl(var(--accent))]"

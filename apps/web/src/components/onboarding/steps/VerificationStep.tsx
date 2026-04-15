@@ -125,7 +125,12 @@ export function VerificationStep({
     return (
       <div className="space-y-8">
         {/* Canvas confetti overlay */}
-        <canvas ref={canvasRef} className="pointer-events-none fixed inset-0 z-50" aria-hidden="true" />
+        <canvas
+          ref={canvasRef}
+          className="pointer-events-none fixed inset-0 z-50"
+          aria-hidden="true"
+          role="presentation"
+        />
 
         <div className="flex flex-col items-center justify-center space-y-6 py-12">
           <div className="flex h-20 w-20 items-center justify-center rounded-full bg-[hsl(var(--accent))]/10 border border-[hsl(var(--accent))]/30">

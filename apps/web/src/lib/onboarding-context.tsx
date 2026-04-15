@@ -38,7 +38,8 @@ function readLocalStorage<T>(key: string, fallback: T): T {
     const raw = localStorage.getItem(key);
     if (raw === null) return fallback;
     return JSON.parse(raw) as T;
-  } catch {
+  } catch (err) {
+    console.error("[onboarding] Failed to read localStorage key:", key, err);
     return fallback;
   }
 }
@@ -72,7 +73,7 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
     setProfileState(p);
     writeLocalStorage(PROFILE_KEY, p);
     // Fire-and-forget — profile is already persisted to localStorage
-    onboardingApi.saveProfile(p).catch(() => undefined);
+    onboardingApi.saveProfile(p).catch((err) => console.error("[onboarding] Failed to save profile to server:", err));
   }, []);
 
   const markMilestone = useCallback((id: MilestoneId) => {

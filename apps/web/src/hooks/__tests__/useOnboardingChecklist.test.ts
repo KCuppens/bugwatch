@@ -30,7 +30,7 @@ const allTrueChecklist = {
   invite_member: true,
 };
 
-const mockMarkMilestone = vi.fn();
+let mockMarkMilestone = vi.fn();
 
 function mockOnboarding(overrides: Partial<ReturnType<typeof useOnboarding>> = {}) {
   vi.mocked(useOnboarding).mockReturnValue({
@@ -61,6 +61,7 @@ function mockProject(overrides: Partial<ReturnType<typeof useProject>> = {}) {
 
 describe("useOnboardingChecklist", () => {
   beforeEach(() => {
+    mockMarkMilestone = vi.fn();
     vi.clearAllMocks();
     mockOnboarding();
     mockProject();

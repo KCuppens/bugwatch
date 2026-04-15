@@ -53,8 +53,8 @@ export function useFirstError(): UseFirstErrorReturn {
           markMilestone("first_error");
           clearInterval(intervalId);
         }
-      } catch {
-        // silent — polling errors are non-fatal
+      } catch (err) {
+        console.error("[useFirstError] Polling error:", err);
       }
     };
 

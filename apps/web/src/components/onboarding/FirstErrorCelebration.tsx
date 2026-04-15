@@ -46,7 +46,12 @@ export function FirstErrorCelebration({ issue, onDismiss }: FirstErrorCelebratio
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
       {/* Confetti canvas */}
-      <canvas ref={canvasRef} className="pointer-events-none fixed inset-0 z-50" aria-hidden="true" />
+      <canvas
+        ref={canvasRef}
+        className="pointer-events-none fixed inset-0 z-50"
+        aria-hidden="true"
+        role="presentation"
+      />
 
       {/* Celebration card */}
       <div className="relative z-[60] w-full max-w-lg mx-4 surface-card p-8 rounded-2xl">
