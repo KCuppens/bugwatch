@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Card, CardContent } from "@/components/ui/card";
 import { StepIndicator, type Step } from "./StepIndicator";
 import { ProjectNameStep } from "./steps/ProjectNameStep";
 import { PlatformStep } from "./steps/PlatformStep";
@@ -69,7 +68,7 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
       setCurrentStep(4);
     } catch (err) {
       console.error("Failed to create project:", err);
-      setError(err instanceof Error ? err.message : "Failed to create project");
+      setError("Failed to create project. Please try again.");
     } finally {
       setIsCreating(false);
     }
@@ -96,96 +95,89 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
   };
 
   return (
-    <div className="min-h-screen bg-background">
-      <div className="mx-auto max-w-4xl px-4 py-8">
-        {/* Header */}
-        <div className="mb-8 text-center">
-          <h1 className="font-display text-display-md">Create New Project</h1>
-          <p className="mt-3 text-body-lg text-muted-foreground">
+    <div className="mx-auto max-w-3xl px-4 py-8">
+      {/* Header with mono step counter */}
+      <div className="flex items-start justify-between mb-8">
+        <div>
+          <h1 className="font-sans text-2xl font-bold text-[hsl(var(--foreground))]">Create New Project</h1>
+          <p className="mt-1 text-sm text-[hsl(var(--muted-foreground))]">
             Set up error tracking for your application in minutes
           </p>
         </div>
+        <span className="font-mono text-sm text-[hsl(var(--muted-foreground))] shrink-0 pt-1">
+          {String(currentStep).padStart(2, "0")} / {String(WIZARD_STEPS.length).padStart(2, "0")}
+        </span>
+      </div>
 
-        {/* Step Indicator */}
-        <div className="mb-12">
-          <StepIndicator
-            steps={WIZARD_STEPS}
-            currentStep={currentStep}
-            onStepClick={handleStepClick}
-          />
-        </div>
+      {/* Step Indicator */}
+      <div className="mb-8">
+        <StepIndicator steps={WIZARD_STEPS} currentStep={currentStep} onStepClick={handleStepClick} />
+      </div>
 
-        {/* Error message */}
-        {error && (
-          <div className="mb-6 rounded-lg border border-destructive bg-destructive/10 p-4 text-destructive">
-            {error}
+      {/* Error message */}
+      {error && (
+        <div className="mb-6 rounded-lg border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-400">{error}</div>
+      )}
+
+      {/* Step Content */}
+      <div className="surface-card p-8">
+        {isCreating ? (
+          <div className="flex flex-col items-center justify-center py-12">
+            <Loader2 className="h-10 w-10 animate-spin text-[hsl(var(--accent))]" />
+            <p className="mt-4 text-sm text-[hsl(var(--muted-foreground))]">Creating your project...</p>
           </div>
-        )}
-
-        {/* Step Content */}
-        <Card className="border-0 shadow-lg">
-          <CardContent className="p-8">
-            {isCreating ? (
-              <div className="flex flex-col items-center justify-center py-12">
-                <Loader2 className="h-12 w-12 animate-spin text-accent-2" />
-                <p className="mt-4 text-muted-foreground">
-                  Creating your project...
-                </p>
-              </div>
-            ) : (
-              <>
-                {currentStep === 1 && (
-                  <ProjectNameStep
-                    value={projectName}
-                    onChange={setProjectName}
-                    onNext={handleProjectNameNext}
-                    isValid={projectName.trim().length > 0}
-                  />
-                )}
-                {currentStep === 2 && (
-                  <PlatformStep
-                    value={platform}
-                    onChange={setPlatform}
-                    onNext={handlePlatformNext}
-                    onBack={goBack}
-                    isValid={platform !== null}
-                  />
-                )}
-                {currentStep === 3 && platform && (
-                  <FrameworkStep
-                    platform={platform}
-                    value={framework}
-                    onChange={setFramework}
-                    onNext={handleFrameworkNext}
-                    onBack={goBack}
-                    isValid={framework !== null}
-                  />
-                )}
-                {currentStep === 4 && project && platform && framework && (
-                  <InstallationStep
-                    platform={platform}
-                    framework={framework}
-                    apiKey={project.api_key}
-                    onNext={handleInstallationNext}
-                    onBack={goBack}
-                    backDisabled={!!project}
-                  />
-                )}
-                {currentStep === 5 && project && platform && framework && (
-                  <VerificationStep
-                    projectId={project.id}
-                    platform={platform}
-                    framework={framework}
-                    apiKey={project.api_key}
-                    onComplete={handleComplete}
-                    onBack={goBack}
-                    backDisabled={!!project}
-                  />
-                )}
-              </>
+        ) : (
+          <>
+            {currentStep === 1 && (
+              <ProjectNameStep
+                value={projectName}
+                onChange={setProjectName}
+                onNext={handleProjectNameNext}
+                isValid={projectName.trim().length > 0}
+              />
             )}
-          </CardContent>
-        </Card>
+            {currentStep === 2 && (
+              <PlatformStep
+                value={platform}
+                onChange={setPlatform}
+                onNext={handlePlatformNext}
+                onBack={goBack}
+                isValid={platform !== null}
+              />
+            )}
+            {currentStep === 3 && platform && (
+              <FrameworkStep
+                platform={platform}
+                value={framework}
+                onChange={setFramework}
+                onNext={handleFrameworkNext}
+                onBack={goBack}
+                isValid={framework !== null}
+              />
+            )}
+            {currentStep === 4 && project && platform && framework && (
+              <InstallationStep
+                platform={platform}
+                framework={framework}
+                apiKey={project.api_key}
+                onNext={handleInstallationNext}
+                onBack={goBack}
+                backDisabled={!!project}
+              />
+            )}
+            {currentStep === 5 && project && platform && framework && (
+              <VerificationStep
+                projectId={project.id}
+                platform={platform}
+                framework={framework}
+                apiKey={project.api_key}
+                onComplete={handleComplete}
+                onBack={goBack}
+                backDisabled={!!project}
+              />
+            )}
+          </>
+        )}
       </div>
     </div>
   );

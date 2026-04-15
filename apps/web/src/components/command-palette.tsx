@@ -89,12 +89,15 @@ function CommandPaletteContent({ open, setOpen }: CommandPaletteContentProps) {
       setRecentIssues(issuesCacheRef.current.data);
       return;
     }
-    overviewApi.getIssuesAcrossProjects({ limit: 5 })
+    overviewApi
+      .getIssuesAcrossProjects({ limit: 5 })
       .then((res) => {
         setRecentIssues(res.data);
         issuesCacheRef.current = { data: res.data, timestamp: Date.now() };
       })
-      .catch((err) => { console.error("Failed to fetch recent issues for command palette:", err); });
+      .catch((err) => {
+        console.error("Failed to fetch recent issues for command palette:", err);
+      });
   }, [open]);
 
   // Close on Escape key
@@ -110,23 +113,23 @@ function CommandPaletteContent({ open, setOpen }: CommandPaletteContentProps) {
     return () => document.removeEventListener("keydown", handleEscape);
   }, [open, setOpen]);
 
-  const runCommand = useCallback((command: () => void) => {
-    setOpen(false);
-    command();
-  }, [setOpen]);
+  const runCommand = useCallback(
+    (command: () => void) => {
+      setOpen(false);
+      command();
+    },
+    [setOpen]
+  );
 
   if (!open) return null;
 
   return (
     <div className="fixed inset-0 z-50">
       {/* Backdrop */}
-      <div
-        className="fixed inset-0 bg-black/50"
-        onClick={() => setOpen(false)}
-      />
+      <div className="fixed inset-0 bg-black/50" onClick={() => setOpen(false)} />
 
       {/* Command Dialog */}
-      <div className="fixed left-1/2 top-[18%] w-full max-w-xl -translate-x-1/2 elev-3 overflow-hidden">
+      <div className="fixed left-1/2 top-[18%] w-full max-w-xl -translate-x-1/2 surface-raised overflow-hidden">
         <Command className="rounded-2xl" loop>
           <div className="flex items-center border-b border-border-subtle px-4">
             <Search className="mr-2 h-4 w-4 shrink-0 text-muted-foreground" />
@@ -138,9 +141,7 @@ function CommandPaletteContent({ open, setOpen }: CommandPaletteContentProps) {
             />
           </div>
           <Command.List className="max-h-80 overflow-y-auto p-2">
-            <Command.Empty className="py-6 text-center text-sm text-muted-foreground">
-              No results found.
-            </Command.Empty>
+            <Command.Empty className="py-6 text-center text-sm text-muted-foreground">No results found.</Command.Empty>
 
             {/* Quick Actions */}
             <Command.Group heading="Quick Actions" className="pb-2">
@@ -180,10 +181,12 @@ function CommandPaletteContent({ open, setOpen }: CommandPaletteContentProps) {
                 View Alert Rules
               </Command.Item>
               <Command.Item
-                onSelect={() => runCommand(() => {
-                  // Dispatch keyboard event to trigger shortcuts dialog
-                  document.dispatchEvent(new KeyboardEvent("keydown", { key: "?" }));
-                })}
+                onSelect={() =>
+                  runCommand(() => {
+                    // Dispatch keyboard event to trigger shortcuts dialog
+                    document.dispatchEvent(new KeyboardEvent("keydown", { key: "?", bubbles: true }));
+                  })
+                }
                 className="flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-sm aria-selected:bg-accent-2/10 aria-selected:text-accent-2"
               >
                 <Keyboard className="h-4 w-4" />
@@ -203,9 +206,7 @@ function CommandPaletteContent({ open, setOpen }: CommandPaletteContentProps) {
                   >
                     <FolderOpen className="h-4 w-4" />
                     <span className="flex-1">{project.name}</span>
-                    {selectedProject?.id === project.id && (
-                      <Check className="h-4 w-4 text-accent-2" />
-                    )}
+                    {selectedProject?.id === project.id && <Check className="h-4 w-4 text-accent-2" />}
                   </Command.Item>
                 ))}
               </Command.Group>
@@ -221,12 +222,17 @@ function CommandPaletteContent({ open, setOpen }: CommandPaletteContentProps) {
                     onSelect={() => runCommand(() => router.push(`/dashboard/issues/${issue.id}`))}
                     className="flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-sm aria-selected:bg-accent-2/10 aria-selected:text-accent-2"
                   >
-                    <Bug className={`h-4 w-4 ${
-                      issue.level === "fatal" ? "text-red-500" :
-                      issue.level === "error" ? "text-orange-500" :
-                      issue.level === "warning" ? "text-yellow-500" :
-                      "text-muted-foreground"
-                    }`} />
+                    <Bug
+                      className={`h-4 w-4 ${
+                        issue.level === "fatal"
+                          ? "text-red-500"
+                          : issue.level === "error"
+                            ? "text-orange-500"
+                            : issue.level === "warning"
+                              ? "text-yellow-500"
+                              : "text-muted-foreground"
+                      }`}
+                    />
                     <span className="truncate flex-1">{issue.title}</span>
                     <span className="text-xs text-muted-foreground shrink-0">{issue.project_name}</span>
                   </Command.Item>
@@ -241,26 +247,28 @@ function CommandPaletteContent({ open, setOpen }: CommandPaletteContentProps) {
                   <Command.Item
                     key={`resolve-${issue.id}`}
                     value={`resolve ${issue.title}`}
-                    onSelect={() => runCommand(async () => {
-                      try {
-                        await issuesApi.update(issue.project_id, issue.id, "resolved");
-                        toast.success("Issue resolved", {
-                          description: issue.title,
-                          action: {
-                            label: "Undo",
-                            onClick: async () => {
-                              try {
-                                await issuesApi.update(issue.project_id, issue.id, "unresolved");
-                              } catch {
-                                toast.error("Failed to undo");
-                              }
+                    onSelect={() =>
+                      runCommand(async () => {
+                        try {
+                          await issuesApi.update(issue.project_id, issue.id, "resolved");
+                          toast.success("Issue resolved", {
+                            description: issue.title,
+                            action: {
+                              label: "Undo",
+                              onClick: async () => {
+                                try {
+                                  await issuesApi.update(issue.project_id, issue.id, "unresolved");
+                                } catch {
+                                  toast.error("Failed to undo");
+                                }
+                              },
                             },
-                          },
-                        });
-                      } catch {
-                        toast.error("Failed to resolve issue");
-                      }
-                    })}
+                          });
+                        } catch {
+                          toast.error("Failed to resolve issue");
+                        }
+                      })
+                    }
                     className="flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-sm aria-selected:bg-accent-2/10 aria-selected:text-accent-2"
                   >
                     <CheckCircle2 className="h-4 w-4 text-accent" />
@@ -271,26 +279,28 @@ function CommandPaletteContent({ open, setOpen }: CommandPaletteContentProps) {
                   <Command.Item
                     key={`ignore-${issue.id}`}
                     value={`ignore ${issue.title}`}
-                    onSelect={() => runCommand(async () => {
-                      try {
-                        await issuesApi.update(issue.project_id, issue.id, "ignored");
-                        toast.success("Issue ignored", {
-                          description: issue.title,
-                          action: {
-                            label: "Undo",
-                            onClick: async () => {
-                              try {
-                                await issuesApi.update(issue.project_id, issue.id, "unresolved");
-                              } catch {
-                                toast.error("Failed to undo");
-                              }
+                    onSelect={() =>
+                      runCommand(async () => {
+                        try {
+                          await issuesApi.update(issue.project_id, issue.id, "ignored");
+                          toast.success("Issue ignored", {
+                            description: issue.title,
+                            action: {
+                              label: "Undo",
+                              onClick: async () => {
+                                try {
+                                  await issuesApi.update(issue.project_id, issue.id, "unresolved");
+                                } catch {
+                                  toast.error("Failed to undo");
+                                }
+                              },
                             },
-                          },
-                        });
-                      } catch {
-                        toast.error("Failed to ignore issue");
-                      }
-                    })}
+                          });
+                        } catch {
+                          toast.error("Failed to ignore issue");
+                        }
+                      })
+                    }
                     className="flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-sm aria-selected:bg-accent-2/10 aria-selected:text-accent-2"
                   >
                     <BellOff className="h-4 w-4 text-muted-foreground" />
@@ -353,10 +363,16 @@ function CommandPaletteContent({ open, setOpen }: CommandPaletteContentProps) {
                 Profile Settings
               </Command.Item>
               <Command.Item
-                onSelect={() => runCommand(async () => {
-                  await logout();
-                  router.push("/login");
-                })}
+                onSelect={() =>
+                  runCommand(async () => {
+                    try {
+                      await logout();
+                    } catch {
+                      // Still navigate to login even if logout API fails
+                    }
+                    router.push("/login");
+                  })
+                }
                 className="flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-red-500 aria-selected:bg-red-500/10"
               >
                 <LogOut className="h-4 w-4" />
@@ -368,15 +384,21 @@ function CommandPaletteContent({ open, setOpen }: CommandPaletteContentProps) {
           {/* Footer */}
           <div className="flex items-center justify-between border-t border-border-subtle px-4 py-2.5 text-caption text-muted-foreground">
             <div className="flex items-center gap-1.5">
-              <kbd className="inline-flex h-5 items-center rounded border border-border-subtle bg-surface-3 px-1.5 font-mono text-[10px]">↑↓</kbd>
+              <kbd className="inline-flex h-5 items-center rounded border border-border-subtle bg-surface-3 px-1.5 font-mono text-[10px]">
+                ↑↓
+              </kbd>
               <span>Navigate</span>
             </div>
             <div className="flex items-center gap-1.5">
-              <kbd className="inline-flex h-5 items-center rounded border border-border-subtle bg-surface-3 px-1.5 font-mono text-[10px]">↵</kbd>
+              <kbd className="inline-flex h-5 items-center rounded border border-border-subtle bg-surface-3 px-1.5 font-mono text-[10px]">
+                ↵
+              </kbd>
               <span>Select</span>
             </div>
             <div className="flex items-center gap-1.5">
-              <kbd className="inline-flex h-5 items-center rounded border border-border-subtle bg-surface-3 px-1.5 font-mono text-[10px]">Esc</kbd>
+              <kbd className="inline-flex h-5 items-center rounded border border-border-subtle bg-surface-3 px-1.5 font-mono text-[10px]">
+                Esc
+              </kbd>
               <span>Close</span>
             </div>
           </div>

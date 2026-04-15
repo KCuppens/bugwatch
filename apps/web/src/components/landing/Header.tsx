@@ -29,7 +29,7 @@ export function Header() {
   };
 
   return (
-    <header className="sticky top-0 z-50 border-b border-white/8 liquid-glass transition-all duration-300">
+    <header className="sticky top-0 z-50 border-b border-[hsl(var(--border-subtle))] bg-[hsl(var(--surface-1))]/95 backdrop-blur-sm transition-all duration-300">
       <div className="container mx-auto px-4 h-16 flex items-center justify-between">
         <Link href="/" className="flex items-center gap-2.5">
           <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent text-accent-foreground shadow-lg shadow-accent/25">
@@ -53,7 +53,7 @@ export function Header() {
               <path d="M20 10h2" />
             </svg>
           </span>
-          <span className="font-display font-bold text-xl tracking-tight">BugWatch</span>
+          <span className="font-sans font-bold text-xl tracking-tight">BugWatch</span>
         </Link>
 
         <nav aria-label="Main" className="hidden md:flex items-center gap-6">
@@ -61,7 +61,7 @@ export function Header() {
             href="https://github.com/KCuppens/bugwatch"
             target="_blank"
             rel="noopener noreferrer"
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full liquid-glass text-sm text-muted-foreground hover:text-foreground hover:border-white/16 hover:shadow-glow-blue-sm transition-all"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full surface-panel text-sm text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] hover:border-[hsl(var(--border-strong))] transition-all"
           >
             <Github className="h-4 w-4" />
             <Star className="h-3 w-3" />
@@ -82,7 +82,7 @@ export function Header() {
           </Link>
           <Link
             href="/signup"
-            className="bg-accent text-accent-foreground px-4 py-2 rounded-full text-sm font-medium hover:bg-accent/90 transition-all shadow-glow-blue-sm hover:shadow-glow-blue"
+            className="bg-[hsl(var(--accent))] text-[hsl(var(--accent-foreground))] px-4 py-2 rounded-lg text-sm font-semibold hover:bg-[hsl(var(--accent-2))] transition-all"
           >
             Get Started
           </Link>
@@ -118,7 +118,10 @@ export function Header() {
         role="dialog"
         aria-modal="true"
         aria-label="Navigation menu"
-        className={`fixed top-0 right-0 h-full w-72 liquid-glass-strong border-l border-white/10 z-50 transform transition-transform duration-300 ease-in-out md:hidden ${
+        onKeyDown={(e) => {
+          if (e.key === "Escape") setMobileOpen(false);
+        }}
+        className={`fixed top-0 right-0 h-full w-72 surface-raised border-l border-[hsl(var(--border-subtle))] z-50 transform transition-transform duration-300 ease-in-out md:hidden ${
           mobileOpen ? "translate-x-0" : "translate-x-full"
         }`}
       >
@@ -168,7 +171,7 @@ export function Header() {
           </Link>
           <Link
             href="/signup"
-            className="mt-2 bg-accent text-accent-foreground px-4 py-3 rounded-lg text-sm font-medium text-center hover:bg-accent/90 transition-colors"
+            className="mt-2 bg-[hsl(var(--accent))] text-[hsl(var(--accent-foreground))] px-4 py-3 rounded-lg text-sm font-semibold text-center hover:bg-[hsl(var(--accent-2))] transition-colors"
             onClick={() => setMobileOpen(false)}
           >
             Get Started

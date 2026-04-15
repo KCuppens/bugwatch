@@ -3,24 +3,10 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
-import {
-  Search,
-  HelpCircle,
-  Moon,
-  Sun,
-  LogOut,
-  User,
-  Settings,
-  Menu,
-  BookOpen,
-  Keyboard,
-  Bug,
-  Mail,
-  ExternalLink,
-} from "lucide-react";
-import { useTheme } from "next-themes";
+import { Search, HelpCircle, LogOut, User, Settings, BookOpen, Keyboard, Bug, Mail, ExternalLink } from "lucide-react";
 import { useCommandPalette } from "@/components/command-palette";
 import { NotificationCenter } from "@/components/notification-center";
+import { ProjectSelector } from "@/components/project-selector";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -30,60 +16,71 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 
-interface TopbarProps {
-  onMenuClick: () => void;
-}
-
-export function Topbar({ onMenuClick }: TopbarProps) {
+export function Topbar() {
   const router = useRouter();
   const { user, logout } = useAuth();
-  const { theme, setTheme } = useTheme();
   const { setOpen: openCommandPalette } = useCommandPalette();
   const [isMac, setIsMac] = useState(true);
 
   useEffect(() => {
     if (typeof navigator !== "undefined") {
-      const platform = navigator.platform || (navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform || "";
+      const platform =
+        navigator.platform ||
+        (navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform ||
+        "";
       setIsMac(/mac|iphone|ipad|ipod/i.test(platform));
     }
   }, []);
 
   async function handleLogout() {
-    await logout();
+    try {
+      await logout();
+    } catch {
+      // Logout failed — still navigate to login so the user is not stuck
+    }
     router.push("/login");
   }
 
   return (
-    <header className="fixed md:left-64 left-0 right-0 top-0 z-30 flex h-14 items-center justify-between border-b border-border-subtle bg-surface-1/95 backdrop-blur-lg px-6">
-      {/* Search */}
-      <div className="flex items-center gap-2">
-        <button
-          onClick={onMenuClick}
-          aria-label="Toggle sidebar"
-          className="md:hidden h-9 w-9 rounded-lg flex items-center justify-center hover:bg-surface-3 transition-colors"
-        >
-          <Menu className="h-5 w-5 text-muted-foreground" />
-        </button>
+    <header className="fixed left-0 md:left-14 right-0 top-0 z-30 flex h-12 items-center border-b border-[hsl(var(--border-subtle))] bg-[hsl(var(--surface-1))] px-4">
+      {/* Left: Project selector */}
+      <div className="flex items-center gap-3 min-w-0">
+        <ProjectSelector />
+      </div>
+
+      {/* Center: Search */}
+      <div className="flex-1 flex items-center justify-center px-4">
         <button
           onClick={() => openCommandPalette(true)}
           aria-label="Search issues"
-          className="flex items-center gap-2 h-9 w-9 sm:w-56 px-0 sm:px-3 justify-center sm:justify-start rounded-lg bg-surface-2 border border-border-subtle text-muted-foreground hover:bg-surface-3 hover:text-foreground transition-all"
+          className="flex items-center gap-2 h-8 w-full max-w-[480px] px-3 rounded-md bg-[hsl(var(--surface-3))] border border-[hsl(var(--border-subtle))] text-[hsl(var(--muted-foreground))] hover:border-[hsl(var(--border-strong))] hover:text-[hsl(var(--foreground))] transition-all duration-150 text-sm"
         >
-          <Search className="h-4 w-4" />
-          <span className="hidden sm:inline text-sm">Search issues...</span>
-          <kbd className="hidden sm:inline-flex ml-auto h-5 items-center gap-0.5 rounded bg-surface-3 px-1.5 font-mono text-[10px] font-medium text-muted-foreground">
-            {isMac ? <><span className="text-xs">⌘</span>K</> : <>Ctrl K</>}
+          <Search className="h-3.5 w-3.5 shrink-0" />
+          <span className="flex-1 text-left text-sm">Search issues...</span>
+          <kbd className="shrink-0 inline-flex h-5 items-center gap-0.5 rounded bg-[hsl(var(--surface-1))] border border-[hsl(var(--border-subtle))] px-1.5 font-mono text-[10px] font-medium text-[hsl(var(--muted-foreground))]">
+            {isMac ? (
+              <>
+                <span className="text-xs">⌘</span>K
+              </>
+            ) : (
+              <>Ctrl K</>
+            )}
           </kbd>
         </button>
       </div>
 
-      {/* Actions */}
-      <div className="flex items-center gap-1">
+      {/* Right: Actions */}
+      <div className="flex items-center gap-0.5">
         <NotificationCenter />
+
+        {/* Help menu */}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <button aria-label="Help" className="h-9 w-9 rounded-lg flex items-center justify-center hover:bg-surface-3 transition-colors">
-              <HelpCircle className="h-4 w-4 text-muted-foreground" />
+            <button
+              aria-label="Help"
+              className="h-8 w-8 rounded-md flex items-center justify-center text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--surface-3))] hover:text-[hsl(var(--foreground))] transition-colors duration-150"
+            >
+              <HelpCircle className="h-4 w-4" />
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-48">
@@ -91,9 +88,11 @@ export function Topbar({ onMenuClick }: TopbarProps) {
               <BookOpen className="mr-2 h-4 w-4" />
               Documentation
             </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => {
-              document.dispatchEvent(new KeyboardEvent("keydown", { key: "?", bubbles: true }));
-            }}>
+            <DropdownMenuItem
+              onClick={() => {
+                document.dispatchEvent(new KeyboardEvent("keydown", { key: "?", bubbles: true }));
+              }}
+            >
               <Keyboard className="mr-2 h-4 w-4" />
               Keyboard Shortcuts
             </DropdownMenuItem>
@@ -102,7 +101,7 @@ export function Topbar({ onMenuClick }: TopbarProps) {
               <a href="https://github.com/KCuppens/bugwatch/issues" target="_blank" rel="noopener noreferrer">
                 <Bug className="mr-2 h-4 w-4" />
                 Report a Bug
-                <ExternalLink className="ml-auto h-3 w-3 text-muted-foreground" />
+                <ExternalLink className="ml-auto h-3 w-3 text-[hsl(var(--muted-foreground))]" />
               </a>
             </DropdownMenuItem>
             <DropdownMenuItem asChild>
@@ -113,31 +112,26 @@ export function Topbar({ onMenuClick }: TopbarProps) {
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
-        <button
-          onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-          aria-label="Toggle theme"
-          className="h-9 w-9 rounded-lg flex items-center justify-center hover:bg-surface-3 transition-colors"
-        >
-          <Sun className="h-4 w-4 text-muted-foreground rotate-0 scale-100 transition-all dark:-rotate-90 dark:scale-0" />
-          <Moon className="absolute h-4 w-4 text-muted-foreground rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100" />
-        </button>
 
-        {/* User Menu */}
+        {/* User menu */}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <button className="flex items-center gap-2 h-9 px-2 rounded-lg hover:bg-surface-3 transition-colors">
-              <div className="flex h-7 w-7 items-center justify-center rounded-full bg-accent text-xs font-medium text-accent-foreground">
+            <button
+              aria-label="User menu"
+              className="flex items-center gap-2 h-8 px-2 rounded-md hover:bg-[hsl(var(--surface-3))] transition-colors duration-150 ml-0.5"
+            >
+              <div className="flex h-6 w-6 items-center justify-center rounded-full bg-[hsl(var(--accent))] text-[10px] font-bold font-mono text-[hsl(var(--accent-foreground))]">
                 {user?.name?.[0] || user?.email?.[0]?.toUpperCase() || "U"}
               </div>
-              <span className="max-w-24 truncate text-sm">
+              <span className="max-w-20 truncate text-sm text-[hsl(var(--foreground))] hidden sm:block">
                 {user?.name || user?.email?.split("@")[0]}
               </span>
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-48">
             <DropdownMenuLabel>
-              <p className="font-medium">{user?.name || "User"}</p>
-              <p className="text-xs font-normal text-muted-foreground">{user?.email}</p>
+              <p className="font-medium font-sans">{user?.name || "User"}</p>
+              <p className="text-xs font-normal text-[hsl(var(--muted-foreground))]">{user?.email}</p>
             </DropdownMenuLabel>
             <DropdownMenuSeparator />
             <DropdownMenuItem onClick={() => router.push("/dashboard/settings?tab=profile")}>

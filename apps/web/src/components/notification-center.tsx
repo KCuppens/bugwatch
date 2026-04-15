@@ -1,6 +1,7 @@
 "use client";
 
 import { useNotifications } from "@/hooks/useNotifications";
+import { formatRelativeTime } from "@/lib/format";
 
 import { Bell, AlertCircle, CheckCircle, Clock, XCircle } from "lucide-react";
 import {
@@ -10,21 +11,6 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
-
-function formatRelativeTime(dateString: string): string {
-  const date = new Date(dateString);
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  const diffMins = Math.floor(diffMs / 60000);
-  const diffHours = Math.floor(diffMs / 3600000);
-  const diffDays = Math.floor(diffMs / 86400000);
-
-  if (diffMins < 1) return "just now";
-  if (diffMins < 60) return `${diffMins}m ago`;
-  if (diffHours < 24) return `${diffHours}h ago`;
-  if (diffDays < 7) return `${diffDays}d ago`;
-  return date.toLocaleDateString();
-}
 
 function getTriggerIcon(triggerType: string) {
   switch (triggerType) {
@@ -45,10 +31,14 @@ export function NotificationCenter() {
   const { notifications, unreadCount, markAllRead } = useNotifications();
 
   return (
-    <DropdownMenu onOpenChange={(open) => { if (open) markAllRead(); }}>
+    <DropdownMenu
+      onOpenChange={(open) => {
+        if (open) markAllRead();
+      }}
+    >
       <DropdownMenuTrigger asChild>
         <button
-          aria-label="Notifications"
+          aria-label={unreadCount > 0 ? `Notifications — ${unreadCount} unread` : "Notifications"}
           className="relative h-9 w-9 rounded-lg flex items-center justify-center hover:bg-surface-3 transition-colors"
         >
           <Bell className="h-4 w-4 text-muted-foreground" />
@@ -63,9 +53,7 @@ export function NotificationCenter() {
         <DropdownMenuLabel className="flex items-center justify-between">
           <span>Notifications</span>
           {notifications.length > 0 && (
-            <span className="text-xs font-normal text-muted-foreground">
-              {notifications.length} recent
-            </span>
+            <span className="text-xs font-normal text-muted-foreground">{notifications.length} recent</span>
           )}
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
@@ -77,26 +65,22 @@ export function NotificationCenter() {
         ) : (
           <div className="divide-y divide-border">
             {notifications.map((notification) => (
-              <button
+              <div
                 key={notification.id}
-                className="flex items-start gap-3 px-3 py-2.5 hover:bg-muted/50 transition-colors cursor-pointer w-full text-left"
+                className="flex items-start gap-3 px-3 py-2.5 hover:bg-muted/50 transition-colors w-full text-left"
               >
-                <div className="mt-0.5">
-                  {getTriggerIcon(notification.trigger_type)}
-                </div>
+                <div className="mt-0.5">{getTriggerIcon(notification.trigger_type)}</div>
                 <div className="flex-1 min-w-0">
                   <p className="text-sm truncate">{notification.message}</p>
                   <div className="flex items-center gap-2 mt-0.5">
-                    <span className="text-[10px] text-muted-foreground font-medium">
-                      {notification.project_name}
-                    </span>
+                    <span className="text-[10px] text-muted-foreground font-medium">{notification.project_name}</span>
                     <span className="text-[10px] text-muted-foreground flex items-center gap-0.5">
                       <Clock className="h-2.5 w-2.5" />
                       {formatRelativeTime(notification.created_at)}
                     </span>
                   </div>
                 </div>
-              </button>
+              </div>
             ))}
           </div>
         )}

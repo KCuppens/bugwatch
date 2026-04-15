@@ -4,89 +4,84 @@ import { FadeUp, ScaleIn } from "./motion";
 
 function DashboardPreview() {
   return (
-    <div className="relative mx-auto w-full max-w-5xl mt-16 overflow-hidden">
-      {/* Ambient glow behind the preview — decorative, no semantic content */}
+    <div className="relative w-full">
+      {/* Accent glow behind preview */}
       <div
         aria-hidden="true"
-        className="absolute inset-0 -z-10 opacity-50"
+        className="absolute inset-0 -z-10"
         style={{
-          background: "radial-gradient(ellipse, rgba(96,165,250,0.28) 0%, rgba(139,92,246,0.15) 50%, transparent 70%)",
-          willChange: "transform",
+          background: "radial-gradient(ellipse, rgba(232,255,71,0.12) 0%, transparent 70%)",
         }}
       />
       {/* Browser chrome */}
-      <div className="rounded-2xl liquid-glass-strong overflow-hidden">
+      <div className="surface-raised rounded-xl overflow-hidden">
         {/* Title bar */}
-        <div className="flex items-center gap-2 px-4 py-3 border-b border-border-subtle">
+        <div className="flex items-center gap-2 px-4 py-3 border-b border-[hsl(var(--border-subtle))]">
           <div className="flex gap-1.5">
-            <div className="w-3 h-3 rounded-full bg-muted-foreground/30" />
-            <div className="w-3 h-3 rounded-full bg-muted-foreground/30" />
-            <div className="w-3 h-3 rounded-full bg-muted-foreground/30" />
+            <div className="w-2.5 h-2.5 rounded-full bg-[hsl(var(--surface-3))]" />
+            <div className="w-2.5 h-2.5 rounded-full bg-[hsl(var(--surface-3))]" />
+            <div className="w-2.5 h-2.5 rounded-full bg-[hsl(var(--surface-3))]" />
           </div>
           <div className="flex-1 flex justify-center">
-            <div className="px-4 py-1 rounded-full bg-surface-3 text-xs text-muted-foreground">
-              app.bugwatch.dev/dashboard/issues
+            <div className="px-4 py-1 rounded-md bg-[hsl(var(--surface-3))] text-xs text-[hsl(var(--muted-foreground))] font-mono">
+              app.bugwatch.dev/dashboard
             </div>
           </div>
         </div>
 
         {/* Dashboard content */}
-        <div className="p-6">
+        <div className="p-4 bg-[hsl(var(--background))]">
+          {/* Triage bar mock */}
+          <div className="flex items-center gap-3 h-8 px-3 mb-4 rounded-md bg-[hsl(var(--surface-1))] border border-[hsl(var(--border-subtle))]">
+            <span className="text-xs font-mono font-bold text-red-400 flex items-center gap-1.5">
+              <span className="h-1.5 w-1.5 rounded-full bg-red-500 animate-pulse" />3 FATAL
+            </span>
+            <div className="h-3 w-px bg-[hsl(var(--border-subtle))]" />
+            <span className="text-xs font-mono font-bold text-orange-400 flex items-center gap-1.5">
+              <span className="h-1.5 w-1.5 rounded-full bg-orange-500" />
+              12 ERROR
+            </span>
+            <span className="ml-auto text-xs font-mono text-[hsl(var(--muted-foreground))]">23 unresolved</span>
+          </div>
+
           {/* Stats row */}
-          <div className="grid grid-cols-4 gap-4 mb-6">
-            <div className="p-4 rounded-xl bg-white/5 border border-white/10">
-              <div className="text-2xl font-bold">1,247</div>
-              <div className="text-xs text-muted-foreground">Total Errors</div>
-            </div>
-            <div className="p-4 rounded-xl bg-white/5 border border-white/10">
-              <div className="text-2xl font-bold text-red-500">23</div>
-              <div className="text-xs text-muted-foreground">Unresolved</div>
-            </div>
-            <div className="p-4 rounded-xl bg-white/5 border border-white/10">
-              <div className="text-2xl font-bold text-accent">98.2%</div>
-              <div className="text-xs text-muted-foreground">Uptime</div>
-            </div>
-            <div className="p-4 rounded-xl bg-white/5 border border-white/10">
-              <div className="text-2xl font-bold">$0</div>
-              <div className="text-xs text-muted-foreground">This Month</div>
-            </div>
+          <div className="grid grid-cols-4 gap-3 mb-4">
+            {[
+              { label: "Unresolved", value: "23", color: "text-orange-400" },
+              { label: "Events", value: "1,247", color: "text-[hsl(var(--foreground))]" },
+              { label: "Uptime", value: "98.2%", color: "text-emerald-400" },
+              { label: "This Month", value: "$0", color: "text-[hsl(var(--accent))]" },
+            ].map((stat) => (
+              <div key={stat.label} className="surface-card p-3">
+                <div className={`text-lg font-mono font-bold ${stat.color}`}>{stat.value}</div>
+                <div className="text-[10px] text-[hsl(var(--muted-foreground))]">{stat.label}</div>
+              </div>
+            ))}
           </div>
 
           {/* Issues list */}
-          <div className="rounded-xl bg-white/4 border border-white/8 overflow-hidden">
-            <div className="px-4 py-3 border-b border-border-subtle">
-              <span className="font-medium">Recent Issues</span>
-            </div>
-            <div className="divide-y divide-border-subtle">
-              <div className="px-4 py-3 flex items-center gap-4">
-                <AlertCircle className="h-5 w-5 text-red-500" />
+          <div className="surface-card overflow-hidden">
+            <div className="divide-y divide-[hsl(var(--border-subtle))]">
+              <div className="px-3 py-2.5 flex items-center gap-3 border-l-4 border-l-red-500">
+                <AlertCircle className="h-4 w-4 text-red-500 shrink-0" />
                 <div className="flex-1 min-w-0">
-                  <div className="font-mono text-sm truncate">TypeError: Cannot read property 'id' of undefined</div>
-                  <div className="text-xs text-muted-foreground">src/api/users.ts:142 · 847 events</div>
+                  <div className="font-mono text-xs truncate">TypeError: Cannot read property &apos;id&apos;</div>
+                  <div className="text-[10px] text-[hsl(var(--muted-foreground))] font-mono">847 events · 2m ago</div>
                 </div>
-                <span className="px-3 py-1.5 rounded-full text-xs bg-red-500/20 text-red-400 font-medium">
-                  Unresolved
-                </span>
               </div>
-              <div className="px-4 py-3 flex items-center gap-4">
-                <AlertCircle className="h-5 w-5 text-yellow-500" />
+              <div className="px-3 py-2.5 flex items-center gap-3 border-l-4 border-l-orange-500">
+                <AlertCircle className="h-4 w-4 text-orange-500 shrink-0" />
                 <div className="flex-1 min-w-0">
-                  <div className="font-mono text-sm truncate">Unhandled Promise Rejection: Network Error</div>
-                  <div className="text-xs text-muted-foreground">src/lib/fetch.ts:28 · 234 events</div>
+                  <div className="font-mono text-xs truncate">Unhandled Rejection: Network Error</div>
+                  <div className="text-[10px] text-[hsl(var(--muted-foreground))] font-mono">234 events · 5m ago</div>
                 </div>
-                <span className="px-3 py-1.5 rounded-full text-xs bg-yellow-500/20 text-yellow-400 font-medium">
-                  Investigating
-                </span>
               </div>
-              <div className="px-4 py-3 flex items-center gap-4">
-                <CheckCircle2 className="h-5 w-5 text-accent" />
+              <div className="px-3 py-2.5 flex items-center gap-3 border-l-4 border-l-[hsl(var(--accent))] opacity-60">
+                <CheckCircle2 className="h-4 w-4 text-[hsl(var(--accent))] shrink-0" />
                 <div className="flex-1 min-w-0">
-                  <div className="font-mono text-sm truncate">ReferenceError: user is not defined</div>
-                  <div className="text-xs text-muted-foreground">src/components/Profile.tsx:56 · Resolved 2h ago</div>
+                  <div className="font-mono text-xs truncate">ReferenceError: user is not defined</div>
+                  <div className="text-[10px] text-[hsl(var(--muted-foreground))] font-mono">Resolved 2h ago</div>
                 </div>
-                <span className="px-3 py-1.5 rounded-full text-xs bg-accent/10 text-accent border border-accent/30">
-                  Resolved
-                </span>
               </div>
             </div>
           </div>
@@ -98,66 +93,52 @@ function DashboardPreview() {
 
 export function Hero() {
   return (
-    <section className="container mx-auto px-4 pt-20 md:pt-28 pb-20 md:pb-28">
-      <FadeUp>
-        <div className="text-center max-w-3xl mx-auto">
-          <div className="inline-flex items-center gap-2 px-3 py-1 mb-6 rounded-full border border-border-subtle bg-surface-2 text-caption uppercase text-muted-foreground">
-            <span className="h-1.5 w-1.5 rounded-full bg-accent animate-pulse" />
-            Open source · v1.0 shipping
-          </div>
-          <h1 className="font-display text-display-md sm:text-display-lg md:text-display-xl mb-6">
-            Error tracking that doesn't <span className="gradient-text">punish growth</span>
-          </h1>
-          <p className="text-body-lg md:text-xl text-muted-foreground mb-10 max-w-[620px] mx-auto">
-            Unlimited errors. Zero surprise bills. Open source.
-          </p>
-          <div className="flex flex-col sm:flex-row gap-4 justify-center">
-            <Link
-              href="/signup"
-              className="inline-flex items-center justify-center gap-2 h-12 px-7 rounded-xl bg-accent text-accent-foreground text-base font-medium shadow-glow-blue hover:shadow-glow-blue-lg hover:bg-accent/90 transition-all btn-inset focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 focus-visible:ring-offset-2 focus-visible:ring-offset-background"
-            >
-              Get Started Free
-              <ArrowRight className="h-4 w-4" />
-            </Link>
-            <Link
-              href="https://github.com/KCuppens/bugwatch"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center justify-center gap-2 h-12 px-7 rounded-xl liquid-glass text-base font-medium hover:border-white/16 hover:shadow-glow-blue-sm transition-all"
-            >
-              Self-Host on GitHub
-            </Link>
-          </div>
-          <div className="mt-10 flex flex-col items-center gap-3">
-            <p className="text-caption uppercase tracking-wider text-muted-foreground">
-              Trusted by engineering teams shipping fast
-            </p>
-            <div className="flex items-center gap-8 opacity-60 grayscale text-muted-foreground text-sm font-semibold">
-              <span>
-                <span aria-hidden="true">◆</span> Vercel
-              </span>
-              <span>
-                <span aria-hidden="true">▲</span> Railway
-              </span>
-              <span>
-                <span aria-hidden="true">●</span> Fly.io
-              </span>
-              <span className="hidden sm:inline">
-                <span aria-hidden="true">◇</span> Render
-              </span>
-              <span className="hidden sm:inline">
-                <span aria-hidden="true">★</span> Supabase
-              </span>
+    <section className="relative container mx-auto px-4 pt-20 md:pt-28 pb-20 bg-grid-pattern">
+      <div className="flex flex-col lg:flex-row items-center gap-12 lg:gap-16">
+        {/* Left 60%: Text content */}
+        <div className="flex-[1.5] min-w-0">
+          <FadeUp>
+            <div className="inline-flex items-center gap-2 px-3 py-1 mb-6 rounded-full border border-[hsl(var(--border-subtle))] bg-[hsl(var(--surface-2))] text-xs uppercase text-[hsl(var(--muted-foreground))] font-mono tracking-wider">
+              <span className="h-1.5 w-1.5 rounded-full bg-[hsl(var(--accent))] animate-pulse" />
+              Open source · v1.0 shipping
             </div>
-          </div>
+            <h1 className="font-sans text-4xl sm:text-5xl md:text-6xl font-bold leading-tight tracking-tight mb-6 text-[hsl(var(--foreground))]">
+              Stop paying
+              <br />
+              per error.
+              <br />
+              <span className="text-[hsl(var(--accent))]">BugWatch.</span>
+            </h1>
+            <p className="text-lg text-[hsl(var(--muted-foreground))] mb-10 max-w-md">
+              Open-source error tracking with flat pricing. Unlimited errors, zero surprise bills.
+            </p>
+            <div className="flex flex-col sm:flex-row gap-3">
+              <Link
+                href="/signup"
+                className="inline-flex items-center justify-center gap-2 h-11 px-6 rounded-lg bg-[hsl(var(--accent))] text-[hsl(var(--accent-foreground))] text-sm font-semibold hover:bg-[hsl(var(--accent-2))] transition-colors"
+              >
+                Start free
+                <ArrowRight className="h-4 w-4" />
+              </Link>
+              <Link
+                href="https://github.com/KCuppens/bugwatch"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center justify-center gap-2 h-11 px-6 rounded-lg surface-panel text-sm font-medium text-[hsl(var(--foreground))] hover:border-[hsl(var(--border-strong))] transition-colors"
+              >
+                Self-host on GitHub →
+              </Link>
+            </div>
+          </FadeUp>
         </div>
-      </FadeUp>
 
-      <ScaleIn delay={0.2}>
-        <div className="md:rotate-[0.5deg] transform-gpu">
-          <DashboardPreview />
+        {/* Right 40%: Dashboard preview */}
+        <div className="flex-1 w-full lg:w-auto">
+          <ScaleIn delay={0.15}>
+            <DashboardPreview />
+          </ScaleIn>
         </div>
-      </ScaleIn>
+      </div>
     </section>
   );
 }

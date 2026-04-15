@@ -1,7 +1,5 @@
 import type { Metadata } from "next";
-import { GeistSans } from "geist/font/sans";
-import { GeistMono } from "geist/font/mono";
-import { Urbanist } from "next/font/google";
+import { Space_Mono, DM_Sans } from "next/font/google";
 import { ThemeProvider } from "@/components/theme-provider";
 import { AuthProvider } from "@/lib/auth-context";
 import { BugwatchProvider } from "@/components/bugwatch-provider";
@@ -9,12 +7,19 @@ import { ErrorBoundary } from "@/components/error-boundary";
 import { Toaster } from "@/components/ui/sonner";
 import "./globals.css";
 
-const urbanist = Urbanist({
+const spaceMono = Space_Mono({
   subsets: ["latin"],
-  variable: "--font-display",
+  variable: "--font-mono",
   display: "swap",
-  weight: ["600", "700", "800"],
-  fallback: ["system-ui", "sans-serif"],
+  weight: ["400", "700"],
+  adjustFontFallback: true,
+});
+
+const dmSans = DM_Sans({
+  subsets: ["latin"],
+  variable: "--font-sans",
+  display: "swap",
+  weight: ["400", "500", "600", "700"],
   adjustFontFallback: true,
 });
 
@@ -53,9 +58,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body
-        className={`${GeistSans.variable} ${GeistMono.variable} ${urbanist.variable} font-sans antialiased bg-gradient-mesh`}
-      >
+      <body className={`${spaceMono.variable} ${dmSans.variable} font-sans antialiased bg-gradient-mesh`}>
         <ThemeProvider attribute="class" defaultTheme="dark" enableSystem={false} disableTransitionOnChange>
           <ErrorBoundary
             fallback={

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo, useCallback } from "react";
+import { formatRelativeTime } from "@/lib/format";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -89,36 +90,11 @@ function stringToColor(str: string): string {
   return colors[Math.abs(hash) % colors.length] ?? colors[0];
 }
 
-function formatRelativeTime(dateString: string): string {
-  const date = new Date(dateString);
-  if (isNaN(date.getTime())) return "-";
-
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  if (diffMs < 0) return "just now"; // future date (clock skew)
-
-  const diffMins = Math.floor(diffMs / 60000);
-  const diffHours = Math.floor(diffMs / 3600000);
-  const diffDays = Math.floor(diffMs / 86400000);
-
-  if (diffMins < 1) return "just now";
-  if (diffMins < 60) return `${diffMins}m ago`;
-  if (diffHours < 24) return `${diffHours}h ago`;
-  if (diffDays < 7) return `${diffDays}d ago`;
-  return date.toLocaleDateString();
-}
-
-function generateTrendData(
-  count: number,
-  firstSeen: string
-): { trend: "up" | "down" | "stable"; percentage: number } {
-  const hoursSinceFirst =
-    (Date.now() - new Date(firstSeen).getTime()) / (1000 * 60 * 60);
+function generateTrendData(count: number, firstSeen: string): { trend: "up" | "down" | "stable"; percentage: number } {
+  const hoursSinceFirst = (Date.now() - new Date(firstSeen).getTime()) / (1000 * 60 * 60);
   const eventsPerDay = count / Math.max(hoursSinceFirst / 24, 1);
-  if (hoursSinceFirst < 2)
-    return { trend: "up", percentage: Math.min(500, Math.round(count * 10)) };
-  if (hoursSinceFirst < 24)
-    return { trend: "up", percentage: Math.round(Math.min(200, eventsPerDay)) };
+  if (hoursSinceFirst < 2) return { trend: "up", percentage: Math.min(500, Math.round(count * 10)) };
+  if (hoursSinceFirst < 24) return { trend: "up", percentage: Math.round(Math.min(200, eventsPerDay)) };
   if (count > 100) return { trend: "stable", percentage: 0 };
   return { trend: "down", percentage: Math.round(Math.min(40, (count / Math.max(hoursSinceFirst, 1)) * 10)) };
 }
@@ -191,11 +167,7 @@ function AlertStatusBadge({ status }: { status: string }) {
     pending: { label: "Pending", className: "bg-yellow-500/10 text-yellow-500" },
   }[status] ?? { label: status, className: "bg-muted text-muted-foreground" };
 
-  return (
-    <span className={cn("px-1.5 py-0.5 rounded text-[10px] font-medium", config.className)}>
-      {config.label}
-    </span>
-  );
+  return <span className={cn("px-1.5 py-0.5 rounded text-[10px] font-medium", config.className)}>{config.label}</span>;
 }
 
 // ---------- Main Page ----------
@@ -227,9 +199,7 @@ export default function OverviewPage() {
     if (!searchQuery.trim()) return issues;
     const query = searchQuery.toLowerCase();
     return issues.filter(
-      (issue) =>
-        issue.title.toLowerCase().includes(query) ||
-        issue.project_name.toLowerCase().includes(query)
+      (issue) => issue.title.toLowerCase().includes(query) || issue.project_name.toLowerCase().includes(query)
     );
   }, [issues, searchQuery]);
 
@@ -285,7 +255,10 @@ export default function OverviewPage() {
 
     function handleVisibility() {
       if (document.hidden) {
-        if (interval) { clearInterval(interval); interval = null; }
+        if (interval) {
+          clearInterval(interval);
+          interval = null;
+        }
       } else {
         fetchData();
         interval = setInterval(fetchData, 30000);
@@ -313,12 +286,10 @@ export default function OverviewPage() {
         }));
         setStats((prev) =>
           prev.map((s) =>
-            s.project_id === projectId
-              ? { ...s, unresolved_count: Math.max(0, s.unresolved_count - 1) }
-              : s
+            s.project_id === projectId ? { ...s, unresolved_count: Math.max(0, s.unresolved_count - 1) } : s
           )
         );
-      } catch (err) {
+      } catch {
         toast.error("Failed to resolve issue");
         fetchData();
       } finally {
@@ -335,7 +306,7 @@ export default function OverviewPage() {
           <div className="mx-auto w-16 h-16 rounded-2xl bg-gradient-to-br from-red-500/20 to-red-500/5 flex items-center justify-center mb-6">
             <AlertCircle className="h-8 w-8 text-red-500" />
           </div>
-          <h2 className="font-display text-heading-lg mb-2">Failed to load</h2>
+          <h2 className="font-sans text-heading-lg mb-2">Failed to load</h2>
           <p className="text-muted-foreground mb-6">{error}</p>
           <Button onClick={fetchData} className="gap-2">
             <RefreshCw className="h-4 w-4" />
@@ -353,10 +324,9 @@ export default function OverviewPage() {
           <div className="mx-auto w-16 h-16 rounded-2xl bg-gradient-to-br from-primary/20 to-primary/5 flex items-center justify-center mb-6">
             <Bug className="h-8 w-8 text-accent-2" />
           </div>
-          <h2 className="font-display text-heading-lg mb-2">No projects yet</h2>
+          <h2 className="font-sans text-heading-lg mb-2">No projects yet</h2>
           <p className="text-muted-foreground mb-6">
-            Create your first project to start tracking errors across your
-            applications.
+            Create your first project to start tracking errors across your applications.
           </p>
           <Link href="/dashboard/projects/new">
             <Button size="lg" className="gap-2">
@@ -374,16 +344,11 @@ export default function OverviewPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-4">
-          <h1 className="font-display text-heading-lg">Overview</h1>
+          <h1 className="font-sans text-heading-lg">Overview</h1>
           <span className="text-body-sm text-muted-foreground">All projects</span>
         </div>
         <div className="flex items-center gap-2">
-          <Button
-            variant="ghost"
-            size="sm"
-            className="text-muted-foreground"
-            onClick={fetchData}
-          >
+          <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={fetchData}>
             <RefreshCw className="h-4 w-4 mr-2" />
             Refresh
           </Button>
@@ -397,38 +362,21 @@ export default function OverviewPage() {
 
       {/* Stat Cards */}
       {isLoading ? (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           {Array.from({ length: 4 }).map((_, i) => (
             <StatCardSkeleton key={i} />
           ))}
         </div>
       ) : (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           {/* Unresolved */}
-          <div className="group relative overflow-hidden rounded-xl border bg-card p-4 transition-all hover:shadow-lg hover:shadow-accent-2/5 hover:border-accent-2/20 card-hover">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-caption font-medium text-muted-foreground uppercase tracking-wide">
-                  Unresolved
-                </p>
-                <p className="font-display text-3xl font-semibold mt-1 tabular-nums tracking-tight">{totals.unresolved}</p>
-              </div>
-              <div
-                className={cn(
-                  "p-2 rounded-lg",
-                  totals.unresolved > 0 ? "bg-orange-500/10" : "bg-bug/10"
-                )}
-              >
-                <AlertCircle
-                  className={cn(
-                    "h-5 w-5",
-                    totals.unresolved > 0 ? "text-orange-500" : "text-bug"
-                  )}
-                />
-              </div>
-            </div>
+          <div className="surface-card p-4 card-hover">
+            <p className="text-[11px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider">
+              Unresolved
+            </p>
+            <p className="font-mono text-3xl font-bold mt-1 tabular-nums tracking-tight">{totals.unresolved}</p>
             {totals.critical > 0 && (
-              <p className="text-xs text-red-500 mt-2 flex items-center gap-1">
+              <p className="text-xs text-red-400 mt-2 flex items-center gap-1 font-mono">
                 <Flame className="h-3 w-3" />
                 {totals.critical} critical
               </p>
@@ -436,82 +384,46 @@ export default function OverviewPage() {
           </div>
 
           {/* Total Events */}
-          <div className="group relative overflow-hidden rounded-xl border bg-card p-4 transition-all hover:shadow-lg hover:shadow-accent-2/5 hover:border-accent-2/20 card-hover">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-caption font-medium text-muted-foreground uppercase tracking-wide">
-                  Total Events
-                </p>
-                <p className="font-display text-3xl font-semibold mt-1 tabular-nums tracking-tight">
-                  {totals.events.toLocaleString()}
-                </p>
-              </div>
-              <div className="p-2 rounded-lg bg-blue-500/10">
-                <TrendingUp className="h-5 w-5 text-blue-500" />
-              </div>
-            </div>
-            <div className="mt-2 flex items-center gap-1">
-              <div className="flex-1 h-1 rounded-full bg-muted overflow-hidden">
-                <div className="h-full w-3/4 bg-gradient-to-r from-blue-500 to-primary rounded-full" />
-              </div>
+          <div className="surface-card p-4 card-hover">
+            <p className="text-[11px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider">
+              Total Events
+            </p>
+            <p className="font-mono text-3xl font-bold mt-1 tabular-nums tracking-tight">
+              {totals.events.toLocaleString()}
+            </p>
+            <div className="mt-2 h-0.5 rounded-full bg-[hsl(var(--surface-3))] overflow-hidden">
+              <div className="h-full w-3/4 bg-[hsl(var(--accent))]/40 rounded-full" />
             </div>
           </div>
 
           {/* Users Affected */}
-          <div className="group relative overflow-hidden rounded-xl border bg-card p-4 transition-all hover:shadow-lg hover:shadow-accent-2/5 hover:border-accent-2/20 card-hover">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-caption font-medium text-muted-foreground uppercase tracking-wide">
-                  Users Affected
-                </p>
-                <p className="font-display text-3xl font-semibold mt-1 tabular-nums tracking-tight">
-                  {totals.users.toLocaleString()}
-                </p>
-              </div>
-              <div className="p-2 rounded-lg bg-purple-500/10">
-                <Users className="h-5 w-5 text-purple-500" />
-              </div>
-            </div>
+          <div className="surface-card p-4 card-hover">
+            <p className="text-[11px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider">
+              Users Affected
+            </p>
+            <p className="font-mono text-3xl font-bold mt-1 tabular-nums tracking-tight">
+              {totals.users.toLocaleString()}
+            </p>
           </div>
 
-          {/* Uptime Health (replaces Projects count) */}
-          <div className="group relative overflow-hidden rounded-xl border bg-card p-4 transition-all hover:shadow-lg hover:shadow-accent-2/5 hover:border-accent-2/20 card-hover">
+          {/* Uptime Health */}
+          <div className="surface-card p-4 card-hover">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-caption font-medium text-muted-foreground uppercase tracking-wide">
-                  Uptime Health
-                </p>
+                <p className="text-caption font-medium text-muted-foreground uppercase tracking-wide">Uptime Health</p>
                 <p className="font-display text-3xl font-semibold mt-1 tabular-nums tracking-tight">
-                  {monitorsSummary.total > 0
-                    ? `${monitorsSummary.up}/${monitorsSummary.total}`
-                    : "-"}
+                  {monitorsSummary.total > 0 ? `${monitorsSummary.up}/${monitorsSummary.total}` : "-"}
                 </p>
               </div>
-              <div
-                className={cn(
-                  "p-2 rounded-lg",
-                  monitorsSummary.down > 0
-                    ? "bg-red-500/10"
-                    : "bg-emerald-500/10"
-                )}
-              >
-                <Signal
-                  className={cn(
-                    "h-5 w-5",
-                    monitorsSummary.down > 0
-                      ? "text-red-500"
-                      : "text-emerald-500"
-                  )}
-                />
+              <div className={cn("p-2 rounded-lg", monitorsSummary.down > 0 ? "bg-red-500/10" : "bg-emerald-500/10")}>
+                <Signal className={cn("h-5 w-5", monitorsSummary.down > 0 ? "text-red-500" : "text-emerald-500")} />
               </div>
             </div>
             {monitorsSummary.total > 0 ? (
               <p
                 className={cn(
                   "text-xs mt-2 flex items-center gap-1",
-                  monitorsSummary.down > 0
-                    ? "text-red-500"
-                    : "text-emerald-500"
+                  monitorsSummary.down > 0 ? "text-red-500" : "text-emerald-500"
                 )}
               >
                 {monitorsSummary.down > 0 ? (
@@ -527,9 +439,7 @@ export default function OverviewPage() {
                 )}
               </p>
             ) : (
-              <p className="text-xs text-muted-foreground mt-2">
-                No monitors configured
-              </p>
+              <p className="text-xs text-muted-foreground mt-2">No monitors configured</p>
             )}
           </div>
         </div>
@@ -537,27 +447,28 @@ export default function OverviewPage() {
 
       {/* Search Bar */}
       <div className="relative">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-[hsl(var(--muted-foreground))]" />
         <input
           type="text"
+          aria-label="Search issues by title or project"
           placeholder="Search issues by title or project..."
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          className="w-full h-10 pl-10 pr-4 rounded-lg border bg-card text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-accent-2/20 focus:border-accent-2/50"
+          className="w-full h-10 pl-10 pr-4 rounded-lg border border-[hsl(var(--border-subtle))] bg-[hsl(var(--surface-3))] text-sm placeholder:text-[hsl(var(--muted-foreground))] focus:outline-none focus:ring-1 focus:ring-[hsl(var(--accent))]/40 focus:border-[hsl(var(--accent))]/40"
         />
       </div>
 
-      {/* Main Content: Issues + Right Sidebar */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Latest Issues (2/3) */}
+      {/* Main Content: 3-column bento grid */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        {/* Col 1: Latest Issues */}
         <div className="lg:col-span-2">
           {isLoading ? (
             <IssueListSkeleton />
           ) : (
-            <div className="rounded-xl border bg-card overflow-hidden">
-              <div className="flex items-center justify-between p-4 border-b">
+            <div className="surface-card overflow-hidden">
+              <div className="flex items-center justify-between p-4 border-b border-[hsl(var(--border-subtle))]">
                 <h2 className="text-sm font-semibold flex items-center gap-2">
-                  <Bug className="h-4 w-4 text-muted-foreground" />
+                  <Bug className="h-4 w-4 text-[hsl(var(--muted-foreground))]" />
                   Latest Issues
                 </h2>
                 <Link
@@ -575,14 +486,8 @@ export default function OverviewPage() {
                     <>
                       <Search className="h-8 w-8 text-muted-foreground mb-3" />
                       <p className="text-sm font-medium mb-1">No matches</p>
-                      <p className="text-xs text-muted-foreground mb-3">
-                        No issues match &quot;{searchQuery}&quot;
-                      </p>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setSearchQuery("")}
-                      >
+                      <p className="text-xs text-muted-foreground mb-3">No issues match &quot;{searchQuery}&quot;</p>
+                      <Button variant="outline" size="sm" onClick={() => setSearchQuery("")}>
                         Clear search
                       </Button>
                     </>
@@ -592,27 +497,19 @@ export default function OverviewPage() {
                         <Check className="h-6 w-6 text-bug" />
                       </div>
                       <p className="text-sm font-medium mb-1">All clear!</p>
-                      <p className="text-xs text-muted-foreground">
-                        No unresolved issues across all projects
-                      </p>
+                      <p className="text-xs text-muted-foreground">No unresolved issues across all projects</p>
                     </>
                   )}
                 </div>
               ) : (
                 <div className="divide-y divide-border-subtle">
                   {filteredIssues.map((issue) => {
-                    const config =
-                      levelConfig[issue.level as keyof typeof levelConfig] ||
-                      levelConfig.error;
+                    const config = levelConfig[issue.level as keyof typeof levelConfig] || levelConfig.error;
                     const Icon = config.icon;
                     const isHovered = hoveredIssue === issue.id;
                     const trend = generateTrendData(issue.count, issue.first_seen);
-                    const isRecent =
-                      Date.now() - new Date(issue.last_seen).getTime() <
-                      1000 * 60 * 5;
-                    const projectColor = stringToColor(
-                      issue.project_slug || issue.project_name
-                    );
+                    const isRecent = Date.now() - new Date(issue.last_seen).getTime() < 1000 * 60 * 5;
+                    const projectColor = stringToColor(issue.project_slug || issue.project_name);
 
                     return (
                       <div
@@ -642,39 +539,34 @@ export default function OverviewPage() {
                           {/* Title & Meta */}
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2">
-                              <p className="font-medium text-sm truncate">
-                                {issue.title}
-                              </p>
+                              <p className="font-medium text-sm truncate">{issue.title}</p>
                               {issue.environment && issue.environment !== "production" && (
-                                <span className={`shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-medium ${
-                                  (ENVIRONMENT_COLORS[issue.environment] ?? ENVIRONMENT_COLORS.production)!.bg
-                                } ${
-                                  (ENVIRONMENT_COLORS[issue.environment] ?? ENVIRONMENT_COLORS.production)!.text
-                                }`}>
+                                <span
+                                  className={`shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-medium ${
+                                    (ENVIRONMENT_COLORS[issue.environment] ?? ENVIRONMENT_COLORS.production)!.bg
+                                  } ${(ENVIRONMENT_COLORS[issue.environment] ?? ENVIRONMENT_COLORS.production)!.text}`}
+                                >
                                   {issue.environment}
                                 </span>
                               )}
                               {isRecent && (
-                                <span className="shrink-0 flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-bug/10 text-bug text-[10px] font-medium">
-                                  <span className="w-1.5 h-1.5 rounded-full bg-bug animate-pulse" />
-                                  NEW
-                                </span>
+                                <span
+                                  className="shrink-0 h-1.5 w-1.5 rounded-full bg-[hsl(var(--accent))] animate-pulse"
+                                  aria-label="New issue"
+                                />
                               )}
                             </div>
                             <div className="flex items-center gap-2 mt-1">
                               <span
-                                className={cn(
-                                  "px-1.5 py-0.5 rounded text-[10px] font-medium border",
-                                  projectColor
-                                )}
+                                className={cn("px-1.5 py-0.5 rounded text-[10px] font-medium border", projectColor)}
                               >
                                 {issue.project_name}
                               </span>
-                              <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                              <span className="flex items-center gap-1 text-xs text-[hsl(var(--muted-foreground))] font-mono">
                                 <Activity className="h-3 w-3" />
                                 {issue.count.toLocaleString()}
                               </span>
-                              <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                              <span className="flex items-center gap-1 text-xs text-[hsl(var(--muted-foreground))] font-mono">
                                 <Users className="h-3 w-3" />
                                 {issue.user_count}
                               </span>
@@ -686,14 +578,12 @@ export default function OverviewPage() {
                             <div
                               className={cn(
                                 "flex items-center gap-1 text-xs font-medium transition-opacity",
-                                isHovered
-                                  ? "opacity-0 w-0 overflow-hidden"
-                                  : "opacity-100 w-auto",
+                                isHovered ? "opacity-0 w-0 overflow-hidden" : "opacity-100 w-auto",
                                 trend.trend === "up"
                                   ? "text-red-500"
                                   : trend.trend === "down"
-                                  ? "text-accent"
-                                  : "text-muted-foreground"
+                                    ? "text-accent"
+                                    : "text-muted-foreground"
                               )}
                             >
                               {trend.trend === "up" ? (
@@ -712,9 +602,7 @@ export default function OverviewPage() {
                             <span
                               className={cn(
                                 "text-xs text-muted-foreground text-right transition-opacity",
-                                isHovered
-                                  ? "opacity-0 w-0 overflow-hidden"
-                                  : "opacity-100 w-16"
+                                isHovered ? "opacity-0 w-0 overflow-hidden" : "opacity-100 w-16"
                               )}
                             >
                               {formatRelativeTime(issue.last_seen)}
@@ -724,9 +612,7 @@ export default function OverviewPage() {
                             <div
                               className={cn(
                                 "flex items-center gap-1 transition-all",
-                                isHovered
-                                  ? "opacity-100 w-auto"
-                                  : "opacity-0 w-0 overflow-hidden"
+                                isHovered ? "opacity-100 w-auto" : "opacity-0 w-0 overflow-hidden"
                               )}
                             >
                               <Button
@@ -737,10 +623,7 @@ export default function OverviewPage() {
                                 onClick={(e) => {
                                   e.preventDefault();
                                   e.stopPropagation();
-                                  handleResolveIssue(
-                                    issue.id,
-                                    issue.project_id
-                                  );
+                                  handleResolveIssue(issue.id, issue.project_id);
                                 }}
                               >
                                 {resolvingIssue === issue.id ? (
@@ -752,9 +635,7 @@ export default function OverviewPage() {
                               </Button>
                             </div>
 
-                            {!isHovered && (
-                              <ChevronRight className="h-4 w-4 text-muted-foreground" />
-                            )}
+                            {!isHovered && <ChevronRight className="h-4 w-4 text-muted-foreground" />}
                           </div>
                         </Link>
                       </div>
@@ -772,10 +653,10 @@ export default function OverviewPage() {
           {isLoading ? (
             <SidePanelSkeleton />
           ) : (
-            <div className="rounded-xl border bg-card overflow-hidden">
-              <div className="flex items-center justify-between p-4 border-b">
+            <div className="surface-card overflow-hidden">
+              <div className="flex items-center justify-between p-4 border-b border-[hsl(var(--border-subtle))]">
                 <h2 className="text-sm font-semibold flex items-center gap-2">
-                  <Globe className="h-4 w-4 text-muted-foreground" />
+                  <Globe className="h-4 w-4 text-[hsl(var(--muted-foreground))]" />
                   Uptime Status
                 </h2>
                 <Link
@@ -790,9 +671,7 @@ export default function OverviewPage() {
               {monitors.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-10">
                   <Globe className="h-6 w-6 text-muted-foreground mb-2" />
-                  <p className="text-xs text-muted-foreground">
-                    No active monitors
-                  </p>
+                  <p className="text-xs text-muted-foreground">No active monitors</p>
                 </div>
               ) : (
                 <>
@@ -802,18 +681,13 @@ export default function OverviewPage() {
                       <span
                         className={cn(
                           "h-2 w-2 rounded-full",
-                          monitorsSummary.down > 0
-                            ? "bg-red-500"
-                            : "bg-emerald-500"
+                          monitorsSummary.down > 0 ? "bg-red-500" : "bg-emerald-500"
                         )}
                       />
                       <span className="text-muted-foreground">
                         {monitorsSummary.up} up
                         {monitorsSummary.down > 0 && (
-                          <span className="text-red-500">
-                            {" "}
-                            / {monitorsSummary.down} down
-                          </span>
+                          <span className="text-red-500"> / {monitorsSummary.down} down</span>
                         )}
                       </span>
                     </div>
@@ -834,16 +708,9 @@ export default function OverviewPage() {
                             )}
                           />
                           <div className="flex-1 min-w-0">
-                            <p className="text-sm font-medium truncate">
-                              {monitor.name}
-                            </p>
+                            <p className="text-sm font-medium truncate">{monitor.name}</p>
                             <div className="flex items-center gap-2 mt-0.5">
-                              <span
-                                className={cn(
-                                  "px-1 py-0 rounded text-[9px] font-medium border",
-                                  projectColor
-                                )}
-                              >
+                              <span className={cn("px-1 py-0 rounded text-[9px] font-medium border", projectColor)}>
                                 {monitor.project_name}
                               </span>
                             </div>
@@ -852,19 +719,19 @@ export default function OverviewPage() {
                             {monitor.uptime_24h != null && (
                               <p
                                 className={cn(
-                                  "text-xs font-medium",
+                                  "text-xs font-mono font-medium",
                                   monitor.uptime_24h >= 99.9
                                     ? "text-emerald-500"
                                     : monitor.uptime_24h >= 95
-                                    ? "text-yellow-500"
-                                    : "text-red-500"
+                                      ? "text-yellow-500"
+                                      : "text-red-500"
                                 )}
                               >
                                 {monitor.uptime_24h.toFixed(1)}%
                               </p>
                             )}
                             {monitor.avg_response_24h != null && (
-                              <p className="text-[10px] text-muted-foreground">
+                              <p className="text-[10px] text-[hsl(var(--muted-foreground))] font-mono">
                                 {Math.round(monitor.avg_response_24h)}ms
                               </p>
                             )}
@@ -882,10 +749,10 @@ export default function OverviewPage() {
           {isLoading ? (
             <SidePanelSkeleton />
           ) : (
-            <div className="rounded-xl border bg-card overflow-hidden">
-              <div className="flex items-center justify-between p-4 border-b">
+            <div className="surface-card overflow-hidden">
+              <div className="flex items-center justify-between p-4 border-b border-[hsl(var(--border-subtle))]">
                 <h2 className="text-sm font-semibold flex items-center gap-2">
-                  <Bell className="h-4 w-4 text-muted-foreground" />
+                  <Bell className="h-4 w-4 text-[hsl(var(--muted-foreground))]" />
                   Recent Alerts
                 </h2>
                 <Link
@@ -900,19 +767,14 @@ export default function OverviewPage() {
               {alertLogs.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-10">
                   <Bell className="h-6 w-6 text-muted-foreground mb-2" />
-                  <p className="text-xs text-muted-foreground">
-                    No recent alerts
-                  </p>
+                  <p className="text-xs text-muted-foreground">No recent alerts</p>
                 </div>
               ) : (
                 <div className="divide-y divide-border-subtle max-h-[300px] overflow-y-auto">
                   {alertLogs.map((log) => {
                     const projectColor = stringToColor(log.project_name);
                     return (
-                      <div
-                        key={log.id}
-                        className="px-4 py-2.5 hover:bg-muted/20 transition-colors"
-                      >
+                      <div key={log.id} className="px-4 py-2.5 hover:bg-muted/20 transition-colors">
                         <div className="flex items-center gap-2 mb-1">
                           <AlertStatusBadge status={log.status} />
                           <span className="text-[10px] text-muted-foreground uppercase font-medium">
@@ -924,17 +786,10 @@ export default function OverviewPage() {
                         </div>
                         <p className="text-xs truncate mb-1">{log.message}</p>
                         <div className="flex items-center gap-2">
-                          <span
-                            className={cn(
-                              "px-1 py-0 rounded text-[9px] font-medium border",
-                              projectColor
-                            )}
-                          >
+                          <span className={cn("px-1 py-0 rounded text-[9px] font-medium border", projectColor)}>
                             {log.project_name}
                           </span>
-                          <span className="text-[10px] text-muted-foreground truncate">
-                            {log.rule_name}
-                          </span>
+                          <span className="text-[10px] text-muted-foreground truncate">{log.rule_name}</span>
                         </div>
                       </div>
                     );

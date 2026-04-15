@@ -15,11 +15,7 @@ interface StepIndicatorProps {
   onStepClick?: (step: number) => void;
 }
 
-export function StepIndicator({
-  steps,
-  currentStep,
-  onStepClick,
-}: StepIndicatorProps) {
+export function StepIndicator({ steps, currentStep, onStepClick }: StepIndicatorProps) {
   return (
     <nav aria-label="Progress" className="w-full">
       <ol aria-label={`Step ${currentStep} of ${steps.length}`} className="flex items-center justify-between">
@@ -37,24 +33,24 @@ export function StepIndicator({
               <div className="flex flex-col items-center">
                 <button
                   type="button"
-                  disabled={!isClickable}
+                  aria-disabled={!isClickable}
+                  aria-label={
+                    isCompleted
+                      ? `${step.title}, completed`
+                      : isCurrent
+                        ? `${step.title}, current step`
+                        : `${step.title}, not yet reached`
+                  }
                   onClick={() => isClickable && onStepClick(step.id)}
                   className={cn(
                     "relative flex h-10 w-10 items-center justify-center rounded-full border-2 transition-all",
                     isCompleted &&
-                      "border-bug bg-bug text-bug-foreground cursor-pointer hover:bg-bug/90",
-                    isCurrent &&
-                      "border-bug bg-bug/10 text-bug",
-                    !isCompleted &&
-                      !isCurrent &&
-                      "border-muted-foreground/30 bg-background text-muted-foreground"
+                      "border-[hsl(var(--accent))] bg-[hsl(var(--accent))] text-[hsl(var(--accent-foreground))] cursor-pointer hover:bg-[hsl(var(--accent))]/90",
+                    isCurrent && "border-[hsl(var(--accent))] bg-[hsl(var(--accent))]/10 text-[hsl(var(--accent))]",
+                    !isCompleted && !isCurrent && "border-muted-foreground/30 bg-background text-muted-foreground"
                   )}
                 >
-                  {isCompleted ? (
-                    <Check className="h-5 w-5" />
-                  ) : (
-                    <span className="text-sm font-medium">{step.id}</span>
-                  )}
+                  {isCompleted ? <Check className="h-5 w-5" /> : <span className="text-sm font-medium">{step.id}</span>}
                 </button>
                 <div className="mt-2 text-center">
                   <p
@@ -72,7 +68,7 @@ export function StepIndicator({
                 <div
                   className={cn(
                     "mx-4 h-0.5 flex-1 transition-colors",
-                    isCompleted ? "bg-bug" : "bg-muted-foreground/30"
+                    isCompleted ? "bg-[hsl(var(--accent))]" : "bg-muted-foreground/30"
                   )}
                 />
               )}

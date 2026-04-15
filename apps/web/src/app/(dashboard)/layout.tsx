@@ -1,6 +1,5 @@
 "use client";
 
-import { useState } from "react";
 import dynamic from "next/dynamic";
 import { AuthGuard } from "@/components/auth-guard";
 import { ErrorBoundary } from "@/components/error-boundary";
@@ -18,8 +17,6 @@ const KeyboardShortcutsDialog = dynamic(
 );
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-
   return (
     <AuthGuard>
       <ProjectProvider>
@@ -34,28 +31,15 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               </a>
               <ErrorBoundary
                 fallback={
-                  <aside className="fixed left-0 top-0 z-40 h-screen w-64 border-r border-white/8 liquid-glass md:translate-x-0 hidden md:flex flex-col p-4 gap-2">
-                    <p className="text-xs text-muted-foreground px-2 py-1">Navigation unavailable</p>
+                  <aside className="fixed left-0 top-0 z-40 h-screen w-14 border-r border-[hsl(var(--border-subtle))] bg-[hsl(var(--surface-1))] flex flex-col p-2 gap-1">
+                    <p className="text-xs text-[hsl(var(--muted-foreground))] px-2 py-1">Nav unavailable</p>
                   </aside>
                 }
               >
-                <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
+                <Sidebar />
               </ErrorBoundary>
-              {/* Mobile sidebar overlay */}
-              {sidebarOpen && (
-                <div
-                  className="fixed inset-0 z-30 bg-black/50 md:hidden"
-                  onClick={() => setSidebarOpen(false)}
-                  aria-hidden="true"
-                />
-              )}
-              <Topbar onMenuClick={() => setSidebarOpen((prev) => !prev)} />
-              <main
-                id="main-content"
-                className="md:pl-64 pt-14"
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                {...(sidebarOpen ? ({ inert: "" } as any) : {})}
-              >
+              <Topbar />
+              <main id="main-content" className="ml-0 md:ml-14 pt-12">
                 <div className="p-6 animate-fade-in-up">{children}</div>
               </main>
             </div>
