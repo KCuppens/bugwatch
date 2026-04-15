@@ -82,8 +82,9 @@ export async function refreshTokens(): Promise<boolean> {
 
       // Server sets new httpOnly cookies automatically via Set-Cookie headers
       return true;
-    } catch {
+    } catch (e) {
       // Network error - don't clear tokens, might be temporary
+      console.debug("[Auth] Token refresh network error:", e);
       return false;
     } finally {
       refreshPromise = null;
@@ -139,19 +140,19 @@ async function handleResponse<T>(response: Response): Promise<T> {
   }
 }
 
-function getAuthHeaders(): HeadersInit {
-  // Auth is handled via httpOnly cookies sent automatically by the browser.
-  return {};
-}
-
 /**
  * Fetch with automatic 401 retry - attempts token refresh on 401 and retries once.
  * Auth is handled via httpOnly cookies (credentials: "include").
+ *
+ * Flow: (1) Send request with cookies. (2) If 401 → attempt refresh via httpOnly
+ * refresh cookie. (3) If refresh succeeds → retry original request. (4) If refresh
+ * fails → dispatch "bugwatch-auth-expired" so AuthProvider clears state and
+ * AuthGuard redirects to /login instead of showing a raw 401 error.
+ * Does NOT retry on non-401 errors or network failures.
  */
 async function fetchWithAuth(url: string, options: RequestInit = {}): Promise<Response> {
   const headers = {
     "Content-Type": "application/json",
-    ...getAuthHeaders(),
     ...(options.headers || {}),
   };
 
@@ -165,6 +166,7 @@ async function fetchWithAuth(url: string, options: RequestInit = {}): Promise<Re
     } else {
       // Refresh failed — session is fully expired. Notify auth context so it can
       // clear local state and redirect to login instead of showing a raw 401 error.
+      console.debug("[Auth] Session expired — dispatching bugwatch-auth-expired for:", url);
       window.dispatchEvent(new Event("bugwatch-auth-expired"));
     }
   }

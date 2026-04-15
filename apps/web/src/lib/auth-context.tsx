@@ -47,8 +47,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (error instanceof ApiError && error.status === 401) {
         // Token refresh already attempted by fetchWithAuth and failed
         clearTokens();
+      } else {
+        // Network errors or 5xx — keep existing user state, log for observability
+        console.debug("[Auth] Failed to fetch current user:", error);
       }
-      // For network errors or server errors, keep existing user state
       return false;
     }
   }, [clearTokens]);
@@ -75,7 +77,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (!user) return;
 
     const interval = setInterval(() => {
-      refreshAccessToken();
+      void refreshAccessToken().catch((e) => console.debug("[Auth] Token refresh failed:", e));
     }, TOKEN_REFRESH_INTERVAL);
 
     return () => clearInterval(interval);
@@ -97,7 +99,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const handleVisibility = () => {
       if (!document.hidden && !user) {
-        fetchCurrentUser();
+        void fetchCurrentUser().catch((e) => console.debug("[Auth] Visibility re-check failed:", e));
       }
     };
 
