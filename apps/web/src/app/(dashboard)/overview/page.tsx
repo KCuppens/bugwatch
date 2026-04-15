@@ -92,7 +92,7 @@ function stringToColor(str: string): string {
 
 function StatCardSkeleton() {
   return (
-    <div className="rounded-xl border bg-card p-4">
+    <div className="surface-card p-4">
       <div className="flex items-center justify-between">
         <div>
           <Skeleton className="h-3 w-20 mb-2" />
@@ -106,7 +106,7 @@ function StatCardSkeleton() {
 
 function IssueListSkeleton() {
   return (
-    <div className="rounded-xl border bg-card overflow-hidden">
+    <div className="surface-card overflow-hidden">
       <div className="p-4 border-b">
         <Skeleton className="h-5 w-32" />
       </div>
@@ -128,7 +128,7 @@ function IssueListSkeleton() {
 
 function SidePanelSkeleton() {
   return (
-    <div className="rounded-xl border bg-card overflow-hidden">
+    <div className="surface-card overflow-hidden">
       <div className="p-4 border-b">
         <Skeleton className="h-5 w-28" />
       </div>

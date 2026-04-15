@@ -2,19 +2,10 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-} from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import {
   Dialog,
@@ -43,30 +34,11 @@ import {
   Clock,
   Pencil,
 } from "lucide-react";
-import {
-  alertsApi,
-  type AlertRule,
-  type NotificationChannel,
-  type AlertLog,
-  type AlertCondition,
-} from "@/lib/api";
+import { alertsApi, type AlertRule, type NotificationChannel, type AlertLog, type AlertCondition } from "@/lib/api";
 import { useProject } from "@/lib/project-context";
 import { useFeature } from "@/hooks/use-feature";
 import { ProBadge, UpgradeLink } from "@/components/pro-badge";
-
-function formatRelativeTime(dateString: string): string {
-  const date = new Date(dateString);
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  if (diffMs < 0) return "just now";
-  const diffMins = Math.floor(diffMs / 60000);
-  const diffHours = Math.floor(diffMs / 3600000);
-
-  if (diffMins < 1) return "just now";
-  if (diffMins < 60) return `${diffMins}m ago`;
-  if (diffHours < 24) return `${diffHours}h ago`;
-  return date.toLocaleDateString();
-}
+import { formatRelativeTime } from "@/lib/format";
 
 function getConditionDescription(condition: AlertCondition): string {
   switch (condition.type) {
@@ -81,9 +53,7 @@ function getConditionDescription(condition: AlertCondition): string {
         ? "Alert when a specific uptime monitor goes down"
         : "Alert when any uptime monitor goes down";
     case "monitor_recovery":
-      return condition.monitor_id
-        ? "Alert when a specific monitor recovers"
-        : "Alert when any monitor recovers";
+      return condition.monitor_id ? "Alert when a specific monitor recovers" : "Alert when any monitor recovers";
     case "server_cpu_high":
       return `Alert when CPU usage exceeds ${condition.threshold_percent}%`;
     case "server_memory_high":
@@ -170,9 +140,7 @@ export default function AlertsPage() {
       { block_type: "context", enabled: true },
       { block_type: "stats", enabled: false },
     ],
-    actions: [
-      { action_type: "view_issue", label: "View in Bugwatch", style: "primary" },
-    ],
+    actions: [{ action_type: "view_issue", label: "View in Bugwatch", style: "primary" }],
   });
   const [isSaving, setIsSaving] = useState(false);
 
@@ -190,14 +158,14 @@ export default function AlertsPage() {
     setRuleForm({
       name: rule.name,
       conditionType: cond.type,
-      level: cond.type === "new_issue" ? (cond.level || "") : "",
+      level: cond.type === "new_issue" ? cond.level || "" : "",
       channelIds: [...rule.channel_ids],
       threshold:
         cond.type === "server_cpu_high" || cond.type === "server_memory_high" || cond.type === "server_disk_high"
           ? cond.threshold_percent
           : 90,
-      mount: cond.type === "server_disk_high" ? (cond.mount || "") : "",
-      missingMinutes: cond.type === "server_offline" ? (cond.missing_minutes || 5) : 5,
+      mount: cond.type === "server_disk_high" ? cond.mount || "" : "",
+      missingMinutes: cond.type === "server_offline" ? cond.missing_minutes || 5 : 5,
     });
     setShowRuleDialog(true);
   }
@@ -213,9 +181,7 @@ export default function AlertsPage() {
         { block_type: "context", enabled: true },
         { block_type: "stats", enabled: false },
       ],
-      actions: [
-        { action_type: "view_issue", label: "View in Bugwatch", style: "primary" },
-      ],
+      actions: [{ action_type: "view_issue", label: "View in Bugwatch", style: "primary" }],
     });
     setShowChannelDialog(true);
   }
@@ -224,11 +190,7 @@ export default function AlertsPage() {
   function openEditChannel(channel: NotificationChannel) {
     // The edit dialog UI only renders inputs for email/webhook/slack; other
     // channel types (pagerduty, opsgenie) are created via their dedicated flows.
-    if (
-      channel.channel_type !== "email" &&
-      channel.channel_type !== "webhook" &&
-      channel.channel_type !== "slack"
-    ) {
+    if (channel.channel_type !== "email" && channel.channel_type !== "webhook" && channel.channel_type !== "slack") {
       return;
     }
 
@@ -278,7 +240,7 @@ export default function AlertsPage() {
       setRules(rulesRes);
       setChannels(channelsRes);
       setLogs(logsRes);
-    } catch (err) {
+    } catch {
       toast.error("Failed to load alerts data");
     } finally {
       setIsLoading(false);
@@ -335,7 +297,7 @@ export default function AlertsPage() {
       setShowRuleDialog(false);
       setRuleForm(defaultRuleForm);
       setEditingRule(null);
-    } catch (err) {
+    } catch {
       toast.error(editingRule ? "Failed to update alert rule" : "Failed to create alert rule");
     } finally {
       setIsSaving(false);
@@ -380,7 +342,7 @@ export default function AlertsPage() {
       setShowChannelDialog(false);
       setChannelForm(defaultChannelForm);
       setEditingChannel(null);
-    } catch (err) {
+    } catch {
       toast.error(editingChannel ? "Failed to update channel" : "Failed to create channel");
     } finally {
       setIsSaving(false);
@@ -395,7 +357,7 @@ export default function AlertsPage() {
       });
       setRules(rules.map((r) => (r.id === rule.id ? response : r)));
       toast.success(response.is_active ? "Alert rule enabled" : "Alert rule paused");
-    } catch (err) {
+    } catch {
       toast.error("Failed to toggle alert rule");
     }
   }
@@ -408,7 +370,7 @@ export default function AlertsPage() {
       setRules(rules.filter((r) => r.id !== deleteRuleTarget.id));
       toast.success("Alert rule deleted");
       setDeleteRuleTarget(null);
-    } catch (err) {
+    } catch {
       toast.error("Failed to delete alert rule");
     } finally {
       setIsDeleting(false);
@@ -423,7 +385,7 @@ export default function AlertsPage() {
       });
       setChannels(channels.map((c) => (c.id === channel.id ? response : c)));
       toast.success(response.is_active ? "Channel enabled" : "Channel disabled");
-    } catch (err) {
+    } catch {
       toast.error("Failed to toggle channel");
     }
   }
@@ -436,7 +398,7 @@ export default function AlertsPage() {
       setChannels(channels.filter((c) => c.id !== deleteChannelTarget.id));
       toast.success("Notification channel deleted");
       setDeleteChannelTarget(null);
-    } catch (err) {
+    } catch {
       toast.error("Failed to delete channel");
     } finally {
       setIsDeleting(false);
@@ -448,7 +410,7 @@ export default function AlertsPage() {
     try {
       await alertsApi.testChannel(selectedProject.id, channelId);
       toast.success("Test notification sent!");
-    } catch (err) {
+    } catch {
       toast.error("Failed to send test notification");
     }
   }
@@ -472,9 +434,7 @@ export default function AlertsPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="font-display text-heading-lg">Alerts</h1>
-          <p className="text-body-sm text-muted-foreground mt-1">
-            Configure alert rules and notification channels
-          </p>
+          <p className="text-body-sm text-muted-foreground mt-1">Configure alert rules and notification channels</p>
         </div>
       </div>
 
@@ -498,7 +458,11 @@ export default function AlertsPage() {
             <TabsContent value="rules">
               <div className="space-y-4">
                 <div className="flex justify-end">
-                  <Button variant="success" onClick={openCreateRule} disabled={!selectedProject || channels.length === 0}>
+                  <Button
+                    variant="success"
+                    onClick={openCreateRule}
+                    disabled={!selectedProject || channels.length === 0}
+                  >
                     <Plus className="mr-2 h-4 w-4" />
                     Create Alert Rule
                   </Button>
@@ -528,7 +492,9 @@ export default function AlertsPage() {
                       <CardContent className="p-4">
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-4">
-                            <div className={`rounded-full p-2 ${rule.is_active ? "bg-bug/10" : "bg-gray-100 dark:bg-gray-800"}`}>
+                            <div
+                              className={`rounded-full p-2 ${rule.is_active ? "bg-bug/10" : "bg-gray-100 dark:bg-gray-800"}`}
+                            >
                               <Bell className={`h-4 w-4 ${rule.is_active ? "text-bug" : "text-gray-500"}`} />
                             </div>
                             <div>
@@ -540,34 +506,20 @@ export default function AlertsPage() {
                                   </span>
                                 )}
                               </div>
-                              <p className="text-sm text-muted-foreground">
-                                {getConditionDescription(rule.condition)}
-                              </p>
+                              <p className="text-sm text-muted-foreground">{getConditionDescription(rule.condition)}</p>
                             </div>
                           </div>
                           <div className="flex items-center gap-2">
                             <span className="text-sm text-muted-foreground">
                               {rule.channel_ids.length} channel{rule.channel_ids.length !== 1 ? "s" : ""}
                             </span>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              onClick={() => openEditRule(rule)}
-                            >
+                            <Button variant="ghost" size="icon" onClick={() => openEditRule(rule)}>
                               <Pencil className="h-4 w-4" />
                             </Button>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              onClick={() => handleToggleRule(rule)}
-                            >
+                            <Button variant="ghost" size="icon" onClick={() => handleToggleRule(rule)}>
                               <Power className={`h-4 w-4 ${rule.is_active ? "text-bug" : ""}`} />
                             </Button>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              onClick={() => setDeleteRuleTarget(rule)}
-                            >
+                            <Button variant="ghost" size="icon" onClick={() => setDeleteRuleTarget(rule)}>
                               <Trash2 className="h-4 w-4 text-destructive" />
                             </Button>
                           </div>
@@ -605,7 +557,9 @@ export default function AlertsPage() {
                       <CardContent className="p-4">
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-4">
-                            <div className={`rounded-full p-2 ${channel.is_active ? "bg-accent-2/10" : "bg-gray-100 dark:bg-gray-800"}`}>
+                            <div
+                              className={`rounded-full p-2 ${channel.is_active ? "bg-accent-2/10" : "bg-gray-100 dark:bg-gray-800"}`}
+                            >
                               {getChannelIcon(channel.channel_type)}
                             </div>
                             <div>
@@ -626,33 +580,17 @@ export default function AlertsPage() {
                             </div>
                           </div>
                           <div className="flex items-center gap-2">
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => handleTestChannel(channel.id)}
-                            >
+                            <Button variant="outline" size="sm" onClick={() => handleTestChannel(channel.id)}>
                               <Send className="mr-2 h-3 w-3" />
                               Test
                             </Button>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              onClick={() => openEditChannel(channel)}
-                            >
+                            <Button variant="ghost" size="icon" onClick={() => openEditChannel(channel)}>
                               <Pencil className="h-4 w-4" />
                             </Button>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              onClick={() => handleToggleChannel(channel)}
-                            >
+                            <Button variant="ghost" size="icon" onClick={() => handleToggleChannel(channel)}>
                               <Power className={`h-4 w-4 ${channel.is_active ? "text-bug" : ""}`} />
                             </Button>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              onClick={() => setDeleteChannelTarget(channel)}
-                            >
+                            <Button variant="ghost" size="icon" onClick={() => setDeleteChannelTarget(channel)}>
                               <Trash2 className="h-4 w-4 text-destructive" />
                             </Button>
                           </div>
@@ -682,13 +620,15 @@ export default function AlertsPage() {
                     <Card key={log.id}>
                       <CardContent className="p-4">
                         <div className="flex items-center gap-4">
-                          <div className={`rounded-full p-2 ${
-                            log.status === "sent"
-                              ? "bg-bug/10"
-                              : log.status === "failed"
-                              ? "bg-red-100 dark:bg-red-950"
-                              : "bg-yellow-100 dark:bg-yellow-950"
-                          }`}>
+                          <div
+                            className={`rounded-full p-2 ${
+                              log.status === "sent"
+                                ? "bg-bug/10"
+                                : log.status === "failed"
+                                  ? "bg-red-100 dark:bg-red-950"
+                                  : "bg-yellow-100 dark:bg-yellow-950"
+                            }`}
+                          >
                             {log.status === "sent" ? (
                               <CheckCircle className="h-4 w-4 text-bug" />
                             ) : log.status === "failed" ? (
@@ -700,26 +640,24 @@ export default function AlertsPage() {
                           <div className="flex-1">
                             <p className="text-sm">{log.message}</p>
                             <div className="flex items-center gap-2 mt-1">
-                              <span className="text-xs text-muted-foreground capitalize">
-                                {log.trigger_type}
-                              </span>
+                              <span className="text-xs text-muted-foreground capitalize">{log.trigger_type}</span>
                               <span className="text-xs text-muted-foreground">
                                 {formatRelativeTime(log.created_at)}
                               </span>
                               {log.error_message && (
-                                <span className="text-xs text-destructive">
-                                  {log.error_message}
-                                </span>
+                                <span className="text-xs text-destructive">{log.error_message}</span>
                               )}
                             </div>
                           </div>
-                          <span className={`text-xs px-2 py-1 rounded ${
-                            log.status === "sent"
-                              ? "bg-bug text-bug-foreground"
-                              : log.status === "failed"
-                              ? "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300"
-                              : "bg-yellow-100 text-yellow-700 dark:bg-yellow-950 dark:text-yellow-300"
-                          }`}>
+                          <span
+                            className={`text-xs px-2 py-1 rounded ${
+                              log.status === "sent"
+                                ? "bg-bug text-bug-foreground"
+                                : log.status === "failed"
+                                  ? "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300"
+                                  : "bg-yellow-100 text-yellow-700 dark:bg-yellow-950 dark:text-yellow-300"
+                            }`}
+                          >
                             {log.status}
                           </span>
                         </div>
@@ -734,7 +672,15 @@ export default function AlertsPage() {
       </Tabs>
 
       {/* Rule Dialog (Create / Edit) */}
-      <Dialog open={showRuleDialog} onOpenChange={(open) => { if (!open) { setShowRuleDialog(false); setEditingRule(null); } }}>
+      <Dialog
+        open={showRuleDialog}
+        onOpenChange={(open) => {
+          if (!open) {
+            setShowRuleDialog(false);
+            setEditingRule(null);
+          }
+        }}
+      >
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>{editingRule ? "Edit Alert Rule" : "Create Alert Rule"}</DialogTitle>
@@ -774,7 +720,9 @@ export default function AlertsPage() {
                 </SelectContent>
               </Select>
             </div>
-            {(ruleForm.conditionType === "server_cpu_high" || ruleForm.conditionType === "server_memory_high" || ruleForm.conditionType === "server_disk_high") && (
+            {(ruleForm.conditionType === "server_cpu_high" ||
+              ruleForm.conditionType === "server_memory_high" ||
+              ruleForm.conditionType === "server_disk_high") && (
               <div className="space-y-2">
                 <Label>Threshold (%)</Label>
                 <Input
@@ -838,7 +786,10 @@ export default function AlertsPage() {
                         if (e.target.checked) {
                           setRuleForm({ ...ruleForm, channelIds: [...ruleForm.channelIds, channel.id] });
                         } else {
-                          setRuleForm({ ...ruleForm, channelIds: ruleForm.channelIds.filter((id) => id !== channel.id) });
+                          setRuleForm({
+                            ...ruleForm,
+                            channelIds: ruleForm.channelIds.filter((id) => id !== channel.id),
+                          });
                         }
                       }}
                       className="h-4 w-4 rounded border-border text-accent-2 focus:ring-accent-2 focus:ring-offset-background"
@@ -851,13 +802,16 @@ export default function AlertsPage() {
             </div>
           </div>
           <DialogFooter className="gap-2 sm:gap-0">
-            <Button variant="outline" onClick={() => { setShowRuleDialog(false); setEditingRule(null); }}>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setShowRuleDialog(false);
+                setEditingRule(null);
+              }}
+            >
               Cancel
             </Button>
-            <Button
-              onClick={handleSaveRule}
-              disabled={isSaving || !ruleForm.name || ruleForm.channelIds.length === 0}
-            >
+            <Button onClick={handleSaveRule} disabled={isSaving || !ruleForm.name || ruleForm.channelIds.length === 0}>
               {isSaving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               {editingRule ? "Save Changes" : "Create Rule"}
             </Button>
@@ -866,7 +820,15 @@ export default function AlertsPage() {
       </Dialog>
 
       {/* Channel Dialog (Create / Edit) */}
-      <Dialog open={showChannelDialog} onOpenChange={(open) => { if (!open) { setShowChannelDialog(false); setEditingChannel(null); } }}>
+      <Dialog
+        open={showChannelDialog}
+        onOpenChange={(open) => {
+          if (!open) {
+            setShowChannelDialog(false);
+            setEditingChannel(null);
+          }
+        }}
+      >
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>{editingChannel ? "Edit Notification Channel" : "Add Notification Channel"}</DialogTitle>
@@ -914,8 +876,7 @@ export default function AlertsPage() {
               </Select>
               {!canUseWebhooks && (
                 <p className="text-xs text-muted-foreground">
-                  Webhook and Slack channels require Pro plan.{" "}
-                  <UpgradeLink feature="webhooks">Upgrade now</UpgradeLink>
+                  Webhook and Slack channels require Pro plan. <UpgradeLink feature="webhooks">Upgrade now</UpgradeLink>
                 </p>
               )}
             </div>
@@ -961,10 +922,7 @@ export default function AlertsPage() {
                   </p>
                   <div className="space-y-2">
                     {slackTemplate.blocks.map((block, index) => (
-                      <div
-                        key={block.block_type}
-                        className="flex items-center justify-between p-2 rounded border bg-card"
-                      >
+                      <div key={block.block_type} className="surface-card flex items-center justify-between p-2">
                         <span className="text-sm capitalize">
                           {block.block_type === "header" && "Header (Title with severity)"}
                           {block.block_type === "message" && "Message (Error details)"}
@@ -979,9 +937,7 @@ export default function AlertsPage() {
                             setSlackTemplate({ ...slackTemplate, blocks: newBlocks });
                           }}
                           className={`px-2 py-1 text-xs rounded ${
-                            block.enabled
-                              ? "bg-accent-2 text-accent-2-foreground"
-                              : "bg-muted text-muted-foreground"
+                            block.enabled ? "bg-accent-2 text-accent-2-foreground" : "bg-muted text-muted-foreground"
                           }`}
                         >
                           {block.enabled ? "On" : "Off"}
@@ -994,22 +950,16 @@ export default function AlertsPage() {
                 {/* Action Buttons */}
                 <div className="space-y-3 pt-3 border-t">
                   <Label>Action Buttons</Label>
-                  <p className="text-xs text-muted-foreground">
-                    Add quick action buttons to your Slack messages.
-                  </p>
+                  <p className="text-xs text-muted-foreground">Add quick action buttons to your Slack messages.</p>
                   <div className="flex flex-wrap gap-2">
                     <button
                       type="button"
                       onClick={() => {
-                        const hasViewIssue = slackTemplate.actions.some(
-                          (a) => a.action_type === "view_issue"
-                        );
+                        const hasViewIssue = slackTemplate.actions.some((a) => a.action_type === "view_issue");
                         if (hasViewIssue) {
                           setSlackTemplate({
                             ...slackTemplate,
-                            actions: slackTemplate.actions.filter(
-                              (a) => a.action_type !== "view_issue"
-                            ),
+                            actions: slackTemplate.actions.filter((a) => a.action_type !== "view_issue"),
                           });
                         } else {
                           setSlackTemplate({
@@ -1024,7 +974,7 @@ export default function AlertsPage() {
                       className={`px-3 py-1.5 text-xs rounded border ${
                         slackTemplate.actions.some((a) => a.action_type === "view_issue")
                           ? "bg-accent-2 text-accent-2-foreground border-accent-2"
-                          : "bg-card border-muted-foreground/20"
+                          : "bg-[hsl(var(--surface-1))] border-muted-foreground/20"
                       }`}
                     >
                       View Issue
@@ -1032,15 +982,11 @@ export default function AlertsPage() {
                     <button
                       type="button"
                       onClick={() => {
-                        const hasResolve = slackTemplate.actions.some(
-                          (a) => a.action_type === "resolve"
-                        );
+                        const hasResolve = slackTemplate.actions.some((a) => a.action_type === "resolve");
                         if (hasResolve) {
                           setSlackTemplate({
                             ...slackTemplate,
-                            actions: slackTemplate.actions.filter(
-                              (a) => a.action_type !== "resolve"
-                            ),
+                            actions: slackTemplate.actions.filter((a) => a.action_type !== "resolve"),
                           });
                         } else {
                           setSlackTemplate({
@@ -1055,7 +1001,7 @@ export default function AlertsPage() {
                       className={`px-3 py-1.5 text-xs rounded border ${
                         slackTemplate.actions.some((a) => a.action_type === "resolve")
                           ? "bg-green-600 text-white border-green-600"
-                          : "bg-card border-muted-foreground/20"
+                          : "bg-[hsl(var(--surface-1))] border-muted-foreground/20"
                       }`}
                     >
                       Resolve
@@ -1063,15 +1009,11 @@ export default function AlertsPage() {
                     <button
                       type="button"
                       onClick={() => {
-                        const hasMute = slackTemplate.actions.some(
-                          (a) => a.action_type === "mute"
-                        );
+                        const hasMute = slackTemplate.actions.some((a) => a.action_type === "mute");
                         if (hasMute) {
                           setSlackTemplate({
                             ...slackTemplate,
-                            actions: slackTemplate.actions.filter(
-                              (a) => a.action_type !== "mute"
-                            ),
+                            actions: slackTemplate.actions.filter((a) => a.action_type !== "mute"),
                           });
                         } else {
                           setSlackTemplate({
@@ -1086,7 +1028,7 @@ export default function AlertsPage() {
                       className={`px-3 py-1.5 text-xs rounded border ${
                         slackTemplate.actions.some((a) => a.action_type === "mute")
                           ? "bg-orange-600 text-white border-orange-600"
-                          : "bg-card border-muted-foreground/20"
+                          : "bg-[hsl(var(--surface-1))] border-muted-foreground/20"
                       }`}
                     >
                       Mute
@@ -1097,12 +1039,24 @@ export default function AlertsPage() {
             )}
           </div>
           <DialogFooter className="gap-2 sm:gap-0">
-            <Button variant="outline" onClick={() => { setShowChannelDialog(false); setEditingChannel(null); }}>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setShowChannelDialog(false);
+                setEditingChannel(null);
+              }}
+            >
               Cancel
             </Button>
             <Button
               onClick={handleSaveChannel}
-              disabled={isSaving || !channelForm.name || (channelForm.type === "email" && !channelForm.emails.trim()) || (channelForm.type === "webhook" && !channelForm.webhookUrl.trim()) || (channelForm.type === "slack" && !channelForm.slackUrl.trim())}
+              disabled={
+                isSaving ||
+                !channelForm.name ||
+                (channelForm.type === "email" && !channelForm.emails.trim()) ||
+                (channelForm.type === "webhook" && !channelForm.webhookUrl.trim()) ||
+                (channelForm.type === "slack" && !channelForm.slackUrl.trim())
+              }
             >
               {isSaving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               {editingChannel ? "Save Changes" : "Add Channel"}
@@ -1114,7 +1068,9 @@ export default function AlertsPage() {
       {/* Confirm Delete Rule Dialog */}
       <ConfirmDialog
         open={!!deleteRuleTarget}
-        onOpenChange={(open) => { if (!open) setDeleteRuleTarget(null); }}
+        onOpenChange={(open) => {
+          if (!open) setDeleteRuleTarget(null);
+        }}
         title="Delete Alert Rule"
         description={`Are you sure you want to delete "${deleteRuleTarget?.name}"? This action cannot be undone.`}
         confirmLabel="Delete Rule"
@@ -1126,7 +1082,9 @@ export default function AlertsPage() {
       {/* Confirm Delete Channel Dialog */}
       <ConfirmDialog
         open={!!deleteChannelTarget}
-        onOpenChange={(open) => { if (!open) setDeleteChannelTarget(null); }}
+        onOpenChange={(open) => {
+          if (!open) setDeleteChannelTarget(null);
+        }}
         title="Delete Notification Channel"
         description={`Are you sure you want to delete "${deleteChannelTarget?.name}"? Any alert rules using this channel will no longer send notifications through it.`}
         confirmLabel="Delete Channel"

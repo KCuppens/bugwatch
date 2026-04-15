@@ -8,7 +8,7 @@ export function OverviewSkeleton() {
       {/* Stat cards skeleton */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         {Array.from({ length: 4 }).map((_, i) => (
-          <div key={i} className="rounded-xl border bg-card p-4">
+          <div key={i} className="surface-card p-4">
             <div className="flex items-center justify-between">
               <div className="space-y-2">
                 <Skeleton className="h-3 w-16" />
@@ -30,7 +30,7 @@ export function OverviewSkeleton() {
           {Array.from({ length: 6 }).map((_, i) => (
             <div
               key={i}
-              className="flex items-center gap-4 rounded-lg border-l-4 border-l-transparent bg-card py-3 px-4"
+              className="flex items-center gap-4 rounded-lg border-l-4 border-l-transparent bg-[hsl(var(--surface-1))] py-3 px-4"
               style={{ opacity: 1 - i * 0.1 }}
             >
               <Skeleton className="h-4 w-4 rounded" />
@@ -46,11 +46,11 @@ export function OverviewSkeleton() {
 
         {/* Side panel */}
         <div className="space-y-4">
-          <div className="rounded-xl border bg-card p-4 space-y-3">
+          <div className="surface-card p-4 space-y-3">
             <Skeleton className="h-5 w-32" />
             <Skeleton className="h-24 w-full rounded-md" />
           </div>
-          <div className="rounded-xl border bg-card p-4 space-y-3">
+          <div className="surface-card p-4 space-y-3">
             <Skeleton className="h-5 w-28" />
             <Skeleton className="h-16 w-full rounded-md" />
           </div>

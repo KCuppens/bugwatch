@@ -918,7 +918,7 @@ export default function DashboardPage() {
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap border transition-all ${
                 activeFilter === filter.id
                   ? "bg-[hsl(var(--accent))] text-[hsl(var(--accent-foreground))] border-[hsl(var(--accent))]"
-                  : "bg-card text-muted-foreground border-border hover:border-[hsl(var(--accent))]/30 hover:text-foreground"
+                  : "bg-[hsl(var(--surface-1))] text-muted-foreground border-border hover:border-[hsl(var(--accent))]/30 hover:text-foreground"
               }`}
             >
               <FilterIcon className="h-3 w-3" />
@@ -961,7 +961,7 @@ export default function DashboardPage() {
             className={`group flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap border transition-all cursor-pointer ${
               activeFilter === search.id
                 ? "bg-[hsl(var(--accent))] text-[hsl(var(--accent-foreground))] border-[hsl(var(--accent))]"
-                : "bg-card text-muted-foreground border-border hover:border-[hsl(var(--accent))]/30 hover:text-foreground"
+                : "bg-[hsl(var(--surface-1))] text-muted-foreground border-border hover:border-[hsl(var(--accent))]/30 hover:text-foreground"
             }`}
           >
             <Bookmark className="h-3 w-3" aria-hidden="true" />
@@ -994,7 +994,7 @@ export default function DashboardPage() {
 
       {/* Save Search Mini Dialog */}
       {showSaveSearch && (
-        <div className="flex items-center gap-2 px-3 py-2 rounded-lg border bg-card animate-fade-in-up">
+        <div className="flex items-center gap-2 px-3 py-2 surface-card animate-fade-in-up">
           <Bookmark className="h-4 w-4 text-accent-2 shrink-0" />
           <input
             autoFocus

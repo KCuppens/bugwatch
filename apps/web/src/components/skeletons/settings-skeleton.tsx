@@ -14,7 +14,7 @@ export function SettingsSkeleton() {
 
       {/* Settings cards skeleton */}
       {Array.from({ length: 2 }).map((_, i) => (
-        <div key={i} className="rounded-xl border bg-card p-6 space-y-4">
+        <div key={i} className="surface-card p-6 space-y-4">
           <Skeleton className="h-5 w-40" />
           <Skeleton className="h-4 w-64" />
           <div className="space-y-3 pt-2">
