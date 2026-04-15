@@ -79,10 +79,15 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
   };
 
   const handleComplete = () => {
-    if (onComplete && project) {
-      onComplete(project);
-    } else {
-      router.push("/dashboard/projects");
+    try {
+      if (onComplete && project) {
+        onComplete(project);
+      } else {
+        router.push("/dashboard/projects");
+      }
+    } catch (err) {
+      console.error("Failed to complete onboarding:", err);
+      router.push("/dashboard");
     }
   };
 

@@ -34,16 +34,6 @@ interface ApiErrorResponse {
 let refreshPromise: Promise<boolean> | null = null;
 
 /**
- * Save tokens — no-op, httpOnly cookies are set by the server automatically.
- * @deprecated Migration to httpOnly cookies is complete. Remove call sites and this function.
- */
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-export function saveTokens(_accessToken: string, _refreshToken: string): void {
-  // httpOnly cookies are managed by the server via Set-Cookie headers.
-  // No client-side storage needed.
-}
-
-/**
  * Clear tokens — no-op for httpOnly cookies (cleared on logout via server).
  * Cleans up any legacy localStorage entries.
  */

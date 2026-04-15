@@ -114,7 +114,7 @@ function CommandPaletteContent({ open, setOpen }: CommandPaletteContentProps) {
   }, [open, setOpen]);
 
   const runCommand = useCallback(
-    (command: () => void) => {
+    (command: () => void | Promise<void>) => {
       setOpen(false);
       command();
     },

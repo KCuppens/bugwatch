@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { Search, HelpCircle, LogOut, User, Settings, BookOpen, Keyboard, Bug, Mail, ExternalLink } from "lucide-react";
@@ -20,26 +20,24 @@ export function Topbar() {
   const router = useRouter();
   const { user, logout } = useAuth();
   const { setOpen: openCommandPalette } = useCommandPalette();
-  const [isMac, setIsMac] = useState(true);
+  const [isMac, setIsMac] = useState<boolean | null>(null);
 
   useEffect(() => {
-    if (typeof navigator !== "undefined") {
-      const platform =
-        navigator.platform ||
-        (navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform ||
-        "";
-      setIsMac(/mac|iphone|ipad|ipod/i.test(platform));
-    }
+    const platform =
+      navigator.platform ||
+      (navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform ||
+      "";
+    setIsMac(/mac|iphone|ipad|ipod/i.test(platform));
   }, []);
 
-  async function handleLogout() {
+  const handleLogout = useCallback(async () => {
     try {
       await logout();
     } catch {
       // Logout failed — still navigate to login so the user is not stuck
     }
     router.push("/login");
-  }
+  }, [logout, router]);
 
   return (
     <header className="fixed left-0 md:left-14 right-0 top-0 z-30 flex h-12 items-center border-b border-[hsl(var(--border-subtle))] bg-[hsl(var(--surface-1))] px-4">
@@ -57,15 +55,17 @@ export function Topbar() {
         >
           <Search className="h-3.5 w-3.5 shrink-0" />
           <span className="flex-1 text-left text-sm">Search issues...</span>
-          <kbd className="shrink-0 inline-flex h-5 items-center gap-0.5 rounded bg-[hsl(var(--surface-1))] border border-[hsl(var(--border-subtle))] px-1.5 font-mono text-[10px] font-medium text-[hsl(var(--muted-foreground))]">
-            {isMac ? (
-              <>
-                <span className="text-xs">⌘</span>K
-              </>
-            ) : (
-              <>Ctrl K</>
-            )}
-          </kbd>
+          {isMac !== null && (
+            <kbd className="shrink-0 inline-flex h-5 items-center gap-0.5 rounded bg-[hsl(var(--surface-1))] border border-[hsl(var(--border-subtle))] px-1.5 font-mono text-[10px] font-medium text-[hsl(var(--muted-foreground))]">
+              {isMac ? (
+                <>
+                  <span className="text-xs">⌘</span>K
+                </>
+              ) : (
+                <>Ctrl K</>
+              )}
+            </kbd>
+          )}
         </button>
       </div>
 
