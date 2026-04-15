@@ -29,7 +29,12 @@ pub enum AlertCondition {
         level: Option<String>,
     },
     #[serde(rename = "issue_frequency")]
-    IssueFrequency { threshold: u32, window_minutes: u32 },
+    IssueFrequency {
+        #[allow(dead_code)]
+        threshold: u32,
+        #[allow(dead_code)]
+        window_minutes: u32,
+    },
     #[serde(rename = "monitor_down")]
     MonitorDown {
         #[serde(default)]
@@ -62,6 +67,7 @@ pub enum AlertCondition {
     },
     #[serde(rename = "server_offline")]
     ServerOffline {
+        #[allow(dead_code)]
         #[serde(default = "default_missing_minutes")]
         missing_minutes: u32,
         #[serde(default)]
@@ -143,11 +149,14 @@ impl AlertingService {
                     frequency: None,
                 };
 
-                self.send_alert(&rule.id, &rule.actions, &payload).await;
+                if let Err(e) = self.send_alert(&rule.id, &rule.actions, &payload).await {
+                    tracing::error!(rule_id = %rule.id, rule_name = %rule.name, error = %e, "Failed to send alert");
+                }
             } else {
                 tracing::debug!(
                     "Alert rule '{}' does not match (condition: {:?})",
-                    rule.name, condition
+                    rule.name,
+                    condition
                 );
             }
         }
@@ -164,7 +173,8 @@ impl AlertingService {
     ) -> Result<()> {
         tracing::debug!(
             "on_monitor_down triggered for monitor '{}' ({})",
-            monitor.name, monitor.id
+            monitor.name,
+            monitor.id
         );
 
         let project = match ProjectRepository::find_by_id(&self.pool, project_id).await? {
@@ -229,7 +239,8 @@ impl AlertingService {
             } else {
                 tracing::debug!(
                     "Alert rule '{}' does not match (condition type: {:?})",
-                    rule.name, condition
+                    rule.name,
+                    condition
                 );
             }
         }

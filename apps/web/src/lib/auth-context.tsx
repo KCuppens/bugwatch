@@ -1,23 +1,7 @@
 "use client";
 
-import {
-  createContext,
-  useContext,
-  useEffect,
-  useMemo,
-  useState,
-  useCallback,
-  type ReactNode,
-} from "react";
-import {
-  authApi,
-  type User,
-  ApiError,
-  saveTokens as apiSaveTokens,
-  clearTokens as apiClearTokens,
-  refreshTokens,
-  isTokenExpired,
-} from "./api";
+import { createContext, useContext, useEffect, useMemo, useState, useCallback, type ReactNode } from "react";
+import { authApi, type User, ApiError, clearTokens as apiClearTokens, refreshTokens } from "./api";
 
 interface AuthContextType {
   user: User | null;
@@ -31,8 +15,8 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-// Refresh 5 minutes before expiry (backend default is 1 hour = 3600s)
-// Refresh at 55 minutes to be safe
+// Refresh 5 minutes before expiry. Backend default: 1 hour (keep in sync with
+// apps/server/src/config.rs jwt_access_expiration). Refresh at 55 min to be safe.
 const TOKEN_REFRESH_INTERVAL = 55 * 60 * 1000; // 55 minutes
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -44,20 +28,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
   }, []);
 
-  const saveTokens = useCallback((accessToken: string, refreshToken: string) => {
-    apiSaveTokens(accessToken, refreshToken);
-  }, []);
-
   // Use the deduplicated refresh from api.ts
   const refreshAccessToken = useCallback(async () => {
     const success = await refreshTokens();
     if (!success) {
-      // If refresh failed due to invalid token, user state will be cleared
-      // by the clearTokens call in refreshTokens
-      const hasRefreshToken = localStorage.getItem("refresh_token");
-      if (!hasRefreshToken) {
-        setUser(null);
-      }
+      setUser(null);
     }
     return success;
   }, []);
@@ -78,43 +53,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [clearTokens]);
 
-  // Initialize auth state on mount
+  // Initialize auth state on mount.
+  // httpOnly cookies are opaque to JS, so we try to fetch the current user
+  // directly — the browser sends cookies automatically.
   useEffect(() => {
     const initAuth = async () => {
-      const accessToken = localStorage.getItem("access_token");
-      const refreshToken = localStorage.getItem("refresh_token");
+      // Clean up any legacy localStorage tokens from before httpOnly migration
+      apiClearTokens();
 
-      if (!accessToken && !refreshToken) {
-        setIsLoading(false);
-        return;
-      }
-
-      // If access token is expired but refresh token exists, try refresh first
-      if (!accessToken || isTokenExpired(accessToken)) {
-        if (refreshToken) {
-          // Try to refresh - if it fails due to network error, we'll still try
-          // to fetch the user (the API might come back online).
-          // If it fails due to 401, refreshTokens() already cleared tokens.
-          const refreshed = await refreshTokens();
-          if (!refreshed) {
-            // Check if tokens were cleared by refreshTokens (401 case)
-            const stillHasRefreshToken = localStorage.getItem("refresh_token");
-            if (!stillHasRefreshToken) {
-              // Token was invalid, already cleared
-              setIsLoading(false);
-              return;
-            }
-            // Network error - tokens still exist, try to proceed anyway
-            // The user might see a brief loading state while server starts
-          }
-        } else {
-          // No refresh token - clear any stale access token
-          apiClearTokens();
-          setIsLoading(false);
-          return;
-        }
-      }
-
+      // Try to fetch the current user — cookies are sent automatically.
+      // If no valid session cookie exists, this returns 401 and we stay logged out.
       await fetchCurrentUser();
       setIsLoading(false);
     };
@@ -133,53 +81,35 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => clearInterval(interval);
   }, [user, refreshAccessToken]);
 
-  // Cross-tab synchronization via storage events
+  // Cross-tab synchronization: httpOnly cookies are shared across tabs automatically.
+  // Listen for visibility changes to re-check auth state when user returns to tab.
   useEffect(() => {
-    const handleStorageChange = (e: StorageEvent) => {
-      if (e.key === "access_token" || e.key === "refresh_token") {
-        if (!e.newValue) {
-          // Token removed in another tab - logout
-          setUser(null);
-        } else if (!user && e.key === "access_token") {
-          // Token added in another tab - fetch user
-          fetchCurrentUser();
-        }
+    const handleVisibility = () => {
+      if (!document.hidden && !user) {
+        fetchCurrentUser();
       }
     };
 
-    window.addEventListener("storage", handleStorageChange);
-    return () => window.removeEventListener("storage", handleStorageChange);
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () => document.removeEventListener("visibilitychange", handleVisibility);
   }, [user, fetchCurrentUser]);
 
-  const login = useCallback(
-    async (email: string, password: string) => {
-      const response = await authApi.login(email, password);
-      saveTokens(
-        response.data.tokens.access_token,
-        response.data.tokens.refresh_token
-      );
-      setUser(response.data.user);
-    },
-    [saveTokens]
-  );
+  const login = useCallback(async (email: string, password: string) => {
+    const response = await authApi.login(email, password);
+    setUser(response.data.user);
+  }, []);
 
-  const signup = useCallback(
-    async (email: string, password: string, name?: string) => {
-      const response = await authApi.signup(email, password, name);
-      saveTokens(
-        response.data.tokens.access_token,
-        response.data.tokens.refresh_token
-      );
-      setUser(response.data.user);
-    },
-    [saveTokens]
-  );
+  const signup = useCallback(async (email: string, password: string, name?: string) => {
+    const response = await authApi.signup(email, password, name);
+    setUser(response.data.user);
+  }, []);
 
   const logout = useCallback(async () => {
     try {
       await authApi.logout();
-    } catch {
-      // Ignore logout errors - clear tokens anyway
+    } catch (e) {
+      // Ignore logout errors — clear local session regardless
+      console.debug("Logout API call failed:", e);
     }
     clearTokens();
   }, [clearTokens]);

@@ -7,6 +7,56 @@ import { useAuth } from "@/lib/auth-context";
 import { ApiError } from "@/lib/api";
 import { Loader2, AlertCircle, Mail, Lock, Eye, EyeOff } from "lucide-react";
 
+function AuthWatermark() {
+  return (
+    <div className="hidden md:flex flex-1 bg-[hsl(var(--background))] items-center justify-center relative overflow-hidden border-r border-[hsl(var(--border-subtle))]">
+      <div
+        aria-hidden="true"
+        className="absolute inset-0 flex items-center justify-center select-none pointer-events-none"
+      >
+        <span
+          className="font-mono font-bold text-[hsl(var(--accent))] tracking-widest"
+          style={{
+            fontSize: "clamp(2.5rem, 9vh, 5.5rem)",
+            opacity: 0.07,
+            writingMode: "vertical-rl",
+            textOrientation: "mixed",
+            letterSpacing: "0.2em",
+          }}
+        >
+          BUGWATCH
+        </span>
+      </div>
+      <div className="relative z-10 text-center px-12">
+        <Link href="/" className="inline-flex items-center gap-2 mb-8">
+          <span className="flex h-8 w-8 items-center justify-center rounded-md bg-[hsl(var(--accent))] text-[hsl(var(--accent-foreground))]">
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.4"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="h-4 w-4"
+              aria-hidden="true"
+            >
+              <path d="M8 2v3" />
+              <path d="M16 2v3" />
+              <rect x="4" y="6" width="16" height="14" rx="5" />
+              <path d="M4 13h16" />
+            </svg>
+          </span>
+          <span className="font-sans font-bold text-xl tracking-tight text-[hsl(var(--foreground))]">BugWatch</span>
+        </Link>
+        <p className="font-mono text-sm text-[hsl(var(--muted-foreground))] leading-relaxed max-w-xs">
+          Open-source error tracking.
+          <br />
+          Flat pricing. No surprises.
+        </p>
+      </div>
+    </div>
+  );
+}
 
 export default function LoginPage() {
   const router = useRouter();
@@ -37,46 +87,58 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center px-4 py-12 bg-gradient-mesh">
-      <div className="relative w-full max-w-[420px] space-y-8">
-        {/* Logo & Header */}
-        <div className="text-center space-y-3">
-          <Link href="/" className="inline-flex items-center gap-2.5 group">
-            <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent text-accent-foreground shadow-lg shadow-accent/25 group-hover:scale-105 transition-transform">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5" aria-hidden="true">
+    <div className="min-h-screen flex bg-[hsl(var(--background))]">
+      <AuthWatermark />
+
+      {/* Right: Form */}
+      <div className="flex flex-1 flex-col items-center justify-center px-6 py-12 bg-[hsl(var(--surface-1))]">
+        <div className="w-full max-w-[400px] space-y-8">
+          {/* Mobile logo */}
+          <Link href="/" className="md:hidden inline-flex items-center gap-2 mb-2">
+            <span className="flex h-8 w-8 items-center justify-center rounded-md bg-[hsl(var(--accent))] text-[hsl(var(--accent-foreground))]">
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.4"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className="h-4 w-4"
+                aria-hidden="true"
+              >
                 <path d="M8 2v3" />
                 <path d="M16 2v3" />
                 <rect x="4" y="6" width="16" height="14" rx="5" />
                 <path d="M4 13h16" />
               </svg>
             </span>
-            <span className="font-display font-bold text-2xl tracking-tight">BugWatch</span>
+            <span className="font-sans font-bold text-xl tracking-tight text-[hsl(var(--foreground))]">BugWatch</span>
           </Link>
-          <div>
-            <h1 className="font-display text-heading-lg">Welcome back</h1>
-            <p className="text-body-sm text-muted-foreground mt-1">
-              Sign in to continue to your dashboard
-            </p>
-          </div>
-        </div>
 
-        {/* Auth Card */}
-        <div className="glass-card rounded-xl p-8 space-y-6">
-          {/* Email/Password Form */}
+          <div>
+            <h1 className="font-sans text-2xl font-bold text-[hsl(var(--foreground))]">Welcome back</h1>
+            <p className="text-sm text-[hsl(var(--muted-foreground))] mt-1">Sign in to continue to your dashboard</p>
+          </div>
+
           <form onSubmit={handleSubmit} className="space-y-5">
             {error && (
-              <div role="alert" className="flex items-start gap-3 p-4 text-sm rounded-lg bg-red-500/10 border border-red-500/20">
+              <div
+                role="alert"
+                aria-live="polite"
+                aria-atomic="true"
+                className="flex items-start gap-3 p-4 text-sm rounded-lg bg-red-500/10 border border-red-500/20"
+              >
                 <AlertCircle className="h-5 w-5 text-red-400 shrink-0 mt-0.5" />
-                <span className="text-red-200">{error}</span>
+                <span className="text-red-300">{error}</span>
               </div>
             )}
 
             <div className="space-y-2">
-              <label htmlFor="email" className="text-sm font-medium text-foreground">
+              <label htmlFor="email" className="text-sm font-medium text-[hsl(var(--foreground))]">
                 Email
               </label>
               <div className="relative">
-                <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-muted-foreground" />
+                <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-[hsl(var(--muted-foreground))]" />
                 <input
                   id="email"
                   type="email"
@@ -86,25 +148,22 @@ export default function LoginPage() {
                   required
                   autoComplete="email"
                   disabled={isLoading}
-                  className="w-full h-12 pl-11 pr-4 rounded-lg bg-surface-3 border border-border-subtle text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-accent/50 focus:border-accent/50 transition-all disabled:opacity-50"
+                  className="w-full h-11 pl-10 pr-4 rounded-lg bg-[hsl(var(--surface-3))] border border-[hsl(var(--border-subtle))] text-[hsl(var(--foreground))] placeholder:text-[hsl(var(--muted-foreground))] focus:outline-none focus:ring-2 focus:ring-[hsl(var(--accent))]/50 focus:border-[hsl(var(--accent))]/50 transition-all disabled:opacity-50 text-sm"
                 />
               </div>
             </div>
 
             <div className="space-y-2">
               <div className="flex items-center justify-between">
-                <label htmlFor="password" className="text-sm font-medium text-foreground">
+                <label htmlFor="password" className="text-sm font-medium text-[hsl(var(--foreground))]">
                   Password
                 </label>
-                <Link
-                  href="/forgot-password"
-                  className="text-xs text-accent-2 hover:underline transition-colors"
-                >
+                <Link href="/forgot-password" className="text-xs text-[hsl(var(--accent))] hover:underline">
                   Forgot password?
                 </Link>
               </div>
               <div className="relative">
-                <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-muted-foreground" />
+                <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-[hsl(var(--muted-foreground))]" />
                 <input
                   id="password"
                   type={showPassword ? "text" : "password"}
@@ -114,12 +173,12 @@ export default function LoginPage() {
                   required
                   autoComplete="current-password"
                   disabled={isLoading}
-                  className="w-full h-12 pl-11 pr-10 rounded-lg bg-surface-3 border border-border-subtle text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-accent/50 focus:border-accent/50 transition-all disabled:opacity-50"
+                  className="w-full h-11 pl-10 pr-10 rounded-lg bg-[hsl(var(--surface-3))] border border-[hsl(var(--border-subtle))] text-[hsl(var(--foreground))] placeholder:text-[hsl(var(--muted-foreground))] focus:outline-none focus:ring-2 focus:ring-[hsl(var(--accent))]/50 focus:border-[hsl(var(--accent))]/50 transition-all disabled:opacity-50 text-sm"
                 />
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] transition-colors"
                   aria-label={showPassword ? "Hide password" : "Show password"}
                 >
                   {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
@@ -130,11 +189,11 @@ export default function LoginPage() {
             <button
               type="submit"
               disabled={isLoading}
-              className="w-full h-12 rounded-lg bg-accent text-accent-foreground font-medium hover:bg-accent/90 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-lg shadow-accent/20"
+              className="w-full h-11 rounded-lg bg-[hsl(var(--accent))] text-[hsl(var(--accent-foreground))] font-sans font-semibold text-sm hover:bg-[hsl(var(--accent-2))] transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
             >
               {isLoading ? (
                 <>
-                  <Loader2 className="h-5 w-5 animate-spin" />
+                  <Loader2 className="h-4 w-4 animate-spin" />
                   Signing in...
                 </>
               ) : (
@@ -142,18 +201,14 @@ export default function LoginPage() {
               )}
             </button>
           </form>
-        </div>
 
-        {/* Footer */}
-        <p className="text-center text-sm text-muted-foreground">
-          Don&apos;t have an account?{" "}
-          <Link
-            href="/signup"
-            className="font-medium text-accent hover:underline transition-colors"
-          >
-            Sign up for free
-          </Link>
-        </p>
+          <p className="text-center text-sm text-[hsl(var(--muted-foreground))]">
+            Don&apos;t have an account?{" "}
+            <Link href="/signup" className="font-medium text-[hsl(var(--accent))] hover:underline">
+              Sign up for free
+            </Link>
+          </p>
+        </div>
       </div>
     </div>
   );

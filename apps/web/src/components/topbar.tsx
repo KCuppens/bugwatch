@@ -20,13 +20,15 @@ export function Topbar() {
   const router = useRouter();
   const { user, logout } = useAuth();
   const { setOpen: openCommandPalette } = useCommandPalette();
-  const [isMac, setIsMac] = useState<boolean | null>(null);
+  const [isMac, setIsMac] = useState<boolean>(() => {
+    if (typeof navigator === "undefined") return false;
+    const platform = navigator.platform || "";
+    return /mac|iphone|ipad|ipod/i.test(platform);
+  });
 
   useEffect(() => {
-    const platform =
-      navigator.platform ||
-      (navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform ||
-      "";
+    const nav = navigator as Navigator & { userAgentData?: { platform?: string } };
+    const platform = nav.platform || nav.userAgentData?.platform || "";
     setIsMac(/mac|iphone|ipad|ipod/i.test(platform));
   }, []);
 
@@ -50,22 +52,20 @@ export function Topbar() {
       <div className="flex-1 flex items-center justify-center px-4">
         <button
           onClick={() => openCommandPalette(true)}
-          aria-label="Search issues"
+          aria-label="Open search and command palette (Ctrl+K or ⌘K)"
           className="flex items-center gap-2 h-8 w-full max-w-[480px] px-3 rounded-md bg-[hsl(var(--surface-3))] border border-[hsl(var(--border-subtle))] text-[hsl(var(--muted-foreground))] hover:border-[hsl(var(--border-strong))] hover:text-[hsl(var(--foreground))] transition-all duration-150 text-sm"
         >
           <Search className="h-3.5 w-3.5 shrink-0" />
           <span className="flex-1 text-left text-sm">Search issues...</span>
-          {isMac !== null && (
-            <kbd className="shrink-0 inline-flex h-5 items-center gap-0.5 rounded bg-[hsl(var(--surface-1))] border border-[hsl(var(--border-subtle))] px-1.5 font-mono text-[10px] font-medium text-[hsl(var(--muted-foreground))]">
-              {isMac ? (
-                <>
-                  <span className="text-xs">⌘</span>K
-                </>
-              ) : (
-                <>Ctrl K</>
-              )}
-            </kbd>
-          )}
+          <kbd className="shrink-0 inline-flex h-5 items-center gap-0.5 rounded bg-[hsl(var(--surface-1))] border border-[hsl(var(--border-subtle))] px-1.5 font-mono text-[10px] font-medium text-[hsl(var(--muted-foreground))]">
+            {isMac ? (
+              <>
+                <span className="text-xs">⌘</span>K
+              </>
+            ) : (
+              <>Ctrl K</>
+            )}
+          </kbd>
         </button>
       </div>
 

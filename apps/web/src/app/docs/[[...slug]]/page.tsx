@@ -1,6 +1,7 @@
-import { DocsBody, DocsDescription, DocsPage, DocsTitle } from 'fumadocs-ui/page';
-import { notFound } from 'next/navigation';
-import { source } from '@/lib/source';
+import { DocsBody, DocsDescription, DocsPage, DocsTitle } from "fumadocs-ui/page";
+import { notFound } from "next/navigation";
+import { source } from "@/lib/source";
+import defaultMdxComponents from "fumadocs-ui/mdx";
 
 export default async function Page({ params }: { params: Promise<{ slug?: string[] }> }) {
   const { slug } = await params;
@@ -12,7 +13,8 @@ export default async function Page({ params }: { params: Promise<{ slug?: string
       <DocsTitle>{page.data.title}</DocsTitle>
       <DocsDescription>{page.data.description}</DocsDescription>
       <DocsBody>
-        <MDX />
+        {/* fumadocs defaultMdxComponents types diverge from React 19 MDXComponents; double-cast is safe */}
+        <MDX components={defaultMdxComponents as unknown as Parameters<typeof MDX>[0]["components"]} />
       </DocsBody>
     </DocsPage>
   );

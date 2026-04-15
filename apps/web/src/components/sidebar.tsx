@@ -46,8 +46,8 @@ export function Sidebar() {
   const hasPerformance = useFeature("performance_monitoring");
   const hasReplay = useFeature("session_replay");
 
-  const safeUnresolved = Math.max(0, Math.floor(Number(unresolvedCount) || 0));
-  const safeDownCount = Math.max(0, Math.floor(Number(monitorsDownCount) || 0));
+  const issueCount = Math.max(0, Number(unresolvedCount) || 0);
+  const monitorDownCount = Math.max(0, Number(monitorsDownCount) || 0);
 
   const navItems = useMemo((): NavItem[] => {
     const items: NavItem[] = [
@@ -60,14 +60,14 @@ export function Sidebar() {
         label: "Issues",
         href: "/dashboard",
         icon: <Bug className="h-5 w-5" />,
-        badgeCount: safeUnresolved,
+        badgeCount: issueCount,
         badgeVariant: "red",
       },
       {
         label: "Uptime",
         href: "/dashboard/uptime",
         icon: <Activity className="h-5 w-5" />,
-        badgeCount: safeDownCount,
+        badgeCount: monitorDownCount,
         badgeVariant: "red",
       },
       {
@@ -121,7 +121,7 @@ export function Sidebar() {
     );
 
     return items;
-  }, [hasPerformance, hasReplay, safeUnresolved, safeDownCount]);
+  }, [hasPerformance, hasReplay, issueCount, monitorDownCount]);
 
   function isActive(href: string) {
     if (href === "/dashboard") return pathname === "/dashboard";

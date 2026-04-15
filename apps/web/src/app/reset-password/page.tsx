@@ -17,7 +17,7 @@ function AuthWatermark() {
         <span
           className="font-mono font-bold text-[hsl(var(--accent))] tracking-widest"
           style={{
-            fontSize: "clamp(5rem, 14vw, 11rem)",
+            fontSize: "clamp(2.5rem, 9vh, 5.5rem)",
             opacity: 0.07,
             writingMode: "vertical-rl",
             textOrientation: "mixed",
@@ -165,6 +165,7 @@ function ResetPasswordContent() {
             <div
               role="status"
               aria-live="polite"
+              aria-atomic="true"
               className="surface-card p-6 rounded-lg flex flex-col items-center gap-4"
             >
               <CheckCircle className="h-12 w-12 text-green-400" aria-hidden="true" />
@@ -178,6 +179,8 @@ function ResetPasswordContent() {
                 <div
                   className="flex items-start gap-3 p-4 text-sm rounded-lg bg-red-500/10 border border-red-500/20"
                   role="alert"
+                  aria-live="polite"
+                  aria-atomic="true"
                 >
                   <AlertCircle className="h-4 w-4 text-red-400 shrink-0 mt-0.5" aria-hidden="true" />
                   <span className="text-red-300">{error}</span>
