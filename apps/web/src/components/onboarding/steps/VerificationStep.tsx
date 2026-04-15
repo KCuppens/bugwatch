@@ -2,14 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { Button } from "@/components/ui/button";
-import {
-  ArrowLeft,
-  Check,
-  Loader2,
-  AlertCircle,
-  ExternalLink,
-  PartyPopper,
-} from "lucide-react";
+import { ArrowLeft, Check, Loader2, AlertCircle, ExternalLink } from "lucide-react";
 import { CodeBlock } from "../CodeBlock";
 import { getSDKContent, interpolateApiKey } from "@/lib/sdk-config";
 import { projectsApi } from "@/lib/api";
@@ -40,8 +33,79 @@ export function VerificationStep({
   const [eventCount, setEventCount] = useState(0);
   const [pollCount, setPollCount] = useState(0);
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
 
   const sdkContent = getSDKContent(platform, framework);
+
+  // Canvas confetti — fires once when status transitions to "success"
+  useEffect(() => {
+    if (status !== "success") return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+
+    type Particle = {
+      x: number;
+      y: number;
+      vx: number;
+      vy: number;
+      color: string;
+      size: number;
+      rotation: number;
+      rotationSpeed: number;
+    };
+
+    const colors = ["#E8FF47", "#F0F4F8", "#60A5FA", "#F97316", "#EF4444", "#A78BFA"];
+    const particles: Particle[] = Array.from({ length: 120 }, () => ({
+      x: canvas.width / 2,
+      y: canvas.height * 0.4,
+      vx: (Math.random() - 0.5) * 14,
+      vy: (Math.random() - 0.9) * 14,
+      color: colors[Math.floor(Math.random() * colors.length)] ?? "#E8FF47",
+      size: Math.random() * 7 + 3,
+      rotation: Math.random() * Math.PI * 2,
+      rotationSpeed: (Math.random() - 0.5) * 0.25,
+    }));
+
+    let startTime: number | null = null;
+    const duration = 1500;
+    let animFrame: number;
+
+    const animate = (timestamp: number) => {
+      if (!startTime) startTime = timestamp;
+      const elapsed = timestamp - startTime;
+
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      for (const p of particles) {
+        p.x += p.vx;
+        p.y += p.vy;
+        p.vy += 0.35;
+        p.rotation += p.rotationSpeed;
+
+        ctx.save();
+        ctx.translate(p.x, p.y);
+        ctx.rotate(p.rotation);
+        ctx.fillStyle = p.color;
+        ctx.globalAlpha = Math.max(0, 1 - elapsed / duration);
+        ctx.fillRect(-p.size / 2, -p.size / 2, p.size, p.size);
+        ctx.restore();
+      }
+
+      if (elapsed < duration) {
+        animFrame = requestAnimationFrame(animate);
+      } else {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+      }
+    };
+
+    animFrame = requestAnimationFrame(animate);
+    return () => cancelAnimationFrame(animFrame);
+  }, [status]);
 
   const checkForEvents = useCallback(async () => {
     try {
@@ -59,7 +123,6 @@ export function VerificationStep({
   }, [projectId]);
 
   const startVerification = useCallback(async () => {
-    // Clear any existing interval
     if (pollIntervalRef.current) {
       clearInterval(pollIntervalRef.current);
       pollIntervalRef.current = null;
@@ -68,11 +131,9 @@ export function VerificationStep({
     setStatus("checking");
     setPollCount(0);
 
-    // Check immediately first
     const immediate = await checkForEvents();
     if (immediate) return;
 
-    // Poll every 2 seconds for up to 120 seconds (60 attempts)
     let attempts = 0;
     const maxAttempts = 60;
 
@@ -91,7 +152,6 @@ export function VerificationStep({
     }, 2000);
   }, [checkForEvents]);
 
-  // Auto-start verification on mount
   useEffect(() => {
     startVerification();
     return () => {
@@ -125,26 +185,33 @@ export function VerificationStep({
   if (status === "success") {
     return (
       <div className="space-y-8">
-        <div className="flex flex-col items-center justify-center space-y-4 py-12">
-          <div className="flex h-20 w-20 items-center justify-center rounded-full bg-green-100 dark:bg-green-900/30">
-            <PartyPopper className="h-10 w-10 text-green-600 dark:text-green-400" />
+        {/* Canvas confetti overlay */}
+        <canvas ref={canvasRef} className="pointer-events-none fixed inset-0 z-50" aria-hidden="true" />
+
+        <div className="flex flex-col items-center justify-center space-y-6 py-12">
+          <div className="flex h-20 w-20 items-center justify-center rounded-full bg-[hsl(var(--accent))]/10 border border-[hsl(var(--accent))]/30">
+            <Check className="h-10 w-10 text-[hsl(var(--accent))]" />
           </div>
-          <div className="text-center space-y-2">
-            <h2 className="font-display text-heading-lg">You&apos;re All Set!</h2>
-            <p className="text-muted-foreground max-w-md">
-              We received {eventCount} event{eventCount > 1 ? "s" : ""} from your
-              application. Bugwatch is now monitoring your project for errors.
+          <div className="text-center space-y-3">
+            <h2 className="font-sans text-3xl font-bold text-[hsl(var(--foreground))]">You&apos;re live.</h2>
+            <p className="text-[hsl(var(--muted-foreground))] max-w-md">
+              We received {eventCount} event{eventCount > 1 ? "s" : ""} from your application. BugWatch is now
+              monitoring your project for errors.
             </p>
           </div>
-          <div className="flex items-center gap-2 text-sm text-green-600 dark:text-green-400">
+          <div className="flex items-center gap-2 text-sm text-[hsl(var(--accent))]">
             <Check className="h-4 w-4" />
             Integration verified successfully
           </div>
         </div>
 
         <div className="flex justify-center pt-4">
-          <Button onClick={handleFinish} size="lg" className="px-8">
-            Go to Dashboard
+          <Button
+            onClick={handleFinish}
+            size="lg"
+            className="px-8 bg-[#E8FF47] text-[#080B10] hover:bg-[#B8CC1A] font-sans font-semibold border-0"
+          >
+            Go to Dashboard →
           </Button>
         </div>
       </div>
@@ -154,21 +221,19 @@ export function VerificationStep({
   return (
     <div className="space-y-8">
       <div className="space-y-2 text-center">
-        <h2 className="font-display text-heading-lg">Verify Your Installation</h2>
-        <p className="text-muted-foreground">
-          Send a test error to confirm everything is working
-        </p>
+        <h2 className="font-sans text-2xl font-bold">Verify Your Installation</h2>
+        <p className="text-[hsl(var(--muted-foreground))]">Send a test error to confirm everything is working</p>
       </div>
 
       <div className="max-w-2xl mx-auto space-y-6">
         {/* Status indicator */}
-        <div className="flex flex-col items-center justify-center space-y-4 py-8 rounded-lg border bg-muted/30">
+        <div className="flex flex-col items-center justify-center space-y-4 py-8 rounded-lg border bg-[hsl(var(--surface-2))]">
           {status === "checking" && (
             <>
-              <Loader2 className="h-12 w-12 animate-spin text-accent-2" />
+              <Loader2 className="h-12 w-12 animate-spin text-[hsl(var(--accent))]" />
               <div className="text-center">
                 <p className="font-medium">Listening for events...</p>
-                <p className="text-sm text-muted-foreground">
+                <p className="text-sm text-[hsl(var(--muted-foreground))]">
                   Waiting for your first error ({pollCount * 2}s)
                 </p>
                 {pollCount * 2 >= 60 && (
@@ -176,7 +241,7 @@ export function VerificationStep({
                     href={sdkContent?.docsUrl || "/docs"}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="text-sm text-accent hover:underline mt-2 inline-flex items-center gap-1"
+                    className="text-sm text-[hsl(var(--accent))] hover:underline mt-2 inline-flex items-center gap-1"
                   >
                     Still waiting? Check the installation guide
                     <ExternalLink className="h-3 w-3" />
@@ -190,7 +255,7 @@ export function VerificationStep({
               <AlertCircle className="h-12 w-12 text-amber-500" />
               <div className="text-center">
                 <p className="font-medium">No events received yet</p>
-                <p className="text-sm text-muted-foreground">
+                <p className="text-sm text-[hsl(var(--muted-foreground))]">
                   Make sure you&apos;ve sent a test error from your application
                 </p>
               </div>
@@ -201,8 +266,8 @@ export function VerificationStep({
           )}
           {status === "idle" && (
             <>
-              <div className="h-12 w-12 rounded-full border-4 border-muted" />
-              <p className="text-muted-foreground">Ready to verify</p>
+              <div className="h-12 w-12 rounded-full border-4 border-[hsl(var(--border))]" />
+              <p className="text-[hsl(var(--muted-foreground))]">Ready to verify</p>
             </>
           )}
         </div>
@@ -212,19 +277,11 @@ export function VerificationStep({
           <div className="space-y-3">
             <div className="flex items-center justify-between">
               <h3 className="font-semibold">Send a Test Error</h3>
-              <span className="text-xs text-muted-foreground">
-                Run this code in your application
-              </span>
+              <span className="text-xs text-[hsl(var(--muted-foreground))]">Run this code in your application</span>
             </div>
             <CodeBlock
               code={interpolateApiKey(sdkContent.verificationCode, apiKey)}
-              language={
-                platform === "python"
-                  ? "python"
-                  : platform === "rust"
-                    ? "rust"
-                    : "javascript"
-              }
+              language={platform === "python" ? "python" : platform === "rust" ? "rust" : "javascript"}
             />
           </div>
         )}
@@ -235,7 +292,7 @@ export function VerificationStep({
             href={sdkContent?.docsUrl || "/docs"}
             target="_blank"
             rel="noopener noreferrer"
-            className="text-sm text-muted-foreground hover:text-foreground transition-colors inline-flex items-center gap-1"
+            className="text-sm text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] transition-colors inline-flex items-center gap-1"
           >
             Having trouble? View troubleshooting guide
             <ExternalLink className="h-3 w-3" />

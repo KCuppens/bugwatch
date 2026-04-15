@@ -2,16 +2,7 @@
 
 import { cn } from "@/lib/utils";
 import type { FrameworkConfig } from "@/lib/sdk-config";
-import {
-  Hexagon,
-  Server,
-  Globe,
-  Layers,
-  Zap,
-  Clock,
-  Box,
-  Cpu,
-} from "lucide-react";
+import { Hexagon, Server, Globe, Layers, Zap, Clock, Box, Cpu } from "lucide-react";
 
 // Map framework IDs to icons
 const FrameworkIcons: Record<string, React.ReactNode> = {
@@ -36,11 +27,7 @@ interface FrameworkCardProps {
   onClick: () => void;
 }
 
-export function FrameworkCard({
-  framework,
-  selected,
-  onClick,
-}: FrameworkCardProps) {
+export function FrameworkCard({ framework, selected, onClick }: FrameworkCardProps) {
   return (
     <button
       type="button"
@@ -48,25 +35,23 @@ export function FrameworkCard({
       className={cn(
         "group relative flex flex-col items-start rounded-xl border-2 p-5 text-left transition-all duration-200 hover:scale-[1.02]",
         selected
-          ? "border-accent-2 bg-accent-2/5 ring-2 ring-accent-2/30 ring-offset-2"
-          : "border-border-subtle hover:border-accent-2/40 bg-surface-2"
+          ? "border-[hsl(var(--accent))] bg-[hsl(var(--accent))]/5 ring-2 ring-[hsl(var(--accent))]/30 ring-offset-2"
+          : "border-[hsl(var(--border))] hover:border-[hsl(var(--accent))]/40 bg-[hsl(var(--surface-2))]"
       )}
     >
       <div
         className={cn(
           "mb-3 transition-colors",
           selected
-            ? "text-accent-2"
-            : "text-muted-foreground group-hover:text-foreground"
+            ? "text-[hsl(var(--accent))]"
+            : "text-[hsl(var(--muted-foreground))] group-hover:text-[hsl(var(--foreground))]"
         )}
       >
         {FrameworkIcons[framework.id] || <Layers className="h-8 w-8" />}
       </div>
       <h3 className="font-semibold">{framework.name}</h3>
-      <p className="mt-1 text-body-sm text-muted-foreground">
-        {framework.description}
-      </p>
-      <code className="mt-3 rounded bg-muted px-2 py-1 text-xs text-muted-foreground">
+      <p className="mt-1 text-sm text-[hsl(var(--muted-foreground))]">{framework.description}</p>
+      <code className="mt-3 rounded bg-[hsl(var(--surface-2))] px-2 py-1 text-xs text-[hsl(var(--muted-foreground))]">
         {framework.package}
       </code>
     </button>

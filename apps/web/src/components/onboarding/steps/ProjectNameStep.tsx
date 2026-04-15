@@ -12,19 +12,12 @@ interface ProjectNameStepProps {
   isValid: boolean;
 }
 
-export function ProjectNameStep({
-  value,
-  onChange,
-  onNext,
-  isValid,
-}: ProjectNameStepProps) {
+export function ProjectNameStep({ value, onChange, onNext, isValid }: ProjectNameStepProps) {
   return (
     <div className="space-y-8">
       <div className="space-y-2 text-center">
-        <h2 className="font-display text-heading-lg">Name Your Project</h2>
-        <p className="text-muted-foreground">
-          Give your project a name to help you identify it later
-        </p>
+        <h2 className="font-sans text-2xl font-bold">Name Your Project</h2>
+        <p className="text-muted-foreground">Give your project a name to help you identify it later</p>
       </div>
 
       <div className="mx-auto max-w-md space-y-4">
@@ -44,17 +37,10 @@ export function ProjectNameStep({
             className="h-12 text-lg"
             autoFocus
           />
-          <p className="text-xs text-muted-foreground">
-            You can change this later in project settings
-          </p>
+          <p className="text-xs text-muted-foreground">You can change this later in project settings</p>
         </div>
 
-        <Button
-          onClick={onNext}
-          disabled={!isValid}
-          className="w-full h-12"
-          size="lg"
-        >
+        <Button onClick={onNext} disabled={!isValid} className="w-full h-12" size="lg">
           Continue
           <ArrowRight className="ml-2 h-4 w-4" />
         </Button>

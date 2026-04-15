@@ -16,14 +16,7 @@ interface InstallationStepProps {
   backDisabled?: boolean;
 }
 
-export function InstallationStep({
-  platform,
-  framework,
-  apiKey,
-  onNext,
-  onBack,
-  backDisabled,
-}: InstallationStepProps) {
+export function InstallationStep({ platform, framework, apiKey, onNext, onBack, backDisabled }: InstallationStepProps) {
   const [showServerMonitoring, setShowServerMonitoring] = useState(false);
   const sdkContent = getSDKContent(platform, framework);
 
@@ -40,17 +33,15 @@ export function InstallationStep({
   return (
     <div className="space-y-8">
       <div className="space-y-2 text-center">
-        <h2 className="font-display text-heading-lg">Install {sdkContent.packageName}</h2>
-        <p className="text-muted-foreground">
-          Follow these steps to integrate Bugwatch into your application
-        </p>
+        <h2 className="font-sans text-2xl font-bold">Install {sdkContent.packageName}</h2>
+        <p className="text-muted-foreground">Follow these steps to integrate Bugwatch into your application</p>
       </div>
 
       <div className="space-y-8 max-w-2xl mx-auto">
         {/* Step 1: Install */}
         <div className="space-y-3">
           <div className="flex items-center gap-3">
-            <div className="flex h-7 w-7 items-center justify-center rounded-full bg-accent-2 text-sm font-medium text-accent-2-foreground">
+            <div className="flex h-7 w-7 items-center justify-center rounded-full bg-[hsl(var(--accent))] text-sm font-medium text-[#080B10]">
               1
             </div>
             <h3 className="font-semibold">Install the SDK</h3>
@@ -62,23 +53,15 @@ export function InstallationStep({
         {sdkContent.configSteps.map((step, index) => (
           <div key={index} className="space-y-3">
             <div className="flex items-center gap-3">
-              <div className="flex h-7 w-7 items-center justify-center rounded-full bg-accent-2 text-sm font-medium text-accent-2-foreground">
+              <div className="flex h-7 w-7 items-center justify-center rounded-full bg-[hsl(var(--accent))] text-sm font-medium text-[#080B10]">
                 {index + 2}
               </div>
               <div>
                 <h3 className="font-semibold">{step.title}</h3>
-                {step.description && (
-                  <p className="text-sm text-muted-foreground">
-                    {step.description}
-                  </p>
-                )}
+                {step.description && <p className="text-sm text-muted-foreground">{step.description}</p>}
               </div>
             </div>
-            <CodeBlock
-              code={interpolateApiKey(step.code, apiKey)}
-              language={step.language}
-              filename={step.filename}
-            />
+            <CodeBlock code={interpolateApiKey(step.code, apiKey)} language={step.language} filename={step.filename} />
           </div>
         ))}
 
@@ -100,14 +83,12 @@ export function InstallationStep({
           <button
             type="button"
             onClick={() => setShowServerMonitoring(!showServerMonitoring)}
-            className="flex w-full items-center gap-3 p-4 text-left hover:bg-muted/50 transition-colors"
+            className="flex w-full items-center gap-3 p-4 text-left hover:bg-[hsl(var(--surface-2))] transition-colors"
           >
             <Server className="h-5 w-5 text-muted-foreground" />
             <div className="flex-1">
               <h3 className="font-semibold text-sm">Server Monitoring (Optional)</h3>
-              <p className="text-xs text-muted-foreground">
-                {SERVER_MONITORING_CONTENT.description}
-              </p>
+              <p className="text-xs text-muted-foreground">{SERVER_MONITORING_CONTENT.description}</p>
             </div>
             {showServerMonitoring ? (
               <ChevronDown className="h-4 w-4 text-muted-foreground" />
@@ -119,28 +100,16 @@ export function InstallationStep({
             <div className="border-t p-4 space-y-4">
               <div className="space-y-2">
                 <h4 className="text-sm font-medium">Install the agent</h4>
-                <CodeBlock
-                  code={interpolateApiKey(
-                    SERVER_MONITORING_CONTENT.installCommand,
-                    apiKey
-                  )}
-                  language="bash"
-                />
+                <CodeBlock code={interpolateApiKey(SERVER_MONITORING_CONTENT.installCommand, apiKey)} language="bash" />
               </div>
-              <p className="text-xs text-muted-foreground">
-                {SERVER_MONITORING_CONTENT.requirements}
-              </p>
+              <p className="text-xs text-muted-foreground">{SERVER_MONITORING_CONTENT.requirements}</p>
               <div className="space-y-2">
                 <h4 className="text-sm font-medium">Management commands</h4>
                 <div className="space-y-1">
                   {SERVER_MONITORING_CONTENT.managementCommands.map((cmd) => (
                     <div key={cmd.label} className="flex items-center gap-2 text-xs">
-                      <span className="text-muted-foreground w-28 shrink-0">
-                        {cmd.label}:
-                      </span>
-                      <code className="bg-muted px-1.5 py-0.5 rounded font-mono">
-                        {cmd.command}
-                      </code>
+                      <span className="text-muted-foreground w-28 shrink-0">{cmd.label}:</span>
+                      <code className="bg-[hsl(var(--surface-2))] px-1.5 py-0.5 rounded font-mono">{cmd.command}</code>
                     </div>
                   ))}
                 </div>

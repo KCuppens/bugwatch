@@ -57,22 +57,22 @@ export function PlatformCard({ platform, selected, onClick }: PlatformCardProps)
       className={cn(
         "group relative flex flex-col items-center justify-center rounded-xl border-2 p-6 transition-all duration-200 hover:scale-[1.02]",
         selected
-          ? "border-accent-2 bg-accent-2/5 ring-2 ring-accent-2/30 ring-offset-2"
-          : "border-border-subtle hover:border-accent-2/40 bg-surface-2"
+          ? "border-[hsl(var(--accent))] bg-[hsl(var(--accent))]/5 ring-2 ring-[hsl(var(--accent))]/30 ring-offset-2"
+          : "border-[hsl(var(--border))] hover:border-[hsl(var(--accent))]/40 bg-[hsl(var(--surface-2))]"
       )}
     >
       <div
         className={cn(
           "mb-4 transition-colors",
-          selected ? "text-accent-2" : "text-muted-foreground group-hover:text-foreground"
+          selected
+            ? "text-[hsl(var(--accent))]"
+            : "text-[hsl(var(--muted-foreground))] group-hover:text-[hsl(var(--foreground))]"
         )}
       >
         {PlatformIcons[platform.icon]}
       </div>
-      <h3 className="text-heading-sm">{platform.name}</h3>
-      <p className="mt-1 text-center text-body-sm text-muted-foreground">
-        {platform.description}
-      </p>
+      <h3 className="text-sm font-semibold">{platform.name}</h3>
+      <p className="mt-1 text-center text-sm text-[hsl(var(--muted-foreground))]">{platform.description}</p>
     </button>
   );
 }
