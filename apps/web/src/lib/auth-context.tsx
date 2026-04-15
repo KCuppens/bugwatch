@@ -3,7 +3,7 @@
 import { createContext, useContext, useEffect, useMemo, useState, useCallback, type ReactNode } from "react";
 import { authApi, type User, ApiError, clearTokens as apiClearTokens, refreshTokens } from "./api";
 
-interface AuthContextType {
+export interface AuthContextType {
   user: User | null;
   isLoading: boolean;
   isAuthenticated: boolean;
@@ -15,9 +15,9 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-// Refresh 5 minutes before expiry. Backend default: 1 hour (keep in sync with
-// apps/server/src/config.rs jwt_access_expiration). Refresh at 55 min to be safe.
-const TOKEN_REFRESH_INTERVAL = 55 * 60 * 1000; // 55 minutes
+// Refresh 2 minutes before expiry. Backend default: 15 minutes / 900 s (keep in
+// sync with apps/server/src/config.rs jwt_access_expiration). Refresh at 13 min.
+const TOKEN_REFRESH_INTERVAL = 13 * 60 * 1000; // 13 minutes
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
@@ -80,6 +80,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     return () => clearInterval(interval);
   }, [user, refreshAccessToken]);
+
+  // When fetchWithAuth gets a persistent 401 (refresh failed — session fully
+  // expired), it dispatches this event so the auth context can clear local state
+  // and let AuthGuard redirect to /login instead of showing a raw auth error.
+  useEffect(() => {
+    const handleSessionExpired = () => {
+      clearTokens();
+    };
+    window.addEventListener("bugwatch-auth-expired", handleSessionExpired);
+    return () => window.removeEventListener("bugwatch-auth-expired", handleSessionExpired);
+  }, [clearTokens]);
 
   // Cross-tab synchronization: httpOnly cookies are shared across tabs automatically.
   // Listen for visibility changes to re-check auth state when user returns to tab.

@@ -33,6 +33,9 @@ import { useListKeyboardNavigation } from "@/hooks/useListKeyboardNavigation";
 import { useSavedSearches } from "@/hooks/useSavedSearches";
 import { formatRelativeTime } from "@/lib/format";
 import { toast } from "sonner";
+import { OnboardingEmptyState } from "@/components/onboarding/OnboardingEmptyState";
+import { FirstErrorCelebration } from "@/components/onboarding/FirstErrorCelebration";
+import { useFirstError } from "@/hooks/useFirstError";
 
 const levelConfig = {
   fatal: {
@@ -257,6 +260,9 @@ export default function DashboardPage() {
   const [activeFilter, setActiveFilter] = useState<string | null>(null);
   const [newIssueIds, setNewIssueIds] = useState<Set<string>>(new Set());
   const previousIssueIdsRef = useRef<Set<string>>(new Set());
+
+  // First-error celebration
+  const { firstIssue, shouldCelebrate, dismiss } = useFirstError();
 
   // Saved searches
   const { savedSearches, saveSearch, deleteSearch } = useSavedSearches(selectedProject?.id);
@@ -678,6 +684,9 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-6">
+      {/* First-error celebration overlay */}
+      {shouldCelebrate && firstIssue && <FirstErrorCelebration issue={firstIssue} onDismiss={dismiss} />}
+
       {/* Compact Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-4">
@@ -1074,14 +1083,8 @@ export default function DashboardPage() {
                 </Button>
               </div>
             ) : (
-              // Zero issues celebration
-              <div className="flex flex-col items-center justify-center py-20 animate-fade-in-up">
-                <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-green-500/20 to-emerald-500/10 flex items-center justify-center mb-4">
-                  <Check className="h-8 w-8 text-green-500" />
-                </div>
-                <h3 className="text-lg font-medium mb-1">Zero issues!</h3>
-                <p className="text-sm text-muted-foreground">Your application is running clean</p>
-              </div>
+              // Zero issues — onboarding empty state
+              <OnboardingEmptyState project={selectedProject} />
             )
           ) : (
             displayIssues

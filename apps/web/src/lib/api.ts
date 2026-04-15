@@ -162,6 +162,10 @@ async function fetchWithAuth(url: string, options: RequestInit = {}): Promise<Re
     const refreshed = await refreshTokens();
     if (refreshed) {
       response = await fetch(url, { ...options, headers, credentials: "include" });
+    } else {
+      // Refresh failed — session is fully expired. Notify auth context so it can
+      // clear local state and redirect to login instead of showing a raw 401 error.
+      window.dispatchEvent(new Event("bugwatch-auth-expired"));
     }
   }
 
@@ -728,6 +732,13 @@ export const issuesApi = {
     return api.delete<{ data: { message: string } }>(
       `/api/v1/projects/${projectId}/issues/${issueId}/comments/${commentId}`
     );
+  },
+};
+
+// Onboarding API
+export const onboardingApi = {
+  async saveProfile(profile: { role: string; use_case: string; team_size: string }) {
+    return api.patch<{ data: { message: string } }>("/api/v1/auth/me/onboarding", profile);
   },
 };
 

@@ -1,13 +1,15 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import { motion } from "framer-motion";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, Check, Loader2, AlertCircle, ExternalLink } from "lucide-react";
+import { ArrowLeft, Check, AlertCircle, ExternalLink } from "lucide-react";
 import { CodeBlock } from "../CodeBlock";
 import { getSDKContent, interpolateApiKey } from "@/lib/sdk-config";
 import { projectsApi } from "@/lib/api";
 import type { Platform, Framework } from "@/lib/api";
+import { useConfetti } from "@/hooks/useConfetti";
 
 interface VerificationStepProps {
   projectId: string;
@@ -34,80 +36,11 @@ export function VerificationStep({
   const [eventCount, setEventCount] = useState(0);
   const [pollCount, setPollCount] = useState(0);
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
   const mountedRef = useRef(true);
 
+  const canvasRef = useConfetti({ trigger: status === "success" });
+
   const sdkContent = getSDKContent(platform, framework);
-
-  // Canvas confetti — fires once when status transitions to "success"
-  useEffect(() => {
-    if (status !== "success") return;
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-
-    canvas.width = window.innerWidth;
-    canvas.height = window.innerHeight;
-
-    type Particle = {
-      x: number;
-      y: number;
-      vx: number;
-      vy: number;
-      color: string;
-      size: number;
-      rotation: number;
-      rotationSpeed: number;
-    };
-
-    const colors = ["#2ed573", "#F0F4F8", "#60A5FA", "#F97316", "#EF4444", "#A78BFA"];
-    const particles: Particle[] = Array.from({ length: 120 }, () => ({
-      x: canvas.width / 2,
-      y: canvas.height * 0.4,
-      vx: (Math.random() - 0.5) * 14,
-      vy: (Math.random() - 0.9) * 14,
-      color: colors[Math.floor(Math.random() * colors.length)] ?? "#2ed573",
-      size: Math.random() * 7 + 3,
-      rotation: Math.random() * Math.PI * 2,
-      rotationSpeed: (Math.random() - 0.5) * 0.25,
-    }));
-
-    let startTime: number | null = null;
-    const duration = 1500;
-    let animFrame: number;
-
-    const animate = (timestamp: number) => {
-      if (!startTime) startTime = timestamp;
-      const elapsed = timestamp - startTime;
-
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-      for (const p of particles) {
-        p.x += p.vx;
-        p.y += p.vy;
-        p.vy += 0.35;
-        p.rotation += p.rotationSpeed;
-
-        ctx.save();
-        ctx.translate(p.x, p.y);
-        ctx.rotate(p.rotation);
-        ctx.fillStyle = p.color;
-        ctx.globalAlpha = Math.max(0, 1 - elapsed / duration);
-        ctx.fillRect(-p.size / 2, -p.size / 2, p.size, p.size);
-        ctx.restore();
-      }
-
-      if (elapsed < duration) {
-        animFrame = requestAnimationFrame(animate);
-      } else {
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-      }
-    };
-
-    animFrame = requestAnimationFrame(animate);
-    return () => cancelAnimationFrame(animFrame);
-  }, [status]);
 
   const checkForEvents = useCallback(async () => {
     try {
@@ -236,7 +169,26 @@ export function VerificationStep({
         <div className="flex flex-col items-center justify-center space-y-4 py-8 rounded-lg border bg-[hsl(var(--surface-2))]">
           {status === "checking" && (
             <>
-              <Loader2 className="h-12 w-12 animate-spin text-[hsl(var(--accent))]" />
+              {/* Health fingerprint — SVG oscilloscope */}
+              <div className="w-48 h-16 relative">
+                <svg viewBox="0 0 200 60" className="w-full h-full overflow-visible">
+                  <motion.path
+                    d="M0 30 Q25 30 50 30 Q75 30 100 30 Q125 30 150 30 Q175 30 200 30"
+                    fill="none"
+                    stroke="hsl(var(--muted-foreground))"
+                    strokeWidth="1.5"
+                    strokeLinecap="round"
+                    animate={{
+                      d: [
+                        "M0 30 Q25 30 50 30 Q75 30 100 30 Q125 30 150 30 Q175 30 200 30",
+                        "M0 30 Q25 25 50 30 Q75 35 100 30 Q125 25 150 30 Q175 35 200 30",
+                        "M0 30 Q25 30 50 30 Q75 30 100 30 Q125 30 150 30 Q175 30 200 30",
+                      ],
+                    }}
+                    transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
+                  />
+                </svg>
+              </div>
               <div className="text-center">
                 <p className="font-medium">Listening for events...</p>
                 <p className="text-sm text-[hsl(var(--muted-foreground))]">

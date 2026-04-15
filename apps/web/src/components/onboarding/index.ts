@@ -3,6 +3,8 @@ export { StepIndicator, type Step } from "./StepIndicator";
 export { PlatformCard } from "./PlatformCard";
 export { FrameworkCard } from "./FrameworkCard";
 export { CodeBlock, InstallCommand } from "./CodeBlock";
+export { OnboardingEmptyState } from "./OnboardingEmptyState";
+export { FirstErrorCelebration } from "./FirstErrorCelebration";
 
 // Step components
 export { ProjectNameStep } from "./steps/ProjectNameStep";

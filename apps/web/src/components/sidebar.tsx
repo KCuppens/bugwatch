@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { Bug, Activity, Settings, FolderOpen, Bell, LayoutGrid, Server, Gauge, Video } from "lucide-react";
+import { ActivationChecklist } from "@/components/onboarding/ActivationChecklist";
 import { useFeature } from "@/hooks/use-feature";
 import { usePaywall } from "@/lib/paywall-context";
 import { useSidebarCounts } from "@/hooks/useSidebarCounts";
@@ -197,6 +198,9 @@ export function Sidebar() {
           );
         })}
       </nav>
+
+      {/* Onboarding checklist — above Settings */}
+      <ActivationChecklist />
 
       {/* Settings — pinned to bottom */}
       <div className="py-3 px-1.5 border-t border-[hsl(var(--border-subtle))]">
