@@ -11,7 +11,9 @@ use crate::billing::tiers::{self, Tier};
 use crate::config::DeploymentMode;
 use crate::db::{repositories::OrganizationRepository, DbPool};
 
-const TIER_CACHE_TTL: Duration = Duration::from_secs(300);
+// 60s TTL ensures tier upgrades take effect within 1 minute without requiring
+// explicit cache invalidation on every billing code path.
+const TIER_CACHE_TTL: Duration = Duration::from_secs(60);
 
 fn tier_cache() -> &'static DashMap<String, (u32, Instant)> {
     static CACHE: OnceLock<DashMap<String, (u32, Instant)>> = OnceLock::new();
@@ -20,10 +22,17 @@ fn tier_cache() -> &'static DashMap<String, (u32, Instant)> {
 
 /// Thread-safe rate limiter using token bucket algorithm
 ///
-/// Maintains separate buckets per key (typically API key or project ID)
+/// Maintains separate buckets per key (typically API key or project ID).
+/// Per-minute and per-hour buckets live in separate DashMaps so that
+/// the hourly cleanup pass (`cleanup_inactive`) never evicts hourly buckets
+/// (which would reset the counter and allow rate-limit bypass).
 #[derive(Clone)]
 pub struct RateLimiter {
+    /// Per-minute token buckets (auth IPs, API keys, …)
     buckets: Arc<DashMap<String, TokenBucket>>,
+    /// Per-hour token buckets (password reset per email, …).
+    /// Uses a 4-hour inactivity TTL in cleanup so counters are not reset within the hour.
+    hourly_buckets: Arc<DashMap<String, TokenBucket>>,
 }
 
 impl Default for RateLimiter {
@@ -37,6 +46,7 @@ impl RateLimiter {
     pub fn new() -> Self {
         Self {
             buckets: Arc::new(DashMap::new()),
+            hourly_buckets: Arc::new(DashMap::new()),
         }
     }
 
@@ -75,7 +85,11 @@ impl RateLimiter {
                 }
             } else {
                 let limit = Self::resolve_tier_limit(db, api_key).await;
-                tier_cache().insert(api_key.to_string(), (limit, Instant::now()));
+                // Use or_insert to avoid overwriting a value that a concurrent request
+                // may have already inserted while we were awaiting the DB query.
+                tier_cache()
+                    .entry(api_key.to_string())
+                    .or_insert((limit, Instant::now()));
                 limit
             }
         };
@@ -108,22 +122,39 @@ impl RateLimiter {
         bucket.try_consume()
     }
 
-    /// Get current stats for a key (for debugging/monitoring)
-    #[allow(dead_code)]
-    pub fn get_stats(&self, key: &str) -> Option<(u32, u32)> {
-        self.buckets.get(key).map(|bucket| {
-            let result = RateLimitResult {
-                allowed: true,
-                remaining: bucket.current_tokens(),
-                limit: bucket.current_tokens(), // This is a simplified view
-                retry_after_secs: None,
-            };
-            (result.remaining, result.limit)
-        })
+    /// Check if a request should be allowed with an hourly rate limit.
+    ///
+    /// Useful for low-frequency operations (e.g. password reset: 3/hour per email).
+    ///
+    /// Hourly buckets are stored in a **separate** DashMap from per-minute buckets so that
+    /// `cleanup_inactive` (called hourly) does not evict them and reset the counter within
+    /// the window — which would allow rate-limit bypass via bucket eviction.
+    ///
+    /// # Arguments
+    /// * `key` - Unique identifier for the rate limit bucket
+    /// * `limit_per_hour` - The rate limit (requests per hour); **only honoured on the
+    ///   first call for a given key** — subsequent calls reuse the existing bucket regardless
+    ///   of the value passed. Always call with the same limit for a given key.
+    pub fn check_hourly(&self, key: &str, limit_per_hour: u32) -> RateLimitResult {
+        let mut bucket = self
+            .hourly_buckets
+            .entry(key.to_string())
+            .or_insert_with(|| TokenBucket::new_hourly(limit_per_hour, limit_per_hour));
+        bucket.try_consume()
     }
 
-    /// Remove expired/inactive buckets (cleanup)
-    /// Should be called periodically to prevent memory growth
+    /// Get current stats for a key (for debugging/monitoring).
+    /// Returns `(remaining_tokens, capacity)`.
+    #[allow(dead_code)]
+    pub fn get_stats(&self, key: &str) -> Option<(u32, u32)> {
+        self.buckets
+            .get(key)
+            .map(|bucket| (bucket.current_tokens(), bucket.capacity()))
+    }
+
+    /// Remove expired/inactive per-minute buckets to prevent memory growth.
+    /// Should be called periodically (e.g. hourly). Does NOT touch hourly buckets
+    /// — use `cleanup_hourly_inactive` for those (with a longer TTL).
     ///
     /// # Arguments
     /// * `max_age_secs` - Remove buckets that haven't been accessed in this many seconds
@@ -131,7 +162,6 @@ impl RateLimiter {
     /// # Returns
     /// Number of buckets removed
     pub fn cleanup_inactive(&self, max_age_secs: u64) -> usize {
-        let mut removed = 0;
         let keys_to_remove: Vec<String> = self
             .buckets
             .iter()
@@ -139,17 +169,47 @@ impl RateLimiter {
             .map(|entry| entry.key().clone())
             .collect();
 
+        let removed = keys_to_remove.len();
         for key in keys_to_remove {
             self.buckets.remove(&key);
-            removed += 1;
         }
-
         removed
     }
 
-    /// Get the current number of buckets (for monitoring)
+    /// Remove expired/inactive per-hour buckets. Uses a longer TTL than `cleanup_inactive`
+    /// (at least 2× the refill window, e.g. 4 hours) so that hourly counters are not reset
+    /// mid-window.
+    ///
+    /// # Arguments
+    /// * `max_age_secs` - Remove hourly buckets that haven't been accessed in this many seconds;
+    ///   should be ≥ 7200 (2 hours) to prevent mid-window eviction for a 1-hour refill window.
+    ///
+    /// # Returns
+    /// Number of buckets removed
+    pub fn cleanup_hourly_inactive(&self, max_age_secs: u64) -> usize {
+        let keys_to_remove: Vec<String> = self
+            .hourly_buckets
+            .iter()
+            .filter(|entry| entry.value().seconds_since_last_access() > max_age_secs)
+            .map(|entry| entry.key().clone())
+            .collect();
+
+        let removed = keys_to_remove.len();
+        for key in keys_to_remove {
+            self.hourly_buckets.remove(&key);
+        }
+        removed
+    }
+
+    /// Get the current number of per-minute buckets (for monitoring)
     pub fn bucket_count(&self) -> usize {
         self.buckets.len()
+    }
+
+    /// Get the current number of per-hour buckets (for monitoring)
+    #[allow(dead_code)]
+    pub fn hourly_bucket_count(&self) -> usize {
+        self.hourly_buckets.len()
     }
 }
 

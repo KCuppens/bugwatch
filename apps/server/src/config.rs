@@ -141,6 +141,12 @@ pub struct Config {
     // =========================================================================
     // Security Configuration
     // =========================================================================
+    /// Trust X-Forwarded-For and X-Real-IP headers for client IP extraction.
+    /// Only enable this if the server runs behind a trusted reverse proxy (nginx, Cloudflare, etc.).
+    /// When false, the IP used for rate limiting is always "unknown" from the application's
+    /// perspective, preventing IP spoofing via crafted headers.
+    pub trust_proxy: bool,
+
     /// Encryption key for field-level encryption of integration tokens
     pub encryption_key: Option<String>,
 
@@ -184,7 +190,7 @@ impl Config {
             database_url: env::var("DATABASE_URL")
                 .unwrap_or_else(|_| "sqlite:./data/bugwatch.db?mode=rwc".to_string()),
             jwt_secret: env::var("JWT_SECRET")
-                .unwrap_or_else(|_| "development-secret-change-in-production".to_string()),
+                .expect("FATAL: JWT_SECRET environment variable is required. Set it in .env for local development."),
             jwt_access_expiration: env::var("JWT_ACCESS_EXPIRATION")
                 .ok()
                 .and_then(|v| v.parse().ok())
@@ -240,6 +246,9 @@ impl Config {
             linear_client_id: env::var("LINEAR_CLIENT_ID").ok(),
             linear_client_secret: env::var("LINEAR_CLIENT_SECRET").ok(),
             // Security config
+            trust_proxy: env::var("TRUST_PROXY")
+                .map(|v| v == "true" || v == "1")
+                .unwrap_or(false),
             encryption_key: env::var("BUGWATCH_ENCRYPTION_KEY").ok(),
             github_webhook_secret: env::var("GITHUB_WEBHOOK_SECRET").ok(),
             jira_webhook_secret: env::var("JIRA_WEBHOOK_SECRET").ok(),
@@ -270,7 +279,9 @@ impl Config {
             }
             if !self.x402_wallet_address.starts_with("0x")
                 || self.x402_wallet_address.len() != 42
-                || !self.x402_wallet_address[2..].chars().all(|c| c.is_ascii_hexdigit())
+                || !self.x402_wallet_address[2..]
+                    .chars()
+                    .all(|c| c.is_ascii_hexdigit())
             {
                 panic!("FATAL: X402_WALLET_ADDRESS must be a valid Ethereum address (0x + 40 hex chars)");
             }
@@ -279,21 +290,41 @@ impl Config {
             }
             if !self.x402_usdc_address.starts_with("0x")
                 || self.x402_usdc_address.len() != 42
-                || !self.x402_usdc_address[2..].chars().all(|c| c.is_ascii_hexdigit())
+                || !self.x402_usdc_address[2..]
+                    .chars()
+                    .all(|c| c.is_ascii_hexdigit())
             {
-                panic!("FATAL: X402_USDC_ADDRESS must be a valid Ethereum address (0x + 40 hex chars)");
+                panic!(
+                    "FATAL: X402_USDC_ADDRESS must be a valid Ethereum address (0x + 40 hex chars)"
+                );
             }
+        }
+
+        // Panic on short JWT secret in every environment — a weak secret is unsafe
+        // regardless of whether the environment is "production". The default dev secret
+        // ("development-secret-change-in-production") is 39 chars so it passes this check.
+        if self.jwt_secret.len() < 32 {
+            panic!(
+                "FATAL: JWT_SECRET must be at least 32 characters (got {}). Refusing to start with a weak secret.",
+                self.jwt_secret.len()
+            );
+        }
+
+        // SMTP all-or-nothing: if a host is configured, the from address must be too.
+        // Partial config leads to silent delivery failures at runtime.
+        if self.smtp_host.is_some() && self.smtp_from.is_none() {
+            panic!("FATAL: SMTP_FROM must be set when SMTP_HOST is configured");
+        }
+        // If credentials are partially supplied, both must be present.
+        let has_user = self.smtp_user.is_some();
+        let has_pass = self.smtp_password.is_some();
+        if has_user != has_pass {
+            panic!("FATAL: SMTP_USER and SMTP_PASSWORD must both be set (or both unset)");
         }
 
         if self.environment == "production" {
             if self.jwt_secret == "development-secret-change-in-production" {
                 panic!("FATAL: JWT_SECRET must be set in production (min 32 characters)");
-            }
-            if self.jwt_secret.len() < 32 {
-                panic!(
-                    "FATAL: JWT_SECRET must be at least 32 characters in production (got {})",
-                    self.jwt_secret.len()
-                );
             }
             if self.database_url.starts_with("sqlite:") {
                 panic!("FATAL: SQLite is not supported in production. Set DATABASE_URL to a PostgreSQL connection string");
@@ -301,8 +332,36 @@ impl Config {
             if self.allowed_origins.is_empty() {
                 panic!("FATAL: ALLOWED_ORIGINS must be set in production (comma-separated list of allowed origins)");
             }
+            // Validate each origin is a parseable URL so misconfigured CORS doesn't
+            // silently reject all cross-origin requests.
+            for origin in &self.allowed_origins {
+                if !origin.starts_with("http://") && !origin.starts_with("https://") {
+                    panic!(
+                        "FATAL: ALLOWED_ORIGINS entry '{}' must start with http:// or https://",
+                        origin
+                    );
+                }
+            }
             if self.encryption_key.is_none() {
                 panic!("FATAL: BUGWATCH_ENCRYPTION_KEY must be set in production to encrypt integration tokens at rest");
+            }
+            // Encryption key must be at least 32 bytes for AES-256 key derivation.
+            if let Some(ref key) = self.encryption_key {
+                if key.len() < 32 {
+                    panic!(
+                        "FATAL: BUGWATCH_ENCRYPTION_KEY must be at least 32 characters (got {})",
+                        key.len()
+                    );
+                }
+            }
+            // Warn if trust_proxy is disabled in production — rate limiting will bucket
+            // all traffic under "unknown" IP and per-IP limits won't work correctly.
+            if !self.trust_proxy {
+                tracing::warn!(
+                    "TRUST_PROXY is not enabled in production. If the server runs behind a \
+                     reverse proxy (nginx, Cloudflare, etc.), set TRUST_PROXY=true so that \
+                     per-IP rate limiting uses the real client IP from X-Forwarded-For."
+                );
             }
         }
     }

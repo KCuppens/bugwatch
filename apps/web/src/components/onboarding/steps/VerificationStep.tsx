@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { ArrowLeft, Check, Loader2, AlertCircle, ExternalLink } from "lucide-react";
 import { CodeBlock } from "../CodeBlock";
@@ -34,6 +35,7 @@ export function VerificationStep({
   const [pollCount, setPollCount] = useState(0);
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const mountedRef = useRef(true);
 
   const sdkContent = getSDKContent(platform, framework);
 
@@ -59,13 +61,13 @@ export function VerificationStep({
       rotationSpeed: number;
     };
 
-    const colors = ["#E8FF47", "#F0F4F8", "#60A5FA", "#F97316", "#EF4444", "#A78BFA"];
+    const colors = ["#2ed573", "#F0F4F8", "#60A5FA", "#F97316", "#EF4444", "#A78BFA"];
     const particles: Particle[] = Array.from({ length: 120 }, () => ({
       x: canvas.width / 2,
       y: canvas.height * 0.4,
       vx: (Math.random() - 0.5) * 14,
       vy: (Math.random() - 0.9) * 14,
-      color: colors[Math.floor(Math.random() * colors.length)] ?? "#E8FF47",
+      color: colors[Math.floor(Math.random() * colors.length)] ?? "#2ed573",
       size: Math.random() * 7 + 3,
       rotation: Math.random() * Math.PI * 2,
       rotationSpeed: (Math.random() - 0.5) * 0.25,
@@ -139,9 +141,11 @@ export function VerificationStep({
 
     pollIntervalRef.current = setInterval(async () => {
       attempts++;
+      if (!mountedRef.current) return;
       setPollCount(attempts);
 
       const found = await checkForEvents();
+      if (!mountedRef.current) return; // component unmounted during await
       if (found || attempts >= maxAttempts) {
         if (pollIntervalRef.current) {
           clearInterval(pollIntervalRef.current);
@@ -153,8 +157,10 @@ export function VerificationStep({
   }, [checkForEvents]);
 
   useEffect(() => {
+    mountedRef.current = true;
     startVerification();
     return () => {
+      mountedRef.current = false;
       if (pollIntervalRef.current) {
         clearInterval(pollIntervalRef.current);
         pollIntervalRef.current = null;
@@ -165,21 +171,21 @@ export function VerificationStep({
   const handleSkip = async () => {
     try {
       await projectsApi.completeOnboarding(projectId);
-      onComplete();
     } catch (error) {
       console.error("Error completing onboarding:", error);
-      onComplete();
+      toast.error("Could not save onboarding progress — you can finish setup from Settings.");
     }
+    onComplete();
   };
 
   const handleFinish = async () => {
     try {
       await projectsApi.completeOnboarding(projectId);
-      onComplete();
     } catch (error) {
       console.error("Error completing onboarding:", error);
-      onComplete();
+      toast.error("Could not save onboarding progress — you can finish setup from Settings.");
     }
+    onComplete();
   };
 
   if (status === "success") {
@@ -209,7 +215,7 @@ export function VerificationStep({
           <Button
             onClick={handleFinish}
             size="lg"
-            className="px-8 bg-[#E8FF47] text-[#080B10] hover:bg-[#B8CC1A] font-sans font-semibold border-0"
+            className="px-8 bg-[#2ed573] text-[#080B10] hover:bg-[#1a9e52] font-sans font-semibold border-0"
           >
             Go to Dashboard →
           </Button>

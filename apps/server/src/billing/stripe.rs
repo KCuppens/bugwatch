@@ -3,12 +3,68 @@ use serde::Serialize;
 use stripe::{
     BillingPortalSession, CheckoutSession, CheckoutSessionMode, Client, Coupon, CouponId,
     CreateBillingPortalSession, CreateCheckoutSession, CreateCheckoutSessionLineItems,
-    CreateCustomer, CreateSetupIntent, Currency, Customer, CustomerId, Invoice, InvoiceId,
-    PaymentIntent, PaymentIntentStatus, PaymentMethod, PaymentMethodId, PromotionCode, SetupIntent,
-    SubscriptionId,
+    CreateCustomer, CreateSetupIntent, Customer, CustomerId, Invoice, InvoiceId, PaymentIntent,
+    PaymentIntentStatus, PaymentMethod, PaymentMethodId, Price, PriceId, PromotionCode,
+    SetupIntent, SubscriptionId,
 };
 
 use crate::config::Config;
+
+/// Generate a stable idempotency key prefix seeded from a logical identifier.
+/// Using a UUID suffix ensures uniqueness per call-site invocation, while the
+/// prefix makes logs easier to correlate with the triggering operation.
+fn idempotency_key(prefix: &str) -> String {
+    format!("{}_{}", prefix, uuid::Uuid::new_v4())
+}
+
+/// Retry a Stripe API call on transient errors (5xx, rate limit, network).
+/// Max 3 retries with exponential backoff: ~1s, ~2s, ~4s.
+async fn stripe_retry<F, Fut, T>(op: F) -> Result<T>
+where
+    F: Fn() -> Fut,
+    Fut: std::future::Future<Output = Result<T, stripe::StripeError>>,
+{
+    let max_retries = 3u32;
+    let mut last_err = None;
+
+    for attempt in 0..=max_retries {
+        match op().await {
+            Ok(val) => return Ok(val),
+            Err(e) => {
+                // Only retry on server errors, rate limits, or network issues
+                let retryable = matches!(
+                    &e,
+                    stripe::StripeError::Stripe(ref err) if err.http_status >= 500 || err.http_status == 429
+                ) || matches!(&e, stripe::StripeError::ClientError(_));
+
+                if !retryable || attempt >= max_retries {
+                    return Err(anyhow!("Stripe API error: {}", e));
+                }
+
+                let base_ms = 1000u64 * 2u64.pow(attempt);
+                let jitter_ms = (std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .subsec_nanos() as u64)
+                    % (base_ms / 5).max(1);
+                let delay = std::time::Duration::from_millis(base_ms + jitter_ms);
+                tracing::warn!(
+                    attempt = attempt + 1,
+                    "Stripe call failed, retrying in {:?}: {}",
+                    delay,
+                    e
+                );
+                tokio::time::sleep(delay).await;
+                last_err = Some(e);
+            }
+        }
+    }
+
+    Err(anyhow!(
+        "Stripe API failed after retries: {}",
+        last_err.map(|e| e.to_string()).unwrap_or_default()
+    ))
+}
 
 /// Stripe client wrapper for billing operations
 #[derive(Clone)]
@@ -61,15 +117,31 @@ impl StripeClient {
                 .collect(),
         );
 
-        let customer = Customer::create(&self.client, params).await?;
-        Ok(customer)
+        // Stable key across retries — prevents duplicate customers if the
+        // response is lost in a network partition after Stripe processes the request.
+        let ikey = idempotency_key(&format!("create_customer_{}", organization_id));
+        let client = self
+            .client
+            .clone()
+            .with_strategy(stripe::RequestStrategy::Idempotent(ikey));
+        stripe_retry(|| {
+            let c = client.clone();
+            let p = params.clone();
+            async move { Customer::create(&c, p).await }
+        })
+        .await
     }
 
     /// Get a customer by ID
     pub async fn get_customer(&self, customer_id: &str) -> Result<Customer> {
         let id: CustomerId = customer_id.parse()?;
-        let customer = Customer::retrieve(&self.client, &id, &[]).await?;
-        Ok(customer)
+        let client = self.client.clone();
+        stripe_retry(|| {
+            let c = client.clone();
+            let i = id.clone();
+            async move { Customer::retrieve(&c, &i, &[]).await }
+        })
+        .await
     }
 
     /// Get the price ID for a given tier and billing interval
@@ -115,8 +187,20 @@ impl StripeClient {
             ..Default::default()
         }]);
 
-        let session = CheckoutSession::create(&self.client, params).await?;
-        Ok(session)
+        let ikey = idempotency_key(&format!(
+            "checkout_{}_{}_{}_{}",
+            customer_id, tier, seats, annual
+        ));
+        let client = self
+            .client
+            .clone()
+            .with_strategy(stripe::RequestStrategy::Idempotent(ikey));
+        stripe_retry(|| {
+            let c = client.clone();
+            let p = params.clone();
+            async move { CheckoutSession::create(&c, p).await }
+        })
+        .await
     }
 
     /// Create a billing portal session for subscription management
@@ -130,8 +214,13 @@ impl StripeClient {
         let mut params = CreateBillingPortalSession::new(customer);
         params.return_url = Some(return_url);
 
-        let session = BillingPortalSession::create(&self.client, params).await?;
-        Ok(session)
+        let client = self.client.clone();
+        stripe_retry(|| {
+            let c = client.clone();
+            let p = params.clone();
+            async move { BillingPortalSession::create(&c, p).await }
+        })
+        .await
     }
 
     /// Cancel a subscription
@@ -141,21 +230,28 @@ impl StripeClient {
         immediately: bool,
     ) -> Result<stripe::Subscription> {
         let id: SubscriptionId = subscription_id.parse()?;
+        let client = self.client.clone();
 
         if immediately {
-            let subscription = stripe::Subscription::cancel(
-                &self.client,
-                &id,
-                stripe::CancelSubscription::default(),
-            )
-            .await?;
-            Ok(subscription)
+            stripe_retry(|| {
+                let c = client.clone();
+                let i = id.clone();
+                async move {
+                    stripe::Subscription::cancel(&c, &i, stripe::CancelSubscription::default())
+                        .await
+                }
+            })
+            .await
         } else {
-            // Cancel at period end
             let mut params = stripe::UpdateSubscription::new();
             params.cancel_at_period_end = Some(true);
-            let subscription = stripe::Subscription::update(&self.client, &id, params).await?;
-            Ok(subscription)
+            stripe_retry(|| {
+                let c = client.clone();
+                let i = id.clone();
+                let p = params.clone();
+                async move { stripe::Subscription::update(&c, &i, p).await }
+            })
+            .await
         }
     }
 
@@ -166,7 +262,14 @@ impl StripeClient {
         new_seats: i64,
     ) -> Result<stripe::Subscription> {
         let id: SubscriptionId = subscription_id.parse()?;
-        let subscription = stripe::Subscription::retrieve(&self.client, &id, &[]).await?;
+        let client = self.client.clone();
+
+        let subscription = stripe_retry(|| {
+            let c = client.clone();
+            let i = id.clone();
+            async move { stripe::Subscription::retrieve(&c, &i, &[]).await }
+        })
+        .await?;
 
         // Get the first subscription item
         let item = subscription
@@ -175,23 +278,37 @@ impl StripeClient {
             .first()
             .ok_or_else(|| anyhow!("No subscription items found"))?;
 
-        // Update the quantity on the subscription item
-        let item_id = &item.id;
+        let item_id = item.id.clone();
         let mut update_params = stripe::UpdateSubscriptionItem::new();
         update_params.quantity = Some(new_seats as u64);
 
-        stripe::SubscriptionItem::update(&self.client, item_id, update_params).await?;
+        stripe_retry(|| {
+            let c = client.clone();
+            let iid = item_id.clone();
+            let p = update_params.clone();
+            async move { stripe::SubscriptionItem::update(&c, &iid, p).await }
+        })
+        .await?;
 
         // Re-fetch the updated subscription
-        let updated = stripe::Subscription::retrieve(&self.client, &id, &[]).await?;
-        Ok(updated)
+        stripe_retry(|| {
+            let c = client.clone();
+            let i = id.clone();
+            async move { stripe::Subscription::retrieve(&c, &i, &[]).await }
+        })
+        .await
     }
 
     /// Check if a payment intent succeeded
     pub async fn get_payment_intent(&self, payment_intent_id: &str) -> Result<PaymentIntent> {
         let id = payment_intent_id.parse()?;
-        let intent = PaymentIntent::retrieve(&self.client, &id, &[]).await?;
-        Ok(intent)
+        let client = self.client.clone();
+        stripe_retry(|| {
+            let c = client.clone();
+            let i = id.clone();
+            async move { PaymentIntent::retrieve(&c, &i, &[]).await }
+        })
+        .await
     }
 
     /// Check if payment intent is successful
@@ -213,9 +330,15 @@ impl StripeClient {
     ) -> Result<stripe::Subscription> {
         let id: SubscriptionId = subscription_id.parse()?;
         let new_price_id = self.get_price_id(new_tier, annual)?;
+        let client = self.client.clone();
 
         // Retrieve current subscription
-        let subscription = stripe::Subscription::retrieve(&self.client, &id, &[]).await?;
+        let subscription = stripe_retry(|| {
+            let c = client.clone();
+            let i = id.clone();
+            async move { stripe::Subscription::retrieve(&c, &i, &[]).await }
+        })
+        .await?;
 
         // Get the first subscription item
         let item = subscription
@@ -232,13 +355,19 @@ impl StripeClient {
             quantity: Some(seats as u64),
             ..Default::default()
         }]);
-        // Note: Stripe defaults to prorating, which is what we want
 
-        let updated = stripe::Subscription::update(&self.client, &id, params).await?;
-        Ok(updated)
+        stripe_retry(|| {
+            let c = client.clone();
+            let i = id.clone();
+            let p = params.clone();
+            async move { stripe::Subscription::update(&c, &i, p).await }
+        })
+        .await
     }
 
-    /// Preview proration charges for a subscription change
+    /// Preview proration charges for a subscription change.
+    /// Uses the actual Stripe price amounts to ensure the preview matches
+    /// what Stripe will charge — no hardcoded price tables.
     pub async fn preview_proration(
         &self,
         subscription_id: &str,
@@ -248,22 +377,17 @@ impl StripeClient {
     ) -> Result<ProrationPreview> {
         let id: SubscriptionId = subscription_id.parse()?;
         let new_price_id = self.get_price_id(new_tier, annual)?;
+        let new_price_stripe_id: PriceId = new_price_id.parse()?;
+        let client = self.client.clone();
 
-        // Retrieve current subscription
-        let subscription = stripe::Subscription::retrieve(&self.client, &id, &[]).await?;
+        // Retrieve current subscription to get current amount
+        let subscription = stripe_retry(|| {
+            let c = client.clone();
+            let i = id.clone();
+            async move { stripe::Subscription::retrieve(&c, &i, &[]).await }
+        })
+        .await?;
 
-        // Get the first subscription item
-        let item = subscription
-            .items
-            .data
-            .first()
-            .ok_or_else(|| anyhow!("No subscription items found"))?;
-
-        // Create an upcoming invoice preview with the changes
-        let mut params = stripe::ListInvoices::new();
-        // Note: This is a simplified preview. For accurate proration, use Invoice::upcoming
-
-        // Get the current price for comparison
         let current_amount = subscription
             .items
             .data
@@ -272,14 +396,15 @@ impl StripeClient {
             .filter_map(|price| price.unit_amount)
             .sum::<i64>();
 
-        // Calculate new amount (simplified)
-        let new_unit_amount = match (new_tier, annual) {
-            ("pro", false) => 1200,  // $12/seat/month
-            ("pro", true) => 840,    // $8.40/seat/month (30% off)
-            ("team", false) => 2500, // $25/seat/month
-            ("team", true) => 1750,  // $17.50/seat/month (30% off)
-            _ => 0,
-        };
+        // Retrieve the actual new price from Stripe to get the real unit amount
+        let new_price = stripe_retry(|| {
+            let c = client.clone();
+            let pid = new_price_stripe_id.clone();
+            async move { Price::retrieve(&c, &pid, &[]).await }
+        })
+        .await?;
+
+        let new_unit_amount = new_price.unit_amount.unwrap_or(0);
         let new_amount = new_unit_amount * seats;
 
         Ok(ProrationPreview {
@@ -306,7 +431,13 @@ impl StripeClient {
         params.customer = Some(customer);
         params.limit = limit;
 
-        let invoices = Invoice::list(&self.client, &params).await?;
+        let client = self.client.clone();
+        let invoices = stripe_retry(|| {
+            let c = client.clone();
+            let p = params.clone();
+            async move { Invoice::list(&c, &p).await }
+        })
+        .await?;
 
         let summaries: Vec<InvoiceSummary> = invoices
             .data
@@ -332,7 +463,13 @@ impl StripeClient {
     /// Get a single invoice with line items
     pub async fn get_invoice(&self, invoice_id: &str) -> Result<InvoiceDetail> {
         let id: InvoiceId = invoice_id.parse()?;
-        let invoice = Invoice::retrieve(&self.client, &id, &[]).await?;
+        let client = self.client.clone();
+        let invoice = stripe_retry(|| {
+            let c = client.clone();
+            let i = id.clone();
+            async move { Invoice::retrieve(&c, &i, &[]).await }
+        })
+        .await?;
 
         let line_items: Vec<InvoiceLineItem> = invoice
             .lines
@@ -391,16 +528,21 @@ impl StripeClient {
         let customer: CustomerId = customer_id.parse()?;
 
         let mut params = stripe::ListPaymentMethods::new();
-        // Filter for card payment methods
+        // Pass the customer ID to Stripe so the API-side filter runs,
+        // preventing other customers' cards from being returned.
+        params.customer = Some(customer.clone());
 
-        let methods = PaymentMethod::list(&self.client, &params).await?;
+        let client = self.client.clone();
+        let methods = stripe_retry(|| {
+            let c = client.clone();
+            let p = params.clone();
+            async move { PaymentMethod::list(&c, &p).await }
+        })
+        .await?;
 
         let summaries: Vec<PaymentMethodSummary> = methods
             .data
             .into_iter()
-            .filter(|pm| {
-                pm.customer.as_ref().map(|c| c.id().to_string()) == Some(customer_id.to_string())
-            })
             .map(|pm| {
                 let card_info = pm.card.as_ref().map(|card| CardInfo {
                     brand: card.brand.clone(),
@@ -434,15 +576,26 @@ impl StripeClient {
             ..Default::default()
         });
 
-        let customer = Customer::update(&self.client, &id, params).await?;
-        Ok(customer)
+        let client = self.client.clone();
+        stripe_retry(|| {
+            let c = client.clone();
+            let i = id.clone();
+            let p = params.clone();
+            async move { Customer::update(&c, &i, p).await }
+        })
+        .await
     }
 
     /// Detach a payment method from a customer
     pub async fn detach_payment_method(&self, payment_method_id: &str) -> Result<PaymentMethod> {
         let id: PaymentMethodId = payment_method_id.parse()?;
-        let method = PaymentMethod::detach(&self.client, &id).await?;
-        Ok(method)
+        let client = self.client.clone();
+        stripe_retry(|| {
+            let c = client.clone();
+            let i = id.clone();
+            async move { PaymentMethod::detach(&c, &i).await }
+        })
+        .await
     }
 
     /// Create a SetupIntent for adding a new payment method
@@ -453,8 +606,17 @@ impl StripeClient {
         params.customer = Some(customer);
         params.payment_method_types = Some(vec!["card".to_string()]);
 
-        let intent = SetupIntent::create(&self.client, params).await?;
-        Ok(intent)
+        let ikey = idempotency_key(&format!("setup_intent_{}", customer_id));
+        let client = self
+            .client
+            .clone()
+            .with_strategy(stripe::RequestStrategy::Idempotent(ikey));
+        stripe_retry(|| {
+            let c = client.clone();
+            let p = params.clone();
+            async move { SetupIntent::create(&c, p).await }
+        })
+        .await
     }
 
     // =========================================================================
@@ -468,7 +630,13 @@ impl StripeClient {
         params.code = Some(code);
         params.active = Some(true);
 
-        let promo_codes = PromotionCode::list(&self.client, &params).await?;
+        let client = self.client.clone();
+        let promo_codes = stripe_retry(|| {
+            let c = client.clone();
+            let p = params.clone();
+            async move { PromotionCode::list(&c, &p).await }
+        })
+        .await?;
 
         if let Some(promo) = promo_codes.data.first() {
             let coupon = &promo.coupon;
@@ -487,9 +655,13 @@ impl StripeClient {
 
         // Try as a direct coupon ID
         let coupon_id: CouponId = code.parse().map_err(|_| anyhow!("Invalid coupon code"))?;
-        let coupon = Coupon::retrieve(&self.client, &coupon_id, &[])
-            .await
-            .map_err(|_| anyhow!("Coupon not found or invalid"))?;
+        let coupon = stripe_retry(|| {
+            let c = client.clone();
+            let cid = coupon_id.clone();
+            async move { Coupon::retrieve(&c, &cid, &[]).await }
+        })
+        .await
+        .map_err(|_| anyhow!("Coupon not found or invalid"))?;
 
         Ok(CouponInfo {
             id: coupon.id.to_string(),
@@ -507,8 +679,13 @@ impl StripeClient {
     /// Retrieve a checkout session by ID
     pub async fn retrieve_checkout_session(&self, session_id: &str) -> Result<CheckoutSession> {
         let id: stripe::CheckoutSessionId = session_id.parse()?;
-        let session = CheckoutSession::retrieve(&self.client, &id, &[]).await?;
-        Ok(session)
+        let client = self.client.clone();
+        stripe_retry(|| {
+            let c = client.clone();
+            let i = id.clone();
+            async move { CheckoutSession::retrieve(&c, &i, &[]).await }
+        })
+        .await
     }
 
     /// Retrieve a subscription by ID
@@ -517,8 +694,13 @@ impl StripeClient {
         subscription_id: &str,
     ) -> Result<stripe::Subscription> {
         let id: SubscriptionId = subscription_id.parse()?;
-        let subscription = stripe::Subscription::retrieve(&self.client, &id, &[]).await?;
-        Ok(subscription)
+        let client = self.client.clone();
+        stripe_retry(|| {
+            let c = client.clone();
+            let i = id.clone();
+            async move { stripe::Subscription::retrieve(&c, &i, &[]).await }
+        })
+        .await
     }
 
     /// Determine tier from a price ID
@@ -573,8 +755,20 @@ impl StripeClient {
         params.tax_id_collection =
             Some(stripe::CreateCheckoutSessionTaxIdCollection { enabled: true });
 
-        let session = CheckoutSession::create(&self.client, params).await?;
-        Ok(session)
+        let ikey = idempotency_key(&format!(
+            "checkout_coupon_{}_{}_{}_{}",
+            customer_id, tier, seats, annual
+        ));
+        let client = self
+            .client
+            .clone()
+            .with_strategy(stripe::RequestStrategy::Idempotent(ikey));
+        stripe_retry(|| {
+            let c = client.clone();
+            let p = params.clone();
+            async move { CheckoutSession::create(&c, p).await }
+        })
+        .await
     }
 
     // =========================================================================

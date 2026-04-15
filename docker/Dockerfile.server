@@ -58,5 +58,10 @@ ENV SERVER_ADDR=0.0.0.0:3000
 ENV DATABASE_URL=sqlite:/app/data/bugwatch.db
 ENV RUST_LOG=info
 
+# Wire /health into the container lifecycle so orchestrators (Docker, ECS, k8s)
+# can detect unhealthy containers and restart them automatically.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD curl -f http://localhost:3000/health || exit 1
+
 # Run the server
 CMD ["/app/bugwatch-server"]

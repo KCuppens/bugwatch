@@ -6,11 +6,12 @@ use axum::{
     routing::get,
     Router,
 };
+use chrono;
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tower_http::{
     cors::{Any, CorsLayer},
-    trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer},
+    trace::{DefaultMakeSpan, DefaultOnResponse, LatencyUnit, TraceLayer},
 };
 use tracing::info;
 use tracing::Level;
@@ -39,6 +40,13 @@ use bugwatch::{init as bugwatch_init, install_panic_hook, BugwatchClient, Bugwat
 /// Maximum concurrent alert evaluation tasks
 const MAX_CONCURRENT_ALERTS: usize = 100;
 
+/// Records the instant the server process started, for uptime reporting.
+static SERVER_START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+
+fn init_server_start() {
+    SERVER_START.get_or_init(std::time::Instant::now);
+}
+
 /// Application state shared across handlers
 #[derive(Clone)]
 pub struct AppState {
@@ -56,6 +64,9 @@ pub struct AppState {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Record server start time as early as possible for uptime reporting.
+    init_server_start();
+
     // Load environment variables first (needed for tracing config)
     dotenvy::dotenv().ok();
 
@@ -171,8 +182,26 @@ async fn main() -> Result<()> {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(24 * 60 * 60)); // 24 hours
         loop {
             interval.tick().await;
-            if let Err(e) = retention.run_cleanup().await {
-                tracing::error!("Data retention cleanup failed: {}", e);
+            // Retry up to 3× on failure with a 5-minute back-off between attempts.
+            let mut succeeded = false;
+            for attempt in 1..=3u32 {
+                match retention.run_cleanup().await {
+                    Ok(()) => {
+                        succeeded = true;
+                        break;
+                    }
+                    Err(e) => {
+                        tracing::warn!(attempt, "Data retention cleanup attempt failed: {}", e);
+                        if attempt < 3 {
+                            tokio::time::sleep(std::time::Duration::from_secs(5 * 60)).await;
+                        }
+                    }
+                }
+            }
+            if !succeeded {
+                tracing::error!(
+                    "Data retention cleanup failed after 3 attempts — will retry in 24 hours"
+                );
             }
         }
     });
@@ -212,13 +241,40 @@ async fn main() -> Result<()> {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(60 * 60)); // 1 hour
         loop {
             interval.tick().await;
-            let removed = rate_limiter.cleanup_inactive(3600); // Remove buckets inactive for > 1 hour
-            if removed > 0 {
-                tracing::info!("Rate limiter cleanup: removed {} inactive buckets", removed);
+            // Per-minute buckets: evict after 1 hour of inactivity
+            let removed = rate_limiter.cleanup_inactive(3600);
+            // Per-hour buckets: evict after 4 hours so the counter is never reset within the
+            // 1-hour window (prevents rate-limit bypass via bucket eviction)
+            let hourly_removed = rate_limiter.cleanup_hourly_inactive(4 * 3600);
+            if removed + hourly_removed > 0 {
+                tracing::info!(
+                    "Rate limiter cleanup: removed {} per-minute + {} per-hour inactive buckets",
+                    removed,
+                    hourly_removed
+                );
             }
         }
     });
     info!("Rate limiter cleanup task started (runs hourly)");
+
+    // Start expired session cleanup task (runs daily)
+    // Removes sessions that have passed their expires_at, including any orphaned sessions
+    // left by soft-delete failures during token rotation.
+    let session_cleanup_db = state.db.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(24 * 60 * 60)); // 24 hours
+        loop {
+            interval.tick().await;
+            match crate::db::repositories::SessionRepository::delete_expired(&session_cleanup_db)
+                .await
+            {
+                Ok(n) if n > 0 => tracing::info!("Session cleanup: deleted {} expired sessions", n),
+                Err(e) => tracing::error!("Session cleanup failed: {}", e),
+                _ => {}
+            }
+        }
+    });
+    info!("Session cleanup task started (runs daily)");
 
     // Start x402 payment challenge expiry task (runs hourly)
     let payment_store_clone = state.payment_store.clone();
@@ -362,8 +418,16 @@ fn create_app(state: AppState) -> Router {
         .with_state(state)
         .layer(
             TraceLayer::new_for_http()
-                .make_span_with(DefaultMakeSpan::new().level(Level::INFO))
-                .on_response(DefaultOnResponse::new().level(Level::INFO)),
+                .make_span_with(
+                    DefaultMakeSpan::new()
+                        .level(Level::INFO)
+                        .include_headers(true),
+                )
+                .on_response(
+                    DefaultOnResponse::new()
+                        .level(Level::INFO)
+                        .latency_unit(LatencyUnit::Micros),
+                ),
         )
         .layer(cors)
         .layer(DefaultBodyLimit::max(2 * 1024 * 1024)) // 2MB max body size
@@ -379,10 +443,7 @@ async fn security_headers(
 ) -> axum::response::Response {
     let mut response = next.run(req).await;
     let headers = response.headers_mut();
-    headers.insert(
-        header::X_FRAME_OPTIONS,
-        HeaderValue::from_static("DENY"),
-    );
+    headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
     headers.insert(
         header::X_CONTENT_TYPE_OPTIONS,
         HeaderValue::from_static("nosniff"),
@@ -405,24 +466,34 @@ async fn security_headers(
 async fn health_check(State(state): State<AppState>) -> axum::response::Response {
     use axum::response::IntoResponse;
 
-    match sqlx::query("SELECT 1").execute(&state.db).await {
-        Ok(_) => (
-            StatusCode::OK,
-            axum::Json(serde_json::json!({
-                "status": "healthy",
-                "database": "connected"
-            })),
-        )
-            .into_response(),
-        Err(_) => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            axum::Json(serde_json::json!({
-                "status": "unhealthy",
-                "database": "disconnected"
-            })),
-        )
-            .into_response(),
-    }
+    let db_ok = sqlx::query("SELECT 1").execute(&state.db).await.is_ok();
+    let status = if db_ok { "healthy" } else { "unhealthy" };
+    let code = if db_ok {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
+    let uptime_secs = SERVER_START
+        .get()
+        .map(|s| s.elapsed().as_secs())
+        .unwrap_or(0);
+    let timestamp = chrono::Utc::now().to_rfc3339();
+
+    (
+        code,
+        axum::Json(serde_json::json!({
+            "status": status,
+            "version": env!("CARGO_PKG_VERSION"),
+            "timestamp": timestamp,
+            "uptime_secs": uptime_secs,
+            "database": if db_ok { "connected" } else { "disconnected" },
+            "db_pool": {
+                "size": state.db.size(),
+                "idle": state.db.num_idle()
+            }
+        })),
+    )
+        .into_response()
 }
 
 async fn serve_install_script() -> Response {

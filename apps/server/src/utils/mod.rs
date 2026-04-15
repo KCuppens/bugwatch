@@ -71,12 +71,20 @@ pub fn validate_monitor_url(url_str: &str) -> Result<(), AppError> {
 /// - Closed: requests flow through normally
 /// - Open: requests are rejected immediately (service assumed down)
 /// - HalfOpen: one probe request allowed to test recovery
+///
+/// A per-open-event jitter (0–20s) is applied to the reset window so that
+/// multiple instances don't all probe the external service at exactly the
+/// same instant (thundering herd prevention).
 pub struct CircuitBreaker {
     name: String,
     failure_threshold: u32,
     reset_timeout_secs: u64,
     failure_count: AtomicU32,
     last_failure_at: AtomicU64,
+    /// Jitter offset (0–20s) sampled when the circuit first opens.
+    /// Stored so it stays stable across repeated `allow_request` checks
+    /// within the same open episode.
+    open_jitter_secs: AtomicU64,
     state: AtomicU32, // 0=Closed, 1=Open, 2=HalfOpen
 }
 
@@ -92,6 +100,7 @@ impl CircuitBreaker {
             reset_timeout_secs,
             failure_count: AtomicU32::new(0),
             last_failure_at: AtomicU64::new(0),
+            open_jitter_secs: AtomicU64::new(0),
             state: AtomicU32::new(CB_CLOSED),
         }
     }
@@ -110,7 +119,9 @@ impl CircuitBreaker {
             CB_CLOSED => true,
             CB_OPEN => {
                 let last_failure = self.last_failure_at.load(Ordering::Relaxed);
-                if Self::now_secs() - last_failure >= self.reset_timeout_secs {
+                let jitter = self.open_jitter_secs.load(Ordering::Relaxed);
+                let elapsed = Self::now_secs().saturating_sub(last_failure);
+                if elapsed >= self.reset_timeout_secs + jitter {
                     // Try half-open
                     self.state
                         .compare_exchange(
@@ -144,7 +155,16 @@ impl CircuitBreaker {
         if count >= self.failure_threshold {
             let prev = self.state.swap(CB_OPEN, Ordering::Relaxed);
             if prev != CB_OPEN {
+                // Sample jitter once per open-episode (0–20s) so all concurrent
+                // callers see the same window but different instances/pods differ.
+                let jitter = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .subsec_nanos() as u64
+                    % 21;
+                self.open_jitter_secs.store(jitter, Ordering::Relaxed);
                 tracing::warn!(
+                    reset_in_secs = self.reset_timeout_secs + jitter,
                     "Circuit breaker '{}' opened after {} failures",
                     self.name,
                     count
