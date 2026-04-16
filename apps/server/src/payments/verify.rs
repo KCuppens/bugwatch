@@ -66,6 +66,11 @@ impl OnChainVerifier {
             .strip_prefix("0x")
             .or_else(|| expected_to.strip_prefix("0X"))
             .unwrap_or(expected_to);
+        if addr_without_prefix.len() != 40
+            || !addr_without_prefix.chars().all(|c| c.is_ascii_hexdigit())
+        {
+            return Err("Invalid expected_to address format".into());
+        }
         let expected_to_padded = format!("0x{:0>64}", addr_without_prefix.to_lowercase());
 
         let logs = receipt

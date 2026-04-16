@@ -173,20 +173,20 @@ pub async fn search(
     let sort_field = req.sort.as_ref().map(|s| s.field.as_str());
     let sort_direction = req.sort.as_ref().and_then(|s| s.direction.as_deref());
 
-    // Run search and facet queries
-    let issues = IssueRepository::search(
-        &state.db,
-        &project_id,
-        &filters,
-        sort_field,
-        sort_direction,
-        per_page as i64,
-        offset,
-    )
-    .await?;
-
-    let total = IssueRepository::count_search(&state.db, &project_id, &filters).await?;
-    let facets = IssueRepository::get_facets(&state.db, &project_id).await?;
+    // Run search, count, and facet queries in parallel
+    let (issues, total, facets) = tokio::try_join!(
+        IssueRepository::search(
+            &state.db,
+            &project_id,
+            &filters,
+            sort_field,
+            sort_direction,
+            per_page as i64,
+            offset,
+        ),
+        IssueRepository::count_search(&state.db, &project_id, &filters),
+        IssueRepository::get_facets(&state.db, &project_id),
+    )?;
 
     let total_pages = ((total as f64) / (per_page as f64)).ceil() as u32;
     let query_time_ms = start.elapsed().as_millis() as u64;
