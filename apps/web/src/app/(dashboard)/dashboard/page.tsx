@@ -23,7 +23,7 @@ import {
   Keyboard,
 } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
-import { issuesApi, type Issue, type Facets } from "@/lib/api";
+import { issuesApi, ApiError, type Issue, type Facets } from "@/lib/api";
 import { ENVIRONMENT_COLORS } from "@/lib/search";
 import { useProject } from "@/lib/project-context";
 import { IssueSearchBar } from "@/components/search";
@@ -443,9 +443,10 @@ export default function DashboardPage() {
         previousIssueIdsRef.current = new Set(issuesResponse.data.map((i) => i.id));
       } catch (err) {
         if (controller.signal.aborted) return;
+        if (err instanceof ApiError && err.status === 401) return;
         setError("Failed to load issues");
         toast.error("Failed to load issues", {
-          description: err instanceof Error ? err.message : "Please try again",
+          description: "Please try again",
         });
       } finally {
         if (!controller.signal.aborted) setIsLoading(false);

@@ -28,6 +28,7 @@ import {
 import {
   overviewApi,
   issuesApi,
+  ApiError,
   type IssueWithProject,
   type ProjectStatsWithInfo,
   type AggregateTotals,
@@ -246,6 +247,9 @@ export default function OverviewPage() {
       setMonitorsSummary(monitorsRes.summary);
     } catch (err) {
       if (!mountedRef.current) return;
+      // 401 means session expired — bugwatch-auth-expired already fired so the
+      // redirect to /login is in flight. Don't set error state (no flash of auth text).
+      if (err instanceof ApiError && err.status === 401) return;
       setError(err instanceof Error ? err.message : "Failed to load overview data");
       toast.error("Failed to load overview data");
     } finally {

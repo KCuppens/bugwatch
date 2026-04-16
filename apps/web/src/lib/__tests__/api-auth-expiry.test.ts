@@ -96,6 +96,68 @@ describe("fetchWithAuth — session expiry event", () => {
     window.removeEventListener("bugwatch-auth-expired", listener);
   });
 
+  // ── regression: session_expired sentinel ─────────────────────────────────
+
+  it("throws ApiError with code 'session_expired' (not raw server error) when refresh fails", async () => {
+    const fetchMock = vi.mocked(fetch);
+
+    fetchMock
+      .mockResolvedValueOnce(
+        makeResponse(
+          JSON.stringify({
+            error: {
+              code: "unauthorized",
+              message: "Authentication required. Provide a JWT token or agent API key.",
+            },
+          }),
+          401
+        )
+      )
+      .mockResolvedValueOnce(
+        makeResponse(JSON.stringify({ error: { code: "unauthorized", message: "Unauthorized" } }), 401)
+      );
+
+    let thrown: unknown = null;
+    try {
+      await api.get("/test");
+    } catch (e) {
+      thrown = e;
+    }
+
+    // Must throw a sentinel error pages can identify — not the raw server message
+    expect(thrown).toBeInstanceOf(Error);
+    const err = thrown as { code?: string; status?: number; message?: string };
+    expect(err.status).toBe(401);
+    expect(err.code).toBe("session_expired");
+    expect(err.message).not.toContain("Authentication required.");
+  });
+
+  it("dispatches bugwatch-auth-expired and throws session_expired when refresh succeeds but retry is still 401", async () => {
+    const fetchMock = vi.mocked(fetch);
+
+    fetchMock
+      .mockResolvedValueOnce(makeResponse(null, 401)) // original → 401
+      .mockResolvedValueOnce(makeResponse("{}", 200)) // refresh → ok
+      .mockResolvedValueOnce(
+        makeResponse(JSON.stringify({ error: { code: "unauthorized", message: "Unauthorized" } }), 401)
+      ); // retry → still 401
+
+    const listener = vi.fn();
+    window.addEventListener("bugwatch-auth-expired", listener);
+
+    let thrown: unknown = null;
+    try {
+      await api.get("/test");
+    } catch (e) {
+      thrown = e;
+    }
+
+    expect(listener).toHaveBeenCalledOnce();
+    const err = thrown as { code?: string; status?: number } | null;
+    expect(err?.code).toBe("session_expired");
+    window.removeEventListener("bugwatch-auth-expired", listener);
+  });
+
   it("does NOT dispatch event when refresh fails but original was NOT a 401", async () => {
     const fetchMock = vi.mocked(fetch);
 

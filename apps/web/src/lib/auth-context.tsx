@@ -108,11 +108,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // and let AuthGuard redirect to /login instead of showing a raw auth error.
   useEffect(() => {
     const handleSessionExpired = () => {
-      clearTokens();
+      // Re-check the session before clearing — another tab may have already
+      // refreshed the tokens, in which case we should not log the user out.
+      void fetchCurrentUser().catch(() => clearTokens());
     };
     window.addEventListener("bugwatch-auth-expired", handleSessionExpired);
     return () => window.removeEventListener("bugwatch-auth-expired", handleSessionExpired);
-  }, [clearTokens]);
+  }, [clearTokens, fetchCurrentUser]);
 
   // Cross-tab synchronization: httpOnly cookies are shared across tabs automatically.
   // Listen for visibility changes to re-check auth state when user returns to tab.

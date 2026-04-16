@@ -182,12 +182,20 @@ async function fetchWithAuth(url: string, options: RequestInit = {}): Promise<Re
       const refreshed = await refreshTokens();
       if (refreshed) {
         response = await fetch(url, { ...options, headers, credentials: "include" });
+        // If the retry after a successful refresh is still 401, the new token was
+        // immediately rejected (e.g. another tab rotated the session first). Treat
+        // as session expiry so the page never sees the raw server auth message.
+        if (response.status === 401) {
+          console.debug("[Auth] Retry still 401 after refresh — dispatching bugwatch-auth-expired for:", url);
+          window.dispatchEvent(new Event("bugwatch-auth-expired"));
+          throw new ApiError(401, "session_expired", "Session expired. Redirecting to login.");
+        }
       } else {
-        // Refresh failed — session is fully expired. Notify auth context so it can
-        // clear local state and redirect to login instead of showing a raw 401 error.
+        // Refresh failed — session is fully expired. Throw a sentinel so pages can
+        // identify auth expiry without exposing the raw server error message.
         console.debug("[Auth] Session expired — dispatching bugwatch-auth-expired for:", url);
         window.dispatchEvent(new Event("bugwatch-auth-expired"));
-        return response;
+        throw new ApiError(401, "session_expired", "Session expired. Redirecting to login.");
       }
     }
 

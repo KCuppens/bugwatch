@@ -25,6 +25,7 @@ import {
 import {
   projectsApi,
   overviewApi,
+  ApiError,
   type Project,
   type Platform,
   type Framework,
@@ -85,9 +86,10 @@ export default function ProjectsPage() {
         setProjectStats(statsMap);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load projects");
+      if (err instanceof ApiError && err.status === 401) return;
+      setError("Failed to load projects");
       toast.error("Failed to load projects", {
-        description: err instanceof Error ? err.message : "Please try again",
+        description: "Please try again",
       });
     } finally {
       setIsLoading(false);
