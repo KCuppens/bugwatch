@@ -18,15 +18,15 @@
     --secondary-foreground: 210 40% 96%;
     --muted: 220 22% 10%;
     --muted-foreground: 220 20% 51%;
-    --accent: 68 100% 64%;
+    --accent: 145 67% 51%;
     --accent-foreground: 220 28% 5%;
-    --accent-2: 68 77% 45%;
+    --accent-2: 146 72% 36%;
     --accent-2-foreground: 220 28% 5%;
     --destructive: 0 62.8% 30.6%;
     --destructive-foreground: 210 40% 98%;
     --border: 220 26% 17%;
     --input: 220 25% 14%;
-    --ring: 68 100% 64%;
+    --ring: 145 67% 51%;
     --radius: 0.5rem;
 
     /* Severity colors */
@@ -36,7 +36,7 @@
     --info: 217 91% 60%;
 
     /* Brand colors */
-    --bug: 68 100% 64%;
+    --bug: 145 67% 51%;
     --bug-foreground: 220 28% 5%;
 
     /* Surface/border tokens */
@@ -62,15 +62,15 @@
     --secondary-foreground: 222.2 47.4% 11.2%;
     --muted: 210 40% 96.1%;
     --muted-foreground: 215.4 16.3% 46.9%;
-    --accent: 68 100% 64%;
+    --accent: 145 67% 51%;
     --accent-foreground: 220 28% 5%;
-    --accent-2: 68 77% 45%;
+    --accent-2: 146 72% 36%;
     --accent-2-foreground: 220 28% 5%;
     --destructive: 0 84.2% 60.2%;
     --destructive-foreground: 210 40% 98%;
     --border: 214.3 31.8% 91.4%;
     --input: 214.3 31.8% 91.4%;
-    --ring: 68 100% 64%;
+    --ring: 145 67% 51%;
 
     /* Severity colors */
     --fatal: 0 84% 60%;
@@ -79,7 +79,7 @@
     --info: 217 91% 60%;
 
     /* Brand colors */
-    --bug: 68 100% 64%;
+    --bug: 145 67% 51%;
     --bug-foreground: 220 28% 5%;
 
     /* Surface/border tokens */
@@ -105,15 +105,15 @@
     --secondary-foreground: 210 40% 96%;
     --muted: 220 22% 10%;
     --muted-foreground: 220 20% 51%;
-    --accent: 68 100% 64%;
+    --accent: 145 67% 51%;
     --accent-foreground: 220 28% 5%;
-    --accent-2: 68 77% 45%;
+    --accent-2: 146 72% 36%;
     --accent-2-foreground: 220 28% 5%;
     --destructive: 0 62.8% 30.6%;
     --destructive-foreground: 210 40% 98%;
     --border: 220 26% 17%;
     --input: 220 25% 14%;
-    --ring: 68 100% 64%;
+    --ring: 145 67% 51%;
 
     /* Severity colors */
     --fatal: 0 84% 60%;
@@ -122,7 +122,7 @@
     --info: 217 91% 60%;
 
     /* Brand colors */
-    --bug: 68 100% 64%;
+    --bug: 145 67% 51%;
     --bug-foreground: 220 28% 5%;
 
     /* Surface/border tokens */
@@ -253,10 +253,10 @@
     transform: translateZ(0);
   }
 
-  /* Accent glow — yellow variant */
+  /* Accent glow — green variant */
   .glow {
     box-shadow:
-      0 4px 24px hsl(68 100% 64% / 0.2),
+      0 4px 24px hsl(145 67% 51% / 0.2),
       0 1px 3px hsl(0 0% 0% / 0.1);
   }
 
@@ -285,17 +285,17 @@
     transform: translateY(-1px);
   }
 
-  /* Gradient text — yellow accent variant */
+  /* Gradient text — green accent variant */
   .gradient-text {
-    background: linear-gradient(135deg, #ffffff 0%, #e8ff47 60%, #b8cc1a 100%);
+    background: linear-gradient(135deg, #ffffff 0%, #2ed573 60%, #1a9e52 100%);
     -webkit-background-clip: text;
     background-clip: text;
     -webkit-text-fill-color: transparent;
   }
 
-  /* New issue glow — acid yellow pulse replacing the "NEW" badge */
+  /* New issue glow — green pulse replacing the "NEW" badge */
   .new-issue-glow {
-    box-shadow: inset 3px 0 8px rgba(232, 255, 71, 0.3);
+    box-shadow: inset 3px 0 8px rgba(46, 213, 115, 0.3);
     animation: new-glow-fade 5s ease-out forwards;
   }
 }
@@ -308,11 +308,11 @@
   --fd-muted-foreground: hsl(215.4 16.3% 46.9%);
   --fd-card: hsl(0 0% 100%);
   --fd-border: hsl(214.3 31.8% 91.4%);
-  --fd-primary: hsl(68 100% 64%);
+  --fd-primary: hsl(145 67% 51%);
   --fd-primary-foreground: hsl(220 28% 5%);
   --fd-accent: hsl(210 40% 96.1%);
   --fd-accent-foreground: hsl(222.2 47.4% 11.2%);
-  --fd-ring: hsl(68 100% 64%);
+  --fd-ring: hsl(145 67% 51%);
 }
 
 .dark [data-docs="true"] {
@@ -322,11 +322,11 @@
   --fd-muted-foreground: hsl(220 20% 51%);
   --fd-card: hsl(220 24% 7%);
   --fd-border: hsl(220 26% 17%);
-  --fd-primary: hsl(68 100% 64%);
+  --fd-primary: hsl(145 67% 51%);
   --fd-primary-foreground: hsl(220 28% 5%);
   --fd-accent: hsl(220 22% 10%);
   --fd-accent-foreground: hsl(210 40% 96%);
-  --fd-ring: hsl(68 100% 64%);
+  --fd-ring: hsl(145 67% 51%);
 }
 
 /* Accessibility: respect reduced motion preferences */
