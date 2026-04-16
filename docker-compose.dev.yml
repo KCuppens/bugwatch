@@ -36,7 +36,7 @@ services:
     environment:
       - SERVER_ADDR=0.0.0.0:3000
       - DATABASE_URL=postgres://bugwatch:${POSTGRES_PASSWORD:-bugwatch_dev}@postgres:5432/bugwatch
-      - JWT_SECRET=${JWT_SECRET:-development-secret-change-in-prod}
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET must be set — copy .env.example to .env and fill it in}
       - ENVIRONMENT=development
       - RUST_LOG=debug
     restart: on-failure
@@ -47,8 +47,8 @@ services:
       test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
       interval: 10s
       timeout: 5s
-      retries: 10
-      start_period: 600s
+      retries: 5
+      start_period: 60s
 
   web:
     image: node:20-alpine

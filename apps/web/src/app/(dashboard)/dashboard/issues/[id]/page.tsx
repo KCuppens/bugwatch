@@ -113,6 +113,8 @@ export default function IssueDetailPage() {
   const [showAppOnly, setShowAppOnly] = useState(false);
   // Single pending-action flag prevents simultaneous resolve+ignore race via keyboard shortcuts
   const [pendingAction, setPendingAction] = useState<"resolve" | "ignore" | null>(null);
+  // Ref mirrors pendingAction so the undo toast closure can read the live value without stale capture
+  const pendingActionRef = useRef<"resolve" | "ignore" | null>(null);
 
   // Event inspector
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
@@ -272,6 +274,7 @@ export default function IssueDetailPage() {
     ) {
       if (!issue || !projectId) return;
       const prev = issue.status;
+      pendingActionRef.current = actionKey;
       setPendingAction(actionKey);
       setIssue({ ...issue, status: newStatus });
 
@@ -279,6 +282,8 @@ export default function IssueDetailPage() {
         action: {
           label: "Undo",
           onClick: async () => {
+            // Guard: don't undo while the original call is still in-flight
+            if (pendingActionRef.current !== null) return;
             setIssue((i) => (i ? { ...i, status: prev } : i));
             try {
               await issuesApi.update(projectId, issueId, prev);
@@ -296,6 +301,7 @@ export default function IssueDetailPage() {
         setIssue((i) => (i ? { ...i, status: prev } : i));
         toast.error(errorMsg);
       } finally {
+        pendingActionRef.current = null;
         setPendingAction(null);
       }
     },
@@ -987,7 +993,9 @@ export default function IssueDetailPage() {
                         className="w-full flex items-center justify-between rounded-md border p-2 hover:bg-muted/50 transition-colors text-left"
                       >
                         <div className="flex items-center gap-3">
-                          <span className="text-xs font-medium text-muted-foreground">#{issue.count - index}</span>
+                          <span className="text-xs font-medium text-muted-foreground">
+                            #{Math.max(1, issue.count - index)}
+                          </span>
                           <span className="text-sm">{formatRelativeTime(event.timestamp)}</span>
                         </div>
                         <div className="flex items-center gap-2 text-xs text-muted-foreground">

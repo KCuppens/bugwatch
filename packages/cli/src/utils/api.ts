@@ -88,10 +88,10 @@ async function getCachedConfig(): Promise<Config | null> {
 }
 
 // GET is idempotent by definition. PATCH is included because all PATCH endpoints
-// in this CLI (issue status, project name) are idempotent field-set operations —
-// retrying them with the same value is safe. If a non-idempotent PATCH endpoint
-// is added in future, exclude it from retries via a per-call `options.noRetry` flag.
-const RETRY_METHODS = new Set(["GET", "PATCH"]);
+// Only retry methods that are safe and idempotent by the HTTP spec.
+// PATCH is excluded: it is not guaranteed idempotent and a future append-style
+// PATCH endpoint would silently double-write on retry.
+const RETRY_METHODS = new Set(["GET"]);
 const MAX_RETRIES = 3;
 
 function isRetryableError(method: string, status?: number): boolean {

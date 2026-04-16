@@ -142,7 +142,9 @@ pub async fn create(
         }
         AuthIdentity::Agent(agent) => {
             let org = OrganizationRepository::find_by_id(&state.db, &agent.organization_id).await?;
-            let owner_id = org.as_ref().map(|o| o.owner_id.clone()).unwrap_or_default();
+            let owner_id = org.as_ref().map(|o| o.owner_id.clone()).ok_or_else(|| {
+                AppError::Internal("Organization not found for agent".to_string())
+            })?;
             (owner_id, org)
         }
     };
