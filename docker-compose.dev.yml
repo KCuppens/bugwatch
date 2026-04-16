@@ -44,7 +44,9 @@ services:
       postgres:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      # curl is installed by the startup command; wget is the fallback for the
+      # brief window before apt-get completes (start_period covers this gap).
+      test: ["CMD-SHELL", "curl -fsS http://localhost:3000/health 2>/dev/null || wget -qO- http://localhost:3000/health 2>/dev/null"]
       interval: 10s
       timeout: 5s
       retries: 5

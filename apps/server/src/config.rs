@@ -143,9 +143,12 @@ pub struct Config {
     // =========================================================================
     /// Trust X-Forwarded-For and X-Real-IP headers for client IP extraction.
     /// Only enable this if the server runs behind a trusted reverse proxy (nginx, Cloudflare, etc.).
-    /// When false, the IP used for rate limiting is always "unknown" from the application's
-    /// perspective, preventing IP spoofing via crafted headers.
+    /// When false, the peer socket address is used for rate limiting so no header can be spoofed.
     pub trust_proxy: bool,
+
+    /// Set the Secure flag on auth cookies. Defaults to true when APP_URL starts with "https".
+    /// Override explicitly with COOKIE_SECURE=true/false for split HTTP/HTTPS setups.
+    pub cookie_secure: bool,
 
     /// Encryption key for field-level encryption of integration tokens
     pub encryption_key: Option<String>,
@@ -249,6 +252,14 @@ impl Config {
             trust_proxy: env::var("TRUST_PROXY")
                 .map(|v| v == "true" || v == "1")
                 .unwrap_or(false),
+            cookie_secure: env::var("COOKIE_SECURE")
+                .ok()
+                .map(|v| v == "true" || v == "1")
+                .unwrap_or_else(|| {
+                    env::var("APP_URL")
+                        .map(|u| u.starts_with("https"))
+                        .unwrap_or(false)
+                }),
             encryption_key: env::var("BUGWATCH_ENCRYPTION_KEY").ok(),
             github_webhook_secret: env::var("GITHUB_WEBHOOK_SECRET").ok(),
             jira_webhook_secret: env::var("JIRA_WEBHOOK_SECRET").ok(),

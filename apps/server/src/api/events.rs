@@ -265,6 +265,15 @@ pub async fn ingest(
             "platform too long (max 64 characters)".to_string(),
         ));
     }
+    // Validate the unstructured `extra` blob to prevent storage exhaustion.
+    if let Some(ref extra) = event.extra {
+        let extra_size = serde_json::to_string(extra).map(|s| s.len()).unwrap_or(0);
+        if extra_size > 65_536 {
+            return Err(AppError::Validation(
+                "extra field too large (max 64 KB)".to_string(),
+            ));
+        }
+    }
 
     // 4b. Deduplicate client-side error boundary events when onRequestError
     //     already captured the same server error with full details.
@@ -358,7 +367,16 @@ pub async fn ingest(
         tracing::info!("Created new issue {} for project {}", issue.id, project.id);
     }
 
-    // 9. Store event
+    // 9. Strip sensitive headers before storing (Authorization, Cookie, X-API-Key must never
+    //    be persisted — they would be readable to anyone with DB read access).
+    if let Some(ref mut request) = event.request {
+        if let Some(ref mut hdrs) = request.headers {
+            const SENSITIVE: &[&str] = &["authorization", "cookie", "x-api-key"];
+            hdrs.retain(|k, _| !SENSITIVE.contains(&k.to_lowercase().as_str()));
+        }
+    }
+
+    // Store event
     let payload = serde_json::to_string(&event)
         .map_err(|e| AppError::Internal(format!("Failed to serialize event: {}", e)))?;
 

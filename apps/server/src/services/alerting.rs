@@ -276,7 +276,7 @@ impl AlertingService {
                     frequency: None,
                 };
 
-                if let Err(e) = self.send_alert(&rule, &payload).await {
+                if let Err(e) = self.send_alert(&rule, &payload, None).await {
                     error!(rule_id = %rule.id, "Alert delivery failed after retries: {}", e);
                 }
             } else {
@@ -357,7 +357,7 @@ impl AlertingService {
                     frequency: None,
                 };
 
-                if let Err(e) = self.send_alert(&rule, &payload).await {
+                if let Err(e) = self.send_alert(&rule, &payload, None).await {
                     error!(rule_id = %rule.id, "Alert delivery failed after retries: {}", e);
                 }
             } else {
@@ -413,7 +413,7 @@ impl AlertingService {
                     frequency: None,
                 };
 
-                if let Err(e) = self.send_alert(&rule, &payload).await {
+                if let Err(e) = self.send_alert(&rule, &payload, None).await {
                     error!(rule_id = %rule.id, "Alert delivery failed after retries: {}", e);
                 }
             }
@@ -467,19 +467,6 @@ impl AlertingService {
                 continue;
             };
 
-            // Cooldown: check if we've already fired this rule+server within 15 minutes
-            match AlertLogRepository::find_recent(&self.pool, &rule.id, Some(server_db_id), 15)
-                .await
-            {
-                Ok(Some(_)) => continue, // already fired recently
-                Ok(None) => {}           // proceed
-                Err(e) => {
-                    // Fail-safe: skip rather than risk alert storm on DB error
-                    tracing::warn!(rule_id = %rule.id, "Failed to check alert cooldown: {}; skipping", e);
-                    continue;
-                }
-            }
-
             let payload = AlertPayload {
                 title: format!("Server Alert: {}", server.hostname),
                 message: alert_msg,
@@ -499,7 +486,8 @@ impl AlertingService {
                 frequency: None,
             };
 
-            if let Err(e) = self.send_alert(&rule, &payload).await {
+            // Cooldown enforced atomically inside send_alert (15-minute window)
+            if let Err(e) = self.send_alert(&rule, &payload, Some(15)).await {
                 error!(rule_id = %rule.id, "Alert delivery failed after retries: {}", e);
             }
         }
@@ -528,18 +516,6 @@ impl AlertingService {
             };
 
             if matches {
-                // Cooldown check — fail-safe: skip on DB error to avoid alert storm
-                match AlertLogRepository::find_recent(&self.pool, &rule.id, Some(&server.id), 15)
-                    .await
-                {
-                    Ok(Some(_)) => continue,
-                    Ok(None) => {}
-                    Err(e) => {
-                        tracing::warn!(rule_id = %rule.id, "Failed to check alert cooldown: {}; skipping", e);
-                        continue;
-                    }
-                }
-
                 let payload = AlertPayload {
                     title: format!("Server Offline: {}", server.hostname),
                     message: format!(
@@ -563,7 +539,8 @@ impl AlertingService {
                     frequency: None,
                 };
 
-                if let Err(e) = self.send_alert(&rule, &payload).await {
+                // Cooldown enforced atomically inside send_alert (15-minute window)
+                if let Err(e) = self.send_alert(&rule, &payload, Some(15)).await {
                     error!(rule_id = %rule.id, "Alert delivery failed after retries: {}", e);
                 }
             }
@@ -576,8 +553,51 @@ impl AlertingService {
     ///
     /// Accepts the already-loaded `AlertRule` so callers avoid a redundant
     /// `find_by_id` round-trip (the rule is fetched once by the calling loop).
-    async fn send_alert(&self, rule: &AlertRule, payload: &AlertPayload) -> Result<()> {
+    ///
+    /// `cooldown_minutes`: when `Some(n)`, atomically checks the cooldown window using a
+    /// Postgres advisory xact lock before sending — eliminating the TOCTOU race where two
+    /// concurrent tasks both pass a plain `find_recent` check and both fire. Pass `None`
+    /// for event-driven alerts (new_issue, monitor) that have no cooldown requirement.
+    async fn send_alert(
+        &self,
+        rule: &AlertRule,
+        payload: &AlertPayload,
+        cooldown_minutes: Option<i32>,
+    ) -> Result<()> {
         let rule_id = &rule.id;
+
+        // Atomic cooldown gate — must run before any per-channel work.
+        if let Some(minutes) = cooldown_minutes {
+            match AlertLogRepository::try_claim_cooldown(
+                &self.pool,
+                rule_id,
+                None,
+                &payload.trigger_type,
+                payload.trigger_id.as_deref(),
+                &payload.message,
+                minutes,
+            )
+            .await
+            {
+                Ok(Some(_)) => {} // claimed — proceed
+                Ok(None) => {
+                    info!(
+                        rule_id = %rule_id,
+                        "Alert cooldown active or concurrent evaluation in progress — skipping"
+                    );
+                    return Ok(());
+                }
+                Err(e) => {
+                    // Fail-safe: skip rather than risk an alert storm on DB error
+                    tracing::warn!(
+                        rule_id = %rule_id,
+                        "Failed to claim alert cooldown slot: {}; skipping",
+                        e
+                    );
+                    return Ok(());
+                }
+            }
+        }
 
         // Check mute status using the already-loaded rule — no extra DB query.
         if let Some(muted_until) = rule.muted_until {

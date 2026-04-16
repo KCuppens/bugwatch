@@ -87,6 +87,10 @@ impl SessionRepository {
     /// Atomically delete the old session and insert a new one within a single
     /// transaction, eliminating the replay window that exists when the two
     /// operations run independently.
+    ///
+    /// Returns `Ok(true)` on success, `Ok(false)` if the session was not found or has already
+    /// expired. The `AND expires_at > NOW()` predicate enforces expiry inside the transaction,
+    /// closing the TOCTOU window between the caller's pre-check and the actual rotation.
     pub async fn rotate(
         pool: &DbPool,
         old_session_id: &str,
@@ -97,19 +101,21 @@ impl SessionRepository {
         ip_address: Option<&str>,
         user_agent: Option<&str>,
         jwt_secret: &str,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let token_hash = hash_token(token, jwt_secret.as_bytes());
         let mut tx = pool.begin().await?;
 
-        let deleted = sqlx::query("DELETE FROM sessions WHERE id = $1")
+        let deleted = sqlx::query("DELETE FROM sessions WHERE id = $1 AND expires_at > NOW()")
             .bind(old_session_id)
             .execute(&mut *tx)
             .await?;
         if deleted.rows_affected() == 0 {
             tracing::warn!(
                 session_id = %old_session_id,
-                "rotate: old session not found — possible concurrent logout or replay attempt"
+                "rotate: session not found or already expired — rejecting token refresh"
             );
+            tx.rollback().await?;
+            return Ok(false);
         }
 
         sqlx::query(
@@ -128,7 +134,7 @@ impl SessionRepository {
         .await?;
 
         tx.commit().await?;
-        Ok(())
+        Ok(true)
     }
 
     pub async fn update_token_hash(

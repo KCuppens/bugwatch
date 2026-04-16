@@ -1,10 +1,11 @@
 use axum::{
-    extract::State,
+    extract::{ConnectInfo, State},
     http::{header, HeaderMap, HeaderValue},
     Json,
 };
 use chrono::{Duration, Utc};
 use serde::{Deserialize, Serialize};
+use std::net::SocketAddr;
 use uuid;
 
 use crate::{
@@ -63,32 +64,45 @@ fn build_clear_cookies(secure: bool) -> Vec<HeaderValue> {
     ]
 }
 
-/// Extract client IP from request headers.
+/// Extract client IP from request headers or the socket peer address.
 ///
-/// Only trusts X-Forwarded-For / X-Real-IP when `trust_proxy` is true.
-/// When false, returns "unknown" so rate limiting still applies per connection
-/// class without allowing bypass via crafted headers.
-fn extract_client_ip(headers: &HeaderMap, trust_proxy: bool) -> String {
-    if !trust_proxy {
-        return "unknown".to_string();
+/// When `trust_proxy` is true, X-Forwarded-For / X-Real-IP are trusted (server is behind a
+/// reverse proxy). When false, the TCP peer address is used so no header spoofing is possible
+/// and each connection gets its own rate-limit bucket instead of sharing "unknown".
+fn extract_client_ip(
+    headers: &HeaderMap,
+    trust_proxy: bool,
+    peer_addr: Option<SocketAddr>,
+) -> String {
+    if trust_proxy {
+        if let Some(ip) = headers
+            .get("x-forwarded-for")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.split(',').next())
+            .map(|s| s.trim().to_string())
+        {
+            return ip;
+        }
+        if let Some(ip) = headers
+            .get("x-real-ip")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string())
+        {
+            return ip;
+        }
     }
-    headers
-        .get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.split(',').next())
-        .map(|s| s.trim().to_string())
-        .or_else(|| {
-            headers
-                .get("x-real-ip")
-                .and_then(|v| v.to_str().ok())
-                .map(|s| s.to_string())
-        })
+    peer_addr
+        .map(|a| a.ip().to_string())
         .unwrap_or_else(|| "unknown".to_string())
 }
 
 /// Check auth rate limit (10 attempts/minute per IP)
-fn check_auth_rate_limit(state: &AppState, headers: &HeaderMap) -> AppResult<()> {
-    let ip = extract_client_ip(headers, state.config.trust_proxy);
+fn check_auth_rate_limit(
+    state: &AppState,
+    headers: &HeaderMap,
+    peer_addr: Option<SocketAddr>,
+) -> AppResult<()> {
+    let ip = extract_client_ip(headers, state.config.trust_proxy, peer_addr);
     let key = format!("auth:{}", ip);
     let result = state.rate_limiter.check(&key, 10);
     if !result.allowed {
@@ -180,7 +194,7 @@ async fn issue_tokens_for_session(
     .await
     .map_err(|e| AppError::Internal(format!("Failed to create session: {}", e)))?;
 
-    let secure = config.app_url.starts_with("https");
+    let secure = config.cookie_secure;
     let mut response_headers = HeaderMap::new();
     for cookie in build_auth_cookies(
         &tokens.access_token,
@@ -198,11 +212,12 @@ async fn issue_tokens_for_session(
 /// POST /api/v1/auth/signup
 pub async fn signup(
     State(state): State<AppState>,
+    ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Json(req): Json<SignupRequest>,
 ) -> AppResult<(HeaderMap, Json<AuthResponse>)> {
     // Rate limit per IP
-    check_auth_rate_limit(&state, &headers)?;
+    check_auth_rate_limit(&state, &headers, Some(peer_addr))?;
 
     // Validate email
     validate_email(&req.email)?;
@@ -228,7 +243,7 @@ pub async fn signup(
 
     // Create session, generate tokens, set cookies
     let session_expires = Utc::now() + Duration::seconds(state.config.jwt_refresh_expiration);
-    let client_ip = extract_client_ip(&headers, state.config.trust_proxy);
+    let client_ip = extract_client_ip(&headers, state.config.trust_proxy, Some(peer_addr));
     let user_agent = extract_user_agent(&headers);
     let (response_headers, _tokens) = issue_tokens_for_session(
         &state.db,
@@ -260,11 +275,12 @@ pub async fn signup(
 /// POST /api/v1/auth/login
 pub async fn login(
     State(state): State<AppState>,
+    ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Json(req): Json<LoginRequest>,
 ) -> AppResult<(HeaderMap, Json<AuthResponse>)> {
     // Rate limit per IP
-    check_auth_rate_limit(&state, &headers)?;
+    check_auth_rate_limit(&state, &headers, Some(peer_addr))?;
 
     // Find user by email
     let user = UserRepository::find_by_email(&state.db, &req.email)
@@ -286,7 +302,7 @@ pub async fn login(
     if !is_valid {
         // Increment failed attempts
         UserRepository::increment_failed_attempts(&state.db, &user.id).await?;
-        let client_ip = extract_client_ip(&headers, state.config.trust_proxy);
+        let client_ip = extract_client_ip(&headers, state.config.trust_proxy, Some(peer_addr));
         tracing::warn!(
             user_id = %user.id,
             client_ip = %client_ip,
@@ -303,7 +319,7 @@ pub async fn login(
 
     // Create session, generate tokens, set cookies
     let session_expires = Utc::now() + Duration::seconds(state.config.jwt_refresh_expiration);
-    let client_ip = extract_client_ip(&headers, state.config.trust_proxy);
+    let client_ip = extract_client_ip(&headers, state.config.trust_proxy, Some(peer_addr));
     let user_agent = extract_user_agent(&headers);
     let (response_headers, _tokens) = issue_tokens_for_session(
         &state.db,
@@ -367,7 +383,7 @@ pub async fn logout(
 
     tracing::info!(user_id = %user.id, outcome = "logout", "User logged out");
 
-    let secure = state.config.app_url.starts_with("https");
+    let secure = state.config.cookie_secure;
     let mut response_headers = HeaderMap::new();
     for cookie in build_clear_cookies(secure) {
         response_headers.append(header::SET_COOKIE, cookie);
@@ -385,10 +401,11 @@ pub async fn logout(
 /// The request body is intentionally ignored to prevent token leakage via JS.
 pub async fn refresh(
     State(state): State<AppState>,
+    ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
 ) -> AppResult<(HeaderMap, Json<RefreshResponse>)> {
     // Rate limit per IP
-    check_auth_rate_limit(&state, &headers)?;
+    check_auth_rate_limit(&state, &headers, Some(peer_addr))?;
 
     // Read refresh token exclusively from httpOnly cookie — never from the body.
     let refresh_token = headers
@@ -425,10 +442,10 @@ pub async fn refresh(
     }
 
     // Atomically rotate: delete old session + create new session in one transaction.
-    // This eliminates the replay window where both old and new tokens are simultaneously valid.
+    // The rotate call also validates expiry inside the transaction (TOCTOU-safe).
     let new_session_id = uuid::Uuid::new_v4().to_string();
     let new_session_expires = Utc::now() + Duration::seconds(state.config.jwt_refresh_expiration);
-    let refresh_ip = extract_client_ip(&headers, state.config.trust_proxy);
+    let refresh_ip = extract_client_ip(&headers, state.config.trust_proxy, Some(peer_addr));
     let refresh_ua = extract_user_agent(&headers);
 
     let tokens = generate_tokens(
@@ -439,7 +456,7 @@ pub async fn refresh(
         state.config.jwt_refresh_expiration,
     )?;
 
-    SessionRepository::rotate(
+    let rotated = SessionRepository::rotate(
         &state.db,
         &session_id,
         &new_session_id,
@@ -453,7 +470,11 @@ pub async fn refresh(
     .await
     .map_err(|e| AppError::Internal(format!("Failed to rotate session: {}", e)))?;
 
-    let secure = state.config.app_url.starts_with("https");
+    if !rotated {
+        return Err(AppError::Unauthorized("Session expired".to_string()));
+    }
+
+    let secure = state.config.cookie_secure;
     let mut response_headers = HeaderMap::new();
     for cookie in build_auth_cookies(
         &tokens.access_token,
@@ -576,11 +597,12 @@ pub struct ChangePasswordRequest {
 pub async fn change_password(
     user: AuthUser,
     State(state): State<AppState>,
+    ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Json(req): Json<ChangePasswordRequest>,
 ) -> AppResult<Json<serde_json::Value>> {
     // Rate limit per IP
-    check_auth_rate_limit(&state, &headers)?;
+    check_auth_rate_limit(&state, &headers, Some(peer_addr))?;
 
     // Get user with password hash
     let db_user = UserRepository::find_by_id(&state.db, &user.id)
@@ -633,11 +655,12 @@ pub struct ResetPasswordRequest {
 /// enumeration attacks.
 pub async fn forgot_password(
     State(state): State<AppState>,
+    ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Json(req): Json<ForgotPasswordRequest>,
 ) -> AppResult<Json<serde_json::Value>> {
     // Rate limit per IP (same bucket as other auth endpoints)
-    check_auth_rate_limit(&state, &headers)?;
+    check_auth_rate_limit(&state, &headers, Some(peer_addr))?;
 
     // Per-email rate limit: max 3 reset requests per hour per address.
     // Keyed on a hash of the email to avoid storing PII in the rate-limit store.
@@ -732,10 +755,11 @@ pub async fn forgot_password(
 /// Validates the reset token and updates the user's password.
 pub async fn reset_password(
     State(state): State<AppState>,
+    ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Json(req): Json<ResetPasswordRequest>,
 ) -> AppResult<Json<serde_json::Value>> {
-    check_auth_rate_limit(&state, &headers)?;
+    check_auth_rate_limit(&state, &headers, Some(peer_addr))?;
 
     let token_hash = hash_reset_token(&req.token, state.config.jwt_secret.as_bytes());
 

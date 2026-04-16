@@ -344,6 +344,95 @@ impl AlertLogRepository {
         .map_err(Into::into)
     }
 
+    /// Atomically claim the right to fire an alert, guarding against the TOCTOU race where
+    /// two concurrent tasks both pass the cooldown SELECT and both fire.
+    ///
+    /// Uses a Postgres transaction-level advisory lock keyed on (rule_id, trigger_id) so only
+    /// one task at a time can check-and-insert for the same rule+trigger pair. The lock is
+    /// released automatically when the transaction commits or rolls back.
+    ///
+    /// Returns `Ok(true)` when the caller should fire the alert (cooldown passed + log inserted),
+    /// `Ok(false)` when another task beat us or a recent log already exists.
+    pub async fn try_claim_cooldown(
+        pool: &DbPool,
+        alert_rule_id: &str,
+        channel_id: Option<&str>,
+        trigger_type: &str,
+        trigger_id: Option<&str>,
+        message: &str,
+        cooldown_minutes: i32,
+    ) -> Result<Option<AlertLog>> {
+        // Derive a stable i64 from rule_id + trigger_id for the advisory lock.
+        let lock_key = {
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            alert_rule_id.hash(&mut h);
+            trigger_id.hash(&mut h);
+            h.finish() as i64
+        };
+
+        let mut tx = pool.begin().await?;
+
+        // Acquire a transaction-scoped advisory lock. If another task holds the same key the
+        // try variant returns false immediately (no wait) so we skip rather than queue up.
+        let (acquired,): (bool,) = sqlx::query_as("SELECT pg_try_advisory_xact_lock($1)")
+            .bind(lock_key)
+            .fetch_one(&mut *tx)
+            .await?;
+
+        if !acquired {
+            tx.rollback().await?;
+            return Ok(None);
+        }
+
+        // Double-check cooldown now that we hold the lock.
+        let existing: Option<(i64,)> = sqlx::query_as(
+            r#"
+            SELECT 1 FROM alert_logs
+            WHERE alert_rule_id = $1
+            AND ($2::TEXT IS NULL OR trigger_id = $2)
+            AND status = 'sent'
+            AND created_at > NOW() - INTERVAL '1 minute' * $3
+            LIMIT 1
+            "#,
+        )
+        .bind(alert_rule_id)
+        .bind(trigger_id)
+        .bind(cooldown_minutes)
+        .fetch_optional(&mut *tx)
+        .await?;
+
+        if existing.is_some() {
+            tx.rollback().await?;
+            return Ok(None);
+        }
+
+        // Cooldown passed — insert a rule-level sentinel log with status='sent' so that
+        // future find_recent calls (which filter on status='sent') will see it and enforce
+        // the cooldown. Per-channel delivery logs are created separately in send_alert.
+        let id = Uuid::new_v4().to_string();
+        let now = Utc::now();
+        let log = sqlx::query_as::<_, AlertLog>(
+            r#"
+            INSERT INTO alert_logs (id, alert_rule_id, channel_id, trigger_type, trigger_id, status, message, created_at)
+            VALUES ($1, $2, $3, $4, $5, 'sent', $6, $7)
+            RETURNING *
+            "#,
+        )
+        .bind(&id)
+        .bind(alert_rule_id)
+        .bind(channel_id)
+        .bind(trigger_type)
+        .bind(trigger_id)
+        .bind(message)
+        .bind(now)
+        .fetch_one(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+        Ok(Some(log))
+    }
+
     /// Find a recent alert log for a rule+trigger pair (for cooldown)
     pub async fn find_recent(
         pool: &DbPool,
