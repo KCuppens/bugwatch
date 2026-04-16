@@ -294,14 +294,10 @@ export const authApi = {
   },
 
   async refresh() {
-    // Sends no body — the httpOnly refresh cookie is sent automatically
-    // by the browser. The server ignores any body content.
-    const response = await fetch(`${API_BASE_URL}/api/v1/auth/refresh`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      credentials: "include",
-    });
-    return handleResponse<{ data: { expires_in: number } }>(response);
+    // Delegate to refreshTokens() for deduplication — prevents concurrent refresh races
+    const success = await refreshTokens();
+    if (!success) throw new ApiError(401, "session_expired", "Session expired.");
+    return { data: { expires_in: 0 } } as { data: { expires_in: number } };
   },
 
   async me() {

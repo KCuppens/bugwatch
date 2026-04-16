@@ -532,9 +532,6 @@ export default function DashboardPage() {
       }
     }
 
-    // Reset previous IDs on project switch to avoid false new-issue detection
-    previousIssueIdsRef.current = new Set();
-
     if (!document.hidden) {
       interval = setInterval(pollIssues, POLL_INTERVAL_MS);
     }
@@ -570,9 +567,12 @@ export default function DashboardPage() {
   const handleStatusChange = useCallback(
     async (issueId: string, newStatus: string, verb: string, label: string) => {
       if (!selectedProject) return;
-      // Read current status from state directly — avoids a race with the setter callback.
-      const previousStatus = issues.find((i) => i.id === issueId)?.status ?? "unresolved";
-      setIssues((prev) => prev.map((i) => (i.id === issueId ? { ...i, status: newStatus } : i)));
+      // Capture previousStatus atomically inside the updater to avoid stale closure.
+      let previousStatus = "unresolved";
+      setIssues((prev) => {
+        previousStatus = prev.find((i) => i.id === issueId)?.status ?? "unresolved";
+        return prev.map((i) => (i.id === issueId ? { ...i, status: newStatus } : i));
+      });
 
       toast.success(`Issue ${label}`, {
         action: {
@@ -595,7 +595,7 @@ export default function DashboardPage() {
         toast.error(`Failed to ${verb} issue`);
       }
     },
-    [selectedProject, issues]
+    [selectedProject]
   );
 
   const handleIgnore = useCallback(
@@ -614,11 +614,12 @@ export default function DashboardPage() {
       const ids = Array.from(selectedIssues);
       const idSet = new Set(ids);
 
-      // Capture previousStates from current issues snapshot before the setIssues call
-      // so the undo closure always has a consistent, non-stale map.
-      const previousStates = new Map(issues.filter((i) => idSet.has(i.id)).map((i) => [i.id, i.status]));
-
-      setIssues((prev) => prev.map((i) => (idSet.has(i.id) ? { ...i, status: newStatus } : i)));
+      // Capture previousStates atomically inside the updater to avoid stale closure.
+      let previousStates = new Map<string, string>();
+      setIssues((prev) => {
+        previousStates = new Map(prev.filter((i) => idSet.has(i.id)).map((i) => [i.id, i.status]));
+        return prev.map((i) => (idSet.has(i.id) ? { ...i, status: newStatus } : i));
+      });
       setSelectedIssues(new Set());
 
       toast.success(`${ids.length} issues ${label}`, {
@@ -644,7 +645,7 @@ export default function DashboardPage() {
       // Run all status updates in parallel rather than sequentially.
       await Promise.allSettled(ids.map((id) => issuesApi.update(selectedProject.id, id, newStatus)));
     },
-    [selectedProject, selectedIssues, issues]
+    [selectedProject, selectedIssues]
   );
 
   const handleBulkResolve = useCallback(() => handleBulkStatusChange("resolved", "resolved"), [handleBulkStatusChange]);
