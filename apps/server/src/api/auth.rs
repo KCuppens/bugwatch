@@ -244,7 +244,7 @@ pub async fn signup(
     )
     .await?;
 
-    tracing::info!("New user registered: {}", user.email);
+    tracing::info!(user_id = %user.id, outcome = "signup", "New user registered");
 
     Ok((
         response_headers,
@@ -293,7 +293,6 @@ pub async fn login(
         let client_ip = extract_client_ip(&headers, state.config.trust_proxy);
         tracing::warn!(
             user_id = %user.id,
-            email = %user.email,
             client_ip = %client_ip,
             outcome = "login_failed",
             "Failed login attempt"
@@ -320,7 +319,7 @@ pub async fn login(
     )
     .await?;
 
-    tracing::info!("User logged in: {}", user.email);
+    tracing::info!(user_id = %user.id, outcome = "login", "User logged in");
 
     Ok((
         response_headers,
@@ -370,7 +369,7 @@ pub async fn logout(
         SessionRepository::delete_by_user(&state.db, &user.id).await?;
     }
 
-    tracing::info!("User logged out: {}", user.email);
+    tracing::info!(user_id = %user.id, outcome = "logout", "User logged out");
 
     let secure = state.config.app_url.starts_with("https");
     let mut response_headers = HeaderMap::new();
@@ -538,7 +537,7 @@ pub async fn update_profile(
             .map_err(|e| AppError::Internal(format!("Failed to update profile: {}", e)))?;
     }
 
-    tracing::info!("User profile updated: {}", user.email);
+    tracing::info!(user_id = %user.id, outcome = "profile_updated", "User profile updated");
 
     Ok(Json(
         serde_json::json!({ "data": { "message": "Profile updated successfully" } }),
@@ -583,7 +582,7 @@ pub async fn change_password(
         .await
         .map_err(|e| AppError::Internal(format!("Failed to update password: {}", e)))?;
 
-    tracing::info!("User password changed: {}", user.email);
+    tracing::info!(user_id = %user.id, outcome = "password_changed", "User password changed");
 
     Ok(Json(
         serde_json::json!({ "data": { "message": "Password changed successfully" } }),
@@ -653,7 +652,7 @@ pub async fn forgot_password(
 
     // Generate a 32-byte random token, hash it for storage
     let plain_token = generate_reset_token();
-    let token_hash = hash_reset_token(&plain_token);
+    let token_hash = hash_reset_token(&plain_token, state.config.jwt_secret.as_bytes());
     let expires_at = Utc::now() + Duration::hours(1);
     let id = uuid::Uuid::new_v4().to_string();
 
@@ -690,13 +689,9 @@ pub async fn forgot_password(
             .trim_end_matches('/');
         let reset_url = format!("{}/reset-password?token={}", web_base, plain_token);
         if let Err(e) = send_reset_email(&state.config, &user.email, &reset_url).await {
-            tracing::warn!(
-                "Failed to send password reset email to {}: {}",
-                user.email,
-                e
-            );
+            tracing::warn!(user_id = %user.id, outcome = "smtp_failed", "Failed to send password reset email: {}", e);
         } else {
-            tracing::info!(user_id = %user.id, outcome = "reset_email_sent", "Password reset email sent to {}", user.email);
+            tracing::info!(user_id = %user.id, outcome = "reset_email_sent", "Password reset email sent");
         }
     } else {
         tracing::info!(
@@ -720,7 +715,7 @@ pub async fn reset_password(
 ) -> AppResult<Json<serde_json::Value>> {
     check_auth_rate_limit(&state, &headers)?;
 
-    let token_hash = hash_reset_token(&req.token);
+    let token_hash = hash_reset_token(&req.token, state.config.jwt_secret.as_bytes());
 
     validate_password(&req.new_password)?;
 
@@ -774,11 +769,13 @@ fn generate_reset_token() -> String {
     hex::encode(bytes)
 }
 
-fn hash_reset_token(token: &str) -> String {
-    use sha2::{Digest, Sha256};
-    let mut h = Sha256::new();
-    h.update(token.as_bytes());
-    hex::encode(h.finalize())
+fn hash_reset_token(token: &str, secret: &[u8]) -> String {
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+    type HmacSha256 = Hmac<Sha256>;
+    let mut mac = HmacSha256::new_from_slice(secret).expect("HMAC accepts keys of any length");
+    mac.update(token.as_bytes());
+    hex::encode(mac.finalize().into_bytes())
 }
 
 async fn send_reset_email(
@@ -825,6 +822,9 @@ async fn send_reset_email(
             .build()
     };
 
-    transport.send(message).await?;
-    Ok(())
+    tokio::time::timeout(std::time::Duration::from_secs(15), transport.send(message))
+        .await
+        .map_err(|_| anyhow::anyhow!("SMTP send timed out after 15s"))?
+        .map_err(Into::into)
+        .map(|_| ())
 }

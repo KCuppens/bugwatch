@@ -72,7 +72,7 @@ async fn main() -> Result<()> {
 
     // Initialize tracing - JSON format in production, pretty format in dev
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| "bugwatch_server=debug,tower_http=debug".into());
+        .unwrap_or_else(|_| "bugwatch_server=info,tower_http=info".into());
 
     let is_production = std::env::var("ENVIRONMENT")
         .map(|e| e == "production")

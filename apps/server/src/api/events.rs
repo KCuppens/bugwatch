@@ -226,6 +226,29 @@ pub async fn ingest(
         }
     }
 
+    // Validate exception and event field bounds to prevent storage exhaustion.
+    if let Some(ref exc) = event.exception {
+        if exc.stacktrace.len() > 200 {
+            return Err(AppError::Validation(
+                "Too many stack frames (max 200)".to_string(),
+            ));
+        }
+    }
+    if let Some(ref breadcrumbs) = event.breadcrumbs {
+        if breadcrumbs.len() > 100 {
+            return Err(AppError::Validation(
+                "Too many breadcrumbs (max 100)".to_string(),
+            ));
+        }
+    }
+    if let Some(ref msg) = event.message {
+        if msg.len() > 8192 {
+            return Err(AppError::Validation(
+                "Message too long (max 8192 bytes)".to_string(),
+            ));
+        }
+    }
+
     // 4b. Deduplicate client-side error boundary events when onRequestError
     //     already captured the same server error with full details.
     //     Client error boundaries tag events with "next.digest" — if we already
@@ -267,8 +290,8 @@ pub async fn ingest(
         if unminified != exc.value {
             tracing::debug!(
                 "Unminified React error: {} -> {}",
-                &exc.value[..exc.value.len().min(60)],
-                &unminified[..unminified.len().min(60)]
+                exc.value.chars().take(60).collect::<String>(),
+                unminified.chars().take(60).collect::<String>()
             );
             exc.value = unminified;
         }
@@ -284,7 +307,7 @@ pub async fn ingest(
             fp,
             exc.exception_type,
             exc.stacktrace.iter().filter(|f| f.in_app).count(),
-            &exc.value[..exc.value.len().min(80)]
+            exc.value.chars().take(80).collect::<String>()
         );
         (fp, t)
     } else {
@@ -341,7 +364,7 @@ pub async fn ingest(
         ));
     }
 
-    let created_event = inserted.unwrap();
+    let created_event = inserted.expect("inserted is_some was verified above");
 
     // Link event to session recording if session_id is present
     let session_id_value = event.session_id.as_deref().or_else(|| {
@@ -354,11 +377,19 @@ pub async fn ingest(
         if let Ok(Some(recording)) =
             ReplayRepository::find_by_session_id(&state.db, &project.id, session_id).await
         {
-            let _ = sqlx::query("UPDATE events SET session_recording_id = $1 WHERE id = $2")
+            if let Err(e) = sqlx::query("UPDATE events SET session_recording_id = $1 WHERE id = $2")
                 .bind(&recording.id)
                 .bind(&created_event.id)
                 .execute(&state.db)
-                .await;
+                .await
+            {
+                tracing::warn!(
+                    event_id = %created_event.id,
+                    recording_id = %recording.id,
+                    "Failed to link session recording to event: {}",
+                    e
+                );
+            }
         }
     }
 
@@ -439,13 +470,4 @@ fn md5_hash(input: &str) -> u128 {
     let mut hasher = DefaultHasher::new();
     input.hash(&mut hasher);
     hasher.finish() as u128
-}
-
-/// Deserialize null as None for Option<String>
-fn deserialize_null_default<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-    T: serde::Deserialize<'de>,
-{
-    Ok(Option::<T>::deserialize(deserializer).ok().flatten())
 }

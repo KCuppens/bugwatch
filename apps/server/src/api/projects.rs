@@ -66,7 +66,7 @@ pub async fn list(
         .ok_or_else(|| AppError::Forbidden("read permission required".to_string()))?;
 
     let page = params.page.max(1);
-    let per_page = params.per_page.min(100).max(1);
+    let per_page = params.per_page; // already clamped 1..=200 by PaginationParams deserializer
     let offset = ((page - 1) * per_page) as i64;
 
     let (projects, total) = match &*auth {

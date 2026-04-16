@@ -80,11 +80,10 @@ impl RateLimiter {
                 } else {
                     drop(entry);
                     let limit = Self::resolve_tier_limit(db, api_key).await;
-                    // Use or_insert to avoid overwriting a fresher value already written
-                    // by a concurrent request that refreshed the same stale entry.
-                    tier_cache()
-                        .entry(api_key.to_string())
-                        .or_insert((limit, Instant::now()));
+                    // Unconditionally overwrite: the stale entry is still in the map (drop
+                    // only released the read guard, not the key), so or_insert would do
+                    // nothing and leave the stale value. insert() always writes the fresh value.
+                    tier_cache().insert(api_key.to_string(), (limit, Instant::now()));
                     limit
                 }
             } else {

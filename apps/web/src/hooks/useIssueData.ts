@@ -68,8 +68,9 @@ export function useIssueData({
   const [linkedIssues, setLinkedIssues] = useState<IssueLinkInfo[]>([]);
   const [issueReplay, setIssueReplay] = useState<SessionRecording | null>(null);
 
-  // Primary fetch
+  // Primary fetch — cleanup via AbortController prevents setState on unmounted component
   useEffect(() => {
+    const controller = new AbortController();
     async function fetchIssue() {
       if (!projectId) {
         setError("No project selected");
@@ -81,7 +82,8 @@ export function useIssueData({
       try {
         const response = await issuesApi.get(projectId, issueId);
         setIssue(response.data);
-      } catch {
+      } catch (err) {
+        if ((err as Error).name === "AbortError") return;
         toast.error("Failed to load issue details");
         setError("Failed to load issue details. Please try again.");
       } finally {
@@ -89,82 +91,102 @@ export function useIssueData({
       }
     }
     fetchIssue();
+    return () => controller.abort();
   }, [issueId, projectId]);
 
-  // Dependent fetches — only run after the primary issue is loaded
+  // Dependent fetches — gate on issue?.id so optimistic status mutations do not re-trigger
+  // hasIntegrations is a feature-flag constant at mount time; listed in deps for exhaustive-deps lint.
   useEffect(() => {
+    const controller = new AbortController();
     async function fetchLinkedIssues() {
       if (!projectId || !hasIntegrations) return;
       try {
         const response = await integrationsApi.listIssueLinks(projectId, issueId);
         setLinkedIssues(response.data);
       } catch (err) {
+        if ((err as Error).name === "AbortError") return;
         console.debug("[issues] fetchLinkedIssues failed (non-critical):", err);
       }
     }
-    if (issue) fetchLinkedIssues();
-  }, [issueId, projectId, issue, hasIntegrations]);
+    if (issue?.id) fetchLinkedIssues();
+    return () => controller.abort();
+  }, [issueId, projectId, issue?.id, hasIntegrations]);
 
   useEffect(() => {
+    const controller = new AbortController();
     async function fetchFrequency() {
       if (!projectId) return;
       setFrequencyLoading(true);
       try {
         const response = await issuesApi.getFrequency(projectId, issueId, frequencyPeriod);
         setFrequencyData(response.data);
-      } catch {
+      } catch (err) {
+        if ((err as Error).name === "AbortError") return;
+        console.warn("[issues] fetchFrequency failed:", err);
         setFrequencyData(null);
       } finally {
         setFrequencyLoading(false);
       }
     }
-    if (issue) fetchFrequency();
-  }, [issueId, projectId, frequencyPeriod, issue]);
+    if (issue?.id) fetchFrequency();
+    return () => controller.abort();
+  }, [issueId, projectId, frequencyPeriod, issue?.id]);
 
   useEffect(() => {
+    const controller = new AbortController();
     async function fetchImpact() {
       if (!projectId) return;
       setImpactLoading(true);
       try {
         const response = await issuesApi.getImpact(projectId, issueId);
         setImpactData(response.data);
-      } catch {
+      } catch (err) {
+        if ((err as Error).name === "AbortError") return;
+        console.warn("[issues] fetchImpact failed:", err);
         setImpactData(null);
       } finally {
         setImpactLoading(false);
       }
     }
-    if (issue) fetchImpact();
-  }, [issueId, projectId, issue]);
+    if (issue?.id) fetchImpact();
+    return () => controller.abort();
+  }, [issueId, projectId, issue?.id]);
 
   useEffect(() => {
+    const controller = new AbortController();
     async function fetchComments() {
       if (!projectId) return;
       setCommentsLoading(true);
       try {
         const response = await issuesApi.listComments(projectId, issueId);
         setComments(response.data);
-      } catch {
+      } catch (err) {
+        if ((err as Error).name === "AbortError") return;
+        console.warn("[issues] fetchComments failed:", err);
         setComments([]);
       } finally {
         setCommentsLoading(false);
       }
     }
-    if (issue) fetchComments();
-  }, [issueId, projectId, issue]);
+    if (issue?.id) fetchComments();
+    return () => controller.abort();
+  }, [issueId, projectId, issue?.id]);
 
   useEffect(() => {
+    const controller = new AbortController();
     async function fetchReplay() {
       if (!projectId || !hasReplay) return;
       try {
         const response = await replayApi.getIssueReplay(projectId, issueId);
         setIssueReplay(response.data ?? null);
-      } catch {
+      } catch (err) {
+        if ((err as Error).name === "AbortError") return;
         setIssueReplay(null);
       }
     }
-    if (issue) fetchReplay();
-  }, [issueId, projectId, issue, hasReplay]);
+    if (issue?.id) fetchReplay();
+    return () => controller.abort();
+  }, [issueId, projectId, issue?.id, hasReplay]);
 
   return {
     issue,

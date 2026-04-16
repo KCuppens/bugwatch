@@ -275,6 +275,16 @@ export default function IssueDetailPage() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [issue, pendingAction, selectedEventId, router, projectId, handleResolve, handleIgnore]);
 
+  // Update browser tab title to show which issue is being viewed
+  useEffect(() => {
+    if (issue) {
+      document.title = `${issue.title} — Bugwatch`;
+      return () => {
+        document.title = "Bugwatch";
+      };
+    }
+  }, [issue?.title]);
+
   function toggleFrame(index: number) {
     const newExpanded = new Set(expandedFrames);
     if (newExpanded.has(index)) newExpanded.delete(index);
@@ -421,8 +431,11 @@ export default function IssueDetailPage() {
 
   if (error || !issue) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-[400px] space-y-4 animate-fade-in-up">
-        <AlertCircle className="h-12 w-12 text-destructive" />
+      <div
+        role="alert"
+        className="flex flex-col items-center justify-center min-h-[400px] space-y-4 animate-fade-in-up"
+      >
+        <AlertCircle aria-hidden="true" className="h-12 w-12 text-destructive" />
         <h2 className="font-display text-heading-md">Failed to load issue</h2>
         <p className="text-muted-foreground">{error || "Issue not found"}</p>
         <Link href="/dashboard">
@@ -567,33 +580,55 @@ export default function IssueDetailPage() {
         <div className="space-y-4 min-w-0">
           {/* Tabs */}
           <div className="border-b">
-            <div role="tablist" aria-label="Issue detail sections" className="flex gap-1">
-              {[
-                { id: "debug" as const, label: "Stack Trace", icon: Code },
-                { id: "timeline" as const, label: "Timeline", icon: Clock },
-                { id: "context" as const, label: "Context", icon: Globe },
-              ].map((tab) => {
-                const TabIcon = tab.icon;
-                return (
-                  <button
-                    key={tab.id}
-                    id={`tab-${tab.id}`}
-                    role="tab"
-                    aria-selected={activeTab === tab.id}
-                    aria-controls={`tabpanel-${tab.id}`}
-                    onClick={() => setActiveTab(tab.id)}
-                    className={`flex items-center gap-2 border-b-2 px-4 py-3 text-sm font-medium transition-colors ${
-                      activeTab === tab.id
-                        ? "border-accent-2 text-accent-2"
-                        : "border-transparent text-muted-foreground hover:text-foreground hover:bg-muted/30"
-                    }`}
-                  >
-                    <TabIcon className="h-4 w-4" aria-hidden="true" />
-                    <span>{tab.label}</span>
-                  </button>
-                );
-              })}
-            </div>
+            {(() => {
+              const tabs = ["debug", "timeline", "context"] as const;
+              return (
+                <div
+                  role="tablist"
+                  aria-label="Issue detail sections"
+                  className="flex gap-1"
+                  onKeyDown={(e) => {
+                    const currentIdx = tabs.indexOf(activeTab);
+                    if (e.key === "ArrowRight") {
+                      const next = tabs[(currentIdx + 1) % tabs.length]!;
+                      setActiveTab(next);
+                      document.getElementById(`tab-${next}`)?.focus();
+                    } else if (e.key === "ArrowLeft") {
+                      const prev = tabs[(currentIdx - 1 + tabs.length) % tabs.length]!;
+                      setActiveTab(prev);
+                      document.getElementById(`tab-${prev}`)?.focus();
+                    }
+                  }}
+                >
+                  {[
+                    { id: "debug" as const, label: "Stack Trace", icon: Code },
+                    { id: "timeline" as const, label: "Timeline", icon: Clock },
+                    { id: "context" as const, label: "Context", icon: Globe },
+                  ].map((tab) => {
+                    const TabIcon = tab.icon;
+                    return (
+                      <button
+                        key={tab.id}
+                        id={`tab-${tab.id}`}
+                        role="tab"
+                        aria-selected={activeTab === tab.id}
+                        aria-controls={`tabpanel-${tab.id}`}
+                        tabIndex={activeTab === tab.id ? 0 : -1}
+                        onClick={() => setActiveTab(tab.id)}
+                        className={`flex items-center gap-2 border-b-2 px-4 py-3 text-sm font-medium transition-colors ${
+                          activeTab === tab.id
+                            ? "border-accent-2 text-accent-2"
+                            : "border-transparent text-muted-foreground hover:text-foreground hover:bg-muted/30"
+                        }`}
+                      >
+                        <TabIcon className="h-4 w-4" aria-hidden="true" />
+                        <span>{tab.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              );
+            })()}
           </div>
 
           {/* Debug Tab - Stack Trace */}
@@ -1389,7 +1424,7 @@ export default function IssueDetailPage() {
                                 <Button
                                   variant="ghost"
                                   size="sm"
-                                  className="h-5 w-5 p-0"
+                                  className="h-5 w-5 p-0 focus:opacity-100"
                                   aria-label="Edit comment"
                                   onClick={() => {
                                     setEditingCommentId(comment.id);
@@ -1401,7 +1436,7 @@ export default function IssueDetailPage() {
                                 <Button
                                   variant="ghost"
                                   size="sm"
-                                  className="h-5 w-5 p-0 text-destructive"
+                                  className="h-5 w-5 p-0 text-destructive focus:opacity-100"
                                   aria-label="Delete comment"
                                   onClick={() => handleDeleteComment(comment.id)}
                                 >
