@@ -42,6 +42,28 @@ import { useTier, useFeature, isSelfHosted, type Tier } from "@/hooks/use-featur
 
 type Tab = "profile" | "notifications" | "billing" | "security" | "integrations";
 
+const DEFAULT_NOTIF_PREFS = {
+  emailDigest: true,
+  inAppBadges: true,
+  criticalAlerts: true,
+  weeklyReport: false,
+  quietHoursEnabled: false,
+};
+
+function parseNotifPrefs(raw: string): typeof DEFAULT_NOTIF_PREFS {
+  const parsed: unknown = JSON.parse(raw);
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return DEFAULT_NOTIF_PREFS;
+  const p = parsed as Record<string, unknown>;
+  return {
+    emailDigest: typeof p.emailDigest === "boolean" ? p.emailDigest : DEFAULT_NOTIF_PREFS.emailDigest,
+    inAppBadges: typeof p.inAppBadges === "boolean" ? p.inAppBadges : DEFAULT_NOTIF_PREFS.inAppBadges,
+    criticalAlerts: typeof p.criticalAlerts === "boolean" ? p.criticalAlerts : DEFAULT_NOTIF_PREFS.criticalAlerts,
+    weeklyReport: typeof p.weeklyReport === "boolean" ? p.weeklyReport : DEFAULT_NOTIF_PREFS.weeklyReport,
+    quietHoursEnabled:
+      typeof p.quietHoursEnabled === "boolean" ? p.quietHoursEnabled : DEFAULT_NOTIF_PREFS.quietHoursEnabled,
+  };
+}
+
 export default function SettingsPage() {
   const { user, refreshUser } = useAuth();
   const router = useRouter();
@@ -71,28 +93,6 @@ export default function SettingsPage() {
   const [passwordCooldown, setPasswordCooldown] = useState(false);
 
   // Notification preferences (localStorage)
-  const DEFAULT_NOTIF_PREFS = {
-    emailDigest: true,
-    inAppBadges: true,
-    criticalAlerts: true,
-    weeklyReport: false,
-    quietHoursEnabled: false,
-  };
-
-  function parseNotifPrefs(raw: string): typeof DEFAULT_NOTIF_PREFS {
-    const parsed: unknown = JSON.parse(raw);
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return DEFAULT_NOTIF_PREFS;
-    const p = parsed as Record<string, unknown>;
-    return {
-      emailDigest: typeof p.emailDigest === "boolean" ? p.emailDigest : DEFAULT_NOTIF_PREFS.emailDigest,
-      inAppBadges: typeof p.inAppBadges === "boolean" ? p.inAppBadges : DEFAULT_NOTIF_PREFS.inAppBadges,
-      criticalAlerts: typeof p.criticalAlerts === "boolean" ? p.criticalAlerts : DEFAULT_NOTIF_PREFS.criticalAlerts,
-      weeklyReport: typeof p.weeklyReport === "boolean" ? p.weeklyReport : DEFAULT_NOTIF_PREFS.weeklyReport,
-      quietHoursEnabled:
-        typeof p.quietHoursEnabled === "boolean" ? p.quietHoursEnabled : DEFAULT_NOTIF_PREFS.quietHoursEnabled,
-    };
-  }
-
   const [notifPrefs, setNotifPrefs] = useState(() => {
     if (typeof window === "undefined") return DEFAULT_NOTIF_PREFS;
     try {
@@ -181,8 +181,9 @@ export default function SettingsPage() {
               setIsOwner(orgResponse.is_owner);
               setSubscription(subResponse);
               setMembersCount(orgResponse.members_count);
-            } catch {
-              // Billing refresh failed, but verification was successful
+            } catch (err) {
+              console.warn("[billing] Refresh after checkout verification failed:", err);
+              toast.info("Subscription verified — refresh the page if plan details look outdated");
             }
           } else {
             // Verification returned success: false - still fallback to refresh
@@ -251,7 +252,7 @@ export default function SettingsPage() {
     return () => clearInterval(i);
   }, [lastSavedAt]);
 
-  function updateNotifPref(key: string, value: boolean) {
+  function updateNotifPref(key: keyof typeof DEFAULT_NOTIF_PREFS, value: boolean) {
     const updated = { ...notifPrefs, [key]: value };
     setNotifPrefs(updated);
     localStorage.setItem("bugwatch-notification-prefs", JSON.stringify(updated));
@@ -268,10 +269,11 @@ export default function SettingsPage() {
       toast.error("Password must be at least 8 characters");
       return;
     }
-    setPasswordCooldown(true);
-    setTimeout(() => setPasswordCooldown(false), 2000);
     try {
       await authApi.changePassword(currentPassword, newPassword);
+      // Activate cooldown only on success so users can retry immediately on error
+      setPasswordCooldown(true);
+      setTimeout(() => setPasswordCooldown(false), 2000);
       toast.success("Password changed successfully");
       setPasswordDialogOpen(false);
       setCurrentPassword("");
@@ -663,7 +665,16 @@ export default function SettingsPage() {
                 <Button variant="outline" onClick={() => setPasswordDialogOpen(false)}>
                   Cancel
                 </Button>
-                <Button onClick={handlePasswordChange} disabled={passwordCooldown}>
+                {passwordCooldown && (
+                  <span id="pwd-cooldown-msg" className="sr-only" aria-live="polite">
+                    Please wait before changing your password again.
+                  </span>
+                )}
+                <Button
+                  onClick={handlePasswordChange}
+                  disabled={passwordCooldown}
+                  aria-describedby={passwordCooldown ? "pwd-cooldown-msg" : undefined}
+                >
                   {passwordCooldown ? "Please wait..." : "Change Password"}
                 </Button>
               </DialogFooter>

@@ -38,6 +38,11 @@ export async function loadConfig(): Promise<Config | null> {
   } catch (error) {
     if (error instanceof SyntaxError) {
       console.warn(`Warning: Config file at ${CONFIG_PATH} contains invalid JSON. Ignoring.`);
+    } else {
+      console.warn(
+        `Warning: Could not read config file at ${CONFIG_PATH}:`,
+        error instanceof Error ? error.message : String(error)
+      );
     }
     return null;
   }
@@ -49,6 +54,8 @@ export async function loadConfig(): Promise<Config | null> {
 export async function saveConfig(config: Config): Promise<void> {
   await fs.mkdir(CONFIG_DIR, { recursive: true });
   await fs.writeFile(CONFIG_PATH, JSON.stringify(config, null, 2), { encoding: "utf-8", mode: 0o600 });
+  // Invalidate the in-process cache so subsequent API calls in the same process see the new config
+  _configCache = undefined;
 }
 
 /**
@@ -123,8 +130,14 @@ async function request<T = unknown>(path: string, options: RequestOptions = {}):
     // Extract user-friendly message from JSON response body, fall back to generic
     let userMessage: string;
     try {
-      const json = JSON.parse(text) as { message?: string; error?: string };
-      userMessage = json.message ?? json.error ?? `Request failed (${response.status})`;
+      const json: unknown = JSON.parse(text);
+      const msg =
+        typeof json === "object" && json !== null && "message" in json
+          ? (json as Record<string, unknown>).message
+          : typeof json === "object" && json !== null && "error" in json
+            ? (json as Record<string, unknown>).error
+            : undefined;
+      userMessage = typeof msg === "string" && msg ? msg : `Request failed (${response.status})`;
     } catch {
       userMessage = `Request failed (${response.status} ${response.statusText})`;
     }

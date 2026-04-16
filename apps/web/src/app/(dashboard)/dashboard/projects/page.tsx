@@ -279,10 +279,21 @@ export default function ProjectsPage() {
                 {/* API Key */}
                 <div className="space-y-1">
                   <span className="text-xs text-muted-foreground">API Key</span>
-                  <div className="flex items-center gap-2">
+                  <div role="group" aria-label={`API key for ${project.name}`} className="flex items-center gap-2">
                     <code className="flex-1 truncate rounded bg-muted px-2 py-1 text-xs font-mono">
-                      {revealedId === project.id ? project.api_key : `${project.api_key.slice(0, 8)}${"•".repeat(12)}`}
+                      {revealedId === project.id ? (
+                        project.api_key
+                      ) : (
+                        <>
+                          {project.api_key.slice(0, 8)}
+                          <span aria-hidden="true">{"•".repeat(12)}</span>
+                          <span className="sr-only">hidden</span>
+                        </>
+                      )}
                     </code>
+                    <span aria-live="polite" className="sr-only">
+                      {revealedId === project.id ? "API key revealed" : ""}
+                    </span>
                     <Button
                       variant="ghost"
                       size="icon"
@@ -290,7 +301,11 @@ export default function ProjectsPage() {
                       aria-label={revealedId === project.id ? "Hide API key" : "Reveal API key"}
                       onClick={() => setRevealedId(revealedId === project.id ? null : project.id)}
                     >
-                      {revealedId === project.id ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+                      {revealedId === project.id ? (
+                        <EyeOff className="h-3 w-3" aria-hidden="true" />
+                      ) : (
+                        <Eye className="h-3 w-3" aria-hidden="true" />
+                      )}
                     </Button>
                     <Button
                       variant="ghost"
@@ -299,7 +314,11 @@ export default function ProjectsPage() {
                       aria-label={copiedId === project.id ? "API key copied" : "Copy API key"}
                       onClick={() => copyApiKey(project.id, project.api_key)}
                     >
-                      {copiedId === project.id ? <Check className="h-3 w-3 text-bug" /> : <Copy className="h-3 w-3" />}
+                      {copiedId === project.id ? (
+                        <Check className="h-3 w-3 text-bug" aria-hidden="true" />
+                      ) : (
+                        <Copy className="h-3 w-3" aria-hidden="true" />
+                      )}
                     </Button>
                   </div>
                 </div>

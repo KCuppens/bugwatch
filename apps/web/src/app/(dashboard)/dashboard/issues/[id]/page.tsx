@@ -190,8 +190,8 @@ export default function IssueDetailPage() {
       try {
         const response = await integrationsApi.listIssueLinks(projectId, issueId);
         setLinkedIssues(response.data);
-      } catch {
-        // Silently fail - not critical
+      } catch (err) {
+        console.debug("[issues] fetchLinkedIssues failed (non-critical):", err);
       }
     }
     if (issue) fetchLinkedIssues();
@@ -466,7 +466,7 @@ export default function IssueDetailPage() {
     setSubmittingComment(true);
     try {
       const response = await issuesApi.createComment(projectId, issueId, newComment.trim());
-      setComments([response.data, ...comments]);
+      setComments((prev) => [response.data, ...prev]);
       setNewComment("");
       if (commentRef.current) commentRef.current.style.height = "auto";
       toast.success("Comment added");
@@ -481,7 +481,7 @@ export default function IssueDetailPage() {
     if (!projectId || !editingContent.trim()) return;
     try {
       const response = await issuesApi.updateComment(projectId, issueId, commentId, editingContent.trim());
-      setComments(comments.map((c) => (c.id === commentId ? response.data : c)));
+      setComments((prev) => prev.map((c) => (c.id === commentId ? response.data : c)));
       setEditingCommentId(null);
       setEditingContent("");
       toast.success("Comment updated");
@@ -495,7 +495,7 @@ export default function IssueDetailPage() {
     if (!window.confirm("Delete this comment?")) return;
     try {
       await issuesApi.deleteComment(projectId, issueId, commentId);
-      setComments(comments.filter((c) => c.id !== commentId));
+      setComments((prev) => prev.filter((c) => c.id !== commentId));
       toast.success("Comment deleted");
     } catch {
       toast.error("Failed to delete comment");
@@ -1325,17 +1325,13 @@ export default function IssueDetailPage() {
                     Session: <span className="font-mono">{issueReplay.session_id}</span>
                     {issueReplay.duration_ms && ` (${Math.round(issueReplay.duration_ms / 1000)}s)`}
                   </p>
-                  <a
+                  <Link
                     href={`/dashboard/replay?project=${projectId}`}
                     className="inline-flex items-center gap-1 text-xs text-accent hover:underline mt-1"
-                    onClick={(e) => {
-                      e.preventDefault();
-                      window.location.href = `/dashboard/replay?project=${projectId}`;
-                    }}
                   >
-                    <Video className="h-3 w-3" />
+                    <Video className="h-3 w-3" aria-hidden="true" />
                     Watch replay
-                  </a>
+                  </Link>
                 </div>
               </CardContent>
             </Card>
@@ -1413,6 +1409,7 @@ export default function IssueDetailPage() {
                           <div className="flex gap-1">
                             <input
                               type="text"
+                              aria-label="Edit comment"
                               value={editingContent}
                               onChange={(e) => setEditingContent(e.target.value)}
                               className="flex-1 h-6 rounded border bg-background px-2 text-xs"
@@ -1429,8 +1426,9 @@ export default function IssueDetailPage() {
                               variant="ghost"
                               className="h-6 px-1 text-xs"
                               onClick={() => setEditingCommentId(null)}
+                              aria-label="Cancel edit"
                             >
-                              ×
+                              <XCircle className="h-3 w-3" aria-hidden="true" />
                             </Button>
                           </div>
                         ) : (
