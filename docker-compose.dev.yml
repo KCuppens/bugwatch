@@ -42,6 +42,12 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 120s
 
   web:
     image: node:20-alpine
@@ -62,7 +68,8 @@ services:
       - CHOKIDAR_USEPOLLING=true
       - CHOKIDAR_INTERVAL=1000
     depends_on:
-      - server
+      server:
+        condition: service_healthy
 
 volumes:
   postgres-data:

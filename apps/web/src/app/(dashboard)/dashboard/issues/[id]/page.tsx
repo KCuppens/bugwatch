@@ -416,18 +416,25 @@ export default function IssueDetailPage() {
 
   function handleCopyCurl() {
     if (!issue?.request) return;
+    // Escape backslashes then double-quotes so values are safe inside double-quoted shell strings
+    const shellEscape = (s: string) => s.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
     const parts: string[] = ["curl"];
     const method = issue.request.method || "GET";
-    if (method !== "GET") parts.push(`-X ${method}`);
+    if (method !== "GET") parts.push(`-X ${shellEscape(method)}`);
     let url = issue.request.url || "";
     if (issue.request.query_string && !url.includes("?")) url += `?${issue.request.query_string}`;
     const sensitive = ["authorization", "cookie", "x-api-key"];
     if (issue.request.headers) {
       Object.entries(issue.request.headers).forEach(([key, value]) => {
-        parts.push(sensitive.includes(key.toLowerCase()) ? `-H "${key}: [REDACTED]"` : `-H "${key}: ${value}"`);
+        const safeKey = shellEscape(key);
+        parts.push(
+          sensitive.includes(key.toLowerCase())
+            ? `-H "${safeKey}: [REDACTED]"`
+            : `-H "${safeKey}: ${shellEscape(String(value))}"`
+        );
       });
     }
-    parts.push(`"${url}"`);
+    parts.push(`"${shellEscape(url)}"`);
     navigator.clipboard
       .writeText(parts.join(" \\\n  "))
       .then(() => toast.success("cURL command copied"))

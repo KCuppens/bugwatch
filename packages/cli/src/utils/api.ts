@@ -11,6 +11,12 @@ interface Config {
   url?: string;
 }
 
+function isValidConfig(value: unknown): value is Config {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const v = value as Record<string, unknown>;
+  return typeof v.apiKey === "string" && v.apiKey.length > 0 && (v.url === undefined || typeof v.url === "string");
+}
+
 interface RequestOptions {
   method?: string;
   body?: unknown;
@@ -23,7 +29,12 @@ interface RequestOptions {
 export async function loadConfig(): Promise<Config | null> {
   try {
     const content = await fs.readFile(CONFIG_PATH, "utf-8");
-    return JSON.parse(content) as Config;
+    const parsed: unknown = JSON.parse(content);
+    if (!isValidConfig(parsed)) {
+      console.warn(`Warning: Config file at ${CONFIG_PATH} has an unexpected shape. Ignoring.`);
+      return null;
+    }
+    return parsed;
   } catch (error) {
     if (error instanceof SyntaxError) {
       console.warn(`Warning: Config file at ${CONFIG_PATH} contains invalid JSON. Ignoring.`);
@@ -37,7 +48,7 @@ export async function loadConfig(): Promise<Config | null> {
  */
 export async function saveConfig(config: Config): Promise<void> {
   await fs.mkdir(CONFIG_DIR, { recursive: true });
-  await fs.writeFile(CONFIG_PATH, JSON.stringify(config, null, 2), "utf-8");
+  await fs.writeFile(CONFIG_PATH, JSON.stringify(config, null, 2), { encoding: "utf-8", mode: 0o600 });
 }
 
 /**
@@ -51,10 +62,15 @@ function getApiKey(config: Config | null): string {
 }
 
 /**
- * Get the API base URL from env or config file
+ * Get the API base URL from env or config file. Rejects non-http/https schemes to prevent SSRF.
  */
 function getBaseUrl(config: Config | null): string {
-  return process.env.BUGWATCH_URL || config?.url || DEFAULT_URL;
+  const raw = process.env.BUGWATCH_URL || config?.url || DEFAULT_URL;
+  const scheme = raw.split(":")[0]?.toLowerCase();
+  if (scheme !== "http" && scheme !== "https") {
+    throw new Error(`Invalid API URL scheme "${scheme}": only http and https are allowed.`);
+  }
+  return raw;
 }
 
 // Cache config for the lifetime of the CLI process — config is immutable per invocation

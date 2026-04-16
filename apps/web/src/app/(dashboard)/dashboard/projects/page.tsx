@@ -18,6 +18,8 @@ import {
   Flame,
   Users,
   Activity,
+  Eye,
+  EyeOff,
 } from "lucide-react";
 import {
   projectsApi,
@@ -54,6 +56,7 @@ function getHealthColor(stats: ProjectStatsWithInfo | undefined): { dot: string;
 
 export default function ProjectsPage() {
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [revealedId, setRevealedId] = useState<string | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -278,8 +281,17 @@ export default function ProjectsPage() {
                   <span className="text-xs text-muted-foreground">API Key</span>
                   <div className="flex items-center gap-2">
                     <code className="flex-1 truncate rounded bg-muted px-2 py-1 text-xs font-mono">
-                      {project.api_key}
+                      {revealedId === project.id ? project.api_key : `${project.api_key.slice(0, 8)}${"•".repeat(12)}`}
                     </code>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7 shrink-0"
+                      aria-label={revealedId === project.id ? "Hide API key" : "Reveal API key"}
+                      onClick={() => setRevealedId(revealedId === project.id ? null : project.id)}
+                    >
+                      {revealedId === project.id ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+                    </Button>
                     <Button
                       variant="ghost"
                       size="icon"

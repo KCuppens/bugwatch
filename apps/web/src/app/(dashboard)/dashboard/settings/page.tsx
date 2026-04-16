@@ -68,30 +68,40 @@ export default function SettingsPage() {
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [passwordCooldown, setPasswordCooldown] = useState(false);
 
   // Notification preferences (localStorage)
+  const DEFAULT_NOTIF_PREFS = {
+    emailDigest: true,
+    inAppBadges: true,
+    criticalAlerts: true,
+    weeklyReport: false,
+    quietHoursEnabled: false,
+  };
+
+  function parseNotifPrefs(raw: string): typeof DEFAULT_NOTIF_PREFS {
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return DEFAULT_NOTIF_PREFS;
+    const p = parsed as Record<string, unknown>;
+    return {
+      emailDigest: typeof p.emailDigest === "boolean" ? p.emailDigest : DEFAULT_NOTIF_PREFS.emailDigest,
+      inAppBadges: typeof p.inAppBadges === "boolean" ? p.inAppBadges : DEFAULT_NOTIF_PREFS.inAppBadges,
+      criticalAlerts: typeof p.criticalAlerts === "boolean" ? p.criticalAlerts : DEFAULT_NOTIF_PREFS.criticalAlerts,
+      weeklyReport: typeof p.weeklyReport === "boolean" ? p.weeklyReport : DEFAULT_NOTIF_PREFS.weeklyReport,
+      quietHoursEnabled:
+        typeof p.quietHoursEnabled === "boolean" ? p.quietHoursEnabled : DEFAULT_NOTIF_PREFS.quietHoursEnabled,
+    };
+  }
+
   const [notifPrefs, setNotifPrefs] = useState(() => {
-    if (typeof window === "undefined")
-      return {
-        emailDigest: true,
-        inAppBadges: true,
-        criticalAlerts: true,
-        weeklyReport: false,
-        quietHoursEnabled: false,
-      };
+    if (typeof window === "undefined") return DEFAULT_NOTIF_PREFS;
     try {
       const stored = localStorage.getItem("bugwatch-notification-prefs");
-      if (stored) return JSON.parse(stored);
+      if (stored) return parseNotifPrefs(stored);
     } catch (e) {
       console.warn("Failed to parse notification preferences from localStorage:", e);
     }
-    return {
-      emailDigest: true,
-      inAppBadges: true,
-      criticalAlerts: true,
-      weeklyReport: false,
-      quietHoursEnabled: false,
-    };
+    return DEFAULT_NOTIF_PREFS;
   });
 
   // Track if verification has been attempted to prevent duplicate calls
@@ -249,6 +259,7 @@ export default function SettingsPage() {
   }
 
   async function handlePasswordChange() {
+    if (passwordCooldown) return;
     if (newPassword !== confirmPassword) {
       toast.error("Passwords don't match");
       return;
@@ -257,6 +268,8 @@ export default function SettingsPage() {
       toast.error("Password must be at least 8 characters");
       return;
     }
+    setPasswordCooldown(true);
+    setTimeout(() => setPasswordCooldown(false), 2000);
     try {
       await authApi.changePassword(currentPassword, newPassword);
       toast.success("Password changed successfully");
@@ -650,7 +663,9 @@ export default function SettingsPage() {
                 <Button variant="outline" onClick={() => setPasswordDialogOpen(false)}>
                   Cancel
                 </Button>
-                <Button onClick={handlePasswordChange}>Change Password</Button>
+                <Button onClick={handlePasswordChange} disabled={passwordCooldown}>
+                  {passwordCooldown ? "Please wait..." : "Change Password"}
+                </Button>
               </DialogFooter>
             </DialogContent>
           </Dialog>
