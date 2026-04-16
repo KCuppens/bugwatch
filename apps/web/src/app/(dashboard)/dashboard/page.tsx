@@ -273,7 +273,8 @@ export default function DashboardPage() {
   const [renderCap, setRenderCap] = useState(100);
   const [density, setDensity] = useState<"compact" | "comfortable">(() => {
     if (typeof window === "undefined") return "comfortable";
-    return (localStorage.getItem("bugwatch:issues-density") as "compact" | "comfortable") || "comfortable";
+    const stored = localStorage.getItem("bugwatch:issues-density");
+    return stored === "compact" || stored === "comfortable" ? stored : "comfortable";
   });
 
   useEffect(() => {
@@ -290,8 +291,9 @@ export default function DashboardPage() {
       const stored = sessionStorage.getItem(key);
       if (stored) {
         const parsed = JSON.parse(stored);
-        if (parsed.activeFilter) setActiveFilter(parsed.activeFilter);
-        if (parsed.sortBy) setSortBy(parsed.sortBy);
+        if (parsed.activeFilter && typeof parsed.activeFilter === "string") setActiveFilter(parsed.activeFilter);
+        const VALID_SORT = new Set(["recent", "frequent", "users", "trending"]);
+        if (parsed.sortBy && VALID_SORT.has(parsed.sortBy)) setSortBy(parsed.sortBy as SortOption);
       }
     } catch {
       /* ignore parse errors */

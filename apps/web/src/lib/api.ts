@@ -1,7 +1,12 @@
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000";
 
-if (process.env.NODE_ENV === "production" && API_BASE_URL && !API_BASE_URL.startsWith("https://")) {
-  throw new Error(`[Bugwatch] API URL must use HTTPS in production. Got: ${API_BASE_URL}`);
+if (process.env.NODE_ENV === "production") {
+  if (!API_BASE_URL || API_BASE_URL === "http://localhost:3000") {
+    throw new Error("[Bugwatch] NEXT_PUBLIC_API_URL must be set in production.");
+  }
+  if (!API_BASE_URL.startsWith("https://")) {
+    throw new Error(`[Bugwatch] API URL must use HTTPS in production. Got: ${API_BASE_URL}`);
+  }
 }
 
 export class ApiError extends Error {

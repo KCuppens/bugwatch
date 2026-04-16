@@ -109,12 +109,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const handleSessionExpired = () => {
       // Re-check the session before clearing — another tab may have already
-      // refreshed the tokens, in which case we should not log the user out.
-      void fetchCurrentUser().catch(() => clearTokens());
+      // refreshed the httpOnly cookies, making this session still valid.
+      // fetchCurrentUser handles both outcomes: on success it updates the user
+      // state; on 401 it calls clearTokens() internally. The isFetchingRef guard
+      // prevents re-entrant calls if this event fires while a fetch is in flight.
+      void fetchCurrentUser();
     };
     window.addEventListener("bugwatch-auth-expired", handleSessionExpired);
     return () => window.removeEventListener("bugwatch-auth-expired", handleSessionExpired);
-  }, [clearTokens, fetchCurrentUser]);
+  }, [fetchCurrentUser]);
 
   // Cross-tab synchronization: httpOnly cookies are shared across tabs automatically.
   // Listen for visibility changes to re-check auth state when user returns to tab.

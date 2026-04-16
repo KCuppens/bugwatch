@@ -250,7 +250,7 @@ export default function OverviewPage() {
       // 401 means session expired — bugwatch-auth-expired already fired so the
       // redirect to /login is in flight. Don't set error state (no flash of auth text).
       if (err instanceof ApiError && err.status === 401) return;
-      setError(err instanceof Error ? err.message : "Failed to load overview data");
+      setError("Failed to load overview data. Please try again.");
       toast.error("Failed to load overview data");
     } finally {
       if (mountedRef.current) setIsLoading(false);
