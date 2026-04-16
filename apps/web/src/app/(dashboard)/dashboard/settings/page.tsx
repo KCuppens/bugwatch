@@ -1,25 +1,42 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useCallback } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { User, Bell, CreditCard, Shield, CheckCircle, XCircle, Lock, Smartphone, Monitor, Plug } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+  DialogDescription,
+} from "@/components/ui/dialog";
 import { toast } from "sonner";
-import { authApi, billingApi, ApiError, type Organization, type Subscription, type VerifyCheckoutResponse } from "@/lib/api";
-import { PlanCard, PricingTable, UsageStats, TeamMembers, Invoices, PaymentMethods, BillingDashboard, SeatManagement } from "@/components/billing";
+import {
+  authApi,
+  billingApi,
+  ApiError,
+  type Organization,
+  type Subscription,
+  type VerifyCheckoutResponse,
+} from "@/lib/api";
+import {
+  PlanCard,
+  PricingTable,
+  UsageStats,
+  TeamMembers,
+  Invoices,
+  PaymentMethods,
+  BillingDashboard,
+  SeatManagement,
+} from "@/components/billing";
 import { IntegrationSettings } from "@/components/integrations";
 import { useTier, useFeature, isSelfHosted, type Tier } from "@/hooks/use-feature";
 
@@ -31,9 +48,10 @@ export default function SettingsPage() {
   const searchParams = useSearchParams();
 
   const tabParam = searchParams.get("tab") as Tab | null;
-  const activeTab: Tab = tabParam && ["profile", "notifications", "billing", "security", "integrations"].includes(tabParam)
-    ? tabParam
-    : "profile";
+  const activeTab: Tab =
+    tabParam && ["profile", "notifications", "billing", "security", "integrations"].includes(tabParam)
+      ? tabParam
+      : "profile";
 
   const success = searchParams.get("success");
   const canceled = searchParams.get("canceled");
@@ -53,14 +71,27 @@ export default function SettingsPage() {
 
   // Notification preferences (localStorage)
   const [notifPrefs, setNotifPrefs] = useState(() => {
-    if (typeof window === "undefined") return { emailDigest: true, inAppBadges: true, criticalAlerts: true, weeklyReport: false, quietHoursEnabled: false };
+    if (typeof window === "undefined")
+      return {
+        emailDigest: true,
+        inAppBadges: true,
+        criticalAlerts: true,
+        weeklyReport: false,
+        quietHoursEnabled: false,
+      };
     try {
       const stored = localStorage.getItem("bugwatch-notification-prefs");
       if (stored) return JSON.parse(stored);
     } catch (e) {
       console.warn("Failed to parse notification preferences from localStorage:", e);
     }
-    return { emailDigest: true, inAppBadges: true, criticalAlerts: true, weeklyReport: false, quietHoursEnabled: false };
+    return {
+      emailDigest: true,
+      inAppBadges: true,
+      criticalAlerts: true,
+      weeklyReport: false,
+      quietHoursEnabled: false,
+    };
   });
 
   // Track if verification has been attempted to prevent duplicate calls
@@ -101,7 +132,7 @@ export default function SettingsPage() {
         setIsOwner(orgResponse.is_owner);
         setSubscription(subResponse);
         setMembersCount(orgResponse.members_count);
-      } catch (error) {
+      } catch {
         toast.error("Failed to load billing data");
       } finally {
         setBillingLoading(false);
@@ -148,7 +179,7 @@ export default function SettingsPage() {
             setVerificationError(result.message);
             await refreshUser();
           }
-        } catch (error) {
+        } catch {
           toast.error("Checkout verification failed");
           setVerificationError("Failed to verify checkout. Refreshing subscription data...");
           // Fallback to regular refresh
@@ -163,14 +194,14 @@ export default function SettingsPage() {
         }
       } else {
         // No session ID - fallback to regular refresh (legacy behavior)
-        refreshUser();
+        await refreshUser();
       }
     }
 
     verifyAndRefresh();
   }, [success, sessionId, refreshUser, router, searchParams]);
 
-  async function handleSave() {
+  const handleSave = useCallback(async () => {
     setIsSaving(true);
     try {
       await authApi.updateProfile({ name: name.trim() });
@@ -183,7 +214,7 @@ export default function SettingsPage() {
     } finally {
       setIsSaving(false);
     }
-  }
+  }, [name, refreshUser]);
 
   // Autosave profile name — debounce 800ms after last change
   useEffect(() => {
@@ -192,8 +223,7 @@ export default function SettingsPage() {
       void handleSave();
     }, 800);
     return () => clearTimeout(handle);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [name]);
+  }, [name, user, handleSave]);
 
   // Ghost text ticker — "Saved Ns ago"
   useEffect(() => {
@@ -251,7 +281,7 @@ export default function SettingsPage() {
       setSubscription(subResponse);
       setMembersCount(orgResponse.members_count);
       refreshUser();
-    } catch (error) {
+    } catch {
       toast.error("Failed to refresh billing data");
     } finally {
       setBillingLoading(false);
@@ -271,9 +301,7 @@ export default function SettingsPage() {
       {/* Header */}
       <div>
         <h1 className="font-display text-heading-lg">Settings</h1>
-        <p className="text-body-sm text-muted-foreground mt-1">
-          Manage your account and preferences
-        </p>
+        <p className="text-body-sm text-muted-foreground mt-1">Manage your account and preferences</p>
       </div>
 
       {/* Success/Canceled Messages */}
@@ -332,19 +360,12 @@ export default function SettingsPage() {
           <CardContent className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="name">Name</Label>
-              <Input
-                id="name"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="Your name"
-              />
+              <Input id="name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Your name" />
             </div>
             <div className="space-y-2">
               <Label htmlFor="email">Email</Label>
               <Input id="email" value={user?.email || ""} disabled />
-              <p className="text-xs text-muted-foreground">
-                Contact support to change your email
-              </p>
+              <p className="text-xs text-muted-foreground">Contact support to change your email</p>
             </div>
             <div className="flex items-center gap-3">
               <Button onClick={handleSave} disabled={isSaving}>
@@ -365,9 +386,7 @@ export default function SettingsPage() {
           <Card>
             <CardHeader>
               <CardTitle>Notification Preferences</CardTitle>
-              <CardDescription>
-                Configure how you want to be notified
-              </CardDescription>
+              <CardDescription>Configure how you want to be notified</CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
               <div className="flex items-center justify-between">
@@ -375,20 +394,14 @@ export default function SettingsPage() {
                   <Label>Email Digest</Label>
                   <p className="text-xs text-muted-foreground">Receive a daily summary of new issues</p>
                 </div>
-                <Switch
-                  checked={notifPrefs.emailDigest}
-                  onCheckedChange={(v) => updateNotifPref("emailDigest", v)}
-                />
+                <Switch checked={notifPrefs.emailDigest} onCheckedChange={(v) => updateNotifPref("emailDigest", v)} />
               </div>
               <div className="flex items-center justify-between">
                 <div className="space-y-0.5">
                   <Label>In-App Badges</Label>
                   <p className="text-xs text-muted-foreground">Show unread count badges on navigation items</p>
                 </div>
-                <Switch
-                  checked={notifPrefs.inAppBadges}
-                  onCheckedChange={(v) => updateNotifPref("inAppBadges", v)}
-                />
+                <Switch checked={notifPrefs.inAppBadges} onCheckedChange={(v) => updateNotifPref("inAppBadges", v)} />
               </div>
               <div className="flex items-center justify-between">
                 <div className="space-y-0.5">
@@ -405,10 +418,7 @@ export default function SettingsPage() {
                   <Label>Weekly Report</Label>
                   <p className="text-xs text-muted-foreground">Get a weekly email with project health overview</p>
                 </div>
-                <Switch
-                  checked={notifPrefs.weeklyReport}
-                  onCheckedChange={(v) => updateNotifPref("weeklyReport", v)}
-                />
+                <Switch checked={notifPrefs.weeklyReport} onCheckedChange={(v) => updateNotifPref("weeklyReport", v)} />
               </div>
             </CardContent>
           </Card>
@@ -416,9 +426,7 @@ export default function SettingsPage() {
           <Card>
             <CardHeader>
               <CardTitle>Quiet Hours</CardTitle>
-              <CardDescription>
-                Pause non-critical notifications during specific hours
-              </CardDescription>
+              <CardDescription>Pause non-critical notifications during specific hours</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="flex items-center justify-between">
@@ -461,9 +469,7 @@ export default function SettingsPage() {
           ) : (
             <>
               {/* Billing Dashboard - Overview (Paid plans only) */}
-              {subscription?.has_stripe && (
-                <BillingDashboard />
-              )}
+              {subscription?.has_stripe && <BillingDashboard />}
 
               {/* Current Plan Summary (Paid plans only) */}
               {subscription?.has_stripe && (
@@ -476,10 +482,7 @@ export default function SettingsPage() {
               )}
 
               {/* Pricing Table - Always visible */}
-              <PricingTable
-                currentTier={(organization?.tier || "free") as Tier}
-                isOwner={isOwner}
-              />
+              <PricingTable currentTier={(organization?.tier || "free") as Tier} isOwner={isOwner} />
 
               {/* Usage Stats */}
               <UsageStats tier={(organization?.tier || "free") as Tier} />
@@ -496,28 +499,19 @@ export default function SettingsPage() {
               )}
 
               {/* Team Members (Team+ only) */}
-              {tier === "team" || tier === "enterprise" ? (
-                <TeamMembers isOwner={isOwner} />
-              ) : null}
+              {tier === "team" || tier === "enterprise" ? <TeamMembers isOwner={isOwner} /> : null}
 
               {/* Payment Methods (Paid plans only) */}
-              {subscription?.has_stripe && (
-                <PaymentMethods isOwner={isOwner} />
-              )}
+              {subscription?.has_stripe && <PaymentMethods isOwner={isOwner} />}
 
               {/* Invoices (Paid plans only) */}
-              {subscription?.has_stripe && (
-                <Invoices />
-              )}
-
+              {subscription?.has_stripe && <Invoices />}
             </>
           )}
         </div>
       )}
 
-      {activeTab === "integrations" && hasIntegrations && (
-        <IntegrationSettings />
-      )}
+      {activeTab === "integrations" && hasIntegrations && <IntegrationSettings />}
 
       {activeTab === "security" && (
         <div className="space-y-6">
@@ -581,7 +575,10 @@ export default function SettingsPage() {
                   <div>
                     <p className="text-sm font-medium">Current Session</p>
                     <p className="text-xs text-muted-foreground">
-                      {typeof navigator !== "undefined" ? navigator.userAgent.split(" ").slice(-1)[0]?.split("/")[0] || "Browser" : "Browser"} — Active now
+                      {typeof navigator !== "undefined"
+                        ? navigator.userAgent.split(" ").slice(-1)[0]?.split("/")[0] || "Browser"
+                        : "Browser"}{" "}
+                      — Active now
                     </p>
                   </div>
                 </div>
@@ -629,7 +626,9 @@ export default function SettingsPage() {
                 </div>
               </div>
               <DialogFooter>
-                <Button variant="outline" onClick={() => setPasswordDialogOpen(false)}>Cancel</Button>
+                <Button variant="outline" onClick={() => setPasswordDialogOpen(false)}>
+                  Cancel
+                </Button>
                 <Button onClick={handlePasswordChange}>Change Password</Button>
               </DialogFooter>
             </DialogContent>

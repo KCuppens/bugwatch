@@ -54,7 +54,12 @@ export function FirstErrorCelebration({ issue, onDismiss }: FirstErrorCelebratio
       />
 
       {/* Celebration card */}
-      <div className="relative z-[60] w-full max-w-lg mx-4 surface-card p-8 rounded-2xl">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="First error captured"
+        className="relative z-[60] w-full max-w-lg mx-4 surface-card p-8 rounded-2xl"
+      >
         {/* Dismiss button */}
         <button
           onClick={onDismiss}

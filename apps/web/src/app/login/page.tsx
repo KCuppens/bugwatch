@@ -2,7 +2,7 @@
 
 import { useState, type FormEvent } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { ApiError } from "@/lib/api";
 import { Loader2, AlertCircle, Mail, Lock, Eye, EyeOff } from "lucide-react";
@@ -60,6 +60,7 @@ function AuthWatermark() {
 
 export default function LoginPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { login } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -74,7 +75,9 @@ export default function LoginPage() {
 
     try {
       await login(email, password);
-      router.push("/dashboard");
+      const next = searchParams.get("next") ?? "";
+      const destination = next.startsWith("/") && !next.startsWith("//") ? next : "/dashboard";
+      router.push(destination);
     } catch (err) {
       if (err instanceof ApiError) {
         setError(err.message);

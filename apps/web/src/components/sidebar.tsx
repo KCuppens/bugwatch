@@ -188,7 +188,13 @@ export function Sidebar() {
           );
 
           return item.proGated ? (
-            <button key={item.href} onClick={() => openPaywall()} title={item.label} className={itemClassName}>
+            <button
+              key={item.href}
+              onClick={() => openPaywall()}
+              title={item.label}
+              aria-label={`${item.label} — requires Pro plan`}
+              className={itemClassName}
+            >
               {itemContent}
             </button>
           ) : (

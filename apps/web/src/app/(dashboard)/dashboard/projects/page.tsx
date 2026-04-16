@@ -3,13 +3,7 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   FolderOpen,
@@ -25,7 +19,14 @@ import {
   Users,
   Activity,
 } from "lucide-react";
-import { projectsApi, overviewApi, type Project, type Platform, type Framework, type ProjectStatsWithInfo } from "@/lib/api";
+import {
+  projectsApi,
+  overviewApi,
+  type Project,
+  type Platform,
+  type Framework,
+  type ProjectStatsWithInfo,
+} from "@/lib/api";
 import { getPlatformConfig, getFrameworkConfig } from "@/lib/sdk-config";
 import { toast } from "sonner";
 
@@ -91,9 +92,9 @@ export default function ProjectsPage() {
     fetchProjects();
   }, []);
 
-  function copyApiKey(id: string, apiKey: string) {
+  async function copyApiKey(id: string, apiKey: string) {
     try {
-      navigator.clipboard.writeText(apiKey);
+      await navigator.clipboard.writeText(apiKey);
       setCopiedId(id);
       toast.success("API key copied");
       setTimeout(() => setCopiedId(null), 2000);
@@ -105,10 +106,7 @@ export default function ProjectsPage() {
   function getProjectBadge(project: Project) {
     if (!project.platform || !project.framework) return null;
     const platformConfig = getPlatformConfig(project.platform as Platform);
-    const frameworkConfig = getFrameworkConfig(
-      project.platform as Platform,
-      project.framework as Framework
-    );
+    const frameworkConfig = getFrameworkConfig(project.platform as Platform, project.framework as Framework);
     if (!platformConfig || !frameworkConfig) return null;
     return {
       platform: platformConfig.name,
@@ -175,9 +173,7 @@ export default function ProjectsPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="font-display text-heading-lg">Projects</h1>
-          <p className="text-body-sm text-muted-foreground mt-1">
-            Manage your projects and API keys
-          </p>
+          <p className="text-body-sm text-muted-foreground mt-1">Manage your projects and API keys</p>
         </div>
         <Link href="/dashboard/projects/new">
           <Button variant="success">
@@ -191,8 +187,7 @@ export default function ProjectsPage() {
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
         {projects.map((project) => {
           const badge = getProjectBadge(project);
-          const needsOnboarding =
-            !project.onboarding_completed_at && project.platform;
+          const needsOnboarding = !project.onboarding_completed_at && project.platform;
           const stats = projectStats.get(project.id);
           const health = getHealthColor(stats);
 
@@ -208,16 +203,16 @@ export default function ProjectsPage() {
                       <div className="flex items-center gap-2">
                         <CardTitle className="text-base">{project.name}</CardTitle>
                         {/* Health indicator dot */}
-                        <span className={`h-2 w-2 rounded-full ${health.dot}`} title={health.label} />
+                        <span className={`h-2 w-2 rounded-full ${health.dot}`} title={health.label}>
+                          <span className="sr-only">{health.label}</span>
+                        </span>
                       </div>
-                      <CardDescription className="text-xs">
-                        {project.slug}
-                      </CardDescription>
+                      <CardDescription className="text-xs">{project.slug}</CardDescription>
                     </div>
                   </div>
-                  <Link href={`/dashboard/projects/${project.id}/settings`}>
+                  <Link href={`/dashboard/projects/${project.id}/settings`} aria-label={`Settings for ${project.name}`}>
                     <Button variant="ghost" size="icon" className="h-8 w-8">
-                      <Settings className="h-4 w-4" />
+                      <Settings className="h-4 w-4" aria-hidden="true" />
                     </Button>
                   </Link>
                 </div>
@@ -241,9 +236,7 @@ export default function ProjectsPage() {
                     href={`/dashboard/projects/${project.id}/settings`}
                     className="flex items-center justify-between rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 dark:border-amber-900 dark:bg-amber-950"
                   >
-                    <span className="text-sm font-medium text-amber-800 dark:text-amber-200">
-                      Complete setup
-                    </span>
+                    <span className="text-sm font-medium text-amber-800 dark:text-amber-200">Complete setup</span>
                     <ArrowRight className="h-4 w-4 text-amber-600 dark:text-amber-400" />
                   </Link>
                 )}
@@ -291,13 +284,10 @@ export default function ProjectsPage() {
                       variant="ghost"
                       size="icon"
                       className="h-7 w-7 shrink-0"
+                      aria-label={copiedId === project.id ? "API key copied" : "Copy API key"}
                       onClick={() => copyApiKey(project.id, project.api_key)}
                     >
-                      {copiedId === project.id ? (
-                        <Check className="h-3 w-3 text-bug" />
-                      ) : (
-                        <Copy className="h-3 w-3" />
-                      )}
+                      {copiedId === project.id ? <Check className="h-3 w-3 text-bug" /> : <Copy className="h-3 w-3" />}
                     </Button>
                   </div>
                 </div>

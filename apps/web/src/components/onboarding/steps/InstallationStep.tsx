@@ -83,6 +83,8 @@ export function InstallationStep({ platform, framework, apiKey, onNext, onBack, 
           <button
             type="button"
             onClick={() => setShowServerMonitoring(!showServerMonitoring)}
+            aria-expanded={showServerMonitoring}
+            aria-controls="server-monitoring-content"
             className="flex w-full items-center gap-3 p-4 text-left hover:bg-[hsl(var(--surface-2))] transition-colors"
           >
             <Server className="h-5 w-5 text-muted-foreground" />
@@ -97,7 +99,7 @@ export function InstallationStep({ platform, framework, apiKey, onNext, onBack, 
             )}
           </button>
           {showServerMonitoring && (
-            <div className="border-t p-4 space-y-4">
+            <div id="server-monitoring-content" className="border-t p-4 space-y-4">
               <div className="space-y-2">
                 <h4 className="text-sm font-medium">Install the agent</h4>
                 <CodeBlock code={interpolateApiKey(SERVER_MONITORING_CONTENT.installCommand, apiKey)} language="bash" />

@@ -31,6 +31,14 @@ export function IssueSearchBar({
   onSortChange,
 }: IssueSearchBarProps) {
   const inputRef = useRef<HTMLInputElement>(null);
+  const blurTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(
+    () => () => {
+      if (blurTimerRef.current) clearTimeout(blurTimerRef.current);
+    },
+    []
+  );
 
   const {
     query,
@@ -111,7 +119,7 @@ export function IssueSearchBar({
 
   const handleInputBlur = useCallback(() => {
     // Delay closing to allow click on suggestions
-    setTimeout(() => {
+    blurTimerRef.current = setTimeout(() => {
       setAutocompleteOpen(false);
     }, 200);
   }, [setAutocompleteOpen]);
@@ -126,9 +134,7 @@ export function IssueSearchBar({
   );
 
   // Extract active filters from parsed query for display
-  const activeFilters = parsedQuery?.tokens.filter(
-    (t) => t.type === "field" && t.field && t.value
-  ) || [];
+  const activeFilters = parsedQuery?.tokens.filter((t) => t.type === "field" && t.field && t.value) || [];
 
   return (
     <div className={cn("relative", className)}>
@@ -186,11 +192,7 @@ export function IssueSearchBar({
 
         {/* Clear button */}
         {query && (
-          <button
-            type="button"
-            onClick={clearSearch}
-            className="p-1 hover:bg-muted rounded transition-colors"
-          >
+          <button type="button" onClick={clearSearch} className="p-1 hover:bg-muted rounded transition-colors">
             <X className="h-4 w-4 text-muted-foreground" />
           </button>
         )}
@@ -225,6 +227,7 @@ export function IssueSearchBar({
           <select
             value={sortBy}
             onChange={(e) => onSortChange?.(e.target.value)}
+            aria-label="Sort issues by"
             className="bg-transparent text-xs outline-none cursor-pointer"
           >
             <option value="recent">Recent</option>
@@ -278,8 +281,5 @@ function getFilterColorClass(field: string, value: string): string {
  */
 function isInputFocused(): boolean {
   const activeElement = document.activeElement;
-  return (
-    activeElement instanceof HTMLInputElement ||
-    activeElement instanceof HTMLTextAreaElement
-  );
+  return activeElement instanceof HTMLInputElement || activeElement instanceof HTMLTextAreaElement;
 }

@@ -47,9 +47,7 @@ function getApiKey(config: Config | null): string {
   const envKey = process.env.BUGWATCH_API_KEY;
   if (envKey) return envKey;
   if (config?.apiKey) return config.apiKey;
-  throw new Error(
-    'No API key found. Set BUGWATCH_API_KEY or run "bugwatch login" to configure.'
-  );
+  throw new Error('No API key found. Set BUGWATCH_API_KEY or run "bugwatch login" to configure.');
 }
 
 /**
@@ -62,10 +60,7 @@ function getBaseUrl(config: Config | null): string {
 /**
  * Make an authenticated API request
  */
-async function request<T = unknown>(
-  path: string,
-  options: RequestOptions = {}
-): Promise<T> {
+async function request<T = unknown>(path: string, options: RequestOptions = {}): Promise<T> {
   const config = await loadConfig();
   const apiKey = getApiKey(config);
   const baseUrl = getBaseUrl(config);
@@ -92,9 +87,7 @@ async function request<T = unknown>(
 
   if (!response.ok) {
     const text = await response.text().catch(() => "");
-    throw new Error(
-      `API request failed: ${response.status} ${response.statusText}${text ? ` - ${text}` : ""}`
-    );
+    throw new Error(`API request failed: ${response.status} ${response.statusText}${text ? ` - ${text}` : ""}`);
   }
 
   return response.json() as Promise<T>;
@@ -118,7 +111,6 @@ export interface Project {
   name: string;
   slug?: string;
   unresolved_count?: number;
-  [key: string]: unknown;
 }
 
 export interface Issue {
@@ -130,7 +122,6 @@ export interface Issue {
   first_seen: string;
   last_seen: string;
   project_id?: string;
-  [key: string]: unknown;
 }
 
 export interface Monitor {
@@ -142,7 +133,6 @@ export interface Monitor {
   uptime_24h?: number;
   avg_response_24h?: number;
   avg_response_time?: number;
-  [key: string]: unknown;
 }
 
 export interface Alert {
@@ -151,7 +141,6 @@ export interface Alert {
   status: string;
   message?: string;
   created_at: string;
-  [key: string]: unknown;
 }
 
 export interface ListOptions {
@@ -164,71 +153,45 @@ export async function listProjects(): Promise<Project[]> {
   return resp.data;
 }
 
-export async function listIssues(
-  projectId?: string,
-  options?: ListOptions
-): Promise<Issue[]> {
+export async function listIssues(projectId?: string, options?: ListOptions): Promise<Issue[]> {
   const params: Record<string, string | number | undefined> = {
     status: options?.status,
     per_page: options?.limit,
   };
 
   if (projectId) {
-    const resp = await request<PaginatedResponse<Issue>>(
-      `/api/v1/projects/${projectId}/issues`,
-      { params }
-    );
+    const resp = await request<PaginatedResponse<Issue>>(`/api/v1/projects/${projectId}/issues`, { params });
     return resp.data;
   }
-  const resp = await request<PaginatedResponse<Issue>>(
-    "/api/v1/issues/across-projects",
-    { params }
-  );
+  const resp = await request<PaginatedResponse<Issue>>("/api/v1/issues/across-projects", { params });
   return resp.data;
 }
 
-export async function countIssues(
-  projectId: string,
-  status?: string
-): Promise<number> {
+export async function countIssues(projectId: string, status?: string): Promise<number> {
   const params: Record<string, string | number | undefined> = {
     status,
     per_page: 1,
   };
-  const resp = await request<PaginatedResponse<Issue>>(
-    `/api/v1/projects/${projectId}/issues`,
-    { params }
-  );
+  const resp = await request<PaginatedResponse<Issue>>(`/api/v1/projects/${projectId}/issues`, { params });
   return resp.pagination.total;
 }
 
-export async function getIssue(
-  issueId: string,
-  projectId: string
-): Promise<Issue> {
-  const resp = await request<ApiResponse<Issue>>(
-    `/api/v1/projects/${projectId}/issues/${issueId}`
-  );
+export async function getIssue(issueId: string, projectId: string): Promise<Issue> {
+  const resp = await request<ApiResponse<Issue>>(`/api/v1/projects/${projectId}/issues/${issueId}`);
   return resp.data;
 }
 
-export async function updateIssue(
-  issueId: string,
-  projectId: string,
-  data: Record<string, unknown>
-): Promise<Issue> {
-  const resp = await request<ApiResponse<Issue>>(
-    `/api/v1/projects/${projectId}/issues/${issueId}`,
-    { method: "PATCH", body: data }
-  );
+export async function updateIssue(issueId: string, projectId: string, data: Record<string, unknown>): Promise<Issue> {
+  const resp = await request<ApiResponse<Issue>>(`/api/v1/projects/${projectId}/issues/${issueId}`, {
+    method: "PATCH",
+    body: data,
+  });
   return resp.data;
 }
 
 export async function getStatus(projectId?: string): Promise<Project[]> {
   if (projectId) {
-    const resp = await request<ApiResponse<Project>>(
-      `/api/v1/projects/${projectId}`
-    );
+    const resp = await request<ApiResponse<Project>>(`/api/v1/projects/${projectId}`);
     return [resp.data];
   }
   const resp = await request<PaginatedResponse<Project>>("/api/v1/projects");
@@ -237,15 +200,11 @@ export async function getStatus(projectId?: string): Promise<Project[]> {
 
 export async function listMonitors(projectId?: string): Promise<Monitor[]> {
   if (projectId) {
-    const resp = await request<PaginatedResponse<Monitor>>(
-      `/api/v1/projects/${projectId}/monitors`
-    );
+    const resp = await request<PaginatedResponse<Monitor>>(`/api/v1/projects/${projectId}/monitors`);
     return resp.data;
   }
   // Cross-project returns { data: Monitor[], summary: {...} }
-  const resp = await request<{ data: Monitor[] }>(
-    "/api/v1/monitors/across-projects"
-  );
+  const resp = await request<{ data: Monitor[] }>("/api/v1/monitors/across-projects");
   return resp.data;
 }
 
@@ -255,8 +214,6 @@ export async function listAlerts(projectId?: string): Promise<Alert[]> {
     return request<Alert[]>(`/api/v1/projects/${projectId}/alerts/logs`);
   }
   // Cross-project returns { data: Alert[] }
-  const resp = await request<{ data: Alert[] }>(
-    "/api/v1/alerts/across-projects"
-  );
+  const resp = await request<{ data: Alert[] }>("/api/v1/alerts/across-projects");
   return resp.data;
 }

@@ -15,7 +15,7 @@ import type { NextRequest } from "next/server";
  * client-side JS cannot access them.
  */
 
-const PROTECTED_PREFIXES = ["/welcome", "/dashboard"];
+const PROTECTED_PREFIXES = ["/welcome", "/dashboard", "/overview"];
 const GUEST_PREFIXES = ["/login", "/signup", "/forgot-password"];
 
 export function middleware(req: NextRequest) {
@@ -40,5 +40,13 @@ export function middleware(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/welcome/:path*", "/dashboard/:path*", "/login", "/signup", "/forgot-password"],
+  matcher: [
+    "/welcome/:path*",
+    "/dashboard/:path*",
+    "/overview/:path*",
+    "/overview",
+    "/login",
+    "/signup",
+    "/forgot-password",
+  ],
 };

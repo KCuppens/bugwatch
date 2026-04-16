@@ -75,7 +75,14 @@ function BugWatchLogo() {
 
 function ProgressDots({ step, total }: { step: number; total: number }) {
   return (
-    <div className="flex items-center gap-2" role="progressbar" aria-valuenow={step + 1} aria-valuemax={total}>
+    <div
+      className="flex items-center gap-2"
+      role="progressbar"
+      aria-valuenow={step + 1}
+      aria-valuemin={0}
+      aria-valuemax={total}
+      aria-label="Onboarding step"
+    >
       {Array.from({ length: total }).map((_, i) => (
         <div
           key={i}

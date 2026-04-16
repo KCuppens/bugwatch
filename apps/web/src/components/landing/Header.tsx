@@ -118,6 +118,7 @@ export function Header() {
         role="dialog"
         aria-modal="true"
         aria-label="Navigation menu"
+        aria-hidden={!mobileOpen}
         onKeyDown={(e) => {
           if (e.key === "Escape") setMobileOpen(false);
         }}

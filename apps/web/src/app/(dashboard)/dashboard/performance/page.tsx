@@ -2,21 +2,9 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { Card, CardContent } from "@/components/ui/card";
-import {
-  Gauge,
-  Clock,
-  AlertTriangle,
-  Zap,
-  TrendingUp,
-  Lock,
-} from "lucide-react";
+import { Gauge, Clock, AlertTriangle, Zap, TrendingUp, Lock } from "lucide-react";
 import { toast } from "sonner";
-import {
-  performanceApi,
-  type PerformanceSummary,
-  type TransactionAggregate,
-  type TimeSeriesPoint,
-} from "@/lib/api";
+import { performanceApi, type PerformanceSummary, type TransactionAggregate, type TimeSeriesPoint } from "@/lib/api";
 import { useProject } from "@/lib/project-context";
 import { useFeature } from "@/hooks/use-feature";
 import { LatencyChart } from "@/components/performance/LatencyChart";
@@ -54,25 +42,18 @@ export default function PerformancePage() {
     try {
       const periodConfig = PERIODS.find((p) => p.value === period)!;
       const end = new Date().toISOString();
-      const start = new Date(
-        Date.now() - periodConfig.hours * 60 * 60 * 1000
-      ).toISOString();
+      const start = new Date(Date.now() - periodConfig.hours * 60 * 60 * 1000).toISOString();
 
       const [summaryRes, txnRes, chartRes] = await Promise.all([
         performanceApi.getSummary(selectedProject.id, start, end),
         performanceApi.listTransactions(selectedProject.id, start, end, 20),
-        performanceApi.getCharts(
-          selectedProject.id,
-          start,
-          end,
-          periodConfig.interval
-        ),
+        performanceApi.getCharts(selectedProject.id, start, end, periodConfig.interval),
       ]);
 
       setSummary(summaryRes.data);
       setTransactions(txnRes.data);
       setChartData(chartRes.data);
-    } catch (err) {
+    } catch {
       toast.error("Failed to load performance data");
     } finally {
       setLoading(false);
@@ -91,8 +72,8 @@ export default function PerformancePage() {
         </div>
         <h2 className="font-display text-heading-md">Performance Monitoring</h2>
         <p className="text-muted-foreground text-center max-w-md">
-          Track transaction latency, throughput, and errors across your
-          application. Upgrade to Pro to unlock performance monitoring.
+          Track transaction latency, throughput, and errors across your application. Upgrade to Pro to unlock
+          performance monitoring.
         </p>
       </div>
     );
@@ -107,15 +88,18 @@ export default function PerformancePage() {
             <Gauge className="h-6 w-6 text-accent-2" />
             Performance
           </h1>
-          <p className="text-body-sm text-muted-foreground mt-1">
-            Transaction latency, throughput, and error rates
-          </p>
+          <p className="text-body-sm text-muted-foreground mt-1">Transaction latency, throughput, and error rates</p>
         </div>
-        <div className="flex items-center gap-1 bg-surface-2 border border-border-subtle rounded-lg p-1">
+        <div
+          role="group"
+          aria-label="Time period"
+          className="flex items-center gap-1 bg-surface-2 border border-border-subtle rounded-lg p-1"
+        >
           {PERIODS.map((p) => (
             <button
               key={p.value}
               onClick={() => setPeriod(p.value)}
+              aria-pressed={period === p.value}
               className={cn(
                 "px-3 py-1.5 text-xs font-medium rounded-md transition-all",
                 period === p.value
@@ -172,9 +156,7 @@ export default function PerformancePage() {
         />
         <SummaryCard
           label="Total"
-          value={
-            summary ? summary.total_transactions.toLocaleString() : "--"
-          }
+          value={summary ? summary.total_transactions.toLocaleString() : "--"}
           icon={<TrendingUp className="h-4 w-4" />}
           loading={loading}
         />
@@ -226,21 +208,12 @@ function SummaryCard({
       <CardContent className="p-3">
         <div className="flex items-center gap-1.5 text-muted-foreground mb-1">
           {icon}
-          <span className="text-[11px] font-medium uppercase tracking-wide">
-            {label}
-          </span>
+          <span className="text-[11px] font-medium uppercase tracking-wide">{label}</span>
         </div>
         {loading ? (
           <div className="h-6 w-16 bg-surface-3 rounded animate-pulse" />
         ) : (
-          <p
-            className={cn(
-              "text-lg font-semibold tabular-nums",
-              highlight && "text-red-400"
-            )}
-          >
-            {value}
-          </p>
+          <p className={cn("text-lg font-semibold tabular-nums", highlight && "text-red-400")}>{value}</p>
         )}
       </CardContent>
     </Card>

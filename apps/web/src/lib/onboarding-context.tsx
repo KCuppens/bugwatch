@@ -73,7 +73,9 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
     setProfileState(p);
     writeLocalStorage(PROFILE_KEY, p);
     // Fire-and-forget — profile is already persisted to localStorage
-    onboardingApi.saveProfile(p).catch((err) => console.error("[onboarding] Failed to save profile to server:", err));
+    void onboardingApi
+      .saveProfile(p)
+      .catch((err) => console.error("[onboarding] Failed to save profile to server:", err));
   }, []);
 
   const markMilestone = useCallback((id: MilestoneId) => {

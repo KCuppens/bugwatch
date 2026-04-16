@@ -25,6 +25,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const isFetchingRef = useRef(false);
   const isInitializedRef = useRef(false);
+  // Keep a ref in sync with user state — event handlers read this to avoid
+  // stale-closure issues without re-registering listeners on every state change.
+  const userRef = useRef<User | null>(user);
+  userRef.current = user;
 
   const clearTokens = useCallback(() => {
     apiClearTokens();
@@ -63,6 +67,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // httpOnly cookies are opaque to JS, so we try to fetch the current user
   // directly — the browser sends cookies automatically.
   useEffect(() => {
+    let cancelled = false;
     const initAuth = async () => {
       // Clean up any legacy localStorage tokens from before httpOnly migration
       apiClearTokens();
@@ -70,11 +75,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // Try to fetch the current user — cookies are sent automatically.
       // If no valid session cookie exists, this returns 401 and we stay logged out.
       await fetchCurrentUser();
-      isInitializedRef.current = true;
-      setIsLoading(false);
+      if (!cancelled) {
+        isInitializedRef.current = true;
+        setIsLoading(false);
+      }
     };
 
     initAuth();
+    return () => {
+      cancelled = true;
+    };
   }, [fetchCurrentUser]);
 
   // Set up token refresh interval.
@@ -104,16 +114,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // Cross-tab synchronization: httpOnly cookies are shared across tabs automatically.
   // Listen for visibility changes to re-check auth state when user returns to tab.
+  // userRef avoids stale closure — the handler reads the latest value without
+  // needing `user` in deps, which would re-register the listener on every login/logout.
   useEffect(() => {
     const handleVisibility = () => {
-      if (!document.hidden && !!user && isInitializedRef.current) {
-        void fetchCurrentUser().catch((e) => console.debug("[Auth] Visibility re-check failed:", e));
-      }
+      if (document.hidden) return;
+      if (!isInitializedRef.current) return;
+      if (userRef.current === null) return;
+      void fetchCurrentUser().catch((e) => console.debug("[Auth] Visibility re-check failed:", e));
     };
 
     document.addEventListener("visibilitychange", handleVisibility);
     return () => document.removeEventListener("visibilitychange", handleVisibility);
-  }, [user, fetchCurrentUser]);
+  }, [fetchCurrentUser]);
 
   const login = useCallback(async (email: string, password: string) => {
     try {
