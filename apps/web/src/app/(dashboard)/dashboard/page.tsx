@@ -228,7 +228,9 @@ const IssueRow = memo(function IssueRow({
               </Button>
             </div>
           )}
-          {issue.status === "unresolved" && !isHovered && <ChevronRight className="h-4 w-4 text-muted-foreground" aria-hidden="true" />}
+          {issue.status === "unresolved" && !isHovered && (
+            <ChevronRight className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+          )}
         </div>
       </Link>
     </div>
@@ -352,10 +354,24 @@ export default function DashboardPage() {
       events += i.count;
       users += i.user_count;
       if (now - new Date(i.last_seen).getTime() < 86400000) recent++;
-      if (i.level === "fatal") { fatal++; critical++; }
-      else if (i.level === "error") { error++; critical++; }
+      if (i.level === "fatal") {
+        fatal++;
+        critical++;
+      } else if (i.level === "error") {
+        error++;
+        critical++;
+      }
     }
-    return { total: issues.length, unresolved, events, users, recentCount: recent, criticalCount: critical, fatalCount: fatal, errorCount: error };
+    return {
+      total: issues.length,
+      unresolved,
+      events,
+      users,
+      recentCount: recent,
+      criticalCount: critical,
+      fatalCount: fatal,
+      errorCount: error,
+    };
   }, [issues]);
 
   // Sparkline cache — keyed by id:count so re-sorts don't regenerate
@@ -821,9 +837,7 @@ export default function DashboardPage() {
             setSearchResults(activeFilter === "error-triage" ? null : issues.filter((i) => i.level === "error"));
           }}
           className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-mono font-bold transition-all ${
-            stats.errorCount > 0
-              ? "text-orange-400 hover:bg-orange-500/10"
-              : "text-[hsl(var(--muted-foreground))]"
+            stats.errorCount > 0 ? "text-orange-400 hover:bg-orange-500/10" : "text-[hsl(var(--muted-foreground))]"
           } ${activeFilter === "error-triage" ? "bg-orange-500/10" : ""}`}
         >
           <span
@@ -955,6 +969,7 @@ export default function DashboardPage() {
             role="button"
             tabIndex={0}
             aria-pressed={activeFilter === search.id}
+            aria-label={`Filter by saved search: ${search.name}`}
             onClick={() => {
               if (activeFilter === search.id) {
                 setActiveFilter(null);

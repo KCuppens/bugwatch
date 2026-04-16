@@ -75,7 +75,7 @@ export default function IssueDetailPage() {
   const params = useParams();
   const searchParams = useSearchParams();
   const router = useRouter();
-  const issueId = Array.isArray(params.id) ? params.id[0] : (params.id ?? "");
+  const issueId = Array.isArray(params.id) ? (params.id[0] ?? "") : (params.id ?? "");
   const projectId = searchParams.get("project");
 
   const hasIntegrations = useFeature("github");
@@ -1107,14 +1107,18 @@ export default function IssueDetailPage() {
             <div className="rounded-lg border p-3">
               <div className="flex items-center gap-2">
                 <Clock className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
-                <time dateTime={issue.first_seen} className="text-sm font-medium">{new Date(issue.first_seen).toLocaleDateString()}</time>
+                <time dateTime={issue.first_seen} className="text-sm font-medium">
+                  {new Date(issue.first_seen).toLocaleDateString()}
+                </time>
               </div>
               <p className="text-xs text-muted-foreground">First seen</p>
             </div>
             <div className="rounded-lg border p-3">
               <div className="flex items-center gap-2">
                 <Clock className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
-                <time dateTime={issue.last_seen} className="text-sm font-medium">{formatRelativeTime(issue.last_seen)}</time>
+                <time dateTime={issue.last_seen} className="text-sm font-medium">
+                  {formatRelativeTime(issue.last_seen)}
+                </time>
               </div>
               <p className="text-xs text-muted-foreground">Last seen</p>
             </div>

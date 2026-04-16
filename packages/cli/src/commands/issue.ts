@@ -10,10 +10,7 @@ interface IssueOptions {
 /**
  * Issue command - show issue detail
  */
-export async function issueCommand(
-  issueId: string,
-  options: IssueOptions
-): Promise<void> {
+export async function issueCommand(issueId: string, options: IssueOptions): Promise<void> {
   if (!options.project) {
     console.log(chalk.red("\n  --project <id> is required.\n"));
     process.exit(1);
@@ -34,27 +31,14 @@ export async function issueCommand(
     console.log(chalk.bold("\n  Issue Detail\n"));
 
     console.log(`  ${chalk.dim("Title:")}       ${issue.title}`);
-    console.log(
-      `  ${chalk.dim("ID:")}          ${issue.id}`
-    );
-    console.log(
-      `  ${chalk.dim("Status:")}      ${getStatusDisplay(issue.status)}`
-    );
-    console.log(
-      `  ${chalk.dim("Level:")}       ${getLevelDisplay(issue.level)}`
-    );
+    console.log(`  ${chalk.dim("ID:")}          ${issue.id}`);
+    console.log(`  ${chalk.dim("Status:")}      ${getStatusDisplay(issue.status)}`);
+    console.log(`  ${chalk.dim("Level:")}       ${getLevelDisplay(issue.level)}`);
     console.log(`  ${chalk.dim("Count:")}       ${issue.count}`);
-    console.log(
-      `  ${chalk.dim("First Seen:")}  ${formatDate(issue.first_seen)}`
-    );
-    console.log(
-      `  ${chalk.dim("Last Seen:")}   ${formatDate(issue.last_seen)}`
-    );
+    console.log(`  ${chalk.dim("First Seen:")}  ${formatDate(issue.first_seen)}`);
+    console.log(`  ${chalk.dim("Last Seen:")}   ${formatDate(issue.last_seen)}`);
 
-    // Show stack trace if available (server returns exception.stacktrace)
-    const exception = (issue as unknown as Record<string, unknown>).exception as
-      | { type?: string; value?: string; stacktrace?: Array<{ filename: string; function: string; lineno: number; colno?: number }> }
-      | undefined;
+    const exception = issue.exception;
 
     if (exception) {
       if (exception.type || exception.value) {

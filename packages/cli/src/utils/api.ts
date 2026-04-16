@@ -225,6 +225,12 @@ export interface Project {
   unresolved_count?: number;
 }
 
+export interface IssueException {
+  type?: string;
+  value?: string;
+  stacktrace?: Array<{ filename: string; function: string; lineno: number; colno?: number }>;
+}
+
 export interface Issue {
   id: string;
   title: string;
@@ -234,6 +240,7 @@ export interface Issue {
   first_seen: string;
   last_seen: string;
   project_id?: string;
+  exception?: IssueException;
 }
 
 export interface Monitor {
