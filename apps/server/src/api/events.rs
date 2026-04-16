@@ -248,6 +248,23 @@ pub async fn ingest(
             ));
         }
     }
+    if event.environment.len() > 64 {
+        return Err(AppError::Validation(
+            "environment too long (max 64 characters)".to_string(),
+        ));
+    }
+    if let Some(ref release) = event.release {
+        if release.len() > 200 {
+            return Err(AppError::Validation(
+                "release too long (max 200 characters)".to_string(),
+            ));
+        }
+    }
+    if event.platform.len() > 64 {
+        return Err(AppError::Validation(
+            "platform too long (max 64 characters)".to_string(),
+        ));
+    }
 
     // 4b. Deduplicate client-side error boundary events when onRequestError
     //     already captured the same server error with full details.
@@ -317,7 +334,7 @@ pub async fn ingest(
         (fp, msg.to_string())
     };
 
-    // 6. Get level as string
+    // 7. Get level as string
     let level = match event.level {
         EventLevel::Fatal => "fatal",
         EventLevel::Error => "error",
@@ -326,7 +343,7 @@ pub async fn ingest(
         EventLevel::Debug => "debug",
     };
 
-    // 7. Find or create issue
+    // 8. Find or create issue
     let (issue, is_new) = IssueRepository::find_or_create(
         &state.db,
         &project.id,
@@ -341,7 +358,7 @@ pub async fn ingest(
         tracing::info!("Created new issue {} for project {}", issue.id, project.id);
     }
 
-    // 8. Store event
+    // 9. Store event
     let payload = serde_json::to_string(&event)
         .map_err(|e| AppError::Internal(format!("Failed to serialize event: {}", e)))?;
 
@@ -364,7 +381,8 @@ pub async fn ingest(
         ));
     }
 
-    let created_event = inserted.expect("inserted is_some was verified above");
+    // None was handled by the early return above — unwrap is safe here
+    let created_event = inserted.unwrap();
 
     // Link event to session recording if session_id is present
     let session_id_value = event.session_id.as_deref().or_else(|| {
@@ -393,7 +411,7 @@ pub async fn ingest(
         }
     }
 
-    // 9. Evaluate alert rules (async, non-blocking, with backpressure)
+    // 10. Evaluate alert rules (async, non-blocking, with backpressure)
     if is_new {
         tracing::info!(
             "New issue created - triggering alert evaluation for issue {}",
@@ -415,8 +433,9 @@ pub async fn ingest(
             }
             Err(_) => {
                 tracing::warn!(
-                    "Alert semaphore full — skipping alert evaluation for issue {}",
-                    issue.id
+                    issue_id = %issue.id,
+                    project_id = %project.id,
+                    "Alert semaphore full — skipping alert evaluation"
                 );
             }
         }

@@ -149,6 +149,13 @@ export default function IssueDetailPage() {
   // Auto-resize textarea ref
   const commentRef = useRef<HTMLTextAreaElement>(null);
 
+  // Detect Mac platform once on mount to avoid SSR/hydration mismatch
+  const [isMac, setIsMac] = useState(false);
+  useEffect(() => {
+    const nav = navigator as Navigator & { userAgentData?: { platform?: string } };
+    setIsMac(nav.userAgentData?.platform === "macOS" || /Mac|iPhone|iPad|iPod/.test(navigator.userAgent));
+  }, []);
+
   // Keep issueStatusRef in sync so undo closures can detect stale status
   useEffect(() => {
     issueStatusRef.current = issue?.status;
@@ -528,12 +535,16 @@ export default function IssueDetailPage() {
               onClick={handleResolve}
               disabled={!!pendingAction || issue.status === "resolved"}
               aria-keyshortcuts="r"
+              aria-busy={pendingAction === "resolve"}
               className="h-8"
             >
               {pendingAction === "resolve" ? (
-                <Loader2 className="h-3 w-3 animate-spin" />
+                <>
+                  <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
+                  <span className="sr-only">Resolving…</span>
+                </>
               ) : (
-                <CheckCircle className="h-3 w-3" />
+                <CheckCircle className="h-3 w-3" aria-hidden="true" />
               )}
               <span className="ml-1.5 hidden sm:inline">{issue.status === "resolved" ? "Resolved" : "Resolve"}</span>
             </Button>
@@ -549,12 +560,16 @@ export default function IssueDetailPage() {
           onClick={handleIgnore}
           disabled={!!pendingAction || issue.status === "ignored"}
           aria-keyshortcuts="i m e"
+          aria-busy={pendingAction === "ignore"}
           className="h-7 text-xs"
         >
           {pendingAction === "ignore" ? (
-            <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
+            <>
+              <Loader2 className="mr-1.5 h-3 w-3 animate-spin" aria-hidden="true" />
+              <span className="sr-only">Ignoring…</span>
+            </>
           ) : (
-            <XCircle className="mr-1.5 h-3 w-3" />
+            <XCircle className="mr-1.5 h-3 w-3" aria-hidden="true" />
           )}
           {issue.status === "ignored" ? "Ignored" : "Ignore"}
         </Button>
@@ -869,7 +884,7 @@ export default function IssueDetailPage() {
                                 : 0;
 
                               return (
-                                <div key={index}>
+                                <div key={`${crumb.timestamp}-${index}`}>
                                   {gap > 1 && (
                                     <div className="relative flex items-center pl-8 py-1">
                                       <div className="flex items-center gap-2 text-[10px] text-muted-foreground border-b border-dashed border-muted flex-1">
@@ -884,6 +899,7 @@ export default function IssueDetailPage() {
                                   )}
                                   <div className="relative flex items-start gap-3 pl-8">
                                     <div
+                                      aria-hidden="true"
                                       className={`absolute left-1.5 top-2 h-3 w-3 rounded-full ${dotColor} ring-2 ring-background flex items-center justify-center`}
                                     >
                                       <CrumbIcon className="h-1.5 w-1.5 text-white" />
@@ -964,7 +980,7 @@ export default function IssueDetailPage() {
                 <CardHeader className="pb-3">
                   <div className="flex items-center justify-between">
                     <CardTitle className="text-base flex items-center gap-2">
-                      <Globe className="h-4 w-4" />
+                      <Globe className="h-4 w-4" aria-hidden="true" />
                       Request
                     </CardTitle>
                     {issue.request?.url && (
@@ -1013,7 +1029,7 @@ export default function IssueDetailPage() {
               <Card>
                 <CardHeader className="pb-3">
                   <CardTitle className="text-base flex items-center gap-2">
-                    <User className="h-4 w-4" />
+                    <User className="h-4 w-4" aria-hidden="true" />
                     User
                   </CardTitle>
                 </CardHeader>
@@ -1055,7 +1071,7 @@ export default function IssueDetailPage() {
                 <Card>
                   <CardHeader className="pb-3">
                     <CardTitle className="text-base flex items-center gap-2">
-                      <Code className="h-4 w-4" />
+                      <Code className="h-4 w-4" aria-hidden="true" />
                       Extra Data
                     </CardTitle>
                   </CardHeader>
@@ -1166,7 +1182,11 @@ export default function IssueDetailPage() {
                           : frequencyData.buckets;
                       const max = Math.max(...buckets.map((b) => b.count), 1);
                       return buckets.map((b, i) => (
-                        <div key={i} className="flex-1 group relative">
+                        <div
+                          key={i}
+                          className="flex-1 group relative"
+                          aria-label={`${b.count} event${b.count !== 1 ? "s" : ""}`}
+                        >
                           <div
                             className={`w-full rounded-t transition-colors ${b.count > 0 ? "bg-blue-600 hover:bg-blue-500" : "bg-muted"}`}
                             style={{
@@ -1174,7 +1194,10 @@ export default function IssueDetailPage() {
                               minHeight: b.count > 0 ? "4px" : "2px",
                             }}
                           />
-                          <div className="absolute bottom-full mb-1 left-1/2 -translate-x-1/2 hidden group-hover:block bg-popover text-popover-foreground text-[10px] px-2 py-1 rounded border shadow-sm whitespace-nowrap z-10">
+                          <div
+                            className="absolute bottom-full mb-1 left-1/2 -translate-x-1/2 hidden group-hover:block bg-popover text-popover-foreground text-[10px] px-2 py-1 rounded border shadow-sm whitespace-nowrap z-10"
+                            aria-hidden="true"
+                          >
                             {b.count}
                           </div>
                         </div>
@@ -1196,12 +1219,12 @@ export default function IssueDetailPage() {
             <CardHeader className="pb-2 px-4 pt-4">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm flex items-center gap-2">
-                  <BarChart3 className="h-3.5 w-3.5" />
+                  <BarChart3 className="h-3.5 w-3.5" aria-hidden="true" />
                   Impact
                 </CardTitle>
                 {impactData?.is_trending && (
                   <div className="flex items-center gap-1 px-2 py-0.5 bg-red-100 dark:bg-red-950 text-red-700 dark:text-red-300 rounded-full text-[10px] font-medium">
-                    <Flame className="h-3 w-3" />
+                    <Flame className="h-3 w-3" aria-hidden="true" />
                     Trending
                   </div>
                 )}
@@ -1263,7 +1286,7 @@ export default function IssueDetailPage() {
             <Card>
               <CardHeader className="pb-2 px-4 pt-4">
                 <CardTitle className="text-sm flex items-center gap-2">
-                  <Tag className="h-3.5 w-3.5" />
+                  <Tag className="h-3.5 w-3.5" aria-hidden="true" />
                   Tags
                 </CardTitle>
               </CardHeader>
@@ -1285,7 +1308,7 @@ export default function IssueDetailPage() {
             <Card>
               <CardHeader className="pb-2 px-4 pt-4">
                 <CardTitle className="text-sm flex items-center gap-2">
-                  <Video className="h-3.5 w-3.5" />
+                  <Video className="h-3.5 w-3.5" aria-hidden="true" />
                   Session Replay
                 </CardTitle>
               </CardHeader>
@@ -1322,7 +1345,7 @@ export default function IssueDetailPage() {
           <Card>
             <CardHeader className="pb-2 px-4 pt-4">
               <CardTitle className="text-sm flex items-center gap-2">
-                <MessageSquare className="h-3.5 w-3.5" />
+                <MessageSquare className="h-3.5 w-3.5" aria-hidden="true" />
                 Discussion
                 {comments.length > 0 && (
                   <span className="text-xs font-normal text-muted-foreground">({comments.length})</span>
@@ -1360,16 +1383,7 @@ export default function IssueDetailPage() {
                   )}
                 </Button>
               </div>
-              <p className="text-[10px] text-muted-foreground mb-2">
-                {typeof navigator !== "undefined" &&
-                // userAgentData is available in Chromium; fall back to userAgent string for others
-                ((navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform ===
-                  "macOS" ||
-                  /Mac|iPhone|iPad|iPod/.test(navigator.userAgent))
-                  ? "⌘"
-                  : "Ctrl"}
-                +Enter to submit
-              </p>
+              <p className="text-[10px] text-muted-foreground mb-2">{isMac ? "⌘" : "Ctrl"}+Enter to submit</p>
 
               {commentsLoading ? (
                 <div className="flex items-center justify-center py-4">
@@ -1453,6 +1467,7 @@ export default function IssueDetailPage() {
                   {comments.length > 3 && !showAllComments && (
                     <button
                       onClick={() => setShowAllComments(true)}
+                      aria-expanded={showAllComments}
                       className="text-xs text-accent-2 hover:underline w-full text-center pt-1"
                     >
                       View all {comments.length} comments

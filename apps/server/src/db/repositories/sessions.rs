@@ -10,6 +10,9 @@ type HmacSha256 = Hmac<Sha256>;
 pub struct SessionRepository;
 
 impl SessionRepository {
+    /// Retained for external callers. Internally delegates to `create_with_id`
+    /// with a freshly-generated UUID.
+    #[allow(dead_code)]
     pub async fn create(
         pool: &DbPool,
         user_id: &str,
@@ -20,24 +23,10 @@ impl SessionRepository {
         jwt_secret: &str,
     ) -> Result<Session> {
         let id = Uuid::new_v4().to_string();
-        let token_hash = hash_token(token, jwt_secret.as_bytes());
-
-        sqlx::query_as::<_, Session>(
-            r#"
-            INSERT INTO sessions (id, user_id, token_hash, expires_at, ip_address, user_agent)
-            VALUES ($1, $2, $3, $4, $5, $6)
-            RETURNING *
-            "#,
+        Self::create_with_id(
+            pool, &id, user_id, token, expires_at, ip_address, user_agent, jwt_secret,
         )
-        .bind(&id)
-        .bind(user_id)
-        .bind(&token_hash)
-        .bind(expires_at)
-        .bind(ip_address)
-        .bind(user_agent)
-        .fetch_one(pool)
         .await
-        .map_err(Into::into)
     }
 
     pub async fn find_by_id(pool: &DbPool, id: &str) -> Result<Option<Session>> {
@@ -112,10 +101,16 @@ impl SessionRepository {
         let token_hash = hash_token(token, jwt_secret.as_bytes());
         let mut tx = pool.begin().await?;
 
-        sqlx::query("DELETE FROM sessions WHERE id = $1")
+        let deleted = sqlx::query("DELETE FROM sessions WHERE id = $1")
             .bind(old_session_id)
             .execute(&mut *tx)
             .await?;
+        if deleted.rows_affected() == 0 {
+            tracing::warn!(
+                session_id = %old_session_id,
+                "rotate: old session not found — possible concurrent logout or replay attempt"
+            );
+        }
 
         sqlx::query(
             r#"
@@ -151,12 +146,15 @@ impl SessionRepository {
         Ok(())
     }
 
-    /// Delete all sessions that have passed their `expires_at`.
-    /// Returns the number of rows deleted.
+    /// Delete up to 1000 expired sessions per call. Batch-limited to avoid
+    /// long-running lock contention on large backlogs; callers should loop
+    /// until the return value is 0.
     pub async fn delete_expired(pool: &DbPool) -> Result<u64> {
-        let result = sqlx::query("DELETE FROM sessions WHERE expires_at < NOW()")
-            .execute(pool)
-            .await?;
+        let result = sqlx::query(
+            "DELETE FROM sessions WHERE id IN (SELECT id FROM sessions WHERE expires_at < NOW() LIMIT 1000)"
+        )
+        .execute(pool)
+        .await?;
         Ok(result.rows_affected())
     }
 }

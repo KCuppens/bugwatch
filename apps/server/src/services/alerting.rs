@@ -95,6 +95,76 @@ async fn get_project_and_rules(
     Ok(Some((project, rules)))
 }
 
+/// Evaluate whether a metric reading matches a server-metric alert condition.
+/// Returns `Some(alert_message)` on a match, `None` otherwise.
+/// Accepts pre-parsed `disks` so the JSON is not deserialized once per rule.
+fn evaluate_metric_condition(
+    condition: &AlertCondition,
+    server_db_id: &str,
+    metric: &ServerMetric,
+    hostname: &str,
+    disks: &[serde_json::Value],
+) -> Option<String> {
+    match condition {
+        AlertCondition::ServerCpuHigh {
+            threshold_percent,
+            server_id,
+        } => {
+            let applies = server_id.is_none() || server_id.as_deref() == Some(server_db_id);
+            applies
+                .then(|| metric.cpu_usage_percent)
+                .flatten()
+                .filter(|&cpu| cpu >= *threshold_percent)
+                .map(|cpu| {
+                    format!(
+                        "CPU at {:.1}% on {} (threshold: {:.0}%)",
+                        cpu, hostname, threshold_percent
+                    )
+                })
+        }
+        AlertCondition::ServerMemoryHigh {
+            threshold_percent,
+            server_id,
+        } => {
+            let applies = server_id.is_none() || server_id.as_deref() == Some(server_db_id);
+            applies
+                .then(|| metric.mem_usage_percent)
+                .flatten()
+                .filter(|&mem| mem >= *threshold_percent)
+                .map(|mem| {
+                    format!(
+                        "Memory at {:.1}% on {} (threshold: {:.0}%)",
+                        mem, hostname, threshold_percent
+                    )
+                })
+        }
+        AlertCondition::ServerDiskHigh {
+            threshold_percent,
+            mount,
+            server_id,
+        } => {
+            let applies = server_id.is_none() || server_id.as_deref() == Some(server_db_id);
+            if !applies {
+                return None;
+            }
+            disks.iter().find_map(|disk| {
+                let disk_mount = disk["mount"].as_str().unwrap_or("");
+                let usage = disk["usage_percent"].as_f64().unwrap_or(0.0);
+                let mount_matches = mount.is_none() || mount.as_deref() == Some(disk_mount);
+                if mount_matches && usage >= *threshold_percent {
+                    Some(format!(
+                        "Disk {} at {:.1}% on {} (threshold: {:.0}%)",
+                        disk_mount, usage, hostname, threshold_percent
+                    ))
+                } else {
+                    None
+                }
+            })
+        }
+        _ => None,
+    }
+}
+
 /// Parse a rule's condition JSON, logging a structured error and returning
 /// `None` on failure so the caller can `continue` the rule loop cleanly.
 fn parse_alert_condition(rule: &AlertRule) -> Option<AlertCondition> {
@@ -114,10 +184,13 @@ async fn send_with_retry(
     channel: &NotificationChannel,
     payload: &AlertPayload,
 ) -> Result<Option<String>> {
+    use rand::Rng;
     let mut last_err = anyhow::anyhow!("no attempts made");
     for attempt in 0u32..3 {
         if attempt > 0 {
-            tokio::time::sleep(std::time::Duration::from_millis(500 * (1 << (attempt - 1)))).await;
+            let base_ms = 500u64 * (1 << (attempt - 1));
+            let jitter_ms = rand::thread_rng().gen_range(0u64..=100);
+            tokio::time::sleep(std::time::Duration::from_millis(base_ms + jitter_ms)).await;
         }
         match notification_service.send(channel, payload).await {
             Ok(action) => return Ok(action),
@@ -203,7 +276,9 @@ impl AlertingService {
                     frequency: None,
                 };
 
-                self.send_alert(&rule.id, &rule.actions, &payload).await;
+                if let Err(e) = self.send_alert(&rule, &payload).await {
+                    error!(rule_id = %rule.id, "Alert delivery failed after retries: {}", e);
+                }
             } else {
                 tracing::debug!(
                     "Alert rule '{}' does not match (condition: {:?})",
@@ -282,7 +357,9 @@ impl AlertingService {
                     frequency: None,
                 };
 
-                self.send_alert(&rule.id, &rule.actions, &payload).await;
+                if let Err(e) = self.send_alert(&rule, &payload).await {
+                    error!(rule_id = %rule.id, "Alert delivery failed after retries: {}", e);
+                }
             } else {
                 tracing::debug!(
                     "Alert rule '{}' does not match (condition type: {:?})",
@@ -336,7 +413,9 @@ impl AlertingService {
                     frequency: None,
                 };
 
-                self.send_alert(&rule.id, &rule.actions, &payload).await;
+                if let Err(e) = self.send_alert(&rule, &payload).await {
+                    error!(rule_id = %rule.id, "Alert delivery failed after retries: {}", e);
+                }
             }
         }
 
@@ -360,134 +439,68 @@ impl AlertingService {
             None => return Ok(()),
         };
 
+        // Parse disks_json once before the loop so it is not re-deserialized
+        // for each active rule that includes a ServerDiskHigh condition.
+        let disks: Vec<serde_json::Value> = metric
+            .disks_json
+            .as_deref()
+            .and_then(|s| {
+                serde_json::from_str(s)
+                    .map_err(|e| tracing::warn!("Failed to parse disks_json: {}", e))
+                    .ok()
+            })
+            .unwrap_or_default();
+
         for rule in rules {
             let condition = match parse_alert_condition(&rule) {
                 Some(c) => c,
                 None => continue,
             };
 
-            let (matches, alert_msg) = match &condition {
-                AlertCondition::ServerCpuHigh {
-                    threshold_percent,
-                    server_id,
-                } => {
-                    let applies = server_id.is_none() || server_id.as_deref() == Some(server_db_id);
-                    if applies {
-                        if let Some(cpu) = metric.cpu_usage_percent {
-                            if cpu >= *threshold_percent {
-                                (
-                                    true,
-                                    format!(
-                                        "CPU at {:.1}% on {} (threshold: {:.0}%)",
-                                        cpu, server.hostname, threshold_percent
-                                    ),
-                                )
-                            } else {
-                                (false, String::new())
-                            }
-                        } else {
-                            (false, String::new())
-                        }
-                    } else {
-                        (false, String::new())
-                    }
-                }
-                AlertCondition::ServerMemoryHigh {
-                    threshold_percent,
-                    server_id,
-                } => {
-                    let applies = server_id.is_none() || server_id.as_deref() == Some(server_db_id);
-                    if applies {
-                        if let Some(mem) = metric.mem_usage_percent {
-                            if mem >= *threshold_percent {
-                                (
-                                    true,
-                                    format!(
-                                        "Memory at {:.1}% on {} (threshold: {:.0}%)",
-                                        mem, server.hostname, threshold_percent
-                                    ),
-                                )
-                            } else {
-                                (false, String::new())
-                            }
-                        } else {
-                            (false, String::new())
-                        }
-                    } else {
-                        (false, String::new())
-                    }
-                }
-                AlertCondition::ServerDiskHigh {
-                    threshold_percent,
-                    mount,
-                    server_id,
-                } => {
-                    let applies = server_id.is_none() || server_id.as_deref() == Some(server_db_id);
-                    if applies {
-                        if let Some(ref disks_str) = metric.disks_json {
-                            let disks: Vec<serde_json::Value> = serde_json::from_str(disks_str)
-                                .unwrap_or_else(|e| {
-                                    tracing::warn!("Failed to parse disks_json: {}", e);
-                                    vec![]
-                                });
-                            let mut triggered = false;
-                            let mut msg = String::new();
-                            for disk in &disks {
-                                let disk_mount = disk["mount"].as_str().unwrap_or("");
-                                let usage = disk["usage_percent"].as_f64().unwrap_or(0.0);
-                                let mount_matches =
-                                    mount.is_none() || mount.as_deref() == Some(disk_mount);
-                                if mount_matches && usage >= *threshold_percent {
-                                    triggered = true;
-                                    msg = format!(
-                                        "Disk {} at {:.1}% on {} (threshold: {:.0}%)",
-                                        disk_mount, usage, server.hostname, threshold_percent
-                                    );
-                                    break;
-                                }
-                            }
-                            (triggered, msg)
-                        } else {
-                            (false, String::new())
-                        }
-                    } else {
-                        (false, String::new())
-                    }
-                }
-                _ => (false, String::new()),
+            let Some(alert_msg) = evaluate_metric_condition(
+                &condition,
+                server_db_id,
+                metric,
+                &server.hostname,
+                &disks,
+            ) else {
+                continue;
             };
 
-            if matches {
-                // Cooldown: check if we've already fired this rule+server within 15 minutes
-                let recent_log =
-                    AlertLogRepository::find_recent(&self.pool, &rule.id, Some(server_db_id), 15)
-                        .await;
-
-                if let Ok(Some(_)) = recent_log {
-                    // Already fired recently, skip
+            // Cooldown: check if we've already fired this rule+server within 15 minutes
+            match AlertLogRepository::find_recent(&self.pool, &rule.id, Some(server_db_id), 15)
+                .await
+            {
+                Ok(Some(_)) => continue, // already fired recently
+                Ok(None) => {}           // proceed
+                Err(e) => {
+                    // Fail-safe: skip rather than risk alert storm on DB error
+                    tracing::warn!(rule_id = %rule.id, "Failed to check alert cooldown: {}; skipping", e);
                     continue;
                 }
+            }
 
-                let payload = AlertPayload {
-                    title: format!("Server Alert: {}", server.hostname),
-                    message: alert_msg,
-                    severity: "warning".to_string(),
-                    project_name: project.name.clone(),
-                    trigger_type: "server_metric".to_string(),
-                    trigger_id: Some(server_db_id.to_string()),
-                    url: Some(format!(
-                        "{}/dashboard/server?project={}",
-                        self.app_url, project_id
-                    )),
-                    timestamp: chrono::Utc::now().to_rfc3339(),
-                    project_id: None,
-                    issue: None,
-                    stack_trace: None,
-                    affected_users: None,
-                    frequency: None,
-                };
+            let payload = AlertPayload {
+                title: format!("Server Alert: {}", server.hostname),
+                message: alert_msg,
+                severity: "warning".to_string(),
+                project_name: project.name.clone(),
+                trigger_type: "server_metric".to_string(),
+                trigger_id: Some(server_db_id.to_string()),
+                url: Some(format!(
+                    "{}/dashboard/server?project={}",
+                    self.app_url, project_id
+                )),
+                timestamp: chrono::Utc::now().to_rfc3339(),
+                project_id: None,
+                issue: None,
+                stack_trace: None,
+                affected_users: None,
+                frequency: None,
+            };
 
-                self.send_alert(&rule.id, &rule.actions, &payload).await;
+            if let Err(e) = self.send_alert(&rule, &payload).await {
+                error!(rule_id = %rule.id, "Alert delivery failed after retries: {}", e);
             }
         }
 
@@ -515,13 +528,16 @@ impl AlertingService {
             };
 
             if matches {
-                // Cooldown check
-                let recent_log =
-                    AlertLogRepository::find_recent(&self.pool, &rule.id, Some(&server.id), 15)
-                        .await;
-
-                if let Ok(Some(_)) = recent_log {
-                    continue;
+                // Cooldown check — fail-safe: skip on DB error to avoid alert storm
+                match AlertLogRepository::find_recent(&self.pool, &rule.id, Some(&server.id), 15)
+                    .await
+                {
+                    Ok(Some(_)) => continue,
+                    Ok(None) => {}
+                    Err(e) => {
+                        tracing::warn!(rule_id = %rule.id, "Failed to check alert cooldown: {}; skipping", e);
+                        continue;
+                    }
                 }
 
                 let payload = AlertPayload {
@@ -547,46 +563,52 @@ impl AlertingService {
                     frequency: None,
                 };
 
-                self.send_alert(&rule.id, &rule.actions, &payload).await;
+                if let Err(e) = self.send_alert(&rule, &payload).await {
+                    error!(rule_id = %rule.id, "Alert delivery failed after retries: {}", e);
+                }
             }
         }
 
         Ok(())
     }
 
-    /// Send alert to all configured channels
-    async fn send_alert(&self, rule_id: &str, actions_json: &str, payload: &AlertPayload) {
-        // Check mute status
-        let rule = AlertRuleRepository::find_by_id(&self.pool, rule_id).await;
-        if let Ok(Some(rule)) = &rule {
-            if let Some(muted_until) = rule.muted_until {
-                if muted_until > chrono::Utc::now() {
-                    info!(
-                        "Alert rule '{}' is muted until {}, skipping",
-                        rule.name, muted_until
-                    );
-                    return;
-                }
+    /// Send alert to all configured channels.
+    ///
+    /// Accepts the already-loaded `AlertRule` so callers avoid a redundant
+    /// `find_by_id` round-trip (the rule is fetched once by the calling loop).
+    async fn send_alert(&self, rule: &AlertRule, payload: &AlertPayload) -> Result<()> {
+        let rule_id = &rule.id;
+
+        // Check mute status using the already-loaded rule — no extra DB query.
+        if let Some(muted_until) = rule.muted_until {
+            if muted_until > chrono::Utc::now() {
+                info!(
+                    rule_id = %rule_id,
+                    "Alert rule '{}' is muted until {}, skipping",
+                    rule.name,
+                    muted_until
+                );
+                return Ok(());
             }
         }
 
-        let channel_ids: Vec<String> = match serde_json::from_str(actions_json) {
+        let channel_ids: Vec<String> = match serde_json::from_str(&rule.actions) {
             Ok(ids) => ids,
             Err(e) => {
-                error!("Failed to parse channel IDs from '{}': {}", actions_json, e);
-                return;
+                error!(rule_id = %rule_id, "Failed to parse channel IDs from actions JSON: {}", e);
+                return Ok(());
             }
         };
 
         info!(
-            "Sending alert to {} channels: {:?}",
-            channel_ids.len(),
-            channel_ids
+            rule_id = %rule_id,
+            channel_count = channel_ids.len(),
+            "Sending alert"
         );
 
         if channel_ids.is_empty() {
-            info!("No channels configured for this alert rule");
-            return;
+            info!(rule_id = %rule_id, "No channels configured for this alert rule");
+            return Ok(());
         }
 
         // Batch-fetch all channels in a single query instead of N+1
@@ -595,7 +617,7 @@ impl AlertingService {
                 Ok(c) => c,
                 Err(e) => {
                     error!("Failed to batch-fetch channels: {}", e);
-                    return;
+                    return Ok(());
                 }
             };
 
@@ -623,7 +645,7 @@ impl AlertingService {
             // Create log entry
             let log = match AlertLogRepository::create(
                 &self.pool,
-                rule_id,
+                rule_id.as_str(),
                 Some(channel_id),
                 &payload.trigger_type,
                 payload.trigger_id.as_deref(),
@@ -677,16 +699,24 @@ impl AlertingService {
                 let new_status = match action.as_str() {
                     "resolve" => "resolved",
                     "ignore" => "ignored",
-                    _ => return,
+                    // Unknown actions are no-ops — don't early-return the whole function
+                    _ => return Ok(()),
                 };
                 match IssueRepository::update_status(&self.pool, issue_id, new_status).await {
-                    Ok(_) => info!("Webhook action '{}' applied to issue {}", action, issue_id),
+                    Ok(_) => info!(
+                        rule_id = %rule_id,
+                        "Webhook action '{}' applied to issue {}",
+                        action, issue_id
+                    ),
                     Err(e) => error!(
+                        rule_id = %rule_id,
                         "Failed to apply webhook action '{}' to issue {}: {}",
                         action, issue_id, e
                     ),
                 }
             }
         }
+
+        Ok(())
     }
 }

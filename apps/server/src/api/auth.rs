@@ -503,21 +503,25 @@ pub struct MeResponse {
 
 /// GET /api/v1/auth/me
 pub async fn me(user: AuthUser, State(state): State<AppState>) -> AppResult<Json<MeResponse>> {
-    // Fetch organization for user
-    let organization = OrganizationRepository::find_by_user(&state.db, &user.id)
-        .await
-        .ok()
-        .flatten()
-        .map(|org| OrganizationInfo {
-            id: org.id,
-            name: org.name,
-            slug: org.slug,
-            tier: org.tier,
-            seats: org.seats,
-            subscription_status: org.subscription_status,
-            current_period_end: org.current_period_end,
-            cancel_at_period_end: org.cancel_at_period_end,
-        });
+    // Fetch organization for user — soft failure: a DB error returns null org
+    // rather than a 500, since the user profile itself is still valid.
+    let organization = match OrganizationRepository::find_by_user(&state.db, &user.id).await {
+        Ok(opt) => opt,
+        Err(e) => {
+            tracing::warn!(user_id = %user.id, "Failed to fetch organization for /me: {}", e);
+            None
+        }
+    }
+    .map(|org| OrganizationInfo {
+        id: org.id,
+        name: org.name,
+        slug: org.slug,
+        tier: org.tier,
+        seats: org.seats,
+        subscription_status: org.subscription_status,
+        current_period_end: org.current_period_end,
+        cancel_at_period_end: org.cancel_at_period_end,
+    });
 
     Ok(Json(MeResponse {
         data: MeData {
@@ -769,7 +773,7 @@ pub async fn reset_password(
     // Invalidate all existing sessions for this user (force re-login with new password)
     SessionRepository::delete_by_user(&state.db, &user_id).await?;
 
-    tracing::info!("Password reset successful for user {}", user_id);
+    tracing::info!(user_id = %user_id, outcome = "password_reset", "Password reset successful");
 
     Ok(Json(
         serde_json::json!({ "data": { "message": "Password reset successfully. Please log in with your new password." } }),
