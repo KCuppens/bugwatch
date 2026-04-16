@@ -169,11 +169,10 @@ pub async fn ingest(
     headers: HeaderMap,
     Json(mut event): Json<ErrorEvent>,
 ) -> AppResult<(StatusCode, Json<IngestResponse>)> {
-    tracing::info!("Event ingest request received");
+    tracing::debug!("Event ingest request received");
 
     // 1. Extract API key from Authorization header
     let api_key = extract_api_key(&headers)?;
-    tracing::info!("API key extracted successfully");
 
     // 2. Validate API key and get project
     let project = ProjectRepository::find_by_api_key(&state.db, &api_key)
@@ -205,7 +204,7 @@ pub async fn ingest(
         });
     }
 
-    tracing::info!(
+    tracing::debug!(
         "Processing event {} for project {} ({})",
         event.event_id,
         project.name,
@@ -364,7 +363,7 @@ pub async fn ingest(
     .await?;
 
     if is_new {
-        tracing::info!("Created new issue {} for project {}", issue.id, project.id);
+        tracing::debug!("Created new issue {} for project {}", issue.id, project.id);
     }
 
     // 9. Strip sensitive headers before storing (Authorization, Cookie, X-API-Key must never
@@ -431,7 +430,7 @@ pub async fn ingest(
 
     // 10. Evaluate alert rules (async, non-blocking, with backpressure)
     if is_new {
-        tracing::info!(
+        tracing::debug!(
             "New issue created - triggering alert evaluation for issue {}",
             issue.id
         );
@@ -458,7 +457,7 @@ pub async fn ingest(
             }
         }
     } else {
-        tracing::info!(
+        tracing::debug!(
             "Issue {} already exists (fingerprint match) - no alert triggered",
             issue.id
         );

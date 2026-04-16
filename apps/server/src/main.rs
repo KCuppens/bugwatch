@@ -72,13 +72,12 @@ async fn main() -> Result<()> {
 
     // Initialize tracing - JSON format in production, pretty format in dev
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| "bugwatch_server=info,tower_http=info".into());
+        .unwrap_or_else(|_| "bugwatch_server=info,tower_http=info,sqlx=warn".into());
 
-    let is_production = std::env::var("ENVIRONMENT")
-        .map(|e| e == "production")
-        .unwrap_or(false);
+    let environment = std::env::var("ENVIRONMENT").unwrap_or_default();
+    let use_json_logs = environment == "production" || environment == "staging";
 
-    if is_production {
+    if use_json_logs {
         tracing_subscriber::registry()
             .with(env_filter)
             .with(tracing_subscriber::fmt::layer().json())
@@ -265,31 +264,35 @@ async fn main() -> Result<()> {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(24 * 60 * 60)); // 24 hours
         loop {
             interval.tick().await;
-            // Retry up to 3 times with 5-minute back-off on transient DB errors
-            let mut success = false;
-            for attempt in 1..=3u32 {
-                match crate::db::repositories::SessionRepository::delete_expired(
-                    &session_cleanup_db,
-                )
-                .await
-                {
-                    Ok(n) => {
-                        if n > 0 {
-                            tracing::info!("Session cleanup: deleted {} expired sessions", n);
+            // Loop until delete_expired drains the full backlog (batches of 1000).
+            let mut total = 0u64;
+            'batch: loop {
+                for attempt in 1..=3u32 {
+                    match crate::db::repositories::SessionRepository::delete_expired(
+                        &session_cleanup_db,
+                    )
+                    .await
+                    {
+                        Ok(0) => break 'batch, // backlog drained
+                        Ok(n) => {
+                            total += n;
+                            break; // batch succeeded, fetch next batch
                         }
-                        success = true;
-                        break;
-                    }
-                    Err(e) => {
-                        tracing::warn!("Session cleanup attempt {}/3 failed: {}", attempt, e);
-                        if attempt < 3 {
+                        Err(e) => {
+                            tracing::warn!("Session cleanup attempt {}/3 failed: {}", attempt, e);
+                            if attempt == 3 {
+                                tracing::error!(
+                                    "Session cleanup failed after 3 attempts — will retry next cycle"
+                                );
+                                break 'batch;
+                            }
                             tokio::time::sleep(std::time::Duration::from_secs(5 * 60)).await;
                         }
                     }
                 }
             }
-            if !success {
-                tracing::error!("Session cleanup failed after 3 attempts — will retry next cycle");
+            if total > 0 {
+                tracing::info!("Session cleanup: deleted {} expired sessions", total);
             }
         }
     });
@@ -301,7 +304,7 @@ async fn main() -> Result<()> {
         let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(3600)); // every hour
         loop {
             interval.tick().await;
-            for attempt in 1..=2u32 {
+            for attempt in 1..=3u32 {
                 match payment_store_clone.expire_old().await {
                     Ok(n) => {
                         if n > 0 {
@@ -311,11 +314,11 @@ async fn main() -> Result<()> {
                     }
                     Err(e) => {
                         tracing::warn!(
-                            "Failed to expire x402 challenges (attempt {}/2): {}",
+                            "Failed to expire x402 challenges (attempt {}/3): {}",
                             attempt,
                             e
                         );
-                        if attempt < 2 {
+                        if attempt < 3 {
                             tokio::time::sleep(std::time::Duration::from_secs(30)).await;
                         }
                     }
@@ -346,13 +349,12 @@ fn create_app(state: AppState) -> Router {
     {
         // Development: allow the frontend origin with credentials (for httpOnly cookies).
         // Can't use Any with allow_credentials(true), so derive from app_url or default.
-        let dev_origin = state
-            .config
-            .app_url
-            .replace("/api", "")
-            .trim_end_matches('/')
-            .parse::<HeaderValue>()
-            .unwrap_or_else(|_| "http://localhost:3001".parse().unwrap());
+        let dev_origin = {
+            let url = state.config.app_url.trim_end_matches('/');
+            let url = url.strip_suffix("/api").unwrap_or(url);
+            url.parse::<HeaderValue>()
+                .unwrap_or_else(|_| "http://localhost:3001".parse().unwrap())
+        };
         CorsLayer::new()
             .allow_origin(dev_origin)
             .allow_methods([

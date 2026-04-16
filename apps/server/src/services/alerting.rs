@@ -717,22 +717,23 @@ impl AlertingService {
         if let (Some(action), Some(issue_id)) = (&webhook_action, &payload.trigger_id) {
             if payload.trigger_type == "new_issue" || payload.trigger_type == "issue_frequency" {
                 let new_status = match action.as_str() {
-                    "resolve" => "resolved",
-                    "ignore" => "ignored",
-                    // Unknown actions are no-ops — don't early-return the whole function
-                    _ => return Ok(()),
+                    "resolve" => Some("resolved"),
+                    "ignore" => Some("ignored"),
+                    _ => None, // Unknown actions are no-ops
                 };
-                match IssueRepository::update_status(&self.pool, issue_id, new_status).await {
-                    Ok(_) => info!(
-                        rule_id = %rule_id,
-                        "Webhook action '{}' applied to issue {}",
-                        action, issue_id
-                    ),
-                    Err(e) => error!(
-                        rule_id = %rule_id,
-                        "Failed to apply webhook action '{}' to issue {}: {}",
-                        action, issue_id, e
-                    ),
+                if let Some(status) = new_status {
+                    match IssueRepository::update_status(&self.pool, issue_id, status).await {
+                        Ok(_) => info!(
+                            rule_id = %rule_id,
+                            "Webhook action '{}' applied to issue {}",
+                            action, issue_id
+                        ),
+                        Err(e) => error!(
+                            rule_id = %rule_id,
+                            "Failed to apply webhook action '{}' to issue {}: {}",
+                            action, issue_id, e
+                        ),
+                    }
                 }
             }
         }

@@ -109,27 +109,25 @@ impl AlertRuleRepository {
         muted_until: DateTime<Utc>,
         duration_minutes: i32,
     ) -> Result<AlertRule> {
-        sqlx::query(
-            "UPDATE alert_rules SET muted_until = $1, snooze_duration_minutes = $2 WHERE id = $3",
+        sqlx::query_as::<_, AlertRule>(
+            "UPDATE alert_rules SET muted_until = $1, snooze_duration_minutes = $2 WHERE id = $3 RETURNING *",
         )
         .bind(muted_until)
         .bind(duration_minutes)
         .bind(id)
-        .execute(pool)
-        .await?;
-        Self::find_by_id(pool, id)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("Alert rule not found"))
+        .fetch_optional(pool)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("Alert rule not found"))
     }
 
     pub async fn unmute(pool: &DbPool, id: &str) -> Result<AlertRule> {
-        sqlx::query("UPDATE alert_rules SET muted_until = NULL, snooze_duration_minutes = NULL WHERE id = $1")
-            .bind(id)
-            .execute(pool)
-            .await?;
-        Self::find_by_id(pool, id)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("Alert rule not found"))
+        sqlx::query_as::<_, AlertRule>(
+            "UPDATE alert_rules SET muted_until = NULL, snooze_duration_minutes = NULL WHERE id = $1 RETURNING *",
+        )
+        .bind(id)
+        .fetch_optional(pool)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("Alert rule not found"))
     }
 }
 

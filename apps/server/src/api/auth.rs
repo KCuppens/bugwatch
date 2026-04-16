@@ -427,20 +427,6 @@ pub async fn refresh(
         .jti
         .ok_or_else(|| AppError::Unauthorized("Invalid refresh token".to_string()))?;
 
-    // Verify session exists
-    let session = SessionRepository::find_by_id(&state.db, &session_id)
-        .await?
-        .ok_or_else(|| AppError::Unauthorized("Session not found".to_string()))?;
-
-    // Check if session is expired
-    if session.expires_at < Utc::now() {
-        // Best-effort cleanup — don't fail the request if delete fails
-        if let Err(e) = SessionRepository::delete(&state.db, &session_id).await {
-            tracing::warn!(session_id = %session_id, "Failed to delete expired session: {}", e);
-        }
-        return Err(AppError::Unauthorized("Session expired".to_string()));
-    }
-
     // Atomically rotate: delete old session + create new session in one transaction.
     // The rotate call also validates expiry inside the transaction (TOCTOU-safe).
     let new_session_id = uuid::Uuid::new_v4().to_string();
