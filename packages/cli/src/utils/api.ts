@@ -87,8 +87,17 @@ async function getCachedConfig(): Promise<Config | null> {
   return _configCache;
 }
 
+const RETRY_METHODS = new Set(["GET", "PATCH"]);
+const MAX_RETRIES = 3;
+
+function isRetryableError(method: string, status?: number): boolean {
+  if (!RETRY_METHODS.has(method.toUpperCase())) return false;
+  // Retry on 5xx server errors and network failures (status undefined)
+  return status === undefined || status >= 500;
+}
+
 /**
- * Make an authenticated API request
+ * Make an authenticated API request with exponential backoff retry for idempotent methods.
  */
 async function request<T = unknown>(path: string, options: RequestOptions = {}): Promise<T> {
   const config = await getCachedConfig();
@@ -109,42 +118,64 @@ async function request<T = unknown>(path: string, options: RequestOptions = {}):
     "Content-Type": "application/json",
   };
 
-  const response = await fetch(url.toString(), {
-    method: options.method || "GET",
-    headers,
-    body: options.body ? JSON.stringify(options.body) : undefined,
-  });
+  const method = options.method || "GET";
+  let lastError: Error | undefined;
 
-  if (!response.ok) {
-    const text = await response.text().catch(() => "");
-    // Log structured error for CLI log aggregation before throwing user-facing message
-    console.error(
-      JSON.stringify({
-        ts: new Date().toISOString(),
-        method: options.method ?? "GET",
-        path,
-        status: response.status,
-        body: text,
-      })
-    );
-    // Extract user-friendly message from JSON response body, fall back to generic
-    let userMessage: string;
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    let response: Response | undefined;
     try {
-      const json: unknown = JSON.parse(text);
-      const msg =
-        typeof json === "object" && json !== null && "message" in json
-          ? (json as Record<string, unknown>).message
-          : typeof json === "object" && json !== null && "error" in json
-            ? (json as Record<string, unknown>).error
-            : undefined;
-      userMessage = typeof msg === "string" && msg ? msg : `Request failed (${response.status})`;
-    } catch {
-      userMessage = `Request failed (${response.status} ${response.statusText})`;
+      response = await fetch(url.toString(), {
+        method,
+        headers,
+        body: options.body ? JSON.stringify(options.body) : undefined,
+      });
+    } catch (networkErr) {
+      lastError = networkErr instanceof Error ? networkErr : new Error(String(networkErr));
+      if (attempt < MAX_RETRIES && isRetryableError(method)) {
+        await new Promise((r) => setTimeout(r, 200 * 2 ** (attempt - 1)));
+        continue;
+      }
+      throw lastError;
     }
-    throw new Error(userMessage);
+
+    if (!response.ok) {
+      if (attempt < MAX_RETRIES && isRetryableError(method, response.status)) {
+        await new Promise((r) => setTimeout(r, 200 * 2 ** (attempt - 1)));
+        continue;
+      }
+
+      const text = await response.text().catch(() => "");
+      // Log structured error for CLI log aggregation before throwing user-facing message
+      console.error(
+        JSON.stringify({
+          ts: new Date().toISOString(),
+          method,
+          path,
+          status: response.status,
+          body: text,
+        })
+      );
+      // Extract user-friendly message from JSON response body, fall back to generic
+      let userMessage: string;
+      try {
+        const json: unknown = JSON.parse(text);
+        const msg =
+          typeof json === "object" && json !== null && "message" in json
+            ? (json as Record<string, unknown>).message
+            : typeof json === "object" && json !== null && "error" in json
+              ? (json as Record<string, unknown>).error
+              : undefined;
+        userMessage = typeof msg === "string" && msg ? msg : `Request failed (${response.status})`;
+      } catch {
+        userMessage = `Request failed (${response.status} ${response.statusText})`;
+      }
+      throw new Error(userMessage);
+    }
+
+    return response.json() as Promise<T>;
   }
 
-  return response.json() as Promise<T>;
+  throw lastError ?? new Error("Request failed after retries");
 }
 
 // ─── Response wrappers (match server response shapes) ────────────────

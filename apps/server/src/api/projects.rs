@@ -94,7 +94,16 @@ pub async fn list(
     let total_pages = ((total as f64) / (per_page as f64)).ceil() as u32;
 
     Ok(Json(PaginatedResponse {
-        data: projects.into_iter().map(ProjectResponse::from).collect(),
+        data: projects
+            .into_iter()
+            .map(|p| {
+                let mut r = ProjectResponse::from(p);
+                // Truncate the API key in list responses — only the first 8 chars are exposed.
+                // Callers that need the full key must fetch the individual project endpoint.
+                r.api_key = r.api_key.chars().take(8).collect();
+                r
+            })
+            .collect(),
         pagination: PaginationMeta {
             page,
             per_page,

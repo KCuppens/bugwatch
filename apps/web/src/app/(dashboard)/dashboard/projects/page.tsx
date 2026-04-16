@@ -57,6 +57,7 @@ function getHealthColor(stats: ProjectStatsWithInfo | undefined): { dot: string;
 export default function ProjectsPage() {
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [revealedId, setRevealedId] = useState<string | null>(null);
+  const [revealedKeys, setRevealedKeys] = useState<Map<string, string>>(new Map());
   const [projects, setProjects] = useState<Project[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -95,15 +96,39 @@ export default function ProjectsPage() {
     fetchProjects();
   }, []);
 
-  async function copyApiKey(id: string, apiKey: string) {
+  async function getFullApiKey(id: string): Promise<string | null> {
+    if (revealedKeys.has(id)) return revealedKeys.get(id)!;
     try {
-      await navigator.clipboard.writeText(apiKey);
+      const res = await projectsApi.get(id);
+      const fullKey = res.data.api_key;
+      setRevealedKeys((prev) => new Map(prev).set(id, fullKey));
+      return fullKey;
+    } catch {
+      toast.error("Failed to fetch API key");
+      return null;
+    }
+  }
+
+  async function copyApiKey(id: string) {
+    const fullKey = await getFullApiKey(id);
+    if (!fullKey) return;
+    try {
+      await navigator.clipboard.writeText(fullKey);
       setCopiedId(id);
       toast.success("API key copied");
       setTimeout(() => setCopiedId(null), 2000);
     } catch {
       toast.error("Failed to copy — clipboard not available");
     }
+  }
+
+  async function toggleRevealApiKey(id: string) {
+    if (revealedId === id) {
+      setRevealedId(null);
+      return;
+    }
+    await getFullApiKey(id);
+    setRevealedId(id);
   }
 
   function getProjectBadge(project: Project) {
@@ -282,10 +307,10 @@ export default function ProjectsPage() {
                   <div role="group" aria-label={`API key for ${project.name}`} className="flex items-center gap-2">
                     <code className="flex-1 truncate rounded bg-muted px-2 py-1 text-xs font-mono">
                       {revealedId === project.id ? (
-                        project.api_key
+                        (revealedKeys.get(project.id) ?? project.api_key)
                       ) : (
                         <>
-                          {project.api_key.slice(0, 8)}
+                          {project.api_key}
                           <span aria-hidden="true">{"•".repeat(12)}</span>
                           <span className="sr-only">hidden</span>
                         </>
@@ -299,7 +324,7 @@ export default function ProjectsPage() {
                       size="icon"
                       className="h-7 w-7 shrink-0"
                       aria-label={revealedId === project.id ? "Hide API key" : "Reveal API key"}
-                      onClick={() => setRevealedId(revealedId === project.id ? null : project.id)}
+                      onClick={() => toggleRevealApiKey(project.id)}
                     >
                       {revealedId === project.id ? (
                         <EyeOff className="h-3 w-3" aria-hidden="true" />
@@ -312,7 +337,7 @@ export default function ProjectsPage() {
                       size="icon"
                       className="h-7 w-7 shrink-0"
                       aria-label={copiedId === project.id ? "API key copied" : "Copy API key"}
-                      onClick={() => copyApiKey(project.id, project.api_key)}
+                      onClick={() => copyApiKey(project.id)}
                     >
                       {copiedId === project.id ? (
                         <Check className="h-3 w-3 text-bug" aria-hidden="true" />

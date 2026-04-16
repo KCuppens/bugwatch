@@ -262,6 +262,73 @@ export default function IssueDetailPage() {
     if (issue) fetchReplay();
   }, [issueId, projectId, issue, hasReplay]);
 
+  // Resolve with undo toast
+  const handleResolve = useCallback(
+    async function () {
+      if (!issue || !projectId) return;
+      const prev = issue.status;
+      setIsResolving(true);
+      setIssue({ ...issue, status: "resolved" });
+
+      toast.success("Issue resolved", {
+        action: {
+          label: "Undo",
+          onClick: async () => {
+            setIssue((i) => (i ? { ...i, status: prev } : i));
+            try {
+              await issuesApi.update(projectId, issueId, prev);
+            } catch {
+              toast.error("Failed to undo");
+            }
+          },
+        },
+      });
+
+      try {
+        await issuesApi.update(projectId, issueId, "resolved");
+      } catch {
+        setIssue((i) => (i ? { ...i, status: prev } : i));
+        toast.error("Failed to resolve issue");
+      } finally {
+        setIsResolving(false);
+      }
+    },
+    [issue, projectId, issueId]
+  );
+
+  const handleIgnore = useCallback(
+    async function () {
+      if (!issue || !projectId) return;
+      const prev = issue.status;
+      setIsIgnoring(true);
+      setIssue({ ...issue, status: "ignored" });
+
+      toast.success("Issue ignored", {
+        action: {
+          label: "Undo",
+          onClick: async () => {
+            setIssue((i) => (i ? { ...i, status: prev } : i));
+            try {
+              await issuesApi.update(projectId, issueId, prev);
+            } catch {
+              toast.error("Failed to undo");
+            }
+          },
+        },
+      });
+
+      try {
+        await issuesApi.update(projectId, issueId, "ignored");
+      } catch {
+        setIssue((i) => (i ? { ...i, status: prev } : i));
+        toast.error("Failed to ignore issue");
+      } finally {
+        setIsIgnoring(false);
+      }
+    },
+    [issue, projectId, issueId]
+  );
+
   // Keyboard shortcuts
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
@@ -312,74 +379,13 @@ export default function IssueDetailPage() {
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [issue, isResolving, isIgnoring, selectedEventId, router, projectId]);
+  }, [issue, isResolving, isIgnoring, selectedEventId, router, projectId, handleResolve, handleIgnore]);
 
   function toggleFrame(index: number) {
     const newExpanded = new Set(expandedFrames);
     if (newExpanded.has(index)) newExpanded.delete(index);
     else newExpanded.add(index);
     setExpandedFrames(newExpanded);
-  }
-
-  // Resolve with undo toast
-  async function handleResolve() {
-    if (!issue || !projectId) return;
-    const prev = issue.status;
-    setIsResolving(true);
-    setIssue({ ...issue, status: "resolved" });
-
-    toast.success("Issue resolved", {
-      action: {
-        label: "Undo",
-        onClick: async () => {
-          setIssue((i) => (i ? { ...i, status: prev } : i));
-          try {
-            await issuesApi.update(projectId, issueId, prev);
-          } catch {
-            toast.error("Failed to undo");
-          }
-        },
-      },
-    });
-
-    try {
-      await issuesApi.update(projectId, issueId, "resolved");
-    } catch {
-      setIssue((i) => (i ? { ...i, status: prev } : i));
-      toast.error("Failed to resolve issue");
-    } finally {
-      setIsResolving(false);
-    }
-  }
-
-  async function handleIgnore() {
-    if (!issue || !projectId) return;
-    const prev = issue.status;
-    setIsIgnoring(true);
-    setIssue({ ...issue, status: "ignored" });
-
-    toast.success("Issue ignored", {
-      action: {
-        label: "Undo",
-        onClick: async () => {
-          setIssue((i) => (i ? { ...i, status: prev } : i));
-          try {
-            await issuesApi.update(projectId, issueId, prev);
-          } catch {
-            toast.error("Failed to undo");
-          }
-        },
-      },
-    });
-
-    try {
-      await issuesApi.update(projectId, issueId, "ignored");
-    } catch {
-      setIssue((i) => (i ? { ...i, status: prev } : i));
-      toast.error("Failed to ignore issue");
-    } finally {
-      setIsIgnoring(false);
-    }
   }
 
   function handleCopyForAi() {
