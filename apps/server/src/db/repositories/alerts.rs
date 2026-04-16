@@ -280,20 +280,29 @@ impl AlertLogRepository {
 
     pub async fn mark_sent(pool: &DbPool, id: &str) -> Result<()> {
         let now = Utc::now();
-        sqlx::query("UPDATE alert_logs SET status = 'sent', sent_at = $1 WHERE id = $2")
-            .bind(now)
-            .bind(id)
-            .execute(pool)
-            .await?;
+        let result =
+            sqlx::query("UPDATE alert_logs SET status = 'sent', sent_at = $1 WHERE id = $2")
+                .bind(now)
+                .bind(id)
+                .execute(pool)
+                .await?;
+        if result.rows_affected() == 0 {
+            tracing::warn!(log_id = %id, "mark_sent: alert log entry not found");
+        }
         Ok(())
     }
 
     pub async fn mark_failed(pool: &DbPool, id: &str, error: &str) -> Result<()> {
-        sqlx::query("UPDATE alert_logs SET status = 'failed', error_message = $1 WHERE id = $2")
-            .bind(error)
-            .bind(id)
-            .execute(pool)
-            .await?;
+        let result = sqlx::query(
+            "UPDATE alert_logs SET status = 'failed', error_message = $1 WHERE id = $2",
+        )
+        .bind(error)
+        .bind(id)
+        .execute(pool)
+        .await?;
+        if result.rows_affected() == 0 {
+            tracing::warn!(log_id = %id, "mark_failed: alert log entry not found");
+        }
         Ok(())
     }
 
@@ -384,7 +393,7 @@ impl AlertLogRepository {
         // Double-check cooldown now that we hold the lock.
         let existing: Option<(i64,)> = sqlx::query_as(
             r#"
-            SELECT 1 FROM alert_logs
+            SELECT 1::BIGINT FROM alert_logs
             WHERE alert_rule_id = $1
             AND ($2::TEXT IS NULL OR trigger_id = $2)
             AND status = 'sent'

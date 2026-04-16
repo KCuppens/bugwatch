@@ -342,6 +342,16 @@ impl Config {
         }
 
         if self.environment == "production" {
+            // Warn when password reset tokens share the JWT signing secret.
+            // A leaked JWT secret would also compromise all outstanding reset links.
+            // Set PASSWORD_RESET_SECRET to a distinct value to decouple them.
+            if self.password_reset_secret == self.jwt_secret {
+                tracing::warn!(
+                    "PASSWORD_RESET_SECRET is not set — falling back to JWT_SECRET. \
+                     Set PASSWORD_RESET_SECRET to a separate secret so a leaked JWT signing key \
+                     does not also compromise password reset tokens."
+                );
+            }
             if self.jwt_secret == "development-secret-change-in-production" {
                 panic!("FATAL: JWT_SECRET must be set in production (min 32 characters)");
             }

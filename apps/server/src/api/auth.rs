@@ -657,7 +657,7 @@ pub async fn forgot_password(
         h.update(req.email.to_lowercase().as_bytes());
         let email_hash = hex::encode(h.finalize());
         let reset_key = format!("reset_email:{}", email_hash);
-        let result = state.rate_limiter.check_hourly(&reset_key, 1);
+        let result = state.rate_limiter.check_hourly(&reset_key, 3);
         if !result.allowed {
             // Return the same generic OK to avoid user enumeration, but log for monitoring
             tracing::warn!(

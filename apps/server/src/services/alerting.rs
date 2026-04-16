@@ -183,6 +183,7 @@ async fn send_with_retry(
     notification_service: &NotificationService,
     channel: &NotificationChannel,
     payload: &AlertPayload,
+    rule_id: &str,
 ) -> Result<Option<String>> {
     use rand::Rng;
     let mut last_err = anyhow::anyhow!("no attempts made");
@@ -197,6 +198,7 @@ async fn send_with_retry(
             Err(e) => {
                 tracing::warn!(
                     attempt = attempt + 1,
+                    rule_id = %rule_id,
                     channel_id = %channel.id,
                     "Alert send attempt {} of 3 failed: {}",
                     attempt + 1,
@@ -686,7 +688,7 @@ impl AlertingService {
             };
 
             // Send notification (3 attempts with exponential back-off)
-            match send_with_retry(&self.notification_service, channel, payload).await {
+            match send_with_retry(&self.notification_service, channel, payload, rule_id).await {
                 Ok(action) => {
                     if let Err(e) = AlertLogRepository::mark_sent(&self.pool, &log.id).await {
                         error!("Failed to mark log as sent: {}", e);
