@@ -28,6 +28,8 @@ impl TokenBucket {
     /// * `capacity` - Maximum tokens in bucket
     /// * `refill_rate_per_minute` - Tokens added per minute
     pub fn new(capacity: u32, refill_rate_per_minute: u32) -> Self {
+        assert!(capacity > 0, "TokenBucket capacity must be > 0");
+        assert!(refill_rate_per_minute > 0, "TokenBucket refill_rate_per_minute must be > 0 — a zero-rate bucket would never refill");
         let now = Instant::now();
         Self {
             capacity,

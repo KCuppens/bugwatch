@@ -80,7 +80,11 @@ impl RateLimiter {
                 } else {
                     drop(entry);
                     let limit = Self::resolve_tier_limit(db, api_key).await;
-                    tier_cache().insert(api_key.to_string(), (limit, Instant::now()));
+                    // Use or_insert to avoid overwriting a fresher value already written
+                    // by a concurrent request that refreshed the same stale entry.
+                    tier_cache()
+                        .entry(api_key.to_string())
+                        .or_insert((limit, Instant::now()));
                     limit
                 }
             } else {
@@ -162,18 +166,10 @@ impl RateLimiter {
     /// # Returns
     /// Number of buckets removed
     pub fn cleanup_inactive(&self, max_age_secs: u64) -> usize {
-        let keys_to_remove: Vec<String> = self
-            .buckets
-            .iter()
-            .filter(|entry| entry.value().seconds_since_last_access() > max_age_secs)
-            .map(|entry| entry.key().clone())
-            .collect();
-
-        let removed = keys_to_remove.len();
-        for key in keys_to_remove {
-            self.buckets.remove(&key);
-        }
-        removed
+        let before = self.buckets.len();
+        self.buckets
+            .retain(|_, v| v.seconds_since_last_access() <= max_age_secs);
+        before - self.buckets.len()
     }
 
     /// Remove expired/inactive per-hour buckets. Uses a longer TTL than `cleanup_inactive`
@@ -187,18 +183,10 @@ impl RateLimiter {
     /// # Returns
     /// Number of buckets removed
     pub fn cleanup_hourly_inactive(&self, max_age_secs: u64) -> usize {
-        let keys_to_remove: Vec<String> = self
-            .hourly_buckets
-            .iter()
-            .filter(|entry| entry.value().seconds_since_last_access() > max_age_secs)
-            .map(|entry| entry.key().clone())
-            .collect();
-
-        let removed = keys_to_remove.len();
-        for key in keys_to_remove {
-            self.hourly_buckets.remove(&key);
-        }
-        removed
+        let before = self.hourly_buckets.len();
+        self.hourly_buckets
+            .retain(|_, v| v.seconds_since_last_access() <= max_age_secs);
+        before - self.hourly_buckets.len()
     }
 
     /// Get the current number of per-minute buckets (for monitoring)

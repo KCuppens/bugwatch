@@ -201,6 +201,8 @@ async function request<T = unknown>(path: string, options: RequestOptions = {}):
     return response.json() as Promise<T>;
   }
 
+  // Only reached when a network error occurs on the final attempt (non-OK HTTP errors
+  // are thrown inline in the loop above before reaching this point).
   throw lastError ?? new Error("Request failed after retries");
 }
 

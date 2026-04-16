@@ -51,6 +51,7 @@ import {
 } from "@/lib/api";
 import { ENVIRONMENT_COLORS } from "@/lib/search";
 
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { StackFrame } from "@/components/issue-detail/StackFrame";
 import { IssueNavigation } from "@/components/issue-detail/IssueNavigation";
 import { IssueDetailSkeleton } from "@/components/skeletons/issue-detail-skeleton";
@@ -545,6 +546,8 @@ export default function IssueDetailPage() {
               </Button>
             </Link>
             <div
+              role="img"
+              aria-label={`Level: ${issue.level}`}
               className={`shrink-0 rounded-md p-1.5 ${
                 issue.level === "fatal"
                   ? "bg-red-100 dark:bg-red-950"
@@ -556,6 +559,7 @@ export default function IssueDetailPage() {
               }`}
             >
               <AlertCircle
+                aria-hidden="true"
                 className={`h-4 w-4 ${
                   issue.level === "fatal"
                     ? "text-red-600"
@@ -724,13 +728,14 @@ export default function IssueDetailPage() {
               <div className="flex items-center gap-2 mb-2">
                 <button
                   onClick={() => setShowAppOnly(!showAppOnly)}
+                  aria-pressed={showAppOnly}
                   className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
                     showAppOnly
                       ? "bg-accent-2 text-accent-2-foreground"
                       : "bg-muted text-muted-foreground hover:text-foreground"
                   }`}
                 >
-                  <Filter className="h-3 w-3" />
+                  <Filter className="h-3 w-3" aria-hidden="true" />
                   App Only
                 </button>
                 <button
@@ -990,6 +995,7 @@ export default function IssueDetailPage() {
                       <button
                         key={event.id}
                         onClick={() => handleEventClick(event.id)}
+                        aria-label={`View event #${Math.max(1, issue.count - index)}, ${formatRelativeTime(event.timestamp)}${event.release ? `, release ${event.release}` : ""}`}
                         className="w-full flex items-center justify-between rounded-md border p-2 hover:bg-muted/50 transition-colors text-left"
                       >
                         <div className="flex items-center gap-3">
@@ -1205,7 +1211,11 @@ export default function IssueDetailPage() {
                 </div>
               ) : frequencyData && frequencyData.total > 0 ? (
                 <div>
-                  <div className="h-24 flex items-end gap-0.5">
+                  <div
+                    className="h-24 flex items-end gap-0.5"
+                    role="img"
+                    aria-label={`Frequency chart: ${frequencyData.total} events in the last ${frequencyPeriod}`}
+                  >
                     {(() => {
                       const buckets =
                         frequencyPeriod === "24h"
@@ -1416,7 +1426,13 @@ export default function IssueDetailPage() {
                 </Button>
               </div>
               <p className="text-[10px] text-muted-foreground mb-2">
-                {typeof navigator !== "undefined" && /Mac|iPhone|iPad|iPod/.test(navigator.platform) ? "⌘" : "Ctrl"}
+                {typeof navigator !== "undefined" &&
+                // userAgentData is available in Chromium; fall back to userAgent string for others
+                ((navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform ===
+                  "macOS" ||
+                  /Mac|iPhone|iPad|iPod/.test(navigator.userAgent))
+                  ? "⌘"
+                  : "Ctrl"}
                 +Enter to submit
               </p>
 
@@ -1474,20 +1490,22 @@ export default function IssueDetailPage() {
                                   variant="ghost"
                                   size="sm"
                                   className="h-5 w-5 p-0"
+                                  aria-label="Edit comment"
                                   onClick={() => {
                                     setEditingCommentId(comment.id);
                                     setEditingContent(comment.content);
                                   }}
                                 >
-                                  <Edit3 className="h-3 w-3" />
+                                  <Edit3 className="h-3 w-3" aria-hidden="true" />
                                 </Button>
                                 <Button
                                   variant="ghost"
                                   size="sm"
                                   className="h-5 w-5 p-0 text-destructive"
+                                  aria-label="Delete comment"
                                   onClick={() => handleDeleteComment(comment.id)}
                                 >
-                                  <Trash2 className="h-3 w-3" />
+                                  <Trash2 className="h-3 w-3" aria-hidden="true" />
                                 </Button>
                               </div>
                             </div>
@@ -1513,92 +1531,83 @@ export default function IssueDetailPage() {
       </div>
 
       {/* Event Inspector Modal */}
-      {selectedEventId && (
-        <div className="fixed inset-0 z-50 bg-background/80 backdrop-blur-sm">
-          <div
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="event-modal-title"
-            className="fixed left-[50%] top-[50%] z-50 w-full max-w-3xl max-h-[85vh] translate-x-[-50%] translate-y-[-50%] border bg-background shadow-lg sm:rounded-lg flex flex-col"
-          >
-            <div className="flex items-center justify-between border-b p-4 shrink-0">
-              <div>
-                <h2 id="event-modal-title" className="font-display text-heading-sm">
-                  Event Details
-                </h2>
-                {eventDetail && (
-                  <p className="text-sm text-muted-foreground">
-                    {new Date(eventDetail.timestamp).toLocaleString()}
-                    {eventDetail.release && ` • ${eventDetail.release}`}
-                  </p>
+      <Dialog
+        open={!!selectedEventId}
+        onOpenChange={(open) => {
+          if (!open) closeEventModal();
+        }}
+      >
+        <DialogContent className="max-w-3xl max-h-[85vh] flex flex-col p-0 gap-0">
+          <DialogHeader className="border-b p-4 shrink-0">
+            <DialogTitle className="font-display text-heading-sm">Event Details</DialogTitle>
+            {eventDetail && (
+              <p className="text-sm text-muted-foreground">
+                {new Date(eventDetail.timestamp).toLocaleString()}
+                {eventDetail.release && ` • ${eventDetail.release}`}
+              </p>
+            )}
+          </DialogHeader>
+          <div className="flex-1 overflow-y-auto p-4">
+            {eventLoading && (
+              <div className="flex flex-col items-center py-12">
+                <Loader2 className="h-8 w-8 animate-spin text-accent-2" />
+                <p className="mt-4 text-sm text-muted-foreground">Loading...</p>
+              </div>
+            )}
+            {eventDetail && !eventLoading && (
+              <div className="space-y-6">
+                {eventDetail.exception && (
+                  <div>
+                    <h3 className="text-sm font-semibold mb-2">Exception</h3>
+                    <div className="rounded-md border p-3 bg-muted/30">
+                      <p className="font-mono text-sm text-destructive">
+                        {eventDetail.exception.type}: {eventDetail.exception.value}
+                      </p>
+                    </div>
+                  </div>
+                )}
+                {eventDetail.user && (
+                  <div>
+                    <h3 className="text-sm font-semibold mb-2">User</h3>
+                    <div className="grid gap-2 md:grid-cols-2">
+                      {eventDetail.user.id && (
+                        <div className="rounded-md border p-2">
+                          <span className="text-xs text-muted-foreground">ID</span>
+                          <p className="font-mono text-sm">{eventDetail.user.id}</p>
+                        </div>
+                      )}
+                      {eventDetail.user.email && (
+                        <div className="rounded-md border p-2">
+                          <span className="text-xs text-muted-foreground">Email</span>
+                          <p className="font-mono text-sm">{eventDetail.user.email}</p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+                {eventDetail.tags && Object.keys(eventDetail.tags).length > 0 && (
+                  <div>
+                    <h3 className="text-sm font-semibold mb-2">Tags</h3>
+                    <div className="flex flex-wrap gap-2">
+                      {Object.entries(eventDetail.tags).map(([key, value]) => (
+                        <div key={key} className="rounded-md border px-2 py-1 text-xs">
+                          <span className="text-muted-foreground">{key}:</span>{" "}
+                          <span className="font-mono">{value}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
                 )}
               </div>
-              <Button variant="ghost" size="icon" onClick={closeEventModal} aria-label="Close event details">
-                <XCircle className="h-4 w-4" aria-hidden="true" />
-              </Button>
-            </div>
-            <div className="flex-1 overflow-y-auto p-4">
-              {eventLoading && (
-                <div className="flex flex-col items-center py-12">
-                  <Loader2 className="h-8 w-8 animate-spin text-accent-2" />
-                  <p className="mt-4 text-sm text-muted-foreground">Loading...</p>
-                </div>
-              )}
-              {eventDetail && !eventLoading && (
-                <div className="space-y-6">
-                  {eventDetail.exception && (
-                    <div>
-                      <h3 className="text-sm font-semibold mb-2">Exception</h3>
-                      <div className="rounded-md border p-3 bg-muted/30">
-                        <p className="font-mono text-sm text-destructive">
-                          {eventDetail.exception.type}: {eventDetail.exception.value}
-                        </p>
-                      </div>
-                    </div>
-                  )}
-                  {eventDetail.user && (
-                    <div>
-                      <h3 className="text-sm font-semibold mb-2">User</h3>
-                      <div className="grid gap-2 md:grid-cols-2">
-                        {eventDetail.user.id && (
-                          <div className="rounded-md border p-2">
-                            <span className="text-xs text-muted-foreground">ID</span>
-                            <p className="font-mono text-sm">{eventDetail.user.id}</p>
-                          </div>
-                        )}
-                        {eventDetail.user.email && (
-                          <div className="rounded-md border p-2">
-                            <span className="text-xs text-muted-foreground">Email</span>
-                            <p className="font-mono text-sm">{eventDetail.user.email}</p>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  )}
-                  {eventDetail.tags && Object.keys(eventDetail.tags).length > 0 && (
-                    <div>
-                      <h3 className="text-sm font-semibold mb-2">Tags</h3>
-                      <div className="flex flex-wrap gap-2">
-                        {Object.entries(eventDetail.tags).map(([key, value]) => (
-                          <div key={key} className="rounded-md border px-2 py-1 text-xs">
-                            <span className="text-muted-foreground">{key}:</span>{" "}
-                            <span className="font-mono">{value}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-            <div className="flex justify-end border-t p-4 shrink-0">
-              <Button variant="outline" onClick={closeEventModal}>
-                Close
-              </Button>
-            </div>
+            )}
           </div>
-        </div>
-      )}
+          <div className="flex justify-end border-t p-4 shrink-0">
+            <Button variant="outline" onClick={closeEventModal}>
+              Close
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Create External Issue Dialog */}
       {hasIntegrations && projectId && (

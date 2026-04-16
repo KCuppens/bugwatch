@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -65,38 +65,38 @@ export default function ProjectsPage() {
   const [error, setError] = useState<string | null>(null);
   const [projectStats, setProjectStats] = useState<Map<string, ProjectStatsWithInfo>>(new Map());
 
-  useEffect(() => {
-    async function fetchProjects() {
-      setIsLoading(true);
-      setError(null);
+  const fetchProjects = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
 
-      try {
-        const [projectsRes, statsRes] = await Promise.all([
-          projectsApi.list(),
-          overviewApi.getStatsByProject().catch(() => null),
-        ]);
-        setProjects(projectsRes.data);
+    try {
+      const [projectsRes, statsRes] = await Promise.all([
+        projectsApi.list(),
+        overviewApi.getStatsByProject().catch(() => null),
+      ]);
+      setProjects(projectsRes.data);
 
-        // Build stats map
-        if (statsRes?.data) {
-          const statsMap = new Map<string, ProjectStatsWithInfo>();
-          for (const stat of statsRes.data) {
-            statsMap.set(stat.project_id, stat);
-          }
-          setProjectStats(statsMap);
+      // Build stats map
+      if (statsRes?.data) {
+        const statsMap = new Map<string, ProjectStatsWithInfo>();
+        for (const stat of statsRes.data) {
+          statsMap.set(stat.project_id, stat);
         }
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed to load projects");
-        toast.error("Failed to load projects", {
-          description: err instanceof Error ? err.message : "Please try again",
-        });
-      } finally {
-        setIsLoading(false);
+        setProjectStats(statsMap);
       }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load projects");
+      toast.error("Failed to load projects", {
+        description: err instanceof Error ? err.message : "Please try again",
+      });
+    } finally {
+      setIsLoading(false);
     }
-
-    fetchProjects();
   }, []);
+
+  useEffect(() => {
+    fetchProjects();
+  }, [fetchProjects]);
 
   async function getFullApiKey(id: string): Promise<string | null> {
     const cached = revealedKeys.get(id);
@@ -136,6 +136,8 @@ export default function ProjectsPage() {
       });
       return;
     }
+    // Guard against double-tap before the first reveal renders its disabled state
+    if (revealingId === id) return;
     setRevealingId(id);
     try {
       await getFullApiKey(id);
@@ -204,7 +206,7 @@ export default function ProjectsPage() {
         <AlertCircle className="h-12 w-12 text-destructive" />
         <h2 className="text-lg font-medium">Failed to load projects</h2>
         <p className="text-muted-foreground">{error}</p>
-        <Button onClick={() => window.location.reload()}>Try Again</Button>
+        <Button onClick={fetchProjects}>Try Again</Button>
       </div>
     );
   }
@@ -245,9 +247,7 @@ export default function ProjectsPage() {
                       <div className="flex items-center gap-2">
                         <CardTitle className="text-base">{project.name}</CardTitle>
                         {/* Health indicator dot */}
-                        <span className={`h-2 w-2 rounded-full ${health.dot}`} title={health.label}>
-                          <span className="sr-only">{health.label}</span>
-                        </span>
+                        <span role="img" aria-label={health.label} className={`h-2 w-2 rounded-full ${health.dot}`} />
                       </div>
                       <CardDescription className="text-xs">{project.slug}</CardDescription>
                     </div>
@@ -286,30 +286,30 @@ export default function ProjectsPage() {
                 {/* Real Stats */}
                 <div className="flex items-center gap-4 text-sm">
                   <div className="flex items-center gap-1 text-muted-foreground">
-                    <Bug className="h-3 w-3" />
+                    <Bug className="h-3 w-3" aria-hidden="true" />
                     <span>{stats?.unresolved_count ?? 0} issues</span>
                   </div>
                   {stats && stats.critical_count > 0 && (
                     <div className="flex items-center gap-1 text-red-500">
-                      <Flame className="h-3 w-3" />
+                      <Flame className="h-3 w-3" aria-hidden="true" />
                       <span>{stats.critical_count} critical</span>
                     </div>
                   )}
                   {stats && stats.total_events > 0 && (
                     <div className="flex items-center gap-1 text-muted-foreground">
-                      <Activity className="h-3 w-3" />
+                      <Activity className="h-3 w-3" aria-hidden="true" />
                       <span>{stats.total_events.toLocaleString()}</span>
                     </div>
                   )}
                   {stats && stats.total_users > 0 && (
                     <div className="flex items-center gap-1 text-muted-foreground">
-                      <Users className="h-3 w-3" />
+                      <Users className="h-3 w-3" aria-hidden="true" />
                       <span>{stats.total_users}</span>
                     </div>
                   )}
                   {!stats && (
                     <div className="flex items-center gap-1 text-muted-foreground">
-                      <Clock className="h-3 w-3" />
+                      <Clock className="h-3 w-3" aria-hidden="true" />
                       <span>{formatRelativeTime(project.created_at)}</span>
                     </div>
                   )}
@@ -384,20 +384,20 @@ export default function ProjectsPage() {
         })}
 
         {/* Empty State / Create New */}
-        <Card className="flex flex-col items-center justify-center border-dashed border-bug/50 p-6 hover:border-bug transition-colors">
-          <div className="rounded-full bg-bug/10 p-3">
-            <Plus className="h-6 w-6 text-bug" />
-          </div>
-          <h3 className="mt-4 font-medium">Create a new project</h3>
-          <p className="mt-1 text-center text-sm text-muted-foreground">
-            Get started by creating a project for your application
-          </p>
-          <Link href="/dashboard/projects/new">
-            <Button className="mt-4" variant="outline">
+        <Link href="/dashboard/projects/new" className="block">
+          <Card className="flex flex-col items-center justify-center border-dashed border-bug/50 p-6 hover:border-bug transition-colors cursor-pointer">
+            <div className="rounded-full bg-bug/10 p-3">
+              <Plus className="h-6 w-6 text-bug" aria-hidden="true" />
+            </div>
+            <h3 className="mt-4 font-medium">Create a new project</h3>
+            <p className="mt-1 text-center text-sm text-muted-foreground">
+              Get started by creating a project for your application
+            </p>
+            <Button className="mt-4 pointer-events-none" variant="outline" tabIndex={-1} aria-hidden="true">
               New Project
             </Button>
-          </Link>
-        </Card>
+          </Card>
+        </Link>
       </div>
     </div>
   );

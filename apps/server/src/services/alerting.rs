@@ -115,7 +115,7 @@ impl AlertingService {
             let condition: AlertCondition = match serde_json::from_str(&rule.condition) {
                 Ok(c) => c,
                 Err(e) => {
-                    error!("Failed to parse alert condition: {}", e);
+                    error!(rule_id = %rule.id, rule_name = %rule.name, "Failed to parse alert condition: {}", e);
                     continue;
                 }
             };
@@ -194,7 +194,7 @@ impl AlertingService {
             let condition: AlertCondition = match serde_json::from_str(&rule.condition) {
                 Ok(c) => c,
                 Err(e) => {
-                    error!("Failed to parse alert condition: {}", e);
+                    error!(rule_id = %rule.id, rule_name = %rule.name, "Failed to parse alert condition: {}", e);
                     continue;
                 }
             };
@@ -259,7 +259,7 @@ impl AlertingService {
             let condition: AlertCondition = match serde_json::from_str(&rule.condition) {
                 Ok(c) => c,
                 Err(e) => {
-                    error!("Failed to parse alert condition: {}", e);
+                    error!(rule_id = %rule.id, rule_name = %rule.name, "Failed to parse alert condition: {}", e);
                     continue;
                 }
             };
@@ -383,8 +383,11 @@ impl AlertingService {
                     let applies = server_id.is_none() || server_id.as_deref() == Some(server_db_id);
                     if applies {
                         if let Some(ref disks_str) = metric.disks_json {
-                            let disks: Vec<serde_json::Value> =
-                                serde_json::from_str(disks_str).unwrap_or_default();
+                            let disks: Vec<serde_json::Value> = serde_json::from_str(disks_str)
+                                .unwrap_or_else(|e| {
+                                    tracing::warn!("Failed to parse disks_json: {}", e);
+                                    vec![]
+                                });
                             let mut triggered = false;
                             let mut msg = String::new();
                             for disk in &disks {

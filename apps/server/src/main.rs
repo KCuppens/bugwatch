@@ -265,12 +265,31 @@ async fn main() -> Result<()> {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(24 * 60 * 60)); // 24 hours
         loop {
             interval.tick().await;
-            match crate::db::repositories::SessionRepository::delete_expired(&session_cleanup_db)
+            // Retry up to 3 times with 5-minute back-off on transient DB errors
+            let mut success = false;
+            for attempt in 1..=3u32 {
+                match crate::db::repositories::SessionRepository::delete_expired(
+                    &session_cleanup_db,
+                )
                 .await
-            {
-                Ok(n) if n > 0 => tracing::info!("Session cleanup: deleted {} expired sessions", n),
-                Err(e) => tracing::error!("Session cleanup failed: {}", e),
-                _ => {}
+                {
+                    Ok(n) => {
+                        if n > 0 {
+                            tracing::info!("Session cleanup: deleted {} expired sessions", n);
+                        }
+                        success = true;
+                        break;
+                    }
+                    Err(e) => {
+                        tracing::warn!("Session cleanup attempt {}/3 failed: {}", attempt, e);
+                        if attempt < 3 {
+                            tokio::time::sleep(std::time::Duration::from_secs(5 * 60)).await;
+                        }
+                    }
+                }
+            }
+            if !success {
+                tracing::error!("Session cleanup failed after 3 attempts — will retry next cycle");
             }
         }
     });
@@ -282,10 +301,25 @@ async fn main() -> Result<()> {
         let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(3600)); // every hour
         loop {
             interval.tick().await;
-            match payment_store_clone.expire_old().await {
-                Ok(n) if n > 0 => tracing::info!("Expired {} stale x402 payment challenges", n),
-                Err(e) => tracing::warn!("Failed to expire old x402 challenges: {}", e),
-                _ => {}
+            for attempt in 1..=2u32 {
+                match payment_store_clone.expire_old().await {
+                    Ok(n) => {
+                        if n > 0 {
+                            tracing::info!("Expired {} stale x402 payment challenges", n);
+                        }
+                        break;
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "Failed to expire x402 challenges (attempt {}/2): {}",
+                            attempt,
+                            e
+                        );
+                        if attempt < 2 {
+                            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                        }
+                    }
+                }
             }
         }
     });
@@ -339,7 +373,8 @@ fn create_app(state: AppState) -> Router {
             ])
             .allow_credentials(true)
     } else if state.config.allowed_origins.is_empty() {
-        // Non-development with no origins configured: restrictive default
+        // Non-development with no origins configured: restrictive default — no credentials
+        // because no origin is permitted, so credential sharing would be meaningless and misleading.
         tracing::warn!("No ALLOWED_ORIGINS configured in non-development mode. CORS will reject cross-origin requests.");
         CorsLayer::new()
             .allow_origin(tower_http::cors::AllowOrigin::list(
@@ -364,7 +399,7 @@ fn create_app(state: AppState) -> Router {
                 HeaderName::from_static("x-bugwatch-agent"),
                 HeaderName::from_static("x-payment"),
             ])
-            .allow_credentials(true)
+            .allow_credentials(false)
     } else {
         // Production: restrict to configured origins
         let origins: Vec<HeaderValue> = state
