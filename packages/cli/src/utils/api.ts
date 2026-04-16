@@ -87,6 +87,10 @@ async function getCachedConfig(): Promise<Config | null> {
   return _configCache;
 }
 
+// GET is idempotent by definition. PATCH is included because all PATCH endpoints
+// in this CLI (issue status, project name) are idempotent field-set operations —
+// retrying them with the same value is safe. If a non-idempotent PATCH endpoint
+// is added in future, exclude it from retries via a per-call `options.noRetry` flag.
 const RETRY_METHODS = new Set(["GET", "PATCH"]);
 const MAX_RETRIES = 3;
 
@@ -132,6 +136,17 @@ async function request<T = unknown>(path: string, options: RequestOptions = {}):
     } catch (networkErr) {
       lastError = networkErr instanceof Error ? networkErr : new Error(String(networkErr));
       if (attempt < MAX_RETRIES && isRetryableError(method)) {
+        console.warn(
+          JSON.stringify({
+            ts: new Date().toISOString(),
+            level: "warn",
+            event: "retry",
+            method,
+            path,
+            attempt,
+            reason: "network_error",
+          })
+        );
         await new Promise((r) => setTimeout(r, 200 * 2 ** (attempt - 1)));
         continue;
       }
@@ -140,6 +155,17 @@ async function request<T = unknown>(path: string, options: RequestOptions = {}):
 
     if (!response.ok) {
       if (attempt < MAX_RETRIES && isRetryableError(method, response.status)) {
+        console.warn(
+          JSON.stringify({
+            ts: new Date().toISOString(),
+            level: "warn",
+            event: "retry",
+            method,
+            path,
+            attempt,
+            reason: response.status,
+          })
+        );
         await new Promise((r) => setTimeout(r, 200 * 2 ** (attempt - 1)));
         continue;
       }
@@ -152,7 +178,7 @@ async function request<T = unknown>(path: string, options: RequestOptions = {}):
           method,
           path,
           status: response.status,
-          body: text,
+          body: text.slice(0, 200),
         })
       );
       // Extract user-friendly message from JSON response body, fall back to generic
@@ -266,7 +292,11 @@ export async function getIssue(issueId: string, projectId: string): Promise<Issu
   return resp.data;
 }
 
-export async function updateIssue(issueId: string, projectId: string, data: Record<string, unknown>): Promise<Issue> {
+export async function updateIssue(
+  issueId: string,
+  projectId: string,
+  data: { status?: string; assigned_to?: string }
+): Promise<Issue> {
   const resp = await request<ApiResponse<Issue>>(`/api/v1/projects/${projectId}/issues/${issueId}`, {
     method: "PATCH",
     body: data,

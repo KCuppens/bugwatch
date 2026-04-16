@@ -87,6 +87,12 @@ impl TokenBucket {
     pub fn current_tokens(&self) -> u32 {
         self.tokens as u32
     }
+
+    /// Get the bucket capacity
+    #[allow(dead_code)]
+    pub fn get_capacity(&self) -> u32 {
+        self.capacity
+    }
 }
 
 /// Result of a rate limit check

@@ -20,6 +20,7 @@ import {
   Activity,
   Eye,
   EyeOff,
+  Loader2,
 } from "lucide-react";
 import {
   projectsApi,
@@ -58,6 +59,7 @@ export default function ProjectsPage() {
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [revealedId, setRevealedId] = useState<string | null>(null);
   const [revealedKeys, setRevealedKeys] = useState<Map<string, string>>(new Map());
+  const [revealingId, setRevealingId] = useState<string | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -97,7 +99,8 @@ export default function ProjectsPage() {
   }, []);
 
   async function getFullApiKey(id: string): Promise<string | null> {
-    if (revealedKeys.has(id)) return revealedKeys.get(id)!;
+    const cached = revealedKeys.get(id);
+    if (cached) return cached;
     try {
       const res = await projectsApi.get(id);
       const fullKey = res.data.api_key;
@@ -125,10 +128,21 @@ export default function ProjectsPage() {
   async function toggleRevealApiKey(id: string) {
     if (revealedId === id) {
       setRevealedId(null);
+      // Clear the cached key from state so it doesn't persist in memory indefinitely
+      setRevealedKeys((prev) => {
+        const next = new Map(prev);
+        next.delete(id);
+        return next;
+      });
       return;
     }
-    await getFullApiKey(id);
-    setRevealedId(id);
+    setRevealingId(id);
+    try {
+      await getFullApiKey(id);
+      setRevealedId(id);
+    } finally {
+      setRevealingId(null);
+    }
   }
 
   function getProjectBadge(project: Project) {
@@ -307,7 +321,7 @@ export default function ProjectsPage() {
                   <div role="group" aria-label={`API key for ${project.name}`} className="flex items-center gap-2">
                     <code className="flex-1 truncate rounded bg-muted px-2 py-1 text-xs font-mono">
                       {revealedId === project.id ? (
-                        (revealedKeys.get(project.id) ?? project.api_key)
+                        (revealedKeys.get(project.id) ?? "(error loading key)")
                       ) : (
                         <>
                           {project.api_key}
@@ -324,9 +338,12 @@ export default function ProjectsPage() {
                       size="icon"
                       className="h-7 w-7 shrink-0"
                       aria-label={revealedId === project.id ? "Hide API key" : "Reveal API key"}
+                      disabled={revealingId === project.id}
                       onClick={() => toggleRevealApiKey(project.id)}
                     >
-                      {revealedId === project.id ? (
+                      {revealingId === project.id ? (
+                        <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
+                      ) : revealedId === project.id ? (
                         <EyeOff className="h-3 w-3" aria-hidden="true" />
                       ) : (
                         <Eye className="h-3 w-3" aria-hidden="true" />

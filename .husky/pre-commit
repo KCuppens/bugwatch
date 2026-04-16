@@ -6,3 +6,9 @@ if git diff --cached --name-only | grep -qE '\.(ts|tsx)$'; then
   echo "TypeScript files changed — running type check..."
   (cd apps/web && npx tsc --noEmit)
 fi
+
+# Run cargo check if any Rust files were staged
+if git diff --cached --name-only | grep -qE '\.rs$'; then
+  echo "Rust files changed — running cargo check..."
+  (cd apps/server && cargo check 2>&1)
+fi

@@ -149,9 +149,7 @@ impl AlertingService {
                     frequency: None,
                 };
 
-                if let Err(e) = self.send_alert(&rule.id, &rule.actions, &payload).await {
-                    tracing::error!(rule_id = %rule.id, rule_name = %rule.name, error = %e, "Failed to send alert");
-                }
+                self.send_alert(&rule.id, &rule.actions, &payload).await;
             } else {
                 tracing::debug!(
                     "Alert rule '{}' does not match (condition: {:?})",

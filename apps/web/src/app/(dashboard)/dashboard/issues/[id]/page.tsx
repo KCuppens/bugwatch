@@ -111,8 +111,8 @@ export default function IssueDetailPage() {
   }, [activeTab]);
   const [expandedFrames, setExpandedFrames] = useState<Set<number>>(new Set([0]));
   const [showAppOnly, setShowAppOnly] = useState(false);
-  const [isResolving, setIsResolving] = useState(false);
-  const [isIgnoring, setIsIgnoring] = useState(false);
+  // Single pending-action flag prevents simultaneous resolve+ignore race via keyboard shortcuts
+  const [pendingAction, setPendingAction] = useState<"resolve" | "ignore" | null>(null);
 
   // Event inspector
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
@@ -262,15 +262,20 @@ export default function IssueDetailPage() {
     if (issue) fetchReplay();
   }, [issueId, projectId, issue, hasReplay]);
 
-  // Resolve with undo toast
-  const handleResolve = useCallback(
-    async function () {
+  // Shared status-change handler — handles optimistic update, undo toast, and rollback
+  const handleStatusChange = useCallback(
+    async function (
+      actionKey: "resolve" | "ignore",
+      newStatus: "resolved" | "ignored",
+      successMsg: string,
+      errorMsg: string
+    ) {
       if (!issue || !projectId) return;
       const prev = issue.status;
-      setIsResolving(true);
-      setIssue({ ...issue, status: "resolved" });
+      setPendingAction(actionKey);
+      setIssue({ ...issue, status: newStatus });
 
-      toast.success("Issue resolved", {
+      const toastId = toast.success(successMsg, {
         action: {
           label: "Undo",
           onClick: async () => {
@@ -285,48 +290,30 @@ export default function IssueDetailPage() {
       });
 
       try {
-        await issuesApi.update(projectId, issueId, "resolved");
+        await issuesApi.update(projectId, issueId, newStatus);
       } catch {
+        toast.dismiss(toastId);
         setIssue((i) => (i ? { ...i, status: prev } : i));
-        toast.error("Failed to resolve issue");
+        toast.error(errorMsg);
       } finally {
-        setIsResolving(false);
+        setPendingAction(null);
       }
     },
     [issue, projectId, issueId]
   );
 
+  const handleResolve = useCallback(
+    async function () {
+      await handleStatusChange("resolve", "resolved", "Issue resolved", "Failed to resolve issue");
+    },
+    [handleStatusChange]
+  );
+
   const handleIgnore = useCallback(
     async function () {
-      if (!issue || !projectId) return;
-      const prev = issue.status;
-      setIsIgnoring(true);
-      setIssue({ ...issue, status: "ignored" });
-
-      toast.success("Issue ignored", {
-        action: {
-          label: "Undo",
-          onClick: async () => {
-            setIssue((i) => (i ? { ...i, status: prev } : i));
-            try {
-              await issuesApi.update(projectId, issueId, prev);
-            } catch {
-              toast.error("Failed to undo");
-            }
-          },
-        },
-      });
-
-      try {
-        await issuesApi.update(projectId, issueId, "ignored");
-      } catch {
-        setIssue((i) => (i ? { ...i, status: prev } : i));
-        toast.error("Failed to ignore issue");
-      } finally {
-        setIsIgnoring(false);
-      }
+      await handleStatusChange("ignore", "ignored", "Issue ignored", "Failed to ignore issue");
     },
-    [issue, projectId, issueId]
+    [handleStatusChange]
   );
 
   // Keyboard shortcuts
@@ -338,7 +325,7 @@ export default function IssueDetailPage() {
 
       switch (e.key.toLowerCase()) {
         case "r":
-          if (issue?.status !== "resolved" && !isResolving) {
+          if (issue?.status !== "resolved" && !pendingAction) {
             e.preventDefault();
             handleResolve();
           }
@@ -346,7 +333,7 @@ export default function IssueDetailPage() {
         case "i":
         case "m":
         case "e":
-          if (issue?.status !== "ignored" && !isIgnoring) {
+          if (issue?.status !== "ignored" && !pendingAction) {
             e.preventDefault();
             handleIgnore();
           }
@@ -379,7 +366,7 @@ export default function IssueDetailPage() {
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [issue, isResolving, isIgnoring, selectedEventId, router, projectId, handleResolve, handleIgnore]);
+  }, [issue, pendingAction, selectedEventId, router, projectId, handleResolve, handleIgnore]);
 
   function toggleFrame(index: number) {
     const newExpanded = new Set(expandedFrames);
@@ -496,16 +483,23 @@ export default function IssueDetailPage() {
     }
   }
 
-  async function handleDeleteComment(commentId: string) {
+  function handleDeleteComment(commentId: string) {
     if (!projectId) return;
-    if (!window.confirm("Delete this comment?")) return;
-    try {
-      await issuesApi.deleteComment(projectId, issueId, commentId);
-      setComments((prev) => prev.filter((c) => c.id !== commentId));
-      toast.success("Comment deleted");
-    } catch {
-      toast.error("Failed to delete comment");
-    }
+    toast("Delete this comment?", {
+      action: {
+        label: "Delete",
+        onClick: async () => {
+          try {
+            await issuesApi.deleteComment(projectId, issueId, commentId);
+            setComments((prev) => prev.filter((c) => c.id !== commentId));
+            toast.success("Comment deleted");
+          } catch {
+            toast.error("Failed to delete comment");
+          }
+        },
+      },
+      cancel: { label: "Cancel", onClick: () => {} },
+    });
   }
 
   // Auto-resize textarea
@@ -609,10 +603,15 @@ export default function IssueDetailPage() {
               variant="outline"
               size="sm"
               onClick={handleResolve}
-              disabled={isResolving || issue.status === "resolved"}
+              disabled={!!pendingAction || issue.status === "resolved"}
+              aria-keyshortcuts="r"
               className="h-8"
             >
-              {isResolving ? <Loader2 className="h-3 w-3 animate-spin" /> : <CheckCircle className="h-3 w-3" />}
+              {pendingAction === "resolve" ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : (
+                <CheckCircle className="h-3 w-3" />
+              )}
               <span className="ml-1.5 hidden sm:inline">{issue.status === "resolved" ? "Resolved" : "Resolve"}</span>
             </Button>
           </div>
@@ -625,10 +624,15 @@ export default function IssueDetailPage() {
           variant="outline"
           size="sm"
           onClick={handleIgnore}
-          disabled={isIgnoring || issue.status === "ignored"}
+          disabled={!!pendingAction || issue.status === "ignored"}
+          aria-keyshortcuts="i m e"
           className="h-7 text-xs"
         >
-          {isIgnoring ? <Loader2 className="mr-1.5 h-3 w-3 animate-spin" /> : <XCircle className="mr-1.5 h-3 w-3" />}
+          {pendingAction === "ignore" ? (
+            <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
+          ) : (
+            <XCircle className="mr-1.5 h-3 w-3" />
+          )}
           {issue.status === "ignored" ? "Ignored" : "Ignore"}
         </Button>
         <Button variant="outline" size="sm" onClick={handleCopyLink} className="h-7 text-xs">
@@ -663,8 +667,10 @@ export default function IssueDetailPage() {
                 return (
                   <button
                     key={tab.id}
+                    id={`tab-${tab.id}`}
                     role="tab"
                     aria-selected={activeTab === tab.id}
+                    aria-controls={`tabpanel-${tab.id}`}
                     onClick={() => setActiveTab(tab.id)}
                     className={`flex items-center gap-2 border-b-2 px-4 py-3 text-sm font-medium transition-colors ${
                       activeTab === tab.id
@@ -682,7 +688,7 @@ export default function IssueDetailPage() {
 
           {/* Debug Tab - Stack Trace */}
           {activeTab === "debug" && (
-            <div className="space-y-2">
+            <div id="tabpanel-debug" role="tabpanel" aria-labelledby="tab-debug" tabIndex={0} className="space-y-2">
               <div className="flex items-center justify-between mb-3">
                 <div>
                   <h3 className="font-semibold text-sm">
@@ -845,7 +851,13 @@ export default function IssueDetailPage() {
 
           {/* Timeline Tab */}
           {activeTab === "timeline" && (
-            <div className="space-y-4">
+            <div
+              id="tabpanel-timeline"
+              role="tabpanel"
+              aria-labelledby="tab-timeline"
+              tabIndex={0}
+              className="space-y-4"
+            >
               {/* Breadcrumbs */}
               <Card>
                 <CardHeader className="pb-3">
@@ -997,7 +1009,7 @@ export default function IssueDetailPage() {
 
           {/* Context Tab */}
           {activeTab === "context" && (
-            <div className="space-y-4">
+            <div id="tabpanel-context" role="tabpanel" aria-labelledby="tab-context" tabIndex={0} className="space-y-4">
               {/* Request */}
               <Card>
                 <CardHeader className="pb-3">
@@ -1395,7 +1407,10 @@ export default function IssueDetailPage() {
                   )}
                 </Button>
               </div>
-              <p className="text-[10px] text-muted-foreground mb-2">Cmd+Enter to submit</p>
+              <p className="text-[10px] text-muted-foreground mb-2">
+                {typeof navigator !== "undefined" && /Mac|iPhone|iPad|iPod/.test(navigator.platform) ? "⌘" : "Ctrl"}
+                +Enter to submit
+              </p>
 
               {commentsLoading ? (
                 <div className="flex items-center justify-center py-4">
@@ -1446,7 +1461,7 @@ export default function IssueDetailPage() {
                               <span className="text-xs text-muted-foreground">
                                 · {formatRelativeTime(comment.created_at)}
                               </span>
-                              <div className="ml-auto flex opacity-0 group-hover:opacity-100 transition-opacity">
+                              <div className="ml-auto flex opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
                                 <Button
                                   variant="ghost"
                                   size="sm"

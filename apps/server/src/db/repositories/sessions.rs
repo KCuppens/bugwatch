@@ -69,6 +69,15 @@ impl SessionRepository {
             .await?;
         Ok(())
     }
+
+    /// Delete all sessions that have passed their `expires_at`.
+    /// Returns the number of rows deleted.
+    pub async fn delete_expired(pool: &DbPool) -> Result<u64> {
+        let result = sqlx::query("DELETE FROM sessions WHERE expires_at < NOW()")
+            .execute(pool)
+            .await?;
+        Ok(result.rows_affected())
+    }
 }
 
 fn hash_token(token: &str) -> String {

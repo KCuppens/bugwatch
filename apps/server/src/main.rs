@@ -11,7 +11,7 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 use tower_http::{
     cors::{Any, CorsLayer},
-    trace::{DefaultMakeSpan, DefaultOnResponse, LatencyUnit, TraceLayer},
+    trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer},
 };
 use tracing::info;
 use tracing::Level;
@@ -426,7 +426,7 @@ fn create_app(state: AppState) -> Router {
                 .on_response(
                     DefaultOnResponse::new()
                         .level(Level::INFO)
-                        .latency_unit(LatencyUnit::Micros),
+                        .latency_unit(tower_http::LatencyUnit::Micros),
                 ),
         )
         .layer(cors)

@@ -94,12 +94,12 @@ pub async fn list(
     let total_pages = ((total as f64) / (per_page as f64)).ceil() as u32;
 
     Ok(Json(PaginatedResponse {
+        // NOTE: api_key is intentionally truncated to the first 8 chars in list responses to
+        // avoid exposing full keys in bulk. The GET /projects/:id endpoint returns the full key.
         data: projects
             .into_iter()
             .map(|p| {
                 let mut r = ProjectResponse::from(p);
-                // Truncate the API key in list responses — only the first 8 chars are exposed.
-                // Callers that need the full key must fetch the individual project endpoint.
                 r.api_key = r.api_key.chars().take(8).collect();
                 r
             })
@@ -128,7 +128,7 @@ pub async fn create(
             "Project name cannot be empty".to_string(),
         ));
     }
-    if req.name.len() > 100 {
+    if req.name.chars().count() > 100 {
         return Err(AppError::Validation(
             "Project name too long (max 100 characters)".to_string(),
         ));
@@ -243,11 +243,16 @@ pub async fn create(
 }
 
 /// GET /api/v1/projects/:id
+/// Returns the full api_key (unlike the list endpoint which returns only the first 8 chars).
 pub async fn get(
     State(state): State<AppState>,
     auth: EitherAuth,
     Path(id): Path<String>,
 ) -> AppResult<Json<ApiResponse<ProjectResponse>>> {
+    auth.has_permission("read")
+        .then_some(())
+        .ok_or_else(|| AppError::Forbidden("read permission required".to_string()))?;
+
     let project = ProjectRepository::find_by_id(&state.db, &id)
         .await?
         .ok_or_else(|| AppError::NotFound(format!("Project {} not found", id)))?;
@@ -291,7 +296,7 @@ pub async fn update(
                 "Project name cannot be empty".to_string(),
             ));
         }
-        if name.len() > 100 {
+        if name.chars().count() > 100 {
             return Err(AppError::Validation(
                 "Project name too long (max 100 characters)".to_string(),
             ));

@@ -139,7 +139,7 @@ impl RateLimiter {
         let mut bucket = self
             .hourly_buckets
             .entry(key.to_string())
-            .or_insert_with(|| TokenBucket::new_hourly(limit_per_hour, limit_per_hour));
+            .or_insert_with(|| TokenBucket::new(limit_per_hour, (limit_per_hour / 60).max(1)));
         bucket.try_consume()
     }
 
@@ -149,7 +149,7 @@ impl RateLimiter {
     pub fn get_stats(&self, key: &str) -> Option<(u32, u32)> {
         self.buckets
             .get(key)
-            .map(|bucket| (bucket.current_tokens(), bucket.capacity()))
+            .map(|bucket| (bucket.current_tokens(), bucket.get_capacity()))
     }
 
     /// Remove expired/inactive per-minute buckets to prevent memory growth.
