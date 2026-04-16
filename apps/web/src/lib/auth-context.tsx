@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useEffect, useMemo, useState, useCallback, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useMemo, useState, useCallback, useRef, type ReactNode } from "react";
 import { authApi, type User, ApiError, clearTokens as apiClearTokens, refreshTokens } from "./api";
 
 export interface AuthContextType {
@@ -23,6 +23,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
+  const isFetchingRef = useRef(false);
+  const isInitializedRef = useRef(false);
+
   const clearTokens = useCallback(() => {
     apiClearTokens();
     setUser(null);
@@ -38,20 +41,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const fetchCurrentUser = useCallback(async () => {
+    if (isFetchingRef.current) return false;
+    isFetchingRef.current = true;
     try {
-      // The api.ts fetchWithAuth will automatically handle 401 retry
       const response = await authApi.me();
       setUser(response.data);
       return true;
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) {
-        // Token refresh already attempted by fetchWithAuth and failed
         clearTokens();
       } else {
-        // Network errors or 5xx — keep existing user state, log for observability
         console.debug("[Auth] Failed to fetch current user:", error);
       }
       return false;
+    } finally {
+      isFetchingRef.current = false;
     }
   }, [clearTokens]);
 
@@ -66,6 +70,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // Try to fetch the current user — cookies are sent automatically.
       // If no valid session cookie exists, this returns 401 and we stay logged out.
       await fetchCurrentUser();
+      isInitializedRef.current = true;
       setIsLoading(false);
     };
 
@@ -101,7 +106,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // Listen for visibility changes to re-check auth state when user returns to tab.
   useEffect(() => {
     const handleVisibility = () => {
-      if (!document.hidden && !user) {
+      if (!document.hidden && !!user && isInitializedRef.current) {
         void fetchCurrentUser().catch((e) => console.debug("[Auth] Visibility re-check failed:", e));
       }
     };
