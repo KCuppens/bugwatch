@@ -212,6 +212,20 @@ pub async fn ingest(
         project.id
     );
 
+    // Validate tags to prevent abuse: cap count and key/value lengths.
+    if let Some(ref tags) = event.tags {
+        if tags.len() > 64 {
+            return Err(AppError::Validation("Too many tags (max 64)".to_string()));
+        }
+        for (k, v) in tags {
+            if k.len() > 256 || v.len() > 256 {
+                return Err(AppError::Validation(
+                    "Tag key/value too long (max 256 characters each)".to_string(),
+                ));
+            }
+        }
+    }
+
     // 4b. Deduplicate client-side error boundary events when onRequestError
     //     already captured the same server error with full details.
     //     Client error boundaries tag events with "next.digest" — if we already

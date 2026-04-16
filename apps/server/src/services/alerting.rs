@@ -564,6 +564,10 @@ impl AlertingService {
         let channel_map: std::collections::HashMap<String, _> =
             channels.into_iter().map(|c| (c.id.clone(), c)).collect();
 
+        // Collect the first webhook action that requests a status change — applied
+        // once after the loop so multiple channels can't race to overwrite each other.
+        let mut webhook_action: Option<String> = None;
+
         for channel_id in &channel_ids {
             let channel = match channel_map.get(channel_id) {
                 Some(c) if c.is_active => c,
@@ -606,31 +610,12 @@ impl AlertingService {
                         channel.channel_type, channel.name
                     );
 
-                    // Handle webhook response actions (resolve/ignore)
-                    if let Some(action) = action {
-                        if let Some(issue_id) = &payload.trigger_id {
-                            if payload.trigger_type == "new_issue"
-                                || payload.trigger_type == "issue_frequency"
-                            {
-                                let new_status = match action.as_str() {
-                                    "resolve" => "resolved",
-                                    "ignore" => "ignored",
-                                    _ => continue,
-                                };
-                                match IssueRepository::update_status(
-                                    &self.pool, issue_id, new_status,
-                                )
-                                .await
-                                {
-                                    Ok(_) => info!(
-                                        "Webhook action '{}' applied to issue {}",
-                                        action, issue_id
-                                    ),
-                                    Err(e) => error!(
-                                        "Failed to apply webhook action '{}' to issue {}: {}",
-                                        action, issue_id, e
-                                    ),
-                                }
+                    // Record the first resolve/ignore action; later channels are ignored
+                    // so the issue status is only updated once per alert evaluation.
+                    if webhook_action.is_none() {
+                        if let Some(action) = action {
+                            if matches!(action.as_str(), "resolve" | "ignore") {
+                                webhook_action = Some(action);
                             }
                         }
                     }
@@ -643,6 +628,24 @@ impl AlertingService {
                     {
                         error!("Failed to mark log as failed: {}", e);
                     }
+                }
+            }
+        }
+
+        // Apply the webhook action (if any) once, outside the channel loop.
+        if let (Some(action), Some(issue_id)) = (&webhook_action, &payload.trigger_id) {
+            if payload.trigger_type == "new_issue" || payload.trigger_type == "issue_frequency" {
+                let new_status = match action.as_str() {
+                    "resolve" => "resolved",
+                    "ignore" => "ignored",
+                    _ => return,
+                };
+                match IssueRepository::update_status(&self.pool, issue_id, new_status).await {
+                    Ok(_) => info!("Webhook action '{}' applied to issue {}", action, issue_id),
+                    Err(e) => error!(
+                        "Failed to apply webhook action '{}' to issue {}: {}",
+                        action, issue_id, e
+                    ),
                 }
             }
         }

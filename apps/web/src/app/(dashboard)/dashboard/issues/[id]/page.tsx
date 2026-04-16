@@ -36,19 +36,7 @@ import {
   GitBranch,
   Video,
 } from "lucide-react";
-import {
-  issuesApi,
-  integrationsApi,
-  replayApi,
-  type IssueDetail,
-  type BreadcrumbDetail,
-  type EventDetail,
-  type FrequencyData,
-  type ImpactData,
-  type IssueComment,
-  type IssueLinkInfo,
-  type SessionRecording,
-} from "@/lib/api";
+import { issuesApi, type BreadcrumbDetail, type EventDetail } from "@/lib/api";
 import { ENVIRONMENT_COLORS } from "@/lib/search";
 
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -57,6 +45,7 @@ import { IssueNavigation } from "@/components/issue-detail/IssueNavigation";
 import { IssueDetailSkeleton } from "@/components/skeletons/issue-detail-skeleton";
 import { CreateIssueDialog, LinkedIssues } from "@/components/integrations";
 import { useFeature } from "@/hooks/use-feature";
+import { useIssueData } from "@/hooks/useIssueData";
 import { toast } from "sonner";
 
 function formatRelativeTime(dateString: string): string {
@@ -89,10 +78,30 @@ export default function IssueDetailPage() {
   const issueId = params.id as string;
   const projectId = searchParams.get("project");
 
-  // Core state
-  const [issue, setIssue] = useState<IssueDetail | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const hasIntegrations = useFeature("github");
+  const hasReplay = useFeature("session_replay");
+
+  // All remote data fetching is centralised in this hook
+  const {
+    issue,
+    setIssue,
+    isLoading,
+    error,
+    frequencyData,
+    frequencyPeriod,
+    setFrequencyPeriod,
+    frequencyLoading,
+    impactData,
+    impactLoading,
+    comments,
+    setComments,
+    commentsLoading,
+    linkedIssues,
+    setLinkedIssues,
+    issueReplay,
+  } = useIssueData({ issueId, projectId, hasIntegrations, hasReplay });
+
+  // Core UI state
   const [activeTab, setActiveTab] = useState<"debug" | "timeline" | "context">(() => {
     const tab = searchParams.get("tab");
     if (tab === "timeline" || tab === "context") return tab;
@@ -116,67 +125,34 @@ export default function IssueDetailPage() {
   const [pendingAction, setPendingAction] = useState<"resolve" | "ignore" | null>(null);
   // Ref mirrors pendingAction so the undo toast closure can read the live value without stale capture
   const pendingActionRef = useRef<"resolve" | "ignore" | null>(null);
+  // Ref mirrors the current issue status so undo closures can check for staleness
+  const issueStatusRef = useRef<string | undefined>(undefined);
 
   // Event inspector
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [eventDetail, setEventDetail] = useState<EventDetail | null>(null);
   const [eventLoading, setEventLoading] = useState(false);
 
-  // Frequency chart
-  const [frequencyData, setFrequencyData] = useState<FrequencyData | null>(null);
-  const [frequencyPeriod, setFrequencyPeriod] = useState<"24h" | "7d" | "30d">("24h");
-  const [frequencyLoading, setFrequencyLoading] = useState(false);
-
   // Breadcrumb filter
   const [breadcrumbFilter, setBreadcrumbFilter] = useState<string>("all");
 
-  // Impact
-  const [impactData, setImpactData] = useState<ImpactData | null>(null);
-  const [impactLoading, setImpactLoading] = useState(false);
-
-  // Comments
-  const [comments, setComments] = useState<IssueComment[]>([]);
-  const [commentsLoading, setCommentsLoading] = useState(false);
+  // Comments (UI-only state — data comes from hook)
   const [newComment, setNewComment] = useState("");
   const [submittingComment, setSubmittingComment] = useState(false);
   const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
   const [editingContent, setEditingContent] = useState("");
   const [showAllComments, setShowAllComments] = useState(false);
 
-  // Linked issues
-  const [linkedIssues, setLinkedIssues] = useState<IssueLinkInfo[]>([]);
+  // Linked issues (UI-only state — data comes from hook)
   const [createIssueOpen, setCreateIssueOpen] = useState(false);
-  const hasIntegrations = useFeature("github");
-
-  // Session replay
-  const [issueReplay, setIssueReplay] = useState<SessionRecording | null>(null);
-  const hasReplay = useFeature("session_replay");
 
   // Auto-resize textarea ref
   const commentRef = useRef<HTMLTextAreaElement>(null);
 
-  // Fetch issue
+  // Keep issueStatusRef in sync so undo closures can detect stale status
   useEffect(() => {
-    async function fetchIssue() {
-      if (!projectId) {
-        setError("No project selected");
-        setIsLoading(false);
-        return;
-      }
-      setIsLoading(true);
-      setError(null);
-      try {
-        const response = await issuesApi.get(projectId, issueId);
-        setIssue(response.data);
-      } catch {
-        toast.error("Failed to load issue details");
-        setError("Failed to load issue details. Please try again.");
-      } finally {
-        setIsLoading(false);
-      }
-    }
-    fetchIssue();
-  }, [issueId, projectId]);
+    issueStatusRef.current = issue?.status;
+  }, [issue?.status]);
 
   // Auto-expand in-app frames
   useEffect(() => {
@@ -185,85 +161,6 @@ export default function IssueDetailPage() {
       setExpandedFrames(new Set(inAppIndices.length > 0 ? inAppIndices : [0]));
     }
   }, [issue]);
-
-  // Fetch linked issues
-  useEffect(() => {
-    async function fetchLinkedIssues() {
-      if (!projectId || !hasIntegrations) return;
-      try {
-        const response = await integrationsApi.listIssueLinks(projectId, issueId);
-        setLinkedIssues(response.data);
-      } catch (err) {
-        console.debug("[issues] fetchLinkedIssues failed (non-critical):", err);
-      }
-    }
-    if (issue) fetchLinkedIssues();
-  }, [issueId, projectId, issue, hasIntegrations]);
-
-  // Fetch frequency data
-  useEffect(() => {
-    async function fetchFrequency() {
-      if (!projectId) return;
-      setFrequencyLoading(true);
-      try {
-        const response = await issuesApi.getFrequency(projectId, issueId, frequencyPeriod);
-        setFrequencyData(response.data);
-      } catch {
-        setFrequencyData(null);
-      } finally {
-        setFrequencyLoading(false);
-      }
-    }
-    if (issue) fetchFrequency();
-  }, [issueId, projectId, frequencyPeriod, issue]);
-
-  // Fetch impact
-  useEffect(() => {
-    async function fetchImpact() {
-      if (!projectId) return;
-      setImpactLoading(true);
-      try {
-        const response = await issuesApi.getImpact(projectId, issueId);
-        setImpactData(response.data);
-      } catch {
-        setImpactData(null);
-      } finally {
-        setImpactLoading(false);
-      }
-    }
-    if (issue) fetchImpact();
-  }, [issueId, projectId, issue]);
-
-  // Fetch comments
-  useEffect(() => {
-    async function fetchComments() {
-      if (!projectId) return;
-      setCommentsLoading(true);
-      try {
-        const response = await issuesApi.listComments(projectId, issueId);
-        setComments(response.data);
-      } catch {
-        setComments([]);
-      } finally {
-        setCommentsLoading(false);
-      }
-    }
-    if (issue) fetchComments();
-  }, [issueId, projectId, issue]);
-
-  // Fetch session replay linked to this issue
-  useEffect(() => {
-    async function fetchReplay() {
-      if (!projectId || !hasReplay) return;
-      try {
-        const response = await replayApi.getIssueReplay(projectId, issueId);
-        setIssueReplay(response.data ?? null);
-      } catch {
-        setIssueReplay(null);
-      }
-    }
-    if (issue) fetchReplay();
-  }, [issueId, projectId, issue, hasReplay]);
 
   // Shared status-change handler — handles optimistic update, undo toast, and rollback
   const handleStatusChange = useCallback(
@@ -285,6 +182,9 @@ export default function IssueDetailPage() {
           onClick: async () => {
             // Guard: don't undo while the original call is still in-flight
             if (pendingActionRef.current !== null) return;
+            // Guard: bail if the status has already changed to something else
+            // (e.g. another action fired while the toast was visible)
+            if (issueStatusRef.current !== newStatus) return;
             setIssue((i) => (i ? { ...i, status: prev } : i));
             try {
               await issuesApi.update(projectId, issueId, prev);

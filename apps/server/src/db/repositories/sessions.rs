@@ -1,8 +1,11 @@
 use crate::db::{models::Session, DbPool};
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use sha2::{Digest, Sha256};
+use hmac::{Hmac, Mac};
+use sha2::Sha256;
 use uuid::Uuid;
+
+type HmacSha256 = Hmac<Sha256>;
 
 pub struct SessionRepository;
 
@@ -14,9 +17,10 @@ impl SessionRepository {
         expires_at: DateTime<Utc>,
         ip_address: Option<&str>,
         user_agent: Option<&str>,
+        jwt_secret: &str,
     ) -> Result<Session> {
         let id = Uuid::new_v4().to_string();
-        let token_hash = hash_token(token);
+        let token_hash = hash_token(token, jwt_secret.as_bytes());
 
         sqlx::query_as::<_, Session>(
             r#"
@@ -60,8 +64,13 @@ impl SessionRepository {
         Ok(())
     }
 
-    pub async fn update_token_hash(pool: &DbPool, id: &str, token: &str) -> Result<()> {
-        let token_hash = hash_token(token);
+    pub async fn update_token_hash(
+        pool: &DbPool,
+        id: &str,
+        token: &str,
+        jwt_secret: &str,
+    ) -> Result<()> {
+        let token_hash = hash_token(token, jwt_secret.as_bytes());
         sqlx::query("UPDATE sessions SET token_hash = $1 WHERE id = $2")
             .bind(&token_hash)
             .bind(id)
@@ -80,8 +89,10 @@ impl SessionRepository {
     }
 }
 
-fn hash_token(token: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(token.as_bytes());
-    hex::encode(hasher.finalize())
+/// HMAC-SHA256 keyed on the JWT secret so a leaked token_hash column cannot
+/// be used to brute-force session tokens without also knowing the secret.
+fn hash_token(token: &str, secret: &[u8]) -> String {
+    let mut mac = HmacSha256::new_from_slice(secret).expect("HMAC accepts keys of any length");
+    mac.update(token.as_bytes());
+    hex::encode(mac.finalize().into_bytes())
 }

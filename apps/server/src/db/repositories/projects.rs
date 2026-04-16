@@ -55,6 +55,40 @@ impl ProjectRepository {
         .map_err(Into::into)
     }
 
+    /// Insert a new project using an existing connection (e.g., inside a transaction).
+    /// Callers are responsible for committing or rolling back the transaction.
+    pub async fn create_in_tx(
+        conn: &mut sqlx::PgConnection,
+        name: &str,
+        slug: &str,
+        owner_id: &str,
+        platform: Option<&str>,
+        framework: Option<&str>,
+    ) -> Result<Project> {
+        let id = Uuid::new_v4().to_string();
+        let api_key = format!("bw_live_{}", Uuid::new_v4().to_string().replace("-", ""));
+        let api_key_hash = hash_api_key(&api_key);
+
+        sqlx::query_as::<_, Project>(
+            r#"
+            INSERT INTO projects (id, name, slug, api_key, api_key_hash, owner_id, platform, framework)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            RETURNING *
+            "#,
+        )
+        .bind(&id)
+        .bind(name)
+        .bind(slug)
+        .bind(&api_key)
+        .bind(&api_key_hash)
+        .bind(owner_id)
+        .bind(platform)
+        .bind(framework)
+        .fetch_one(conn)
+        .await
+        .map_err(Into::into)
+    }
+
     pub async fn find_by_id(pool: &DbPool, id: &str) -> Result<Option<Project>> {
         if let Some(entry) = project_cache().get(id) {
             let (project, inserted_at) = entry.value();

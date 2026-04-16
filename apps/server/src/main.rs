@@ -453,11 +453,7 @@ fn create_app(state: AppState) -> Router {
         .with_state(state)
         .layer(
             TraceLayer::new_for_http()
-                .make_span_with(
-                    DefaultMakeSpan::new()
-                        .level(Level::INFO)
-                        .include_headers(true),
-                )
+                .make_span_with(DefaultMakeSpan::new().level(Level::INFO))
                 .on_response(
                     DefaultOnResponse::new()
                         .level(Level::INFO)
@@ -508,15 +504,23 @@ async fn health_check(State(state): State<AppState>) -> axum::response::Response
     } else {
         StatusCode::SERVICE_UNAVAILABLE
     };
-    let uptime_secs = SERVER_START
-        .get()
-        .map(|s| s.elapsed().as_secs())
-        .unwrap_or(0);
     let timestamp = chrono::Utc::now().to_rfc3339();
 
-    (
-        code,
-        axum::Json(serde_json::json!({
+    // In production, return only the fields a load-balancer needs: status,
+    // timestamp, and whether the database is reachable.  Version strings and
+    // pool internals are stripped to reduce information leakage.
+    let body = if state.config.is_production() {
+        serde_json::json!({
+            "status": status,
+            "timestamp": timestamp,
+            "database": if db_ok { "connected" } else { "disconnected" },
+        })
+    } else {
+        let uptime_secs = SERVER_START
+            .get()
+            .map(|s| s.elapsed().as_secs())
+            .unwrap_or(0);
+        serde_json::json!({
             "status": status,
             "version": env!("CARGO_PKG_VERSION"),
             "timestamp": timestamp,
@@ -526,9 +530,10 @@ async fn health_check(State(state): State<AppState>) -> axum::response::Response
                 "size": state.db.size(),
                 "idle": state.db.num_idle()
             }
-        })),
-    )
-        .into_response()
+        })
+    };
+
+    (code, axum::Json(body)).into_response()
 }
 
 async fn serve_install_script() -> Response {
@@ -550,8 +555,27 @@ async fn serve_agent_script() -> Response {
 }
 
 async fn shutdown_signal() {
-    tokio::signal::ctrl_c()
-        .await
-        .expect("Failed to install CTRL+C signal handler");
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("Failed to install CTRL+C signal handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("Failed to install SIGTERM handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+    }
+
     info!("Shutdown signal received, starting graceful shutdown");
 }

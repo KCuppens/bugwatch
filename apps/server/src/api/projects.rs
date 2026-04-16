@@ -156,8 +156,38 @@ pub async fn create(
     };
     let limits = get_tier_limits(tier);
 
+    let slug = generate_slug(&req.name);
+
+    // Begin a transaction so the count check and INSERT are atomic.
+    // An advisory lock keyed on owner_id serialises concurrent project-create
+    // requests for the same user, preventing TOCTOU races on the project limit.
+    let mut tx = state
+        .db
+        .begin()
+        .await
+        .map_err(|e| AppError::Internal(format!("Failed to start transaction: {}", e)))?;
+
+    let lock_key: i64 = {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        owner_id.hash(&mut h);
+        h.finish() as i64
+    };
+    sqlx::query("SELECT pg_advisory_xact_lock($1)")
+        .bind(lock_key)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| AppError::Internal(format!("Failed to acquire project limit lock: {}", e)))?;
+
+    // Re-count within the lock to get a consistent view
+    let current_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM projects WHERE owner_id = $1")
+            .bind(&owner_id)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|e| AppError::Internal(format!("Failed to count projects: {}", e)))?;
+
     if let Some(project_limit) = limits.project_limit {
-        let current_count = ProjectRepository::count_by_owner(&state.db, &owner_id).await?;
         let x402_extra = org
             .as_ref()
             .map(|o| o.x402_extra_projects as i64)
@@ -227,10 +257,8 @@ pub async fn create(
         }
     }
 
-    let slug = generate_slug(&req.name);
-
-    let project = ProjectRepository::create(
-        &state.db,
+    let project = ProjectRepository::create_in_tx(
+        &mut tx,
         &req.name,
         &slug,
         &owner_id,
@@ -238,6 +266,10 @@ pub async fn create(
         req.framework.as_deref(),
     )
     .await?;
+
+    tx.commit()
+        .await
+        .map_err(|e| AppError::Internal(format!("Failed to commit project creation: {}", e)))?;
 
     Ok(Json(ApiResponse {
         data: ProjectResponse::from(project),
@@ -427,6 +459,10 @@ pub async fn verify_events(
     auth: EitherAuth,
     Path(id): Path<String>,
 ) -> AppResult<Json<ApiResponse<VerificationResponse>>> {
+    auth.has_permission("read")
+        .then_some(())
+        .ok_or_else(|| AppError::Forbidden("read permission required".to_string()))?;
+
     let project = ProjectRepository::find_by_id(&state.db, &id)
         .await?
         .ok_or_else(|| AppError::NotFound(format!("Project {} not found", id)))?;

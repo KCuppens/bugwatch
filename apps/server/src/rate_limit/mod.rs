@@ -143,7 +143,7 @@ impl RateLimiter {
         let mut bucket = self
             .hourly_buckets
             .entry(key.to_string())
-            .or_insert_with(|| TokenBucket::new(limit_per_hour, (limit_per_hour / 60).max(1)));
+            .or_insert_with(|| TokenBucket::new_with_hourly_rate(limit_per_hour, limit_per_hour));
         bucket.try_consume()
     }
 

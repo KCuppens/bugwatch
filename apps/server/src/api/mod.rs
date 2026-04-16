@@ -323,7 +323,8 @@ impl<T> ApiResponse<T> {
 pub struct PaginationParams {
     #[serde(default = "default_page")]
     pub page: u32,
-    #[serde(default = "default_per_page")]
+    /// Capped at 200 by `cap_per_page` — any larger value is silently clamped.
+    #[serde(default = "default_per_page", deserialize_with = "cap_per_page")]
     pub per_page: u32,
 }
 
@@ -333,6 +334,11 @@ fn default_page() -> u32 {
 
 fn default_per_page() -> u32 {
     20
+}
+
+fn cap_per_page<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
+    let v = u32::deserialize(d)?;
+    Ok(v.clamp(1, 200))
 }
 
 /// Paginated response wrapper

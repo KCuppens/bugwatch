@@ -40,6 +40,27 @@ impl TokenBucket {
         }
     }
 
+    /// Create a token bucket whose refill rate is expressed in tokens-per-hour.
+    ///
+    /// Unlike `new()`, this avoids integer-division precision loss for low hourly
+    /// rates (e.g., 3/hour → 3/3600 tokens/second, not `(3/60).max(1)` = 1/minute).
+    ///
+    /// # Arguments
+    /// * `capacity` - Maximum tokens (burst size equals the hourly limit)
+    /// * `limit_per_hour` - Tokens added per hour (refill rate)
+    pub fn new_with_hourly_rate(capacity: u32, limit_per_hour: u32) -> Self {
+        assert!(capacity > 0, "TokenBucket capacity must be > 0");
+        assert!(limit_per_hour > 0, "TokenBucket limit_per_hour must be > 0");
+        let now = Instant::now();
+        Self {
+            capacity,
+            tokens: capacity as f64,
+            refill_rate: limit_per_hour as f64 / 3600.0, // exact tokens-per-second
+            last_refill: now,
+            last_access: now,
+        }
+    }
+
     /// Try to consume a token from the bucket
     ///
     /// Returns `RateLimitResult` with current state

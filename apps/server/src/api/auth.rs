@@ -162,6 +162,7 @@ async fn issue_tokens_for_session(
         session_expires,
         Some(client_ip),
         user_agent,
+        &config.jwt_secret,
     )
     .await
     .map_err(|e| AppError::Internal(format!("Failed to create session: {}", e)))?;
@@ -174,9 +175,14 @@ async fn issue_tokens_for_session(
         config.jwt_refresh_expiration,
     )?;
 
-    SessionRepository::update_token_hash(db, &session.id, &tokens.refresh_token)
-        .await
-        .map_err(|e| AppError::Internal(format!("Failed to update session token: {}", e)))?;
+    SessionRepository::update_token_hash(
+        db,
+        &session.id,
+        &tokens.refresh_token,
+        &config.jwt_secret,
+    )
+    .await
+    .map_err(|e| AppError::Internal(format!("Failed to update session token: {}", e)))?;
 
     let secure = config.app_url.starts_with("https");
     let mut response_headers = HeaderMap::new();
