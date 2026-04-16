@@ -45,11 +45,14 @@ export function TeamMembers({ isOwner }: TeamMembersProps) {
   const [actionLoading, setActionLoading] = useState<string | null>(null);
 
   const fetchMembers = async () => {
+    setLoading(true);
     try {
       const response = await billingApi.listMembers();
       setMembers(response);
+      setError(null);
     } catch (err) {
       setError("Failed to load team members");
+      toast.error("Failed to load team members");
       console.error(err);
     } finally {
       setLoading(false);
@@ -102,6 +105,8 @@ export function TeamMembers({ isOwner }: TeamMembersProps) {
       fetchMembers();
     } catch (err) {
       console.error("Failed to update role:", err);
+      toast.error("Failed to update role. Please try again.");
+      void fetchMembers(); // revert to server state
     } finally {
       setActionLoading(null);
     }

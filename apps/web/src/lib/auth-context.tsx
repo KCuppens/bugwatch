@@ -99,7 +99,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }, TOKEN_REFRESH_INTERVAL);
 
     return () => clearInterval(interval);
-  }, [user, refreshAccessToken]);
+    // Depend on !!user (boolean) not the full user object — prevents resetting the
+    // interval timer when refreshUser() returns a new object reference with the same data.
+  }, [!!user, refreshAccessToken]);
 
   // When fetchWithAuth gets a persistent 401 (refresh failed — session fully
   // expired), it dispatches this event so the auth context can clear local state

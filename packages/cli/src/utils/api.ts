@@ -57,11 +57,18 @@ function getBaseUrl(config: Config | null): string {
   return process.env.BUGWATCH_URL || config?.url || DEFAULT_URL;
 }
 
+// Cache config for the lifetime of the CLI process — config is immutable per invocation
+let _configCache: Config | null | undefined = undefined;
+async function getCachedConfig(): Promise<Config | null> {
+  if (_configCache === undefined) _configCache = await loadConfig();
+  return _configCache;
+}
+
 /**
  * Make an authenticated API request
  */
 async function request<T = unknown>(path: string, options: RequestOptions = {}): Promise<T> {
-  const config = await loadConfig();
+  const config = await getCachedConfig();
   const apiKey = getApiKey(config);
   const baseUrl = getBaseUrl(config);
 
@@ -87,7 +94,25 @@ async function request<T = unknown>(path: string, options: RequestOptions = {}):
 
   if (!response.ok) {
     const text = await response.text().catch(() => "");
-    throw new Error(`API request failed: ${response.status} ${response.statusText}${text ? ` - ${text}` : ""}`);
+    // Log structured error for CLI log aggregation before throwing user-facing message
+    console.error(
+      JSON.stringify({
+        ts: new Date().toISOString(),
+        method: options.method ?? "GET",
+        path,
+        status: response.status,
+        body: text,
+      })
+    );
+    // Extract user-friendly message from JSON response body, fall back to generic
+    let userMessage: string;
+    try {
+      const json = JSON.parse(text) as { message?: string; error?: string };
+      userMessage = json.message ?? json.error ?? `Request failed (${response.status})`;
+    } catch {
+      userMessage = `Request failed (${response.status} ${response.statusText})`;
+    }
+    throw new Error(userMessage);
   }
 
   return response.json() as Promise<T>;

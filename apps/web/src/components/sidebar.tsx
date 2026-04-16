@@ -78,35 +78,19 @@ export function Sidebar() {
       },
     ];
 
-    if (hasPerformance) {
-      items.push({
-        label: "Performance",
-        href: "/dashboard/performance",
-        icon: <Gauge className="h-5 w-5" />,
-      });
-    } else {
-      items.push({
-        label: "Performance",
-        href: "/dashboard/performance",
-        icon: <Gauge className="h-5 w-5" />,
-        proGated: true,
-      });
-    }
+    items.push({
+      label: "Performance",
+      href: "/dashboard/performance",
+      icon: <Gauge className="h-5 w-5" />,
+      ...(!hasPerformance && { proGated: true }),
+    });
 
-    if (hasReplay) {
-      items.push({
-        label: "Replays",
-        href: "/dashboard/replay",
-        icon: <Video className="h-5 w-5" />,
-      });
-    } else {
-      items.push({
-        label: "Replays",
-        href: "/dashboard/replay",
-        icon: <Video className="h-5 w-5" />,
-        proGated: true,
-      });
-    }
+    items.push({
+      label: "Replays",
+      href: "/dashboard/replay",
+      icon: <Video className="h-5 w-5" />,
+      ...(!hasReplay && { proGated: true }),
+    });
 
     items.push(
       {

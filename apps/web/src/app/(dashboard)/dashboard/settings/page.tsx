@@ -236,7 +236,8 @@ export default function SettingsPage() {
       else setSavedLabel(`Saved ${Math.floor(secs / 3600)}h ago`);
     };
     tick();
-    const i = setInterval(tick, 5000);
+    // 30s interval is sufficient for minute-level display granularity
+    const i = setInterval(tick, 30_000);
     return () => clearInterval(i);
   }, [lastSavedAt]);
 
@@ -280,7 +281,7 @@ export default function SettingsPage() {
       setIsOwner(orgResponse.is_owner);
       setSubscription(subResponse);
       setMembersCount(orgResponse.members_count);
-      refreshUser();
+      await refreshUser();
     } catch {
       toast.error("Failed to refresh billing data");
     } finally {
@@ -335,16 +336,22 @@ export default function SettingsPage() {
       )}
 
       {/* Navigation */}
-      <div className="flex gap-2 border-b border-border-subtle pb-4 overflow-x-auto scrollbar-hide -mx-1 px-1">
+      <div
+        role="tablist"
+        aria-label="Settings sections"
+        className="flex gap-2 border-b border-border-subtle pb-4 overflow-x-auto scrollbar-hide -mx-1 px-1"
+      >
         {tabs.map((tab) => (
           <Button
             key={tab.id}
+            role="tab"
+            aria-selected={activeTab === tab.id}
             variant={activeTab === tab.id ? "secondary" : "ghost"}
             size="sm"
             onClick={() => setActiveTab(tab.id)}
             className="shrink-0"
           >
-            <tab.icon className="mr-2 h-4 w-4" />
+            <tab.icon className="mr-2 h-4 w-4" aria-hidden="true" />
             {tab.label}
           </Button>
         ))}
@@ -391,34 +398,47 @@ export default function SettingsPage() {
             <CardContent className="space-y-6">
               <div className="flex items-center justify-between">
                 <div className="space-y-0.5">
-                  <Label>Email Digest</Label>
+                  <Label htmlFor="notif-email-digest">Email Digest</Label>
                   <p className="text-xs text-muted-foreground">Receive a daily summary of new issues</p>
                 </div>
-                <Switch checked={notifPrefs.emailDigest} onCheckedChange={(v) => updateNotifPref("emailDigest", v)} />
+                <Switch
+                  id="notif-email-digest"
+                  checked={notifPrefs.emailDigest}
+                  onCheckedChange={(v) => updateNotifPref("emailDigest", v)}
+                />
               </div>
               <div className="flex items-center justify-between">
                 <div className="space-y-0.5">
-                  <Label>In-App Badges</Label>
+                  <Label htmlFor="notif-in-app-badges">In-App Badges</Label>
                   <p className="text-xs text-muted-foreground">Show unread count badges on navigation items</p>
                 </div>
-                <Switch checked={notifPrefs.inAppBadges} onCheckedChange={(v) => updateNotifPref("inAppBadges", v)} />
+                <Switch
+                  id="notif-in-app-badges"
+                  checked={notifPrefs.inAppBadges}
+                  onCheckedChange={(v) => updateNotifPref("inAppBadges", v)}
+                />
               </div>
               <div className="flex items-center justify-between">
                 <div className="space-y-0.5">
-                  <Label>Critical Alerts</Label>
+                  <Label htmlFor="notif-critical-alerts">Critical Alerts</Label>
                   <p className="text-xs text-muted-foreground">Immediately notify for fatal and critical issues</p>
                 </div>
                 <Switch
+                  id="notif-critical-alerts"
                   checked={notifPrefs.criticalAlerts}
                   onCheckedChange={(v) => updateNotifPref("criticalAlerts", v)}
                 />
               </div>
               <div className="flex items-center justify-between">
                 <div className="space-y-0.5">
-                  <Label>Weekly Report</Label>
+                  <Label htmlFor="notif-weekly-report">Weekly Report</Label>
                   <p className="text-xs text-muted-foreground">Get a weekly email with project health overview</p>
                 </div>
-                <Switch checked={notifPrefs.weeklyReport} onCheckedChange={(v) => updateNotifPref("weeklyReport", v)} />
+                <Switch
+                  id="notif-weekly-report"
+                  checked={notifPrefs.weeklyReport}
+                  onCheckedChange={(v) => updateNotifPref("weeklyReport", v)}
+                />
               </div>
             </CardContent>
           </Card>
@@ -431,10 +451,11 @@ export default function SettingsPage() {
             <CardContent className="space-y-4">
               <div className="flex items-center justify-between">
                 <div className="space-y-0.5">
-                  <Label>Enable Quiet Hours</Label>
+                  <Label htmlFor="notif-quiet-hours">Enable Quiet Hours</Label>
                   <p className="text-xs text-muted-foreground">10 PM — 8 AM local time</p>
                 </div>
                 <Switch
+                  id="notif-quiet-hours"
                   checked={notifPrefs.quietHoursEnabled}
                   onCheckedChange={(v) => updateNotifPref("quietHoursEnabled", v)}
                 />

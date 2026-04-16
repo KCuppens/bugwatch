@@ -60,9 +60,11 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
     readLocalStorage<OnboardingProfile | null>(PROFILE_KEY, null)
   );
 
-  const [checklist, setChecklist] = useState<Record<MilestoneId, boolean>>(() =>
-    readLocalStorage<Record<MilestoneId, boolean>>(CHECKLIST_KEY, DEFAULT_CHECKLIST)
-  );
+  const [checklist, setChecklist] = useState<Record<MilestoneId, boolean>>(() => {
+    // Merge against defaults so missing keys from older app versions stay false, not undefined
+    const stored = readLocalStorage<Partial<Record<MilestoneId, boolean>>>(CHECKLIST_KEY, {});
+    return { ...DEFAULT_CHECKLIST, ...stored };
+  });
 
   const [isWelcomeComplete, setIsWelcomeComplete] = useState<boolean>(() => {
     if (typeof window === "undefined") return false;

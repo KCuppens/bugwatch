@@ -119,6 +119,7 @@ export function Header() {
         aria-modal="true"
         aria-label="Navigation menu"
         aria-hidden={!mobileOpen}
+        {...(!mobileOpen ? { inert: true } : {})}
         onKeyDown={(e) => {
           if (e.key === "Escape") setMobileOpen(false);
         }}

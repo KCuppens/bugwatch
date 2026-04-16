@@ -401,13 +401,17 @@ export default function IssueDetailPage() {
       });
       lines.push("```", "");
     }
-    navigator.clipboard.writeText(lines.join("\n"));
-    toast.success("Copied for AI assistant");
+    navigator.clipboard
+      .writeText(lines.join("\n"))
+      .then(() => toast.success("Copied for AI assistant"))
+      .catch(() => toast.error("Copy failed"));
   }
 
   function handleCopyLink() {
-    navigator.clipboard.writeText(window.location.href);
-    toast.success("Link copied");
+    navigator.clipboard
+      .writeText(window.location.href)
+      .then(() => toast.success("Link copied"))
+      .catch(() => toast.error("Copy failed"));
   }
 
   function handleCopyCurl() {
@@ -424,8 +428,10 @@ export default function IssueDetailPage() {
       });
     }
     parts.push(`"${url}"`);
-    navigator.clipboard.writeText(parts.join(" \\\n  "));
-    toast.success("cURL command copied");
+    navigator.clipboard
+      .writeText(parts.join(" \\\n  "))
+      .then(() => toast.success("cURL command copied"))
+      .catch(() => toast.error("Copy failed"));
   }
 
   async function handleEventClick(eventId: string) {
@@ -521,8 +527,8 @@ export default function IssueDetailPage() {
         <div className="flex items-center justify-between gap-4">
           <div className="flex items-center gap-3 min-w-0">
             <Link href="/dashboard">
-              <Button variant="ghost" size="icon" className="shrink-0 h-8 w-8">
-                <ArrowLeft className="h-4 w-4" />
+              <Button variant="ghost" size="icon" className="shrink-0 h-8 w-8" aria-label="Back to dashboard">
+                <ArrowLeft className="h-4 w-4" aria-hidden="true" />
               </Button>
             </Link>
             <div
@@ -634,7 +640,7 @@ export default function IssueDetailPage() {
         <div className="space-y-4 min-w-0">
           {/* Tabs */}
           <div className="border-b">
-            <div className="flex gap-1">
+            <div role="tablist" aria-label="Issue detail sections" className="flex gap-1">
               {[
                 { id: "debug" as const, label: "Stack Trace", icon: Code },
                 { id: "timeline" as const, label: "Timeline", icon: Clock },
@@ -644,6 +650,8 @@ export default function IssueDetailPage() {
                 return (
                   <button
                     key={tab.id}
+                    role="tab"
+                    aria-selected={activeTab === tab.id}
                     onClick={() => setActiveTab(tab.id)}
                     className={`flex items-center gap-2 border-b-2 px-4 py-3 text-sm font-medium transition-colors ${
                       activeTab === tab.id
@@ -651,7 +659,7 @@ export default function IssueDetailPage() {
                         : "border-transparent text-muted-foreground hover:text-foreground hover:bg-muted/30"
                     }`}
                   >
-                    <TabIcon className="h-4 w-4" />
+                    <TabIcon className="h-4 w-4" aria-hidden="true" />
                     <span>{tab.label}</span>
                   </button>
                 );
@@ -836,6 +844,7 @@ export default function IssueDetailPage() {
                         <select
                           value={breadcrumbFilter}
                           onChange={(e) => setBreadcrumbFilter(e.target.value)}
+                          aria-label="Filter breadcrumbs by type"
                           className="h-7 rounded-md border bg-background px-2 text-xs"
                         >
                           <option value="all">All</option>
@@ -946,7 +955,7 @@ export default function IssueDetailPage() {
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-1">
-                    {issue.recent_events.map((event, index) => (
+                    {issue.recent_events.slice(0, 20).map((event, index) => (
                       <button
                         key={event.id}
                         onClick={() => handleEventClick(event.id)}
@@ -962,6 +971,11 @@ export default function IssueDetailPage() {
                         </div>
                       </button>
                     ))}
+                    {issue.recent_events.length > 20 && (
+                      <p className="text-xs text-muted-foreground text-center pt-1">
+                        Showing 20 of {issue.recent_events.length} events
+                      </p>
+                    )}
                   </div>
                 </CardContent>
               </Card>
@@ -1347,6 +1361,7 @@ export default function IssueDetailPage() {
                   ref={commentRef}
                   value={newComment}
                   onChange={handleTextareaChange}
+                  aria-label="Add a comment"
                   placeholder="Add a comment..."
                   rows={1}
                   className="flex-1 min-h-[32px] max-h-[120px] rounded-md border bg-background px-3 py-1.5 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-ring"
@@ -1362,8 +1377,13 @@ export default function IssueDetailPage() {
                   className="h-8 shrink-0"
                   onClick={handleSubmitComment}
                   disabled={submittingComment || !newComment.trim()}
+                  aria-label={submittingComment ? "Submitting comment" : "Submit comment"}
                 >
-                  {submittingComment ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                  {submittingComment ? (
+                    <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                  ) : (
+                    <Send className="h-4 w-4" aria-hidden="true" />
+                  )}
                 </Button>
               </div>
               <p className="text-[10px] text-muted-foreground mb-2">Cmd+Enter to submit</p>
@@ -1461,10 +1481,17 @@ export default function IssueDetailPage() {
       {/* Event Inspector Modal */}
       {selectedEventId && (
         <div className="fixed inset-0 z-50 bg-background/80 backdrop-blur-sm">
-          <div className="fixed left-[50%] top-[50%] z-50 w-full max-w-3xl max-h-[85vh] translate-x-[-50%] translate-y-[-50%] border bg-background shadow-lg sm:rounded-lg flex flex-col">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="event-modal-title"
+            className="fixed left-[50%] top-[50%] z-50 w-full max-w-3xl max-h-[85vh] translate-x-[-50%] translate-y-[-50%] border bg-background shadow-lg sm:rounded-lg flex flex-col"
+          >
             <div className="flex items-center justify-between border-b p-4 shrink-0">
               <div>
-                <h2 className="font-display text-heading-sm">Event Details</h2>
+                <h2 id="event-modal-title" className="font-display text-heading-sm">
+                  Event Details
+                </h2>
                 {eventDetail && (
                   <p className="text-sm text-muted-foreground">
                     {new Date(eventDetail.timestamp).toLocaleString()}
@@ -1472,8 +1499,8 @@ export default function IssueDetailPage() {
                   </p>
                 )}
               </div>
-              <Button variant="ghost" size="icon" onClick={closeEventModal}>
-                <XCircle className="h-4 w-4" />
+              <Button variant="ghost" size="icon" onClick={closeEventModal} aria-label="Close event details">
+                <XCircle className="h-4 w-4" aria-hidden="true" />
               </Button>
             </div>
             <div className="flex-1 overflow-y-auto p-4">

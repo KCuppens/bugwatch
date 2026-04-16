@@ -207,7 +207,7 @@ function SummaryCard({
     <Card className="bg-surface-2 border border-border-subtle">
       <CardContent className="p-3">
         <div className="flex items-center gap-1.5 text-muted-foreground mb-1">
-          {icon}
+          <span aria-hidden="true">{icon}</span>
           <span className="text-[11px] font-medium uppercase tracking-wide">{label}</span>
         </div>
         {loading ? (

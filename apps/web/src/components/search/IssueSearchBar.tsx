@@ -192,8 +192,13 @@ export function IssueSearchBar({
 
         {/* Clear button */}
         {query && (
-          <button type="button" onClick={clearSearch} className="p-1 hover:bg-muted rounded transition-colors">
-            <X className="h-4 w-4 text-muted-foreground" />
+          <button
+            type="button"
+            onClick={clearSearch}
+            aria-label="Clear search"
+            className="p-1 hover:bg-muted rounded transition-colors"
+          >
+            <X className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
           </button>
         )}
 
