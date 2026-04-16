@@ -221,8 +221,35 @@ async fn main() -> Result<()> {
                 Ok(newly_offline) => {
                     for server in &newly_offline {
                         tracing::info!("Server {} ({}) marked offline", server.hostname, server.id);
-                        if let Err(e) = offline_alerting.on_server_offline(server).await {
-                            tracing::error!("Failed to send server offline alert: {}", e);
+                        // Retry up to 3× with 5s back-off so a transient network
+                        // error doesn't silently drop the offline alert.
+                        let mut last_err: Option<anyhow::Error> = None;
+                        for attempt in 1u32..=3 {
+                            match offline_alerting.on_server_offline(server).await {
+                                Ok(()) => {
+                                    last_err = None;
+                                    break;
+                                }
+                                Err(e) => {
+                                    tracing::warn!(
+                                        attempt,
+                                        server_id = %server.id,
+                                        "Server offline alert attempt {}/3 failed: {}",
+                                        attempt, e
+                                    );
+                                    last_err = Some(e);
+                                    if attempt < 3 {
+                                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                                    }
+                                }
+                            }
+                        }
+                        if let Some(e) = last_err {
+                            tracing::error!(
+                                server_id = %server.id,
+                                "Failed to send server offline alert after 3 attempts: {}",
+                                e
+                            );
                         }
                     }
                 }

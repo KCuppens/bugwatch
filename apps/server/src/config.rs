@@ -153,6 +153,11 @@ pub struct Config {
     /// Encryption key for field-level encryption of integration tokens
     pub encryption_key: Option<String>,
 
+    /// Separate HMAC secret for password reset tokens.
+    /// Defaults to JWT_SECRET when not set (backward-compatible), but decoupling the two
+    /// means a leaked JWT secret does not also compromise password reset links.
+    pub password_reset_secret: String,
+
     /// GitHub webhook secret for verifying webhook signatures
     pub github_webhook_secret: Option<String>,
 
@@ -261,6 +266,9 @@ impl Config {
                         .unwrap_or(false)
                 }),
             encryption_key: env::var("BUGWATCH_ENCRYPTION_KEY").ok(),
+            password_reset_secret: env::var("PASSWORD_RESET_SECRET")
+                .unwrap_or_else(|_| env::var("JWT_SECRET")
+                    .expect("FATAL: JWT_SECRET environment variable is required.")),
             github_webhook_secret: env::var("GITHUB_WEBHOOK_SECRET").ok(),
             jira_webhook_secret: env::var("JIRA_WEBHOOK_SECRET").ok(),
             linear_webhook_secret: env::var("LINEAR_WEBHOOK_SECRET").ok(),
@@ -343,12 +351,18 @@ impl Config {
             if self.allowed_origins.is_empty() {
                 panic!("FATAL: ALLOWED_ORIGINS must be set in production (comma-separated list of allowed origins)");
             }
-            // Validate each origin is a parseable URL so misconfigured CORS doesn't
-            // silently reject all cross-origin requests.
+            // Validate each origin is a parseable HTTP header value so misconfigured
+            // CORS doesn't silently reject all cross-origin requests at runtime.
             for origin in &self.allowed_origins {
                 if !origin.starts_with("http://") && !origin.starts_with("https://") {
                     panic!(
                         "FATAL: ALLOWED_ORIGINS entry '{}' must start with http:// or https://",
+                        origin
+                    );
+                }
+                if origin.parse::<axum::http::HeaderValue>().is_err() {
+                    panic!(
+                        "FATAL: ALLOWED_ORIGINS entry '{}' contains characters that are not valid in an HTTP header value",
                         origin
                     );
                 }

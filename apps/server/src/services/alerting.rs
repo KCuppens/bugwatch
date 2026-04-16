@@ -276,7 +276,10 @@ impl AlertingService {
                     frequency: None,
                 };
 
-                if let Err(e) = self.send_alert(&rule, &payload, None).await {
+                // 5-minute cooldown prevents duplicate alerts from SDK retries on
+                // the same error (on_new_issue is fired for every ingest, not just
+                // the first one that creates the issue).
+                if let Err(e) = self.send_alert(&rule, &payload, Some(5)).await {
                     error!(rule_id = %rule.id, "Alert delivery failed after retries: {}", e);
                 }
             } else {
@@ -357,7 +360,8 @@ impl AlertingService {
                     frequency: None,
                 };
 
-                if let Err(e) = self.send_alert(&rule, &payload, None).await {
+                // 5-minute cooldown prevents duplicate alerts from repeated down checks.
+                if let Err(e) = self.send_alert(&rule, &payload, Some(5)).await {
                     error!(rule_id = %rule.id, "Alert delivery failed after retries: {}", e);
                 }
             } else {
@@ -413,7 +417,8 @@ impl AlertingService {
                     frequency: None,
                 };
 
-                if let Err(e) = self.send_alert(&rule, &payload, None).await {
+                // 5-minute cooldown prevents duplicate alerts from rapid recovery/down cycling.
+                if let Err(e) = self.send_alert(&rule, &payload, Some(5)).await {
                     error!(rule_id = %rule.id, "Alert delivery failed after retries: {}", e);
                 }
             }

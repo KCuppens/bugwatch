@@ -683,7 +683,7 @@ pub async fn forgot_password(
 
     // Generate a 32-byte random token, hash it for storage
     let plain_token = generate_reset_token();
-    let token_hash = hash_reset_token(&plain_token, state.config.jwt_secret.as_bytes());
+    let token_hash = hash_reset_token(&plain_token, state.config.password_reset_secret.as_bytes());
     let expires_at = Utc::now() + Duration::hours(1);
     let id = uuid::Uuid::new_v4().to_string();
 
@@ -747,7 +747,7 @@ pub async fn reset_password(
 ) -> AppResult<Json<serde_json::Value>> {
     check_auth_rate_limit(&state, &headers, Some(peer_addr))?;
 
-    let token_hash = hash_reset_token(&req.token, state.config.jwt_secret.as_bytes());
+    let token_hash = hash_reset_token(&req.token, state.config.password_reset_secret.as_bytes());
 
     validate_password(&req.new_password)?;
 

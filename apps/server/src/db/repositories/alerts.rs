@@ -192,31 +192,23 @@ impl NotificationChannelRepository {
         config: Option<&str>,
         is_active: Option<bool>,
     ) -> Result<NotificationChannel> {
-        if let Some(n) = name {
-            sqlx::query("UPDATE notification_channels SET name = $1 WHERE id = $2")
-                .bind(n)
-                .bind(id)
-                .execute(pool)
-                .await?;
-        }
-        if let Some(c) = config {
-            sqlx::query("UPDATE notification_channels SET config = $1 WHERE id = $2")
-                .bind(c)
-                .bind(id)
-                .execute(pool)
-                .await?;
-        }
-        if let Some(active) = is_active {
-            sqlx::query("UPDATE notification_channels SET is_active = $1 WHERE id = $2")
-                .bind(active)
-                .bind(id)
-                .execute(pool)
-                .await?;
-        }
-
-        Self::find_by_id(pool, id)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("Notification channel not found"))
+        // Single UPDATE with COALESCE so a None field is left untouched.
+        // Replaces up-to-3 UPDATEs + 1 SELECT with one round trip.
+        sqlx::query_as::<_, NotificationChannel>(
+            "UPDATE notification_channels
+             SET name = COALESCE($1, name),
+                 config = COALESCE($2, config),
+                 is_active = COALESCE($3, is_active)
+             WHERE id = $4
+             RETURNING *",
+        )
+        .bind(name)
+        .bind(config)
+        .bind(is_active)
+        .bind(id)
+        .fetch_optional(pool)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("Notification channel not found"))
     }
 
     pub async fn delete(pool: &DbPool, id: &str) -> Result<()> {
@@ -361,12 +353,18 @@ impl AlertLogRepository {
         cooldown_minutes: i32,
     ) -> Result<Option<AlertLog>> {
         // Derive a stable i64 from rule_id + trigger_id for the advisory lock.
+        // DefaultHasher is explicitly unstable across Rust versions — a binary upgrade
+        // would silently change every lock key, breaking cooldown enforcement.
+        // SHA-256 is stable, deterministic, and already a project dependency.
         let lock_key = {
-            use std::hash::{Hash, Hasher};
-            let mut h = std::collections::hash_map::DefaultHasher::new();
-            alert_rule_id.hash(&mut h);
-            trigger_id.hash(&mut h);
-            h.finish() as i64
+            use sha2::{Digest, Sha256};
+            let input = format!("{}:{}", alert_rule_id, trigger_id.unwrap_or(""));
+            let hash = Sha256::digest(input.as_bytes());
+            i64::from_le_bytes(
+                hash[..8]
+                    .try_into()
+                    .expect("SHA-256 output is always ≥ 8 bytes"),
+            )
         };
 
         let mut tx = pool.begin().await?;
