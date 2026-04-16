@@ -155,10 +155,23 @@ async fn issue_tokens_for_session(
     client_ip: &str,
     user_agent: Option<&str>,
 ) -> AppResult<(HeaderMap, crate::auth::jwt::TokenPair)> {
-    let session = SessionRepository::create(
-        db,
+    // Generate session ID before creating the DB row so we can include the
+    // real token hash in the INSERT (no placeholder → no two-step write window).
+    let session_id = uuid::Uuid::new_v4().to_string();
+
+    let tokens = generate_tokens(
         user_id,
-        "", // Placeholder; replaced with real token hash below
+        &session_id,
+        &config.jwt_secret,
+        config.jwt_access_expiration,
+        config.jwt_refresh_expiration,
+    )?;
+
+    SessionRepository::create_with_id(
+        db,
+        &session_id,
+        user_id,
+        &tokens.refresh_token,
         session_expires,
         Some(client_ip),
         user_agent,
@@ -166,23 +179,6 @@ async fn issue_tokens_for_session(
     )
     .await
     .map_err(|e| AppError::Internal(format!("Failed to create session: {}", e)))?;
-
-    let tokens = generate_tokens(
-        user_id,
-        &session.id,
-        &config.jwt_secret,
-        config.jwt_access_expiration,
-        config.jwt_refresh_expiration,
-    )?;
-
-    SessionRepository::update_token_hash(
-        db,
-        &session.id,
-        &tokens.refresh_token,
-        &config.jwt_secret,
-    )
-    .await
-    .map_err(|e| AppError::Internal(format!("Failed to update session token: {}", e)))?;
 
     let secure = config.app_url.starts_with("https");
     let mut response_headers = HeaderMap::new();
@@ -428,23 +424,45 @@ pub async fn refresh(
         return Err(AppError::Unauthorized("Session expired".to_string()));
     }
 
-    // Create new session FIRST — if this fails the old session remains valid (no lockout)
+    // Atomically rotate: delete old session + create new session in one transaction.
+    // This eliminates the replay window where both old and new tokens are simultaneously valid.
+    let new_session_id = uuid::Uuid::new_v4().to_string();
     let new_session_expires = Utc::now() + Duration::seconds(state.config.jwt_refresh_expiration);
     let refresh_ip = extract_client_ip(&headers, state.config.trust_proxy);
     let refresh_ua = extract_user_agent(&headers);
-    let (response_headers, tokens) = issue_tokens_for_session(
-        &state.db,
-        &state.config,
-        &claims.sub,
-        new_session_expires,
-        &refresh_ip,
-        refresh_ua.as_deref(),
-    )
-    .await?;
 
-    // Delete old session AFTER new one is created — soft failure to avoid leaving user logged out
-    if let Err(e) = SessionRepository::delete(&state.db, &session_id).await {
-        tracing::warn!(session_id = %session_id, "Failed to delete old session during rotation (it will expire naturally): {}", e);
+    let tokens = generate_tokens(
+        &claims.sub,
+        &new_session_id,
+        &state.config.jwt_secret,
+        state.config.jwt_access_expiration,
+        state.config.jwt_refresh_expiration,
+    )?;
+
+    SessionRepository::rotate(
+        &state.db,
+        &session_id,
+        &new_session_id,
+        &claims.sub,
+        &tokens.refresh_token,
+        new_session_expires,
+        Some(&refresh_ip),
+        refresh_ua.as_deref(),
+        &state.config.jwt_secret,
+    )
+    .await
+    .map_err(|e| AppError::Internal(format!("Failed to rotate session: {}", e)))?;
+
+    let secure = state.config.app_url.starts_with("https");
+    let mut response_headers = HeaderMap::new();
+    for cookie in build_auth_cookies(
+        &tokens.access_token,
+        &tokens.refresh_token,
+        state.config.jwt_access_expiration,
+        state.config.jwt_refresh_expiration,
+        secure,
+    ) {
+        response_headers.append(header::SET_COOKIE, cookie);
     }
 
     Ok((

@@ -313,8 +313,8 @@ pub async fn ingest(
     } else {
         // For events without exception, use message as fingerprint base
         let msg = event.message.as_deref().unwrap_or("(no message)");
-        let fp = format!("{:x}", md5_hash(msg));
-        (fp[..16].to_string(), msg.to_string())
+        let fp = sha256_fingerprint(msg);
+        (fp, msg.to_string())
     };
 
     // 6. Get level as string
@@ -463,11 +463,11 @@ pub fn extract_api_key(headers: &HeaderMap) -> AppResult<String> {
     Ok(auth_header.trim_start_matches("Bearer ").to_string())
 }
 
-/// Simple MD5 hash for non-exception fingerprints
-fn md5_hash(input: &str) -> u128 {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    let mut hasher = DefaultHasher::new();
-    input.hash(&mut hasher);
-    hasher.finish() as u128
+/// SHA-256 fingerprint (16 hex chars) for non-exception events.
+/// Uses a real cryptographic hash so fingerprints are stable across processes
+/// and Rust version upgrades (DefaultHasher is explicitly unstable).
+fn sha256_fingerprint(input: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let hash = Sha256::digest(input.as_bytes());
+    hex::encode(&hash[..8]) // 8 bytes → 16 hex chars
 }

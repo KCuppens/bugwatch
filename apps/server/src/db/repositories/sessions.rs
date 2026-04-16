@@ -64,6 +64,78 @@ impl SessionRepository {
         Ok(())
     }
 
+    /// Create a session using a caller-supplied ID so that tokens can be
+    /// generated before the INSERT, eliminating the two-step placeholder write.
+    pub async fn create_with_id(
+        pool: &DbPool,
+        id: &str,
+        user_id: &str,
+        token: &str,
+        expires_at: DateTime<Utc>,
+        ip_address: Option<&str>,
+        user_agent: Option<&str>,
+        jwt_secret: &str,
+    ) -> Result<Session> {
+        let token_hash = hash_token(token, jwt_secret.as_bytes());
+        sqlx::query_as::<_, Session>(
+            r#"
+            INSERT INTO sessions (id, user_id, token_hash, expires_at, ip_address, user_agent)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            RETURNING *
+            "#,
+        )
+        .bind(id)
+        .bind(user_id)
+        .bind(&token_hash)
+        .bind(expires_at)
+        .bind(ip_address)
+        .bind(user_agent)
+        .fetch_one(pool)
+        .await
+        .map_err(Into::into)
+    }
+
+    /// Atomically delete the old session and insert a new one within a single
+    /// transaction, eliminating the replay window that exists when the two
+    /// operations run independently.
+    pub async fn rotate(
+        pool: &DbPool,
+        old_session_id: &str,
+        new_id: &str,
+        user_id: &str,
+        token: &str,
+        expires_at: DateTime<Utc>,
+        ip_address: Option<&str>,
+        user_agent: Option<&str>,
+        jwt_secret: &str,
+    ) -> Result<()> {
+        let token_hash = hash_token(token, jwt_secret.as_bytes());
+        let mut tx = pool.begin().await?;
+
+        sqlx::query("DELETE FROM sessions WHERE id = $1")
+            .bind(old_session_id)
+            .execute(&mut *tx)
+            .await?;
+
+        sqlx::query(
+            r#"
+            INSERT INTO sessions (id, user_id, token_hash, expires_at, ip_address, user_agent)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            "#,
+        )
+        .bind(new_id)
+        .bind(user_id)
+        .bind(&token_hash)
+        .bind(expires_at)
+        .bind(ip_address)
+        .bind(user_agent)
+        .execute(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+        Ok(())
+    }
+
     pub async fn update_token_hash(
         pool: &DbPool,
         id: &str,

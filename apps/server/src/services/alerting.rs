@@ -4,7 +4,7 @@ use tracing::{error, info};
 
 use super::notifications::{AlertPayload, NotificationService};
 use crate::db::{
-    models::{Issue, Monitor, NotificationChannel, ServerMetric},
+    models::{AlertRule, Issue, Monitor, NotificationChannel, Project, ServerMetric},
     repositories::{
         AlertLogRepository, AlertRuleRepository, IssueRepository, NotificationChannelRepository,
         ProjectRepository, ServerRepository,
@@ -79,6 +79,65 @@ fn default_missing_minutes() -> u32 {
     5
 }
 
+// ─── Shared helpers ──────────────────────────────────────────────────────────
+
+/// Load the project and its active alert rules. Returns `None` if the project
+/// does not exist so callers can early-return without duplicating the DB calls.
+async fn get_project_and_rules(
+    pool: &DbPool,
+    project_id: &str,
+) -> Result<Option<(Project, Vec<AlertRule>)>> {
+    let project = match ProjectRepository::find_by_id(pool, project_id).await? {
+        Some(p) => p,
+        None => return Ok(None),
+    };
+    let rules = AlertRuleRepository::list_active_by_project(pool, project_id).await?;
+    Ok(Some((project, rules)))
+}
+
+/// Parse a rule's condition JSON, logging a structured error and returning
+/// `None` on failure so the caller can `continue` the rule loop cleanly.
+fn parse_alert_condition(rule: &AlertRule) -> Option<AlertCondition> {
+    match serde_json::from_str(&rule.condition) {
+        Ok(c) => Some(c),
+        Err(e) => {
+            error!(rule_id = %rule.id, rule_name = %rule.name, "Failed to parse alert condition: {}", e);
+            None
+        }
+    }
+}
+
+/// Send a notification with up to 3 attempts (exponential back-off: 500ms,
+/// 1000ms). Transient delivery failures no longer silently drop alerts.
+async fn send_with_retry(
+    notification_service: &NotificationService,
+    channel: &NotificationChannel,
+    payload: &AlertPayload,
+) -> Result<Option<String>> {
+    let mut last_err = anyhow::anyhow!("no attempts made");
+    for attempt in 0u32..3 {
+        if attempt > 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(500 * (1 << (attempt - 1)))).await;
+        }
+        match notification_service.send(channel, payload).await {
+            Ok(action) => return Ok(action),
+            Err(e) => {
+                tracing::warn!(
+                    attempt = attempt + 1,
+                    channel_id = %channel.id,
+                    "Alert send attempt {} of 3 failed: {}",
+                    attempt + 1,
+                    e
+                );
+                last_err = e;
+            }
+        }
+    }
+    Err(last_err)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 impl AlertingService {
     pub async fn new(pool: DbPool, app_url: String) -> Self {
         Self {
@@ -96,15 +155,13 @@ impl AlertingService {
             issue.id
         );
 
-        let project = match ProjectRepository::find_by_id(&self.pool, project_id).await? {
-            Some(p) => p,
+        let (project, rules) = match get_project_and_rules(&self.pool, project_id).await? {
+            Some(pr) => pr,
             None => {
                 tracing::debug!("Project {} not found, skipping alerts", project_id);
                 return Ok(());
             }
         };
-
-        let rules = AlertRuleRepository::list_active_by_project(&self.pool, project_id).await?;
         tracing::debug!(
             "Found {} active alert rules for project {}",
             rules.len(),
@@ -112,12 +169,9 @@ impl AlertingService {
         );
 
         for rule in rules {
-            let condition: AlertCondition = match serde_json::from_str(&rule.condition) {
-                Ok(c) => c,
-                Err(e) => {
-                    error!(rule_id = %rule.id, rule_name = %rule.name, "Failed to parse alert condition: {}", e);
-                    continue;
-                }
+            let condition = match parse_alert_condition(&rule) {
+                Some(c) => c,
+                None => continue,
             };
 
             // Check if condition matches
@@ -175,15 +229,13 @@ impl AlertingService {
             monitor.id
         );
 
-        let project = match ProjectRepository::find_by_id(&self.pool, project_id).await? {
-            Some(p) => p,
+        let (project, rules) = match get_project_and_rules(&self.pool, project_id).await? {
+            Some(pr) => pr,
             None => {
                 tracing::debug!("Project {} not found, skipping alerts", project_id);
                 return Ok(());
             }
         };
-
-        let rules = AlertRuleRepository::list_active_by_project(&self.pool, project_id).await?;
         tracing::debug!(
             "Found {} active alert rules for project {}",
             rules.len(),
@@ -191,12 +243,9 @@ impl AlertingService {
         );
 
         for rule in rules {
-            let condition: AlertCondition = match serde_json::from_str(&rule.condition) {
-                Ok(c) => c,
-                Err(e) => {
-                    error!(rule_id = %rule.id, rule_name = %rule.name, "Failed to parse alert condition: {}", e);
-                    continue;
-                }
+            let condition = match parse_alert_condition(&rule) {
+                Some(c) => c,
+                None => continue,
             };
 
             // Check if condition matches
@@ -248,20 +297,15 @@ impl AlertingService {
 
     /// Trigger alerts for a monitor recovering
     pub async fn on_monitor_recovery(&self, project_id: &str, monitor: &Monitor) -> Result<()> {
-        let project = match ProjectRepository::find_by_id(&self.pool, project_id).await? {
-            Some(p) => p,
+        let (project, rules) = match get_project_and_rules(&self.pool, project_id).await? {
+            Some(pr) => pr,
             None => return Ok(()),
         };
 
-        let rules = AlertRuleRepository::list_active_by_project(&self.pool, project_id).await?;
-
         for rule in rules {
-            let condition: AlertCondition = match serde_json::from_str(&rule.condition) {
-                Ok(c) => c,
-                Err(e) => {
-                    error!(rule_id = %rule.id, rule_name = %rule.name, "Failed to parse alert condition: {}", e);
-                    continue;
-                }
+            let condition = match parse_alert_condition(&rule) {
+                Some(c) => c,
+                None => continue,
             };
 
             // Check if condition matches
@@ -306,8 +350,8 @@ impl AlertingService {
         server_db_id: &str,
         metric: &ServerMetric,
     ) -> Result<()> {
-        let project = match ProjectRepository::find_by_id(&self.pool, project_id).await? {
-            Some(p) => p,
+        let (project, rules) = match get_project_and_rules(&self.pool, project_id).await? {
+            Some(pr) => pr,
             None => return Ok(()),
         };
 
@@ -316,12 +360,10 @@ impl AlertingService {
             None => return Ok(()),
         };
 
-        let rules = AlertRuleRepository::list_active_by_project(&self.pool, project_id).await?;
-
         for rule in rules {
-            let condition: AlertCondition = match serde_json::from_str(&rule.condition) {
-                Ok(c) => c,
-                Err(_) => continue,
+            let condition = match parse_alert_condition(&rule) {
+                Some(c) => c,
+                None => continue,
             };
 
             let (matches, alert_msg) = match &condition {
@@ -454,18 +496,15 @@ impl AlertingService {
 
     /// Trigger alerts for servers that have gone offline
     pub async fn on_server_offline(&self, server: &crate::db::models::Server) -> Result<()> {
-        let project = match ProjectRepository::find_by_id(&self.pool, &server.project_id).await? {
-            Some(p) => p,
+        let (project, rules) = match get_project_and_rules(&self.pool, &server.project_id).await? {
+            Some(pr) => pr,
             None => return Ok(()),
         };
 
-        let rules =
-            AlertRuleRepository::list_active_by_project(&self.pool, &server.project_id).await?;
-
         for rule in rules {
-            let condition: AlertCondition = match serde_json::from_str(&rule.condition) {
-                Ok(c) => c,
-                Err(_) => continue,
+            let condition = match parse_alert_condition(&rule) {
+                Some(c) => c,
+                None => continue,
             };
 
             let matches = match &condition {
@@ -599,8 +638,8 @@ impl AlertingService {
                 }
             };
 
-            // Send notification
-            match self.notification_service.send(channel, payload).await {
+            // Send notification (3 attempts with exponential back-off)
+            match send_with_retry(&self.notification_service, channel, payload).await {
                 Ok(action) => {
                     if let Err(e) = AlertLogRepository::mark_sent(&self.pool, &log.id).await {
                         error!("Failed to mark log as sent: {}", e);
