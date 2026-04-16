@@ -72,7 +72,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     initAuth();
   }, [fetchCurrentUser]);
 
-  // Set up token refresh interval
+  // Set up token refresh interval.
+  // If refresh fails, refreshAccessToken calls setUser(null), which triggers the
+  // effect cleanup (clearInterval) — so the interval self-cancels on first failure.
+  // No explicit backoff needed: a failed refresh means the session is gone.
   useEffect(() => {
     if (!user) return;
 
@@ -108,13 +111,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [user, fetchCurrentUser]);
 
   const login = useCallback(async (email: string, password: string) => {
-    const response = await authApi.login(email, password);
-    setUser(response.data.user);
+    try {
+      const response = await authApi.login(email, password);
+      setUser(response.data.user);
+    } catch (error) {
+      if (error instanceof ApiError) throw error; // Pass through — callers handle specific codes
+      throw new ApiError(0, "network_error", "Unable to connect. Please check your connection and try again.");
+    }
   }, []);
 
   const signup = useCallback(async (email: string, password: string, name?: string) => {
-    const response = await authApi.signup(email, password, name);
-    setUser(response.data.user);
+    try {
+      const response = await authApi.signup(email, password, name);
+      setUser(response.data.user);
+    } catch (error) {
+      if (error instanceof ApiError) throw error;
+      throw new ApiError(0, "network_error", "Unable to connect. Please check your connection and try again.");
+    }
   }, []);
 
   const logout = useCallback(async () => {

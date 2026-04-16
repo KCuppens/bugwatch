@@ -128,7 +128,8 @@ async function handleResponse<T>(response: Response): Promise<T> {
     );
   }
 
-  // Handle empty successful responses
+  // Handle empty successful responses (e.g. 204 No Content, DELETE/logout endpoints).
+  // Callers for no-body endpoints typically ignore the return value.
   if (!text) {
     return {} as T;
   }
@@ -140,15 +141,16 @@ async function handleResponse<T>(response: Response): Promise<T> {
   }
 }
 
+const FETCH_MAX_RETRIES = 2;
+
 /**
- * Fetch with automatic 401 retry - attempts token refresh on 401 and retries once.
+ * Fetch with automatic 401 retry and exponential-backoff retry for 5xx/network errors.
  * Auth is handled via httpOnly cookies (credentials: "include").
  *
- * Flow: (1) Send request with cookies. (2) If 401 → attempt refresh via httpOnly
- * refresh cookie. (3) If refresh succeeds → retry original request. (4) If refresh
- * fails → dispatch "bugwatch-auth-expired" so AuthProvider clears state and
- * AuthGuard redirects to /login instead of showing a raw 401 error.
- * Does NOT retry on non-401 errors or network failures.
+ * Flow: (1) Send request. (2) If 401 on first attempt → refresh token once, retry.
+ * (3) If refresh fails → dispatch "bugwatch-auth-expired" so AuthProvider redirects to
+ * /login. (4) If 5xx or network error → retry up to FETCH_MAX_RETRIES times with
+ * exponential backoff + jitter. 4xx (other than 401-on-first) fail fast.
  */
 async function fetchWithAuth(url: string, options: RequestInit = {}): Promise<Response> {
   const headers = {
@@ -156,22 +158,49 @@ async function fetchWithAuth(url: string, options: RequestInit = {}): Promise<Re
     ...(options.headers || {}),
   };
 
-  let response = await fetch(url, { ...options, headers, credentials: "include" });
+  let lastNetworkError: Error | null = null;
 
-  // If 401, try to refresh via httpOnly cookie and retry once
-  if (response.status === 401 && typeof window !== "undefined") {
-    const refreshed = await refreshTokens();
-    if (refreshed) {
-      response = await fetch(url, { ...options, headers, credentials: "include" });
-    } else {
-      // Refresh failed — session is fully expired. Notify auth context so it can
-      // clear local state and redirect to login instead of showing a raw 401 error.
-      console.debug("[Auth] Session expired — dispatching bugwatch-auth-expired for:", url);
-      window.dispatchEvent(new Event("bugwatch-auth-expired"));
+  for (let attempt = 0; attempt <= FETCH_MAX_RETRIES; attempt++) {
+    if (attempt > 0) {
+      // Exponential backoff with ±250ms jitter: ~1s, ~2s
+      const delay = 1000 * Math.pow(2, attempt - 1) + Math.random() * 250;
+      await new Promise((r) => setTimeout(r, delay));
+      console.debug(`[API] Retrying request (${attempt}/${FETCH_MAX_RETRIES}): ${url}`);
     }
+
+    let response: Response;
+    try {
+      response = await fetch(url, { ...options, headers, credentials: "include" });
+    } catch (e) {
+      lastNetworkError = e as Error;
+      if (attempt < FETCH_MAX_RETRIES) continue;
+      throw lastNetworkError;
+    }
+
+    // 401 on first attempt: attempt token refresh once (5xx retries skip this)
+    if (response.status === 401 && attempt === 0 && typeof window !== "undefined") {
+      const refreshed = await refreshTokens();
+      if (refreshed) {
+        response = await fetch(url, { ...options, headers, credentials: "include" });
+      } else {
+        // Refresh failed — session is fully expired. Notify auth context so it can
+        // clear local state and redirect to login instead of showing a raw 401 error.
+        console.debug("[Auth] Session expired — dispatching bugwatch-auth-expired for:", url);
+        window.dispatchEvent(new Event("bugwatch-auth-expired"));
+        return response;
+      }
+    }
+
+    // 5xx: retry with backoff (4xx are client errors — fail fast)
+    if (response.status >= 500 && attempt < FETCH_MAX_RETRIES) {
+      console.debug(`[API] Server error ${response.status}, will retry (${attempt + 1}/${FETCH_MAX_RETRIES}): ${url}`);
+      continue;
+    }
+
+    return response;
   }
 
-  return response;
+  throw lastNetworkError || new Error("Request failed after max retries");
 }
 
 export const api = {
@@ -210,13 +239,40 @@ export const api = {
   },
 };
 
+// ============================================================================
+// Client-Side Rate Limiting
+// ============================================================================
+
+// Simple in-memory rate limiter. Resets on page reload — not a substitute for
+// server-side rate limiting; prevents UI bugs and accidental rapid repeated calls.
+const rateLimitState = new Map<string, { count: number; resetAt: number }>();
+
+function checkRateLimit(key: string, maxCalls: number, windowMs: number): void {
+  const now = Date.now();
+  const entry = rateLimitState.get(key);
+
+  if (!entry || now >= entry.resetAt) {
+    rateLimitState.set(key, { count: 1, resetAt: now + windowMs });
+    return;
+  }
+
+  if (entry.count >= maxCalls) {
+    const waitSec = Math.ceil((entry.resetAt - now) / 1000);
+    throw new ApiError(429, "rate_limit_exceeded", `Too many attempts. Please wait ${waitSec} seconds and try again.`);
+  }
+
+  entry.count++;
+}
+
 // Auth API endpoints
 export const authApi = {
   async signup(email: string, password: string, name?: string) {
+    checkRateLimit("auth:signup", 3, 60_000); // 3 per minute
     return api.post<{ data: { user: User } }>("/api/v1/auth/signup", { email, password, name });
   },
 
   async login(email: string, password: string) {
+    checkRateLimit("auth:login", 5, 60_000); // 5 per minute
     return api.post<{ data: { user: User } }>("/api/v1/auth/login", { email, password });
   },
 
@@ -244,6 +300,7 @@ export const authApi = {
   },
 
   async changePassword(currentPassword: string, newPassword: string) {
+    checkRateLimit("auth:changePassword", 3, 900_000); // 3 per 15 minutes
     return api.post<{ data: { message: string } }>("/api/v1/auth/change-password", {
       current_password: currentPassword,
       new_password: newPassword,
@@ -251,10 +308,12 @@ export const authApi = {
   },
 
   async forgotPassword(email: string) {
+    checkRateLimit("auth:forgotPassword", 3, 3_600_000); // 3 per hour
     return api.post<{ data: { message: string } }>("/api/v1/auth/forgot-password", { email });
   },
 
   async resetPassword(token: string, newPassword: string) {
+    checkRateLimit("auth:resetPassword", 5, 3_600_000); // 5 per hour
     return api.post<{ data: { message: string } }>("/api/v1/auth/reset-password", {
       token,
       new_password: newPassword,
