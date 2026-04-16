@@ -267,8 +267,11 @@ impl Config {
                 }),
             encryption_key: env::var("BUGWATCH_ENCRYPTION_KEY").ok(),
             password_reset_secret: env::var("PASSWORD_RESET_SECRET")
-                .unwrap_or_else(|_| env::var("JWT_SECRET")
-                    .expect("FATAL: JWT_SECRET environment variable is required.")),
+                .unwrap_or_else(|_| {
+                    eprintln!("WARNING: PASSWORD_RESET_SECRET not set — falling back to JWT_SECRET. Set a dedicated PASSWORD_RESET_SECRET in production.");
+                    env::var("JWT_SECRET")
+                        .expect("FATAL: JWT_SECRET environment variable is required.")
+                }),
             github_webhook_secret: env::var("GITHUB_WEBHOOK_SECRET").ok(),
             jira_webhook_secret: env::var("JIRA_WEBHOOK_SECRET").ok(),
             linear_webhook_secret: env::var("LINEAR_WEBHOOK_SECRET").ok(),

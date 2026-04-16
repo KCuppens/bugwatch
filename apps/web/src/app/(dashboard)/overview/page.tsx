@@ -550,7 +550,7 @@ export default function OverviewPage() {
                               config.bg
                             )}
                           >
-                            <Icon className={cn("h-4 w-4", config.color)} />
+                            <Icon className={cn("h-4 w-4", config.color)} aria-hidden="true" />
                           </div>
 
                           {/* Title & Meta */}
@@ -628,7 +628,9 @@ export default function OverviewPage() {
                               </Button>
                             </div>
 
-                            {!isHovered && <ChevronRight className="h-4 w-4 text-muted-foreground" />}
+                            {!isHovered && (
+                              <ChevronRight className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+                            )}
                           </div>
                         </Link>
                       </div>

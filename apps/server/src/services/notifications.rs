@@ -616,28 +616,48 @@ impl NotificationService {
     ) -> Result<Option<String>> {
         let config: WebhookConfig = serde_json::from_str(&channel.config)?;
 
-        let mut request = self.client.post(&config.url).json(payload);
+        // Compute signature once; rebuild request each attempt since send() consumes the builder.
+        let signature = config.secret.as_ref().map(|secret| {
+            let payload_json = serde_json::to_string(payload).unwrap_or_default();
+            compute_hmac_signature(&payload_json, secret)
+        });
 
-        // Add HMAC signature if secret is configured
-        if let Some(secret) = &config.secret {
-            let payload_json = serde_json::to_string(payload)?;
-            let signature = compute_hmac_signature(&payload_json, secret);
-            request = request.header("X-Bugwatch-Signature", signature);
-        }
-
-        let response = request.send().await?;
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-
-        if !status.is_success() {
-            return Err(anyhow!("Webhook failed: {} - {}", status, body));
+        let mut last_err = anyhow::anyhow!("Webhook failed after retries");
+        let mut response_body = String::new();
+        for attempt in 0u32..3 {
+            let mut req = self.client.post(&config.url).json(payload);
+            if let Some(ref sig) = signature {
+                req = req.header("X-Bugwatch-Signature", sig.as_str());
+            }
+            match req.send().await {
+                Ok(resp) => {
+                    let status = resp.status();
+                    let body = resp.text().await.unwrap_or_default();
+                    if status.is_success() {
+                        response_body = body;
+                        break;
+                    }
+                    last_err = anyhow!("Webhook failed: {} - {}", status, body);
+                    if status.as_u16() < 500 {
+                        return Err(last_err); // don't retry 4xx
+                    }
+                }
+                Err(e) => {
+                    last_err = anyhow::Error::from(e);
+                }
+            }
+            if attempt < 2 {
+                tokio::time::sleep(std::time::Duration::from_millis(500 * 2u64.pow(attempt))).await;
+            } else {
+                return Err(last_err);
+            }
         }
 
         info!("Webhook sent to {}", config.url);
 
         // Try to parse the response body for an action command
-        if !body.is_empty() {
-            if let Ok(webhook_resp) = serde_json::from_str::<WebhookResponse>(&body) {
+        if !response_body.is_empty() {
+            if let Ok(webhook_resp) = serde_json::from_str::<WebhookResponse>(&response_body) {
                 if let Some(action) = webhook_resp.action {
                     if action == "resolve" || action == "ignore" {
                         info!("Webhook returned action: {}", action);

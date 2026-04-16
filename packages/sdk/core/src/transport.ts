@@ -137,14 +137,20 @@ export class HttpTransport implements Transport {
       if (this.debug) {
         console.warn("[Bugwatch] Rate limited, dropping event:", event.event_id);
       }
-      try { this.onDropped?.(event.event_id, "rate_limited"); } catch { /* */ }
+      try {
+        this.onDropped?.(event.event_id, "rate_limited");
+      } catch {
+        /* */
+      }
       return;
     }
 
     // Wrap in a new promise so we can add it to the Set synchronously
     // before any async work starts, preventing a race with flush().
     let resolve!: () => void;
-    const tracked = new Promise<void>((r) => { resolve = r; });
+    const tracked = new Promise<void>((r) => {
+      resolve = r;
+    });
     this.inFlightRequests.add(tracked);
     this.sendWithRetry(event).finally(() => {
       this.inFlightRequests.delete(tracked);
@@ -161,9 +167,7 @@ export class HttpTransport implements Transport {
 
     try {
       const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
-      const timeoutId = controller
-        ? setTimeout(() => controller.abort(), this.timeoutMs)
-        : null;
+      const timeoutId = controller ? setTimeout(() => controller.abort(), this.timeoutMs) : null;
 
       try {
         const body = serializeWithTruncation(event);
@@ -172,7 +176,7 @@ export class HttpTransport implements Transport {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "Authorization": `Bearer ${this.apiKey}`,
+            Authorization: `Bearer ${this.apiKey}`,
             "X-Bugwatch-SDK": event.sdk?.name || "bugwatch-core",
             "X-Bugwatch-SDK-Version": event.sdk?.version || "0.1.0",
           },
@@ -185,9 +189,7 @@ export class HttpTransport implements Transport {
           if (response.status === 429) {
             const retryAfter = response.headers.get("Retry-After");
             const parsed = retryAfter ? parseInt(retryAfter, 10) : NaN;
-            const backoffMs = !isNaN(parsed) && parsed > 0
-              ? parsed * 1000
-              : 60_000;
+            const backoffMs = !isNaN(parsed) && parsed > 0 ? parsed * 1000 : 60_000;
             this.rateLimitedUntil = Date.now() + backoffMs;
 
             if (this.debug) {
@@ -226,9 +228,10 @@ export class HttpTransport implements Transport {
       }
 
       if (this.debug) {
-        const message = error instanceof Error && error.name === "AbortError"
-          ? `[Bugwatch] Request timed out after ${this.timeoutMs}ms`
-          : "[Bugwatch] Transport error:";
+        const message =
+          error instanceof Error && error.name === "AbortError"
+            ? `[Bugwatch] Request timed out after ${this.timeoutMs}ms`
+            : "[Bugwatch] Transport error:";
         console.error(message, error);
       }
 
@@ -243,7 +246,11 @@ export class HttpTransport implements Transport {
           // Queue itself failed — silent drop, never crash the host app
         }
       }
-      try { this.onDropped?.(event.event_id, "network_error"); } catch { /* */ }
+      try {
+        this.onDropped?.(event.event_id, "network_error");
+      } catch {
+        /* */
+      }
       // Don't throw - we don't want SDK errors to break the application
     }
   }
@@ -266,52 +273,64 @@ export class HttpTransport implements Transport {
         console.log("[Bugwatch] Sending transaction:", event.transaction_name);
       }
 
-      try {
-        const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
-        const timeoutId = controller
-          ? setTimeout(() => controller.abort(), this.timeoutMs)
-          : null;
+      const body = JSON.stringify(
+        event.spans && event.spans.length > 200 ? { ...event, spans: event.spans.slice(0, 200) } : event
+      );
 
+      for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
         try {
-          const response = await this.fetch(url, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "Authorization": `Bearer ${this.apiKey}`,
-              "X-Bugwatch-SDK": "bugwatch-core",
-            },
-            body: JSON.stringify(
-              event.spans && event.spans.length > 200
-                ? { ...event, spans: event.spans.slice(0, 200) }
-                : event
-            ),
-            ...(controller && { signal: controller.signal }),
-          });
+          const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+          const timeoutId = controller ? setTimeout(() => controller.abort(), this.timeoutMs) : null;
 
-          if (!response.ok) {
-            if (response.status === 429) {
-              const retryAfter = response.headers.get("Retry-After");
-              const parsed = retryAfter ? parseInt(retryAfter, 10) : NaN;
-              const backoffMs = !isNaN(parsed) && parsed > 0 ? parsed * 1000 : 60_000;
-              this.rateLimitedUntil = Date.now() + backoffMs;
+          try {
+            const response = await this.fetch(url, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${this.apiKey}`,
+                "X-Bugwatch-SDK": "bugwatch-core",
+              },
+              body,
+              ...(controller && { signal: controller.signal }),
+            });
+
+            if (!response.ok) {
+              if (response.status === 429) {
+                const retryAfter = response.headers.get("Retry-After");
+                const parsed = retryAfter ? parseInt(retryAfter, 10) : NaN;
+                const backoffMs = !isNaN(parsed) && parsed > 0 ? parsed * 1000 : 60_000;
+                this.rateLimitedUntil = Date.now() + backoffMs;
+                return;
+              }
+              if (isRetryableStatus(response.status) && attempt < MAX_RETRIES) {
+                const delay = BASE_RETRY_DELAY_MS * Math.pow(2, attempt) + Math.random() * 200;
+                await new Promise((resolve) => setTimeout(resolve, delay));
+                continue;
+              }
+              if (this.debug) {
+                console.error("[Bugwatch] Failed to send transaction:", response.status);
+              }
+              return;
             }
+
             if (this.debug) {
-              console.error("[Bugwatch] Failed to send transaction:", response.status);
+              console.log("[Bugwatch] Transaction sent successfully:", event.transaction_name);
             }
             return;
+          } finally {
+            if (timeoutId !== null) {
+              clearTimeout(timeoutId);
+            }
           }
-
+        } catch (error) {
+          if (attempt < MAX_RETRIES) {
+            const delay = BASE_RETRY_DELAY_MS * Math.pow(2, attempt) + Math.random() * 200;
+            await new Promise((resolve) => setTimeout(resolve, delay));
+            continue;
+          }
           if (this.debug) {
-            console.log("[Bugwatch] Transaction sent successfully:", event.transaction_name);
+            console.error("[Bugwatch] Transport error sending transaction:", error);
           }
-        } finally {
-          if (timeoutId !== null) {
-            clearTimeout(timeoutId);
-          }
-        }
-      } catch (error) {
-        if (this.debug) {
-          console.error("[Bugwatch] Transport error sending transaction:", error);
         }
       }
     })();
@@ -332,10 +351,7 @@ export class HttpTransport implements Transport {
   /**
    * Abstract fetch to support different environments
    */
-  private async fetch(
-    url: string,
-    options: RequestInit
-  ): Promise<Response> {
+  private async fetch(url: string, options: RequestInit): Promise<Response> {
     // Use global fetch (available in Node 18+, browsers, and edge runtimes)
     if (typeof globalThis.fetch === "function") {
       return globalThis.fetch(url, options);
@@ -349,7 +365,8 @@ export class HttpTransport implements Transport {
  * No-op transport for testing or disabled SDK
  */
 export class NoopTransport implements Transport {
-  async send(_event: ErrorEvent): Promise<void> {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  async send(_: ErrorEvent): Promise<void> {
     // Do nothing
   }
 }
@@ -373,10 +390,7 @@ export class BatchTransport implements Transport {
   private flushInterval: number;
   private timer: ReturnType<typeof setInterval> | null = null;
 
-  constructor(
-    transport: Transport,
-    options: { maxBatchSize?: number; flushInterval?: number } = {}
-  ) {
+  constructor(transport: Transport, options: { maxBatchSize?: number; flushInterval?: number } = {}) {
     this.transport = transport;
     this.maxBatchSize = options.maxBatchSize || 10;
     this.flushInterval = options.flushInterval || 5000;

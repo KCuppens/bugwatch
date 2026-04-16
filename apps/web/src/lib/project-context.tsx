@@ -1,14 +1,6 @@
 "use client";
 
-import {
-  createContext,
-  useContext,
-  useState,
-  useEffect,
-  useMemo,
-  useCallback,
-  type ReactNode,
-} from "react";
+import { createContext, useContext, useState, useEffect, useMemo, useCallback, type ReactNode } from "react";
 import { projectsApi, type Project } from "@/lib/api";
 
 const STORAGE_KEYS = {
@@ -75,12 +67,13 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchProjects = useCallback(async () => {
+  const fetchProjects = useCallback(async (signal?: AbortSignal) => {
     setIsLoading(true);
     setError(null);
 
     try {
       const response = await projectsApi.list(1, 100);
+      if (signal?.aborted) return;
       const fetchedProjects = response.data;
       setProjects(fetchedProjects);
 
@@ -119,7 +112,9 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    fetchProjects();
+    const controller = new AbortController();
+    fetchProjects(controller.signal);
+    return () => controller.abort();
   }, [fetchProjects]);
 
   const selectProject = useCallback(
@@ -137,10 +132,7 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
 
   // Map recent IDs to projects
   const recentProjects = useMemo(
-    () =>
-      recentProjectIds
-        .map((id) => projects.find((p) => p.id === id))
-        .filter((p): p is Project => p !== undefined),
+    () => recentProjectIds.map((id) => projects.find((p) => p.id === id)).filter((p): p is Project => p !== undefined),
     [recentProjectIds, projects]
   );
 
@@ -154,20 +146,10 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
       selectProject,
       refreshProjects: fetchProjects,
     }),
-    [
-      projects,
-      selectedProject,
-      recentProjects,
-      isLoading,
-      error,
-      selectProject,
-      fetchProjects,
-    ]
+    [projects, selectedProject, recentProjects, isLoading, error, selectProject, fetchProjects]
   );
 
-  return (
-    <ProjectContext.Provider value={value}>{children}</ProjectContext.Provider>
-  );
+  return <ProjectContext.Provider value={value}>{children}</ProjectContext.Provider>;
 }
 
 export function useProject() {
