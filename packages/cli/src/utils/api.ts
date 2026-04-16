@@ -87,7 +87,6 @@ async function getCachedConfig(): Promise<Config | null> {
   return _configCache;
 }
 
-// GET is idempotent by definition. PATCH is included because all PATCH endpoints
 // Only retry methods that are safe and idempotent by the HTTP spec.
 // PATCH is excluded: it is not guaranteed idempotent and a future append-style
 // PATCH endpoint would silently double-write on retry.
@@ -198,7 +197,7 @@ async function request<T = unknown>(path: string, options: RequestOptions = {}):
       throw new Error(userMessage);
     }
 
-    return response.json() as Promise<T>;
+    return (await response.json()) as T;
   }
 
   // Only reached when a network error occurs on the final attempt (non-OK HTTP errors

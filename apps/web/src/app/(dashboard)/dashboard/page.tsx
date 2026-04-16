@@ -223,12 +223,12 @@ const IssueRow = memo(function IssueRow({
                   onResolve(issue.id);
                 }}
               >
-                <Check className="h-3 w-3 mr-1" />
+                <Check className="h-3 w-3 mr-1" aria-hidden="true" />
                 Resolve
               </Button>
             </div>
           )}
-          {issue.status === "unresolved" && !isHovered && <ChevronRight className="h-4 w-4 text-muted-foreground" />}
+          {issue.status === "unresolved" && !isHovered && <ChevronRight className="h-4 w-4 text-muted-foreground" aria-hidden="true" />}
         </div>
       </Link>
     </div>
@@ -343,16 +343,19 @@ export default function DashboardPage() {
       events = 0,
       users = 0,
       recent = 0,
-      critical = 0;
+      critical = 0,
+      fatal = 0,
+      error = 0;
     const now = Date.now();
     for (const i of issues) {
       if (i.status === "unresolved") unresolved++;
       events += i.count;
       users += i.user_count;
       if (now - new Date(i.last_seen).getTime() < 86400000) recent++;
-      if (i.level === "fatal" || i.level === "error") critical++;
+      if (i.level === "fatal") { fatal++; critical++; }
+      else if (i.level === "error") { error++; critical++; }
     }
-    return { total: issues.length, unresolved, events, users, recentCount: recent, criticalCount: critical };
+    return { total: issues.length, unresolved, events, users, recentCount: recent, criticalCount: critical, fatalCount: fatal, errorCount: error };
   }, [issues]);
 
   // Sparkline cache — keyed by id:count so re-sorts don't regenerate
@@ -465,6 +468,7 @@ export default function DashboardPage() {
     let cancelled = false;
     let interval: ReturnType<typeof setInterval> | null = null;
     let titleFocusHandler: (() => void) | null = null;
+    let clearNewIdsTimer: ReturnType<typeof setTimeout> | null = null;
 
     async function pollIssues() {
       try {
@@ -482,7 +486,8 @@ export default function DashboardPage() {
 
         if (addedIds.size > 0) {
           setNewIssueIds(addedIds);
-          setTimeout(() => setNewIssueIds(new Set()), 600);
+          if (clearNewIdsTimer) clearTimeout(clearNewIdsTimer);
+          clearNewIdsTimer = setTimeout(() => setNewIssueIds(new Set()), 600);
 
           const newIssues = response.data.filter((i) => addedIds.has(i.id));
           const hasCritical = newIssues.some((i) => i.level === "fatal" || i.level === "error");
@@ -540,6 +545,7 @@ export default function DashboardPage() {
     return () => {
       cancelled = true;
       if (interval) clearInterval(interval);
+      if (clearNewIdsTimer) clearTimeout(clearNewIdsTimer);
       if (titleFocusHandler) window.removeEventListener("focus", titleFocusHandler);
       document.removeEventListener("visibilitychange", handleVisibility);
     };
@@ -805,7 +811,7 @@ export default function DashboardPage() {
           <span
             className={`h-1.5 w-1.5 rounded-full ${stats.criticalCount > 0 ? "bg-red-500 animate-pulse" : "bg-[hsl(var(--muted-foreground))]"}`}
           />
-          {issues.filter((i) => i.level === "fatal").length} FATAL
+          {stats.fatalCount} FATAL
         </button>
         <div className="h-4 w-px bg-[hsl(var(--border-subtle))]" />
         <button
@@ -815,15 +821,15 @@ export default function DashboardPage() {
             setSearchResults(activeFilter === "error-triage" ? null : issues.filter((i) => i.level === "error"));
           }}
           className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-mono font-bold transition-all ${
-            issues.filter((i) => i.level === "error").length > 0
+            stats.errorCount > 0
               ? "text-orange-400 hover:bg-orange-500/10"
               : "text-[hsl(var(--muted-foreground))]"
           } ${activeFilter === "error-triage" ? "bg-orange-500/10" : ""}`}
         >
           <span
-            className={`h-1.5 w-1.5 rounded-full ${issues.filter((i) => i.level === "error").length > 0 ? "bg-orange-500" : "bg-[hsl(var(--muted-foreground))]"}`}
+            className={`h-1.5 w-1.5 rounded-full ${stats.errorCount > 0 ? "bg-orange-500" : "bg-[hsl(var(--muted-foreground))]"}`}
           />
-          {issues.filter((i) => i.level === "error").length} ERROR
+          {stats.errorCount} ERROR
         </button>
         <div className="h-4 w-px bg-[hsl(var(--border-subtle))]" />
         <span className="text-xs text-[hsl(var(--muted-foreground))] font-mono">{stats.unresolved} unresolved</span>

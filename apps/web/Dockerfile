@@ -1,20 +1,16 @@
 # Stage 1: Install dependencies
 FROM node:20-alpine AS deps
 
-RUN corepack enable && corepack prepare pnpm@latest --activate
-
 WORKDIR /app
 
-COPY package.json pnpm-lock.yaml* pnpm-workspace.yaml* ./
+COPY package.json package-lock.json* ./
 COPY apps/web/package.json ./apps/web/
 COPY packages/ ./packages/
 
-RUN pnpm install --frozen-lockfile
+RUN npm ci
 
 # Stage 2: Build the application
 FROM node:20-alpine AS builder
-
-RUN corepack enable && corepack prepare pnpm@latest --activate
 
 WORKDIR /app
 
@@ -24,9 +20,9 @@ COPY --from=deps /app/packages ./packages
 COPY . .
 
 # Build SDK packages first (core -> node -> nextjs)
-RUN cd packages/sdk/core && pnpm build
-RUN cd packages/sdk/node && pnpm build
-RUN cd packages/sdk/nextjs && pnpm build
+RUN cd packages/sdk/core && npm run build
+RUN cd packages/sdk/node && npm run build
+RUN cd packages/sdk/nextjs && npm run build
 
 # Build-time env vars (NEXT_PUBLIC_* are inlined at build time)
 ARG NEXT_PUBLIC_API_URL=/api/v1
@@ -37,7 +33,7 @@ ENV NEXT_TELEMETRY_DISABLED=1
 
 WORKDIR /app/apps/web
 
-RUN pnpm build
+RUN npm run build
 
 # Stage 3: Production runner
 FROM node:20-alpine AS runner

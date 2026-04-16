@@ -758,8 +758,8 @@ export const issuesApi = {
     return api.post<SearchResponse>(`/api/v1/projects/${projectId}/issues/_search`, request, options);
   },
 
-  async get(projectId: string, issueId: string) {
-    return api.get<{ data: IssueDetail }>(`/api/v1/projects/${projectId}/issues/${issueId}`);
+  async get(projectId: string, issueId: string, options?: { signal?: AbortSignal }) {
+    return api.get<{ data: IssueDetail }>(`/api/v1/projects/${projectId}/issues/${issueId}`, options);
   },
 
   async update(projectId: string, issueId: string, status: string) {

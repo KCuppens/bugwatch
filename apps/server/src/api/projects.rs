@@ -133,6 +133,12 @@ pub async fn create(
             "Project name too long (max 100 characters)".to_string(),
         ));
     }
+    if req.platform.as_deref().map(|s| s.chars().count()).unwrap_or(0) > 50 {
+        return Err(AppError::Validation("Platform too long (max 50 characters)".to_string()));
+    }
+    if req.framework.as_deref().map(|s| s.chars().count()).unwrap_or(0) > 50 {
+        return Err(AppError::Validation("Framework too long (max 50 characters)".to_string()));
+    }
 
     // Resolve owner_id and org for tier checks
     let (owner_id, org) = match &*auth {

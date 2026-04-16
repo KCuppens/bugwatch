@@ -52,7 +52,7 @@ export async function issueCommand(
     );
 
     // Show stack trace if available (server returns exception.stacktrace)
-    const exception = (issue as Record<string, unknown>).exception as
+    const exception = (issue as unknown as Record<string, unknown>).exception as
       | { type?: string; value?: string; stacktrace?: Array<{ filename: string; function: string; lineno: number; colno?: number }> }
       | undefined;
 

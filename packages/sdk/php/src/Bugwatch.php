@@ -14,7 +14,9 @@ final class Bugwatch
 
     private static mixed $previousErrorHandler = null;
 
-    private function __construct() {}
+    private function __construct()
+    {
+    }
 
     public static function init(Options $options): void
     {

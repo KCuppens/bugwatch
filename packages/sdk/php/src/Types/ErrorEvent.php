@@ -27,7 +27,8 @@ final class ErrorEvent
         public readonly array $tags = [],
         public readonly array $extra = [],
         public readonly array $fingerprint = [],
-    ) {}
+    ) {
+    }
 
     /**
      * @return array<string, mixed>

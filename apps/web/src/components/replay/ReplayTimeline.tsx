@@ -1,6 +1,43 @@
 "use client";
 
+import { memo } from "react";
 import { cn } from "@/lib/utils";
+
+const EventMarkers = memo(function EventMarkers({
+  events,
+  duration,
+}: {
+  events: { time: number; type: string }[];
+  duration: number;
+}) {
+  return (
+    <>
+      {events.map((evt, i) => {
+        const position = (evt.time / duration) * 100;
+        if (position < 0 || position > 100) return null;
+        const markerColor =
+          evt.type === "error"
+            ? "bg-red-500"
+            : evt.type === "click"
+              ? "bg-blue-500"
+              : evt.type === "snapshot"
+                ? "bg-yellow-500"
+                : "bg-muted-foreground/30";
+        return (
+          <div
+            key={`${evt.time}-${i}`}
+            className={cn(
+              "absolute top-1/2 -translate-y-1/2 w-1.5 h-1.5 rounded-full opacity-60 group-hover:opacity-100 transition-opacity",
+              markerColor,
+            )}
+            style={{ left: `${position}%` }}
+            title={`${evt.type} at ${Math.round(evt.time / 1000)}s`}
+          />
+        );
+      })}
+    </>
+  );
+});
 
 interface ReplayTimelineProps {
   duration: number;
@@ -32,32 +69,8 @@ export function ReplayTimeline({
         />
       </div>
 
-      {/* Event markers */}
-      {events.map((evt, i) => {
-        const position = (evt.time / duration) * 100;
-        if (position < 0 || position > 100) return null;
-
-        const markerColor =
-          evt.type === "error"
-            ? "bg-red-500"
-            : evt.type === "click"
-              ? "bg-blue-500"
-              : evt.type === "snapshot"
-                ? "bg-yellow-500"
-                : "bg-muted-foreground/30";
-
-        return (
-          <div
-            key={`${evt.time}-${i}`}
-            className={cn(
-              "absolute top-1/2 -translate-y-1/2 w-1.5 h-1.5 rounded-full opacity-60 group-hover:opacity-100 transition-opacity",
-              markerColor,
-            )}
-            style={{ left: `${position}%` }}
-            title={`${evt.type} at ${Math.round(evt.time / 1000)}s`}
-          />
-        );
-      })}
+      {/* Event markers — memoized so they don't re-render on every currentTime tick */}
+      <EventMarkers events={events} duration={duration} />
 
       {/* Playhead */}
       <div

@@ -20,7 +20,7 @@ const GUEST_PREFIXES = ["/login", "/signup", "/forgot-password"];
 
 export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
-  const hasSession = req.cookies.has("access_token");
+  const hasSession = !!req.cookies.get("access_token")?.value;
 
   if (PROTECTED_PREFIXES.some((p) => pathname.startsWith(p))) {
     if (!hasSession) {

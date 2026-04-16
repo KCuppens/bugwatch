@@ -13,7 +13,8 @@ final class ExceptionInfo
         public readonly string $type,
         public readonly string $value,
         public readonly array $stacktrace = [],
-    ) {}
+    ) {
+    }
 
     /**
      * @return array<string, mixed>

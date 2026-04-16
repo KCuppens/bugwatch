@@ -44,10 +44,10 @@ RSpec.describe Bugwatch::HttpTransport do
 
     it "sends the event body as JSON" do
       stub = stub_request(:post, "https://api.bugwatch.dev/api/v1/events")
-        .with { |request|
+        .with do |request|
           body = JSON.parse(request.body)
           body["event_id"] == "abc123" && body["level"] == "error"
-        }
+        end
         .to_return(status: 200)
 
       transport.send_event({ event_id: "abc123", level: "error" })

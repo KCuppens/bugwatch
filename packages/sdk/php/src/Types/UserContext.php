@@ -11,7 +11,8 @@ final class UserContext
         public readonly ?string $email = null,
         public readonly ?string $username = null,
         public readonly ?string $ipAddress = null,
-    ) {}
+    ) {
+    }
 
     /**
      * @return array<string, mixed>

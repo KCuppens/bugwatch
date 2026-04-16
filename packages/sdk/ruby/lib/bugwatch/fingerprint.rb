@@ -11,7 +11,7 @@ module Bugwatch
         parts << event.exception.type.to_s
         parts << event.exception.value.to_s
 
-        first_in_app = event.exception.stacktrace.find { |frame| frame.in_app }
+        first_in_app = event.exception.stacktrace.find(&:in_app)
         if first_in_app
           parts << first_in_app.filename.to_s
           parts << first_in_app.lineno.to_s

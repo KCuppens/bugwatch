@@ -67,7 +67,6 @@ static REACT_ERROR_MESSAGES: LazyLock<HashMap<u32, &'static str>> = LazyLock::ne
         301,
         "Cannot update during an existing state transition (e.g. within render)",
     );
-    m.insert(423, "There was an error during server rendering (Suspense)");
     m.insert(
         310,
         "Invalid hook call (hooks can only be called inside function components)",

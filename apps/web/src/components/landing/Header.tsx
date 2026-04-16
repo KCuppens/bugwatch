@@ -134,7 +134,7 @@ export function Header() {
             onClick={() => setMobileOpen(false)}
             aria-label="Close menu"
           >
-            <X className="h-5 w-5" />
+            <X className="h-5 w-5" aria-hidden="true" />
           </button>
         </div>
 

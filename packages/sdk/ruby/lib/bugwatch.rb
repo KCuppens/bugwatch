@@ -14,8 +14,8 @@ require_relative "bugwatch/client"
 require_relative "bugwatch/integrations/rack"
 
 # Auto-load framework integrations if present
-require_relative "bugwatch/integrations/rails" if defined?(::Rails::Railtie)
-require_relative "bugwatch/integrations/sidekiq" if defined?(::Sidekiq)
+require_relative "bugwatch/integrations/rails" if defined?(Rails::Railtie)
+require_relative "bugwatch/integrations/sidekiq" if defined?(Sidekiq)
 
 module Bugwatch
   class << self
@@ -76,8 +76,6 @@ module Bugwatch
 
     private
 
-    def client
-      @client
-    end
+    attr_reader :client
   end
 end

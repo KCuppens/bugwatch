@@ -151,6 +151,39 @@ export class Bugwatch implements BugwatchClient {
   }
 
   /**
+   * Scrub, run beforeSend, and dispatch an event. Returns event_id or "" if dropped.
+   */
+  private processAndSend(raw: import("./types").ErrorEvent): string {
+    const event = scrubEvent(raw, this.options.sanitize);
+
+    let processedEvent: import("./types").ErrorEvent | null = event;
+    if (this.options.beforeSend) {
+      try {
+        processedEvent = this.options.beforeSend(event);
+      } catch (err) {
+        if (this.options.debug) {
+          console.error("[Bugwatch] beforeSend threw an error:", err);
+        }
+        processedEvent = event;
+      }
+    }
+
+    if (!processedEvent) {
+      if (this.options.debug) {
+        console.log("[Bugwatch] Event dropped by beforeSend");
+      }
+      try { this.options.onDropped?.(event.event_id, "before_send"); } catch { /* */ }
+      return "";
+    }
+
+    this.transport.send(processedEvent).catch(() => {
+      // Errors are logged by transport
+    });
+
+    return processedEvent.event_id;
+  }
+
+  /**
    * Capture an exception
    */
   captureException(error: Error, context?: Partial<ErrorEvent>): string {
@@ -169,39 +202,7 @@ export class Bugwatch implements BugwatchClient {
       return "";
     }
 
-    const rawEvent = this.createEventFromError(error, context);
-
-    // Apply PII scrubbing before beforeSend so users can override
-    const event = scrubEvent(rawEvent, this.options.sanitize);
-
-    // Run beforeSend hook with error handling
-    let processedEvent: import("./types").ErrorEvent | null = event;
-    if (this.options.beforeSend) {
-      try {
-        processedEvent = this.options.beforeSend(event);
-      } catch (err) {
-        if (this.options.debug) {
-          console.error("[Bugwatch] beforeSend threw an error:", err);
-        }
-        // Continue with original event if beforeSend throws
-        processedEvent = event;
-      }
-    }
-
-    if (!processedEvent) {
-      if (this.options.debug) {
-        console.log("[Bugwatch] Event dropped by beforeSend");
-      }
-      try { this.options.onDropped?.(event.event_id, "before_send"); } catch { /* */ }
-      return "";
-    }
-
-    // Send event asynchronously
-    this.transport.send(processedEvent).catch(() => {
-      // Errors are logged by transport
-    });
-
-    return processedEvent.event_id;
+    return this.processAndSend(this.createEventFromError(error, context));
   }
 
   /**
@@ -215,35 +216,7 @@ export class Bugwatch implements BugwatchClient {
       return "";
     }
 
-    const rawEvent = this.createEvent({
-      message,
-      level,
-    });
-    const event = scrubEvent(rawEvent, this.options.sanitize);
-
-    // Run beforeSend hook with error handling
-    let processedEvent: import("./types").ErrorEvent | null = event;
-    if (this.options.beforeSend) {
-      try {
-        processedEvent = this.options.beforeSend(event);
-      } catch (err) {
-        if (this.options.debug) {
-          console.error("[Bugwatch] beforeSend threw an error:", err);
-        }
-        // Continue with original event if beforeSend throws
-        processedEvent = event;
-      }
-    }
-
-    if (!processedEvent) {
-      return "";
-    }
-
-    this.transport.send(processedEvent).catch(() => {
-      // Errors are logged by transport
-    });
-
-    return processedEvent.event_id;
+    return this.processAndSend(this.createEvent({ message, level }));
   }
 
   /**
@@ -441,10 +414,9 @@ export class Bugwatch implements BugwatchClient {
       const tracesSampleRate = this.options.tracesSampleRate ?? 1.0;
       if (Math.random() > tracesSampleRate) return;
 
-      // Send via transport
-      const transport = this.transport as HttpTransport;
-      if (transport.sendTransaction) {
-        transport.sendTransaction(event).catch(() => {
+      // Send via transport (sendTransaction is optional on the Transport interface)
+      if (this.transport.sendTransaction) {
+        this.transport.sendTransaction(event).catch(() => {
           // Errors are logged by transport
         });
       }

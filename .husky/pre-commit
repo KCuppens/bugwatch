@@ -1,4 +1,5 @@
 #!/usr/bin/env sh
+set -e
 npx lint-staged
 
 # Run TypeScript type check if any TS/TSX files were staged

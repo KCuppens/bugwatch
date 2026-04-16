@@ -359,8 +359,10 @@ export default function SettingsPage() {
         {tabs.map((tab) => (
           <Button
             key={tab.id}
+            id={`settings-tab-${tab.id}`}
             role="tab"
             aria-selected={activeTab === tab.id}
+            aria-controls={`settings-panel-${tab.id}`}
             variant={activeTab === tab.id ? "secondary" : "ghost"}
             size="sm"
             onClick={() => setActiveTab(tab.id)}
@@ -374,7 +376,7 @@ export default function SettingsPage() {
 
       {/* Tab Content */}
       {activeTab === "profile" && (
-        <Card>
+        <Card role="tabpanel" id="settings-panel-profile" aria-labelledby="settings-tab-profile">
           <CardHeader>
             <CardTitle>Profile</CardTitle>
             <CardDescription>Your personal information</CardDescription>
@@ -404,7 +406,7 @@ export default function SettingsPage() {
       )}
 
       {activeTab === "notifications" && (
-        <div className="space-y-6">
+        <div role="tabpanel" id="settings-panel-notifications" aria-labelledby="settings-tab-notifications" className="space-y-6">
           <Card>
             <CardHeader>
               <CardTitle>Notification Preferences</CardTitle>
@@ -481,7 +483,7 @@ export default function SettingsPage() {
       )}
 
       {activeTab === "billing" && !isSelfHosted() && (
-        <div className="space-y-6">
+        <div role="tabpanel" id="settings-panel-billing" aria-labelledby="settings-tab-billing" className="space-y-6">
           {billingLoading ? (
             <>
               <Card>
@@ -547,10 +549,14 @@ export default function SettingsPage() {
         </div>
       )}
 
-      {activeTab === "integrations" && hasIntegrations && <IntegrationSettings />}
+      {activeTab === "integrations" && hasIntegrations && (
+        <div role="tabpanel" id="settings-panel-integrations" aria-labelledby="settings-tab-integrations">
+          <IntegrationSettings />
+        </div>
+      )}
 
       {activeTab === "security" && (
-        <div className="space-y-6">
+        <div role="tabpanel" id="settings-panel-security" aria-labelledby="settings-tab-security" className="space-y-6">
           <Card>
             <CardHeader>
               <CardTitle>Password</CardTitle>

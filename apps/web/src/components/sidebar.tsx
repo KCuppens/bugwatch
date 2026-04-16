@@ -146,7 +146,7 @@ export function Sidebar() {
           const itemContent = (
             <>
               {/* Icon — always visible, fixed width */}
-              <span className="shrink-0 flex items-center justify-center w-5 h-5 relative">
+              <span className="shrink-0 flex items-center justify-center w-5 h-5 relative" aria-hidden="true">
                 {item.icon}
                 {showBadge && (
                   <span
@@ -175,14 +175,13 @@ export function Sidebar() {
             <button
               key={item.href}
               onClick={() => openPaywall()}
-              title={item.label}
               aria-label={`${item.label} — requires Pro plan`}
               className={itemClassName}
             >
               {itemContent}
             </button>
           ) : (
-            <Link key={item.href} href={item.href} title={item.label} className={itemClassName}>
+            <Link key={item.href} href={item.href} aria-label={item.label} aria-current={active ? "page" : undefined} className={itemClassName}>
               {itemContent}
             </Link>
           );

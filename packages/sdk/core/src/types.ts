@@ -200,6 +200,11 @@ export interface ErrorEvent {
 export interface Transport {
   send(event: ErrorEvent): Promise<void>;
   /**
+   * Send a performance transaction event.
+   * Optional — transports that don't support performance monitoring can omit this.
+   */
+  sendTransaction?(event: PerformanceEvent): Promise<void>;
+  /**
    * Flush any pending events.
    * Ensures all queued events are sent before the promise resolves.
    */

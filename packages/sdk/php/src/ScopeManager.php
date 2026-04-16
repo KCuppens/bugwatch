@@ -25,7 +25,9 @@ final class ScopeManager
 
     private int $maxBreadcrumbs = 100;
 
-    private function __construct() {}
+    private function __construct()
+    {
+    }
 
     public static function getInstance(): self
     {

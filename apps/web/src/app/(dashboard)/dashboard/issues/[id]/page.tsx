@@ -75,7 +75,7 @@ export default function IssueDetailPage() {
   const params = useParams();
   const searchParams = useSearchParams();
   const router = useRouter();
-  const issueId = params.id as string;
+  const issueId = Array.isArray(params.id) ? params.id[0] : (params.id ?? "");
   const projectId = searchParams.get("project");
 
   const hasIntegrations = useFeature("github");
@@ -1106,15 +1106,15 @@ export default function IssueDetailPage() {
             </div>
             <div className="rounded-lg border p-3">
               <div className="flex items-center gap-2">
-                <Clock className="h-4 w-4 text-muted-foreground" />
-                <p className="text-sm font-medium">{new Date(issue.first_seen).toLocaleDateString()}</p>
+                <Clock className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+                <time dateTime={issue.first_seen} className="text-sm font-medium">{new Date(issue.first_seen).toLocaleDateString()}</time>
               </div>
               <p className="text-xs text-muted-foreground">First seen</p>
             </div>
             <div className="rounded-lg border p-3">
               <div className="flex items-center gap-2">
-                <Clock className="h-4 w-4 text-muted-foreground" />
-                <p className="text-sm font-medium">{formatRelativeTime(issue.last_seen)}</p>
+                <Clock className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+                <time dateTime={issue.last_seen} className="text-sm font-medium">{formatRelativeTime(issue.last_seen)}</time>
               </div>
               <p className="text-xs text-muted-foreground">Last seen</p>
             </div>
@@ -1431,9 +1431,9 @@ export default function IssueDetailPage() {
                               <span className="font-medium text-xs">
                                 {comment.user_name || comment.user_email?.split("@")[0] || "User"}
                               </span>
-                              <span className="text-xs text-muted-foreground">
+                              <time dateTime={comment.created_at} className="text-xs text-muted-foreground">
                                 · {formatRelativeTime(comment.created_at)}
-                              </span>
+                              </time>
                               <div className="ml-auto flex opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
                                 <Button
                                   variant="ghost"

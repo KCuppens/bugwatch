@@ -1,13 +1,52 @@
 AllCops:
   TargetRubyVersion: 3.0
   NewCops: enable
-  SuggestExtensions: false
 
-Metrics/MethodLength:
+# Project uses double-quoted strings throughout
+Style/StringLiterals:
+  EnforcedStyle: double_quotes
+
+# Not required; existing files already have it where desired
+Style/FrozenStringLiteralComment:
+  Enabled: false
+
+# Dev deps kept in gemspec for discoverability
+Gemspec/DevelopmentDependencies:
+  Enabled: false
+
+# Not publishing to RubyGems.org
+Gemspec/RequireMFA:
+  Enabled: false
+
+# set_user/set_tags/set_extras are part of public API
+Naming/AccessorMethodName:
+  Enabled: false
+
+# Spec blocks are intentionally comprehensive
+Metrics/BlockLength:
+  Exclude:
+    - "spec/**/*"
+
+# Complex transport/fingerprint methods are acceptable in this SDK
+Metrics/AbcSize:
   Max: 25
 
-Metrics/ClassLength:
-  Max: 150
+Metrics/CyclomaticComplexity:
+  Max: 10
 
-Style/Documentation:
+# Allow slightly longer lines for readability
+Layout/LineLength:
+  Max: 140
+
+# Disable layout cops that prescribe one style over another
+Layout/MultilineMethodCallIndentation:
+  Enabled: false
+
+Layout/FirstHashElementIndentation:
+  Enabled: false
+
+Layout/FirstArrayElementIndentation:
+  Enabled: false
+
+Layout/FirstArgumentIndentation:
   Enabled: false

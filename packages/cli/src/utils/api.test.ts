@@ -110,7 +110,7 @@ describe("API method URL construction", () => {
     await listProjects();
 
     expect(fetchSpy).toHaveBeenCalledOnce();
-    const [url, opts] = fetchSpy.mock.calls[0];
+    const [url, opts] = fetchSpy.mock.calls[0]!;
     expect(url).toContain("/api/v1/projects");
     expect(opts.method).toBe("GET");
   });

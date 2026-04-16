@@ -5,6 +5,8 @@ import {
   useContext,
   useState,
   useCallback,
+  useEffect,
+  useRef,
   type ReactNode,
 } from 'react';
 import type { Tier } from '@/hooks/use-feature';
@@ -23,6 +25,11 @@ export function PaywallProvider({ children }: { children: ReactNode }) {
   const [isOpen, setIsOpen] = useState(false);
   const [triggerFeature, setTriggerFeature] = useState<string | null>(null);
   const [targetTier, setTargetTier] = useState<Tier | null>(null);
+  const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => () => {
+    if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
+  }, []);
 
   const openPaywall = useCallback(
     (options?: { feature?: string; targetTier?: Tier }) => {
@@ -35,8 +42,9 @@ export function PaywallProvider({ children }: { children: ReactNode }) {
 
   const closePaywall = useCallback(() => {
     setIsOpen(false);
+    if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
     // Delay clearing feature/tier to allow exit animation
-    setTimeout(() => {
+    closeTimerRef.current = setTimeout(() => {
       setTriggerFeature(null);
       setTargetTier(null);
     }, 200);

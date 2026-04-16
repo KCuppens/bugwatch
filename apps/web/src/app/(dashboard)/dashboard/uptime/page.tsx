@@ -661,15 +661,22 @@ export default function UptimePage() {
                 return (
                   <Card key={monitor.id}>
                     <CardContent className="p-4">
-                      <div
-                        className="flex items-center justify-between cursor-pointer"
+                      <button
+                        type="button"
+                        aria-expanded={isExpanded}
+                        aria-controls={`monitor-detail-${monitor.id}`}
+                        className="flex items-center justify-between cursor-pointer w-full text-left"
                         onClick={() =>
                           setExpandedMonitorId(isExpanded ? null : monitor.id)
                         }
                       >
                         <div className="flex items-center gap-4">
                           <button
+                            role="checkbox"
+                            aria-checked={selectedMonitors.has(monitor.id)}
+                            aria-label={`Select ${monitor.name}`}
                             onClick={(e) => { e.stopPropagation(); toggleMonitorSelection(monitor.id); }}
+                            onKeyDown={(e) => { if (e.key === ' ') { e.preventDefault(); e.stopPropagation(); toggleMonitorSelection(monitor.id); } }}
                             className={`w-4 h-4 rounded border-2 flex items-center justify-center transition-all shrink-0 ${
                               selectedMonitors.has(monitor.id) ? 'bg-accent-2 border-accent-2' : 'border-muted-foreground/30 hover:border-accent-2/50'
                             }`}
@@ -748,7 +755,7 @@ export default function UptimePage() {
                                 e.stopPropagation();
                                 handleToggleMonitor(monitor);
                               }}
-                              title={monitor.is_active ? "Pause monitor" : "Resume monitor"}
+                              aria-label={monitor.is_active ? `Pause ${monitor.name}` : `Resume ${monitor.name}`}
                             >
                               {monitor.is_active ? (
                                 <Pause className="h-4 w-4" />
@@ -763,7 +770,7 @@ export default function UptimePage() {
                                 e.stopPropagation();
                                 handleDeleteClick(monitor.id);
                               }}
-                              title="Delete monitor"
+                              aria-label={`Delete ${monitor.name}`}
                             >
                               <Trash2 className="h-4 w-4 text-destructive" />
                             </Button>
@@ -774,15 +781,17 @@ export default function UptimePage() {
                             )}
                           </div>
                         </div>
-                      </div>
+                      </button>
 
                       {/* Expanded inline detail */}
-                      {isExpanded && selectedProject && (
-                        <MonitorDetail
-                          projectId={selectedProject.id}
-                          monitorId={monitor.id}
-                        />
-                      )}
+                      <div id={`monitor-detail-${monitor.id}`}>
+                        {isExpanded && selectedProject && (
+                          <MonitorDetail
+                            projectId={selectedProject.id}
+                            monitorId={monitor.id}
+                          />
+                        )}
+                      </div>
                     </CardContent>
                   </Card>
                 );

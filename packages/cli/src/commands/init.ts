@@ -65,7 +65,6 @@ export async function initCommand(options: InitOptions): Promise<void> {
         type: "input",
         name: "apiKey",
         message: "Enter your Bugwatch API key:",
-        hint: "Find this in your Bugwatch dashboard under Project Settings",
         validate: (value: string) => {
           if (!value) return "API key is required";
           if (!value.startsWith("bw_")) {

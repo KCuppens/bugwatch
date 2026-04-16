@@ -4,7 +4,7 @@ import { FadeUp, ScaleIn } from "./motion";
 
 function DashboardPreview() {
   return (
-    <div className="relative w-full">
+    <div aria-hidden="true" className="relative w-full">
       {/* Accent glow behind preview */}
       <div
         aria-hidden="true"

@@ -9,6 +9,7 @@ export const metadata: Metadata = {
     title: "BugWatch — Open-source error tracking",
     description: "Unlimited errors, flat pricing. Zero surprise bills.",
     type: "website",
+    images: [{ url: "/og-image.png", width: 1200, height: 630, alt: "BugWatch — Open-source error tracking" }],
   },
 };
 

@@ -111,7 +111,7 @@ public final class Bugwatch {
     /**
      * Returns the underlying client instance, or {@code null} if not initialized.
      */
-    static BugwatchClient getClient() {
+    public static BugwatchClient getClient() {
         return instance;
     }
 }

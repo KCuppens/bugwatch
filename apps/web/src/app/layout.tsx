@@ -39,11 +39,13 @@ export const metadata: Metadata = {
     url: siteUrl,
     siteName: "Bugwatch",
     type: "website",
+    images: [{ url: "/og-image.png", width: 1200, height: 630, alt: "Bugwatch - AI-Powered Error Tracking" }],
   },
   twitter: {
     card: "summary_large_image",
     title: "Bugwatch - AI-Powered Error Tracking",
     description: "Watch your bugs. Fix them faster. Free unlimited error logging with AI-powered fixes.",
+    images: ["/og-image.png"],
   },
   robots: {
     index: true,

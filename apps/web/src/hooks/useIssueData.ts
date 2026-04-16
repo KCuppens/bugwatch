@@ -80,7 +80,7 @@ export function useIssueData({
       setIsLoading(true);
       setError(null);
       try {
-        const response = await issuesApi.get(projectId, issueId);
+        const response = await issuesApi.get(projectId, issueId, { signal: controller.signal });
         setIssue(response.data);
       } catch (err) {
         if ((err as Error).name === "AbortError") return;

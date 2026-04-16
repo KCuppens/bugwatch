@@ -7,7 +7,7 @@ name = "bugwatch-sdk"
 version = "0.4.1"
 description = "Official Python SDK for Bugwatch - AI-Powered Error Tracking"
 readme = "README.md"
-license = "FSL-1.1-Apache-2.0"
+license = { text = "FSL-1.1-Apache-2.0" }
 authors = [
     { name = "Bugwatch Team", email = "support@bugwatch.dev" }
 ]

@@ -9,7 +9,7 @@ function MockIssueList() {
     { level: "resolved", color: "accent", label: "ReferenceError: user is not defined", count: "12", time: "1h ago" },
   ];
   return (
-    <div className="mt-6 divide-y divide-[hsl(var(--border-subtle))] rounded-lg overflow-hidden border border-[hsl(var(--border-subtle))]">
+    <div aria-hidden="true" className="mt-6 divide-y divide-[hsl(var(--border-subtle))] rounded-lg overflow-hidden border border-[hsl(var(--border-subtle))]">
       {issues.map((issue) => (
         <div
           key={issue.label}

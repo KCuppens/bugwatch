@@ -19,6 +19,7 @@ module Bugwatch
     TIMEOUT = 10
 
     def initialize(api_key:, server_url:, debug: false)
+      super()
       @api_key = api_key
       @server_url = server_url
       @debug = debug
@@ -68,9 +69,7 @@ module Bugwatch
 
       response = http.request(request)
 
-      if @debug
-        warn "[Bugwatch] Event sent: #{response.code} #{response.message}"
-      end
+      warn "[Bugwatch] Event sent: #{response.code} #{response.message}" if @debug
     rescue StandardError => e
       warn "[Bugwatch] Failed to send event: #{e.message}" if @debug
     end

@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo } from "react";
 import {
   Card,
   CardContent,
@@ -70,10 +71,11 @@ function formatTimeOffset(ms: number): string {
 }
 
 export function ReplayEventList({ events, currentTime }: ReplayEventListProps) {
-  // Only show significant events (skip frequent dom events)
-  const significantEvents = events.filter(
-    (e) => e.type !== "dom" || events.length < 100,
-  );
+  // Only show significant events (skip frequent dom events); memoized to avoid re-running on each 100ms timer tick
+  const significantEvents = useMemo(() => {
+    if (events.length < 100) return events;
+    return events.filter((e) => e.type !== "dom");
+  }, [events]);
 
   // Limit to last 200 events to prevent performance issues
   const displayEvents = significantEvents.slice(-200);

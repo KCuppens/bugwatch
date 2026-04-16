@@ -57,7 +57,7 @@ export async function statusCommand(options: StatusOptions): Promise<void> {
     // Monitors summary
     if (monitors.length > 0) {
       const getMonitorStatus = (m: Monitor) =>
-        (m as Record<string, unknown>).current_status as string || m.status || "unknown";
+        m.current_status || m.status || "unknown";
 
       const up = monitors.filter(
         (m) => getMonitorStatus(m) === "up" || getMonitorStatus(m) === "healthy"

@@ -4,8 +4,6 @@ import type { ProjectInfo } from "./detect";
  * Get the instrumentation.ts template
  */
 export function getInstrumentationTemplate(project: ProjectInfo): string {
-  const ext = project.hasTypescript ? "ts" : "js";
-
   return `// Bugwatch server-side error tracking
 // Learn more: https://docs.bugwatch.dev/nextjs/instrumentation
 
@@ -26,14 +24,7 @@ export async function register() {
 /**
  * Get the app/error.tsx template (App Router)
  */
-export function getAppErrorTemplate(project: ProjectInfo): string {
-  if (project.hasTypescript) {
-    return `'use client';
-
-export { BugwatchError as default } from '@bugwatch/nextjs/error-components';
-`;
-  }
-
+export function getAppErrorTemplate(_project: ProjectInfo): string {
   return `'use client';
 
 export { BugwatchError as default } from '@bugwatch/nextjs/error-components';
@@ -43,14 +34,7 @@ export { BugwatchError as default } from '@bugwatch/nextjs/error-components';
 /**
  * Get the app/global-error.tsx template (App Router)
  */
-export function getGlobalErrorTemplate(project: ProjectInfo): string {
-  if (project.hasTypescript) {
-    return `'use client';
-
-export { BugwatchGlobalError as default } from '@bugwatch/nextjs/error-components';
-`;
-  }
-
+export function getGlobalErrorTemplate(_project: ProjectInfo): string {
   return `'use client';
 
 export { BugwatchGlobalError as default } from '@bugwatch/nextjs/error-components';

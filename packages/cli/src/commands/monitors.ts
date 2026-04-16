@@ -36,7 +36,7 @@ export async function monitorsCommand(options: MonitorsOptions): Promise<void> {
     console.log(chalk.dim("  " + "─".repeat(100)));
 
     for (const monitor of monitors) {
-      const monitorStatus = (monitor as Record<string, unknown>).current_status as string || monitor.status || "unknown";
+      const monitorStatus = monitor.current_status || monitor.status || "unknown";
       const statusColor =
         monitorStatus === "up" || monitorStatus === "healthy"
           ? chalk.green
