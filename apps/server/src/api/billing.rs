@@ -235,22 +235,25 @@ pub async fn list_members(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
+    let user_ids: Vec<String> = members.iter().map(|m| m.user_id.clone()).collect();
+    let users = UserRepository::find_by_ids(&state.db, &user_ids)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let user_map: std::collections::HashMap<&str, &crate::db::models::User> =
+        users.iter().map(|u| (u.id.as_str(), u)).collect();
+
     let mut response = Vec::new();
-    for member in members {
-        match UserRepository::find_by_id(&state.db, &member.user_id).await {
-            Ok(Some(u)) => response.push(MemberResponse {
-                member,
-                user_email: u.email,
-                user_name: u.name,
+    for member in &members {
+        match user_map.get(member.user_id.as_str()) {
+            Some(u) => response.push(MemberResponse {
+                member: member.clone(),
+                user_email: u.email.clone(),
+                user_name: u.name.clone(),
             }),
-            Ok(None) => tracing::warn!(
+            None => tracing::warn!(
                 user_id = %member.user_id,
                 "Member has no matching user record — orphaned membership"
-            ),
-            Err(e) => tracing::error!(
-                user_id = %member.user_id,
-                "DB error fetching member user: {}",
-                e
             ),
         }
     }
@@ -506,14 +509,20 @@ mod saas_billing {
                     &uuid::Uuid::new_v4().to_string()[..8]
                 );
 
-                OrganizationRepository::create(
+                let new_org = OrganizationRepository::create(
                     &state.db,
                     &user.id,
                     &format!("{}'s Organization", org_name),
                     &slug,
                 )
                 .await
-                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+                OrganizationMemberRepository::add(&state.db, &new_org.id, &user.id, "owner")
+                    .await
+                    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+                new_org
             }
             Err(e) => return Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
         };

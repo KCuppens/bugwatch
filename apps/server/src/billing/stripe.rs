@@ -632,11 +632,9 @@ impl StripeClient {
         params.customer = Some(customer);
         params.payment_method_types = Some(vec!["card".to_string()]);
 
-        let ikey = idempotency_key(&format!("setup_intent_{}", customer_id));
-        let client = self
-            .client
-            .clone()
-            .with_strategy(stripe::RequestStrategy::Idempotent(ikey));
+        // SetupIntents are single-use — every add-card flow needs a fresh intent,
+        // so we must NOT use an idempotency key here.
+        let client = self.client.clone();
         stripe_retry(|| {
             let c = client.clone();
             let p = params.clone();
@@ -781,9 +779,10 @@ impl StripeClient {
         params.tax_id_collection =
             Some(stripe::CreateCheckoutSessionTaxIdCollection { enabled: true });
 
+        let coupon_suffix = coupon_code.unwrap_or("none");
         let ikey = idempotency_key(&format!(
-            "checkout_coupon_{}_{}_{}_{}",
-            customer_id, tier, seats, annual
+            "checkout_coupon_{}_{}_{}_{}_{}",
+            customer_id, tier, seats, annual, coupon_suffix
         ));
         let client = self
             .client
