@@ -75,7 +75,14 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|_| "bugwatch_server=info,tower_http=info,sqlx=warn".into());
 
     let environment = std::env::var("ENVIRONMENT").unwrap_or_default();
-    let use_json_logs = environment == "production" || environment == "staging";
+    let use_json_logs = matches!(environment.as_str(), "production" | "staging");
+
+    if !use_json_logs && !environment.is_empty() {
+        eprintln!(
+            "[WARN] ENVIRONMENT='{}' is not 'production' or 'staging' — using human-readable logs",
+            environment
+        );
+    }
 
     if use_json_logs {
         tracing_subscriber::registry()
@@ -336,12 +343,14 @@ async fn main() -> Result<()> {
         let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(3600)); // every hour
         loop {
             interval.tick().await;
+            let mut succeeded = false;
             for attempt in 1..=3u32 {
                 match payment_store_clone.expire_old().await {
                     Ok(n) => {
                         if n > 0 {
                             tracing::info!("Expired {} stale x402 payment challenges", n);
                         }
+                        succeeded = true;
                         break;
                     }
                     Err(e) => {
@@ -355,6 +364,11 @@ async fn main() -> Result<()> {
                         }
                     }
                 }
+            }
+            if !succeeded {
+                tracing::error!(
+                    "x402 challenge expiry failed after 3 attempts — stale challenges may accumulate"
+                );
             }
         }
     });

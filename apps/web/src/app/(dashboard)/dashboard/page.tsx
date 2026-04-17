@@ -96,7 +96,6 @@ interface IssueRowProps {
 
 const IssueRow = memo(function IssueRow({
   issue,
-  index,
   isHovered,
   isFocused,
   isSelected,
@@ -105,7 +104,6 @@ const IssueRow = memo(function IssueRow({
   density,
   projectId,
   onHover,
-  onFocus,
   onToggleSelect,
   onResolve,
 }: IssueRowProps) {
@@ -125,7 +123,6 @@ const IssueRow = memo(function IssueRow({
       `}
       onMouseEnter={() => onHover(issue.id)}
       onMouseLeave={() => onHover(null)}
-      onClick={() => onFocus(index)}
     >
       <div className="pl-3">
         <button
@@ -166,10 +163,13 @@ const IssueRow = memo(function IssueRow({
               </span>
             )}
             {isRecent && (
-              <span
-                className="shrink-0 h-1.5 w-1.5 rounded-full bg-[hsl(var(--accent))] animate-pulse"
-                aria-label="New issue"
-              />
+              <>
+                <span
+                  aria-hidden="true"
+                  className="shrink-0 h-1.5 w-1.5 rounded-full bg-[hsl(var(--accent))] animate-pulse"
+                />
+                <span className="sr-only">Recently active</span>
+              </>
             )}
           </div>
           <div className="flex items-center gap-3 mt-1 text-xs text-[hsl(var(--muted-foreground))]">
@@ -273,11 +273,11 @@ export default function DashboardPage() {
   const [currentSearchQuery, setCurrentSearchQuery] = useState("");
   const [showShortcutsHelp, setShowShortcutsHelp] = useState(false);
   const [renderCap, setRenderCap] = useState(100);
-  const [density, setDensity] = useState<"compact" | "comfortable">(() => {
-    if (typeof window === "undefined") return "comfortable";
+  const [density, setDensity] = useState<"compact" | "comfortable">("comfortable");
+  useEffect(() => {
     const stored = localStorage.getItem("bugwatch:issues-density");
-    return stored === "compact" || stored === "comfortable" ? stored : "comfortable";
-  });
+    if (stored === "compact" || stored === "comfortable") setDensity(stored);
+  }, []);
 
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -537,13 +537,25 @@ export default function DashboardPage() {
 
         previousIssueIdsRef.current = newIds;
         setIssues(response.data);
-      } catch {
-        // Silent fail for polling
+        consecutiveFailures = 0;
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 401) {
+          // Session expired — auth-context will redirect; stop polling
+          cancelled = true;
+          setIsLive(false);
+          return;
+        }
+        consecutiveFailures++;
+        if (consecutiveFailures >= 3) {
+          setIsLive(false);
+          toast.error("Live updates paused", { description: "Could not reach server" });
+        }
       } finally {
         polling = false;
       }
     }
 
+    let consecutiveFailures = 0;
     const POLL_INTERVAL_MS = 30000;
 
     function handleVisibility() {
@@ -596,12 +608,10 @@ export default function DashboardPage() {
   const handleStatusChange = useCallback(
     async (issueId: string, newStatus: string, verb: string, label: string) => {
       if (!selectedProject) return;
-      // Capture previousStatus atomically inside the updater to avoid stale closure.
-      let previousStatus = "unresolved";
-      setIssues((prev) => {
-        previousStatus = prev.find((i) => i.id === issueId)?.status ?? "unresolved";
-        return prev.map((i) => (i.id === issueId ? { ...i, status: newStatus } : i));
-      });
+      // Snapshot before setIssues so the undo closure captures a stable value,
+      // not one that could be overwritten by a subsequent call.
+      const previousStatus = issues.find((i) => i.id === issueId)?.status ?? "unresolved";
+      setIssues((prev) => prev.map((i) => (i.id === issueId ? { ...i, status: newStatus } : i)));
 
       toast.success(`Issue ${label}`, {
         action: {
@@ -624,7 +634,7 @@ export default function DashboardPage() {
         toast.error(`Failed to ${verb} issue`);
       }
     },
-    [selectedProject]
+    [selectedProject, issues]
   );
 
   const handleIgnore = useCallback(
@@ -661,12 +671,16 @@ export default function DashboardPage() {
                 return prevStatus ? { ...i, status: prevStatus } : i;
               })
             );
-            await Promise.allSettled(
+            const results = await Promise.allSettled(
               ids.map((id) => {
                 const prevStatus = previousStates.get(id);
                 return prevStatus ? issuesApi.update(selectedProject.id, id, prevStatus) : Promise.resolve();
               })
             );
+            const failed = results.filter((r) => r.status === "rejected").length;
+            if (failed > 0) {
+              toast.error(`${failed} issue${failed > 1 ? "s" : ""} could not be reverted`);
+            }
           },
         },
       });
@@ -823,6 +837,8 @@ export default function DashboardPage() {
       <div className="flex items-center gap-3 h-10 px-4 rounded-lg surface-card border-[hsl(var(--border-subtle))]">
         <button
           type="button"
+          aria-pressed={activeFilter === "fatal-triage"}
+          aria-label={`Filter by fatal issues (${stats.fatalCount})`}
           onClick={() => {
             setActiveFilter(activeFilter === "fatal-triage" ? null : "fatal-triage");
             setSearchResults(activeFilter === "fatal-triage" ? null : issues.filter((i) => i.level === "fatal"));
@@ -832,6 +848,7 @@ export default function DashboardPage() {
           } ${activeFilter === "fatal-triage" ? "bg-red-500/10" : ""}`}
         >
           <span
+            aria-hidden="true"
             className={`h-1.5 w-1.5 rounded-full ${stats.criticalCount > 0 ? "bg-red-500 animate-pulse" : "bg-[hsl(var(--muted-foreground))]"}`}
           />
           {stats.fatalCount} FATAL
@@ -839,6 +856,8 @@ export default function DashboardPage() {
         <div className="h-4 w-px bg-[hsl(var(--border-subtle))]" />
         <button
           type="button"
+          aria-pressed={activeFilter === "error-triage"}
+          aria-label={`Filter by error issues (${stats.errorCount})`}
           onClick={() => {
             setActiveFilter(activeFilter === "error-triage" ? null : "error-triage");
             setSearchResults(activeFilter === "error-triage" ? null : issues.filter((i) => i.level === "error"));
@@ -848,6 +867,7 @@ export default function DashboardPage() {
           } ${activeFilter === "error-triage" ? "bg-orange-500/10" : ""}`}
         >
           <span
+            aria-hidden="true"
             className={`h-1.5 w-1.5 rounded-full ${stats.errorCount > 0 ? "bg-orange-500" : "bg-[hsl(var(--muted-foreground))]"}`}
           />
           {stats.errorCount} ERROR
@@ -873,47 +893,49 @@ export default function DashboardPage() {
       </div>
 
       {/* Stats Row */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <dl className="grid grid-cols-2 md:grid-cols-4 gap-3" aria-label="Issue statistics">
         <div className="surface-card p-4 card-hover">
-          <p className="text-[11px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider">
+          <dt className="text-[11px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider">
             Unresolved
-          </p>
-          <p className="font-mono text-3xl font-bold mt-1 tabular-nums tracking-tight">{stats.unresolved}</p>
+          </dt>
+          <dd className="font-mono text-3xl font-bold mt-1 tabular-nums tracking-tight">{stats.unresolved}</dd>
           {stats.criticalCount > 0 && (
             <p className="text-xs text-red-400 mt-2 flex items-center gap-1 font-mono">
-              <Flame className="h-3 w-3" />
+              <Flame className="h-3 w-3" aria-hidden="true" />
               {stats.criticalCount} critical
             </p>
           )}
         </div>
 
         <div className="surface-card p-4 card-hover">
-          <p className="text-[11px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider">Events</p>
-          <p className="font-mono text-3xl font-bold mt-1 tabular-nums tracking-tight">
+          <dt className="text-[11px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider">
+            Events
+          </dt>
+          <dd className="font-mono text-3xl font-bold mt-1 tabular-nums tracking-tight">
             {stats.events.toLocaleString()}
-          </p>
+          </dd>
           <div className="mt-2 h-0.5 rounded-full bg-[hsl(var(--surface-3))] overflow-hidden">
             <div className="h-full w-3/4 bg-[hsl(var(--accent))]/40 rounded-full" />
           </div>
         </div>
 
         <div className="surface-card p-4 card-hover">
-          <p className="text-[11px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider">
+          <dt className="text-[11px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider">
             Users Affected
-          </p>
-          <p className="font-mono text-3xl font-bold mt-1 tabular-nums tracking-tight">
+          </dt>
+          <dd className="font-mono text-3xl font-bold mt-1 tabular-nums tracking-tight">
             {stats.users.toLocaleString()}
-          </p>
+          </dd>
         </div>
 
         <div className="surface-card p-4 card-hover">
-          <p className="text-[11px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider">
+          <dt className="text-[11px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider">
             Last 24h
-          </p>
-          <p className="font-mono text-3xl font-bold mt-1 tabular-nums tracking-tight">{stats.recentCount}</p>
+          </dt>
+          <dd className="font-mono text-3xl font-bold mt-1 tabular-nums tracking-tight">{stats.recentCount}</dd>
           {stats.recentCount > 0 && <p className="text-xs text-emerald-400 mt-2 font-mono">Active</p>}
         </div>
-      </div>
+      </dl>
 
       {/* Advanced Search Bar */}
       <IssueSearchBar
@@ -1015,7 +1037,7 @@ export default function DashboardPage() {
                 deleteSearch(search.id);
                 toast.success("Search removed");
               }}
-              className="ml-1 opacity-0 group-hover:opacity-100 transition-opacity"
+              className="ml-1 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus:opacity-100 transition-opacity"
             >
               <X className="h-3 w-3" aria-hidden="true" />
             </button>
@@ -1024,10 +1046,12 @@ export default function DashboardPage() {
 
         {currentSearchQuery && (
           <button
+            type="button"
+            aria-label={`Save current search: ${currentSearchQuery}`}
             onClick={() => setShowSaveSearch(true)}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap border border-dashed border-accent-2/30 text-accent-2 hover:bg-accent-2/5 transition-all"
           >
-            <Bookmark className="h-3 w-3" />
+            <Bookmark className="h-3 w-3" aria-hidden="true" />
             Save Search
           </button>
         )}
@@ -1080,9 +1104,9 @@ export default function DashboardPage() {
 
       {/* Error State */}
       {error && !isLoading && (
-        <div className="flex flex-col items-center justify-center py-16 animate-fade-in-up">
+        <div role="alert" className="flex flex-col items-center justify-center py-16 animate-fade-in-up">
           <div className="w-14 h-14 rounded-2xl bg-destructive/10 flex items-center justify-center mb-4">
-            <AlertCircle className="h-7 w-7 text-destructive" />
+            <AlertCircle className="h-7 w-7 text-destructive" aria-hidden="true" />
           </div>
           <h3 className="text-lg font-medium mb-1">Something went wrong</h3>
           <p className="text-sm text-muted-foreground mb-4">{error}</p>

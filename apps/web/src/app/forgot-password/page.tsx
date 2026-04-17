@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useState, useRef, useEffect, type FormEvent } from "react";
 import Link from "next/link";
 import { ArrowLeft, Loader2, CheckCircle2, AlertCircle, Mail } from "lucide-react";
 import { authApi, ApiError } from "@/lib/api";
@@ -10,6 +10,13 @@ export default function ForgotPasswordPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [error, setError] = useState("");
+  const successRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (submitted) {
+      requestAnimationFrame(() => successRef.current?.focus());
+    }
+  }, [submitted]);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -66,7 +73,7 @@ export default function ForgotPasswordPage() {
         {/* Card */}
         <div className="glass-card rounded-xl p-8 space-y-6">
           {submitted ? (
-            <div className="space-y-6">
+            <div ref={successRef} tabIndex={-1} className="space-y-6 outline-none" aria-live="polite">
               <div className="flex flex-col items-center gap-3 py-4">
                 <CheckCircle2 className="h-12 w-12 text-green-400" />
                 <p className="text-sm text-center text-muted-foreground">
@@ -88,7 +95,10 @@ export default function ForgotPasswordPage() {
           ) : (
             <form onSubmit={handleSubmit} className="space-y-4">
               {error && (
-                <div className="flex items-start gap-3 p-4 text-sm rounded-lg bg-destructive/10 border border-destructive/20">
+                <div
+                  role="alert"
+                  className="flex items-start gap-3 p-4 text-sm rounded-lg bg-destructive/10 border border-destructive/20"
+                >
                   <AlertCircle className="h-5 w-5 text-destructive shrink-0 mt-0.5" aria-hidden="true" />
                   <span className="text-destructive">{error}</span>
                 </div>
@@ -118,7 +128,7 @@ export default function ForgotPasswordPage() {
 
               <button
                 type="submit"
-                disabled={isLoading || !email}
+                disabled={isLoading}
                 className="w-full h-12 rounded-lg bg-accent text-accent-foreground font-medium hover:bg-accent/90 transition-all flex items-center justify-center gap-2 shadow-lg shadow-accent/20 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {isLoading ? (

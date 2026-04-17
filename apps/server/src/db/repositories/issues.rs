@@ -598,13 +598,7 @@ impl IssueRepository {
             return Ok(vec![]);
         }
 
-        let placeholders: Vec<String> = project_ids
-            .iter()
-            .enumerate()
-            .map(|(i, _)| format!("${}", i + 1))
-            .collect();
-
-        let query = format!(
+        let rows = sqlx::query_as::<_, (String, i64, i64, i64, i64)>(
             r#"
             SELECT
                 project_id,
@@ -613,18 +607,13 @@ impl IssueRepository {
                 COALESCE(SUM(user_count), 0)::BIGINT as total_users,
                 COUNT(*) FILTER (WHERE status = 'unresolved' AND (level = 'fatal' OR level = 'error')) as critical_count
             FROM issues
-            WHERE project_id IN ({})
+            WHERE project_id = ANY($1)
             GROUP BY project_id
             "#,
-            placeholders.join(",")
-        );
-
-        let mut q = sqlx::query_as::<_, (String, i64, i64, i64, i64)>(&query);
-        for pid in project_ids {
-            q = q.bind(pid);
-        }
-
-        let rows = q.fetch_all(pool).await?;
+        )
+        .bind(project_ids)
+        .fetch_all(pool)
+        .await?;
 
         Ok(rows
             .into_iter()

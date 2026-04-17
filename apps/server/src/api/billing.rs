@@ -505,14 +505,23 @@ mod saas_billing {
                     .await
                     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-                // Save customer ID
+                // Save customer ID — if this DB write fails the Stripe customer is orphaned;
+                // log the ID prominently so it can be manually reconciled.
                 OrganizationRepository::set_stripe_customer(
                     &state.db,
                     &org.id,
                     &customer.id.to_string(),
                 )
                 .await
-                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+                .map_err(|e| {
+                    tracing::error!(
+                        org_id = %org.id,
+                        stripe_customer_id = %customer.id,
+                        "CRITICAL: Stripe customer created but DB persist failed — orphaned customer: {}",
+                        e
+                    );
+                    (StatusCode::INTERNAL_SERVER_ERROR, "Failed to save billing information".to_string())
+                })?;
 
                 customer.id.to_string()
             }
@@ -520,6 +529,14 @@ mod saas_billing {
 
         let seats = req.seats.unwrap_or(1).max(1) as i64;
         let annual = req.annual.unwrap_or(false);
+
+        // Validate redirect URLs share the same origin as APP_URL to prevent open-redirect
+        let allowed_origin = state.config.app_url.trim_end_matches('/');
+        if !req.success_url.starts_with(allowed_origin)
+            || !req.cancel_url.starts_with(allowed_origin)
+        {
+            return Err((StatusCode::BAD_REQUEST, "Invalid redirect URL".to_string()));
+        }
 
         let session = stripe
             .create_checkout_session(
@@ -598,15 +615,9 @@ mod saas_billing {
             ));
         }
 
-        // Check session status
-        let status = session
-            .status
-            .as_ref()
-            .map(|s| format!("{:?}", s))
-            .unwrap_or_else(|| "unknown".to_string());
-
-        match status.as_str() {
-            "Complete" => {
+        // Check session status using the typed enum to avoid Debug-repr fragility
+        match session.status {
+            Some(stripe::CheckoutSessionStatus::Complete) => {
                 // Session completed successfully - extract subscription details
                 let subscription_id = session
                     .subscription
@@ -733,24 +744,33 @@ mod saas_billing {
                     already_processed: false,
                 }))
             }
-            "Expired" => Ok(Json(VerifyCheckoutResponse {
-                success: false,
-                subscription: None,
-                message: "Checkout session has expired".to_string(),
-                already_processed: false,
-            })),
-            "Open" => Ok(Json(VerifyCheckoutResponse {
-                success: false,
-                subscription: None,
-                message: "Checkout is still in progress".to_string(),
-                already_processed: false,
-            })),
-            _ => Ok(Json(VerifyCheckoutResponse {
-                success: false,
-                subscription: None,
-                message: format!("Unknown session status: {}", status),
-                already_processed: false,
-            })),
+            Some(stripe::CheckoutSessionStatus::Expired) => {
+                tracing::info!(session_id = %req.session_id, org_id = %org.id, "Checkout session expired");
+                Ok(Json(VerifyCheckoutResponse {
+                    success: false,
+                    subscription: None,
+                    message: "Checkout session has expired".to_string(),
+                    already_processed: false,
+                }))
+            }
+            Some(stripe::CheckoutSessionStatus::Open) => {
+                tracing::debug!(session_id = %req.session_id, "Checkout session still open");
+                Ok(Json(VerifyCheckoutResponse {
+                    success: false,
+                    subscription: None,
+                    message: "Checkout is still in progress".to_string(),
+                    already_processed: false,
+                }))
+            }
+            status => {
+                tracing::warn!(session_id = %req.session_id, ?status, "Unknown checkout session status");
+                Ok(Json(VerifyCheckoutResponse {
+                    success: false,
+                    subscription: None,
+                    message: "Unknown session status".to_string(),
+                    already_processed: false,
+                }))
+            }
         }
     }
 
@@ -788,6 +808,12 @@ mod saas_billing {
             StatusCode::BAD_REQUEST,
             "No Stripe customer. Please upgrade first.".to_string(),
         ))?;
+
+        // Validate return_url shares the same origin as APP_URL to prevent open-redirect
+        let allowed_origin = state.config.app_url.trim_end_matches('/');
+        if !req.return_url.starts_with(allowed_origin) {
+            return Err((StatusCode::BAD_REQUEST, "Invalid redirect URL".to_string()));
+        }
 
         let session = stripe
             .create_billing_portal_session(&customer_id, &req.return_url)
@@ -965,7 +991,16 @@ mod saas_billing {
             subscription.cancel_at_period_end,
         )
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|e| {
+            tracing::error!(
+                org_id = %org.id,
+                subscription_id = %subscription.id,
+                new_tier = %req.tier,
+                "CRITICAL: Stripe plan updated but local DB sync failed — manual reconciliation needed: {}",
+                e
+            );
+            (StatusCode::INTERNAL_SERVER_ERROR, "Plan updated in Stripe but failed to sync locally. Please contact support.".to_string())
+        })?;
 
         Ok(Json(ChangePlanResponse {
             success: true,
@@ -1466,10 +1501,14 @@ mod saas_billing {
             .await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-        // Calculate monthly cost based on tier and seats
+        // WARNING: these unit prices must stay in sync with the Stripe price objects
+        // identified by STRIPE_PRICE_ID_PRO_MONTHLY / STRIPE_PRICE_ID_TEAM_MONTHLY.
+        // Update these constants if prices change in Stripe.
+        const PRICE_PRO_MONTHLY_CENTS: i64 = 1200; // $12/seat/month
+        const PRICE_TEAM_MONTHLY_CENTS: i64 = 2100; // $21/seat/month
         let monthly_cost_cents = match org.tier.as_str() {
-            "pro" => 1200 * org.seats as i64,  // $12/seat/month
-            "team" => 2100 * org.seats as i64, // $21/seat/month
+            "pro" => PRICE_PRO_MONTHLY_CENTS * org.seats as i64,
+            "team" => PRICE_TEAM_MONTHLY_CENTS * org.seats as i64,
             _ => 0,
         };
 

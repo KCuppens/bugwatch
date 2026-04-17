@@ -1,6 +1,7 @@
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use tracing;
 
 pub struct OnChainVerifier {
     rpc_url: String,
@@ -107,11 +108,17 @@ impl OnChainVerifier {
                 continue;
             }
 
-            // Parse transfer value from log data (uint256, hex encoded)
+            // Parse transfer value from log data (uint256 = max 32 bytes = 64 hex chars)
             let data = log.get("data").and_then(|v| v.as_str()).unwrap_or("0x");
             let value_hex = data.trim_start_matches("0x");
+            if value_hex.is_empty() {
+                return Err("Transfer amount is zero or missing".to_string());
+            }
+            if value_hex.len() > 64 {
+                return Err("Invalid transfer data".to_string());
+            }
             let value = u128::from_str_radix(value_hex, 16)
-                .map_err(|_| "Failed to parse transfer value".to_string())?;
+                .map_err(|_| "Invalid transfer data".to_string())?;
 
             // USDC has 6 decimals. Our amounts are already in micro-USDC (6 decimals)
             // so value from chain IS in micro-USDC
@@ -145,6 +152,12 @@ impl OnChainVerifier {
         for attempt in 0..=MAX_RETRIES {
             if attempt > 0 {
                 let delay_ms = 1000u64 * 2u64.pow(attempt - 1);
+                tracing::warn!(
+                    tx_hash = tx_hash,
+                    attempt = attempt,
+                    delay_ms = delay_ms,
+                    "eth_getTransactionReceipt failed, retrying"
+                );
                 tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
             }
 
@@ -159,19 +172,41 @@ impl OnChainVerifier {
             };
 
             let response: RpcResponse = match http_response.json().await {
-                Err(e) => return Err(format!("Failed to parse RPC response: {}", e)),
+                Err(e) => {
+                    // Treat transient parse failures (truncated TCP, proxy error page) as retryable
+                    last_err = format!("Failed to parse RPC response: {}", e);
+                    continue;
+                }
                 Ok(r) => r,
             };
 
             if let Some(err) = response.error {
-                return Err(format!("RPC error: {}", err));
+                let err_str = err.to_string();
+                // -32005 = rate limited, -32603 = internal error — retryable
+                if (err_str.contains("-32005") || err_str.contains("-32603"))
+                    && attempt < MAX_RETRIES
+                {
+                    last_err = format!("RPC error (will retry): {}", err_str);
+                    continue;
+                }
+                return Err(format!("RPC error: {}", err_str));
             }
 
-            return response
-                .result
-                .ok_or_else(|| "Transaction not found or not yet confirmed".to_string());
+            // Null result means tx is pending/not yet propagated — retry
+            match response.result {
+                Some(v) => return Ok(v),
+                None => {
+                    last_err = "Transaction not found or not yet confirmed".to_string();
+                    continue;
+                }
+            }
         }
 
+        tracing::error!(
+            tx_hash = tx_hash,
+            max_retries = MAX_RETRIES,
+            "eth_getTransactionReceipt exhausted all retries"
+        );
         Err(last_err)
     }
 }
