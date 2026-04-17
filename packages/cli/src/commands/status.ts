@@ -1,13 +1,6 @@
 import chalk from "chalk";
 import ora from "ora";
-import {
-  getStatus,
-  countIssues,
-  listMonitors,
-  listAlerts,
-  type Monitor,
-  type Alert,
-} from "../utils/api";
+import { getStatus, countIssues, listMonitors, listAlerts, type Monitor, type Alert } from "../utils/api";
 
 interface StatusOptions {
   project?: string;
@@ -45,8 +38,7 @@ export async function statusCommand(options: StatusOptions): Promise<void> {
         // Ignore - will show 0
       }
 
-      const statusIcon =
-        unresolvedCount > 0 ? chalk.red("!") : chalk.green("~");
+      const statusIcon = unresolvedCount > 0 ? chalk.red("!") : chalk.green("~");
 
       console.log(`  ${statusIcon} ${chalk.bold(project.name)}`);
       console.log(
@@ -56,12 +48,12 @@ export async function statusCommand(options: StatusOptions): Promise<void> {
 
     // Monitors summary
     if (monitors.length > 0) {
-      const getMonitorStatus = (m: Monitor) =>
-        m.current_status || m.status || "unknown";
+      const getMonitorStatus = (m: Monitor) => m.current_status || m.status || "unknown";
 
-      const up = monitors.filter(
-        (m) => getMonitorStatus(m) === "up" || getMonitorStatus(m) === "healthy"
-      ).length;
+      const up = monitors.filter((m) => {
+        const s = getMonitorStatus(m);
+        return s === "up" || s === "healthy";
+      }).length;
       const down = monitors.length - up;
 
       console.log(chalk.bold("\n  Monitors\n"));
@@ -70,9 +62,7 @@ export async function statusCommand(options: StatusOptions): Promise<void> {
       );
 
       if (down > 0) {
-        const downMonitors = monitors.filter(
-          (m) => getMonitorStatus(m) !== "up" && getMonitorStatus(m) !== "healthy"
-        );
+        const downMonitors = monitors.filter((m) => getMonitorStatus(m) !== "up" && getMonitorStatus(m) !== "healthy");
         for (const monitor of downMonitors) {
           console.log(`    ${chalk.red("!")} ${monitor.name} (${monitor.url})`);
         }

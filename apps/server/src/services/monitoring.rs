@@ -76,15 +76,13 @@ impl HealthCheckWorker {
         for monitor in monitors {
             if self.should_check(&monitor) {
                 // Acquire semaphore permit to limit concurrent checks
-                let permit = self.semaphore.clone().acquire_owned().await;
-                if permit.is_err() {
+                let Ok(permit) = self.semaphore.clone().acquire_owned().await else {
                     warn!(
                         "Failed to acquire semaphore permit for monitor {}",
                         monitor.id
                     );
                     continue;
-                }
-                let permit = permit.unwrap();
+                };
 
                 // Spawn check in background to not block other checks
                 let pool = self.pool.clone();
