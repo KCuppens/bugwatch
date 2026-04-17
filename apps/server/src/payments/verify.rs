@@ -97,6 +97,11 @@ impl OnChainVerifier {
                 continue;
             }
 
+            // ERC-20 Transfer event log layout:
+            //   topics[0] = keccak256("Transfer(address,address,uint256)") — event signature
+            //   topics[1] = from address (32-byte left-padded)
+            //   topics[2] = to address (32-byte left-padded)
+            //   data      = transferred amount as uint256 (32 bytes, big-endian)
             let topic0 = topics[0].as_str().unwrap_or("").to_lowercase();
             let topic2 = topics[2].as_str().unwrap_or("").to_lowercase();
 

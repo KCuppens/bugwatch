@@ -7,6 +7,8 @@ use base64::Engine;
 use sha2::{Digest, Sha256};
 
 /// Derive a 32-byte AES-256 key from a variable-length secret.
+/// SHA-256 (no salt/iterations) is acceptable here because the secret is a
+/// server-generated key with high entropy, not a user password.
 fn derive_key(secret: &str) -> [u8; 32] {
     let mut hasher = Sha256::new();
     hasher.update(secret.as_bytes());

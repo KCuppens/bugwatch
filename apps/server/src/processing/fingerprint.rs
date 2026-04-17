@@ -108,7 +108,11 @@ pub fn unminify_react_error(message: &str) -> String {
             if val.is_empty() {
                 None
             } else {
-                Some(urlencoding::decode(val).unwrap_or_default().into_owned())
+                Some(
+                    urlencoding::decode(val)
+                        .unwrap_or_else(|_| std::borrow::Cow::Borrowed(val))
+                        .into_owned(),
+                )
             }
         })
         .collect();
