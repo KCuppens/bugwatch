@@ -71,14 +71,18 @@ impl HttpTransport {
             reqwest::blocking::Client::builder()
                 .timeout(Duration::from_secs(10))
                 .build()
-                .map_err(|e| TransportError::Request(format!("Failed to create HTTP client: {}", e)))?,
+                .map_err(|e| {
+                    TransportError::Request(format!("Failed to create HTTP client: {}", e))
+                })?,
         );
 
         #[cfg(feature = "async")]
         let async_client = reqwest::Client::builder()
             .timeout(Duration::from_secs(10))
             .build()
-            .map_err(|e| TransportError::Request(format!("Failed to create async HTTP client: {}", e)))?;
+            .map_err(|e| {
+                TransportError::Request(format!("Failed to create async HTTP client: {}", e))
+            })?;
 
         Ok(Self {
             endpoint: format!("{}/api/v1/events", options.endpoint.trim_end_matches('/')),
@@ -106,7 +110,10 @@ impl HttpTransport {
             .post(&self.endpoint)
             .header("Content-Type", "application/json")
             .header("Authorization", format!("Bearer {}", self.api_key))
-            .header("User-Agent", format!("bugwatch-rust/{}", env!("CARGO_PKG_VERSION")))
+            .header(
+                "User-Agent",
+                format!("bugwatch-rust/{}", env!("CARGO_PKG_VERSION")),
+            )
             .body(body)
             .send()
             .map_err(|e| TransportError::Request(e.to_string()))?;
@@ -131,11 +138,15 @@ impl HttpTransport {
         // Serialize explicitly so we get a clear serialization error vs network error
         let body = serde_json::to_vec(event)?;
 
-        let response = self.async_client
+        let response = self
+            .async_client
             .post(&self.endpoint)
             .header("Content-Type", "application/json")
             .header("Authorization", format!("Bearer {}", self.api_key))
-            .header("User-Agent", format!("bugwatch-rust/{}", env!("CARGO_PKG_VERSION")))
+            .header(
+                "User-Agent",
+                format!("bugwatch-rust/{}", env!("CARGO_PKG_VERSION")),
+            )
             .body(body)
             .send()
             .await

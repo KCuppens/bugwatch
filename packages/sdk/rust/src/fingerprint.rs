@@ -17,11 +17,7 @@ use crate::types::ExceptionInfo;
 /// # Returns
 ///
 /// A hex string fingerprint (32 characters)
-pub fn generate_fingerprint(
-    error_type: &str,
-    message: &str,
-    stacktrace: Option<&str>,
-) -> String {
+pub fn generate_fingerprint(error_type: &str, message: &str, stacktrace: Option<&str>) -> String {
     // Normalize the message by removing variable parts
     let normalized_message = normalize_message(message);
 
@@ -75,9 +71,8 @@ pub fn fingerprint_from_exception(exception: &ExceptionInfo) -> String {
 }
 
 // Static regex patterns for message normalization
-static RE_NUMBERS: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"\d+").expect("RE_NUMBERS: invalid regex pattern (this is a bug)")
-});
+static RE_NUMBERS: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"\d+").expect("RE_NUMBERS: invalid regex pattern (this is a bug)"));
 static RE_HEX: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"0x[0-9a-fA-F]+").expect("RE_HEX: invalid regex pattern (this is a bug)")
 });
@@ -103,7 +98,6 @@ static RE_ADDR: Lazy<Regex> = Lazy::new(|| {
 
 /// Normalize an error message by removing variable parts.
 fn normalize_message(message: &str) -> String {
-
     let mut normalized = message.to_string();
 
     // Replace patterns in order (more specific first)
@@ -113,8 +107,12 @@ fn normalize_message(message: &str) -> String {
     normalized = RE_NUMBERS.replace_all(&normalized, "<number>").to_string();
     normalized = RE_PATH_UNIX.replace_all(&normalized, "<path>").to_string();
     normalized = RE_PATH_WIN.replace_all(&normalized, "<path>").to_string();
-    normalized = RE_QUOTED_DOUBLE.replace_all(&normalized, "<string>").to_string();
-    normalized = RE_QUOTED_SINGLE.replace_all(&normalized, "<string>").to_string();
+    normalized = RE_QUOTED_DOUBLE
+        .replace_all(&normalized, "<string>")
+        .to_string();
+    normalized = RE_QUOTED_SINGLE
+        .replace_all(&normalized, "<string>")
+        .to_string();
 
     normalized
 }

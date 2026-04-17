@@ -78,9 +78,9 @@ fn capture_panic(client: &BugwatchClient, panic_info: &PanicHookInfo<'_>) {
         };
 
         // Extract location
-        let location = panic_info.location().map(|loc| {
-            format!("{}:{}:{}", loc.file(), loc.line(), loc.column())
-        });
+        let location = panic_info
+            .location()
+            .map(|loc| format!("{}:{}:{}", loc.file(), loc.line(), loc.column()));
 
         // Capture backtrace (skip panic handling frames)
         let stacktrace = capture_backtrace_skip(5);
@@ -159,12 +159,8 @@ impl Drop for PanicGuard {
                 let mut tags = std::collections::HashMap::new();
                 tags.insert("mechanism".to_string(), "panic_guard".to_string());
 
-                let _ = client.capture_exception_internal(
-                    exception,
-                    Level::Fatal,
-                    Some(tags),
-                    None,
-                );
+                let _ =
+                    client.capture_exception_internal(exception, Level::Fatal, Some(tags), None);
                 let _ = client.flush();
             }));
         }

@@ -8,9 +8,7 @@ use uuid::Uuid;
 use crate::backtrace::capture_backtrace_skip;
 use crate::fingerprint::fingerprint_from_exception;
 use crate::transport::{HttpTransport, Transport};
-use crate::types::{
-    Breadcrumb, BugwatchOptions, ErrorEvent, ExceptionInfo, Level, UserContext,
-};
+use crate::types::{Breadcrumb, BugwatchOptions, ErrorEvent, ExceptionInfo, Level, UserContext};
 
 /// The main Bugwatch client for error tracking.
 #[derive(Clone)]
@@ -188,7 +186,9 @@ impl BugwatchClient {
         event.environment = self.options.environment.clone();
         event.release = self.options.release.clone();
         event.server_name = self.options.server_name.clone().or_else(|| {
-            hostname::get().ok().map(|h| h.to_string_lossy().to_string())
+            hostname::get()
+                .ok()
+                .map(|h| h.to_string_lossy().to_string())
         });
 
         // Send event
@@ -236,7 +236,9 @@ impl BugwatchClient {
         event.environment = self.options.environment.clone();
         event.release = self.options.release.clone();
         event.server_name = self.options.server_name.clone().or_else(|| {
-            hostname::get().ok().map(|h| h.to_string_lossy().to_string())
+            hostname::get()
+                .ok()
+                .map(|h| h.to_string_lossy().to_string())
         });
 
         // Send via async transport
@@ -539,8 +541,8 @@ fn rustc_version() -> String {
 
 // Simple PRNG for sampling (no external dependency)
 mod rand {
-    use std::hash::{Hash, Hasher};
     use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     pub fn random<T>() -> T
@@ -648,7 +650,10 @@ mod tests {
 
         let state = client.state.read();
         assert!(state.user.is_some());
-        assert_eq!(state.user.as_ref().unwrap().id, Some("user-123".to_string()));
+        assert_eq!(
+            state.user.as_ref().unwrap().id,
+            Some("user-123".to_string())
+        );
     }
 
     #[test]
