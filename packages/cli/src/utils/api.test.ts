@@ -118,7 +118,7 @@ describe("API method URL construction", () => {
   it('listIssues("proj1") calls GET /api/v1/projects/proj1/issues', async () => {
     await listIssues("proj1");
 
-    const [url, opts] = fetchSpy.mock.calls[0];
+    const [url, opts] = fetchSpy.mock.calls[0]!;
     expect(url).toContain("/api/v1/projects/proj1/issues");
     expect(opts.method).toBe("GET");
   });
@@ -126,7 +126,7 @@ describe("API method URL construction", () => {
   it("listIssues(undefined) calls GET /api/v1/issues/across-projects", async () => {
     await listIssues(undefined);
 
-    const [url, opts] = fetchSpy.mock.calls[0];
+    const [url, opts] = fetchSpy.mock.calls[0]!;
     expect(url).toContain("/api/v1/issues/across-projects");
     expect(opts.method).toBe("GET");
   });
@@ -137,7 +137,7 @@ describe("API method URL construction", () => {
 
     await getIssue("issue1", "proj1");
 
-    const [url, opts] = fetchSpy.mock.calls[0];
+    const [url, opts] = fetchSpy.mock.calls[0]!;
     expect(url).toContain("/api/v1/projects/proj1/issues/issue1");
     expect(opts.method).toBe("GET");
   });
@@ -148,7 +148,7 @@ describe("API method URL construction", () => {
 
     await updateIssue("issue1", "proj1", { status: "resolved" });
 
-    const [url, opts] = fetchSpy.mock.calls[0];
+    const [url, opts] = fetchSpy.mock.calls[0]!;
     expect(url).toContain("/api/v1/projects/proj1/issues/issue1");
     expect(opts.method).toBe("PATCH");
     expect(JSON.parse(opts.body)).toEqual({ status: "resolved" });
@@ -157,7 +157,7 @@ describe("API method URL construction", () => {
   it('listMonitors("proj1") calls GET /api/v1/projects/proj1/monitors', async () => {
     await listMonitors("proj1");
 
-    const [url, opts] = fetchSpy.mock.calls[0];
+    const [url, opts] = fetchSpy.mock.calls[0]!;
     expect(url).toContain("/api/v1/projects/proj1/monitors");
     expect(opts.method).toBe("GET");
   });
@@ -168,7 +168,7 @@ describe("API method URL construction", () => {
 
     await listMonitors(undefined);
 
-    const [url, opts] = fetchSpy.mock.calls[0];
+    const [url, opts] = fetchSpy.mock.calls[0]!;
     expect(url).toContain("/api/v1/monitors/across-projects");
     expect(opts.method).toBe("GET");
   });
@@ -179,7 +179,7 @@ describe("API method URL construction", () => {
 
     await countIssues("proj1", "unresolved");
 
-    const [url] = fetchSpy.mock.calls[0];
+    const [url] = fetchSpy.mock.calls[0]!;
     expect(url).toContain("/api/v1/projects/proj1/issues");
     expect(url).toContain("status=unresolved");
     expect(url).toContain("per_page=1");

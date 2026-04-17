@@ -3,7 +3,7 @@ import type { ProjectInfo } from "./detect";
 /**
  * Get the instrumentation.ts template
  */
-export function getInstrumentationTemplate(project: ProjectInfo): string {
+export function getInstrumentationTemplate(_project: ProjectInfo): string {
   return `// Bugwatch server-side error tracking
 // Learn more: https://docs.bugwatch.dev/nextjs/instrumentation
 
