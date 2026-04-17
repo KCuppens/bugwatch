@@ -5,7 +5,7 @@ use axum::{
 };
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
 use crate::{
     db::repositories::{BillingEventRepository, OrganizationRepository},
@@ -180,7 +180,7 @@ async fn handle_checkout_completed(
 
     if let Some(sub_id) = subscription_id {
         // Fetch subscription details from Stripe to get tier and seats
-        if let Some(stripe) = &state.stripe {
+        if let Some(_stripe) = &state.stripe {
             let subscription = stripe::Subscription::retrieve(
                 &stripe::Client::new(state.config.stripe_secret_key.clone().unwrap_or_default()),
                 &sub_id.parse().map_err(|e| {

@@ -1665,7 +1665,7 @@ mod saas_billing {
 
     /// Validate a coupon code
     pub async fn validate_coupon(
-        user: AuthUser,
+        _user: AuthUser,
         State(state): State<AppState>,
         Json(req): Json<ValidateCouponRequest>,
     ) -> Result<Json<CouponInfo>, (StatusCode, String)> {

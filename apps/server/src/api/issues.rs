@@ -1366,7 +1366,7 @@ pub async fn get_stats_by_project(
     }
 
     let project_ids: Vec<String> = projects.iter().map(|p| p.id.clone()).collect();
-    let project_map: HashMap<String, &crate::db::models::Project> =
+    let _project_map: HashMap<String, &crate::db::models::Project> =
         projects.iter().map(|p| (p.id.clone(), p)).collect();
 
     // Get stats for all projects

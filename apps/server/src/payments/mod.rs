@@ -2,7 +2,7 @@ pub mod challenge;
 pub mod store;
 pub mod verify;
 
-use axum::{body::Body, extract::State, http::Request, middleware::Next, response::Response};
+use axum::{body::Body, http::Request, middleware::Next, response::Response};
 use serde::Deserialize;
 
 use crate::{AppError, AppState};
@@ -225,7 +225,7 @@ pub async fn apply_capacity_grant_in_tx(
 /// - FeatureAccess: verifies, applies, and SHORT-CIRCUITS (skips tier guard)
 /// - CapacityGrant: verifies, applies capacity to org, then FALLS THROUGH to handler
 pub async fn x402_payment_middleware(
-    State(state): State<AppState>,
+    state: AppState,
     req: Request<Body>,
     next: Next,
 ) -> Response {

@@ -309,7 +309,7 @@ impl StripeClient {
 
     /// Check if a payment intent succeeded
     pub async fn get_payment_intent(&self, payment_intent_id: &str) -> Result<PaymentIntent> {
-        let id = payment_intent_id.parse()?;
+        let id: stripe::PaymentIntentId = payment_intent_id.parse()?;
         let client = self.client.clone();
         stripe_retry(|| {
             let c = client.clone();
@@ -682,7 +682,7 @@ impl StripeClient {
                 percent_off: coupon.percent_off,
                 amount_off: coupon.amount_off,
                 currency: coupon.currency.map(|c| c.to_string()),
-                duration: format!("{}", coupon.duration),
+                duration: coupon.duration.map(|d| format!("{:?}", d)).unwrap_or_default(),
                 duration_in_months: coupon.duration_in_months.map(|m| m as i32),
                 valid: coupon.valid.unwrap_or(false),
                 name: coupon.name.clone(),
@@ -705,7 +705,7 @@ impl StripeClient {
             percent_off: coupon.percent_off,
             amount_off: coupon.amount_off,
             currency: coupon.currency.map(|c| c.to_string()),
-            duration: format!("{}", coupon.duration),
+            duration: coupon.duration.map(|d| format!("{:?}", d)).unwrap_or_default(),
             duration_in_months: coupon.duration_in_months.map(|m| m as i32),
             valid: coupon.valid.unwrap_or(false),
             name: coupon.name,

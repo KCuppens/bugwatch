@@ -195,7 +195,12 @@ export class HttpTransport implements Transport {
             if (this.debug) {
               console.warn(`[Bugwatch] Rate limited. Backing off for ${backoffMs}ms`);
             }
-            return; // Drop event, don't retry during rate limit
+            try {
+              this.onDropped?.(event.event_id, "rate_limited");
+            } catch {
+              /* */
+            }
+            return;
           }
 
           if (isRetryableStatus(response.status) && attempt < MAX_RETRIES) {
@@ -207,6 +212,11 @@ export class HttpTransport implements Transport {
           if (this.debug) {
             const errorText = await response.text().catch(() => "");
             console.error("[Bugwatch] Failed to send event:", response.status, errorText);
+          }
+          try {
+            this.onDropped?.(event.event_id, "network_error");
+          } catch {
+            /* */
           }
           return;
         }

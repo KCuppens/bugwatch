@@ -6,11 +6,10 @@ use axum::{
     routing::get,
     Router,
 };
-use chrono;
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tower_http::{
-    cors::{Any, CorsLayer},
+    cors::CorsLayer,
     trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer},
 };
 use tracing::info;
@@ -495,10 +494,12 @@ fn create_app(state: AppState) -> Router {
     // builds omit it entirely (it would be a runtime no-op anyway because
     // x402_enabled is false and deployment_mode is self-hosted).
     #[cfg(feature = "saas")]
-    let router = router.layer(axum::middleware::from_fn_with_state(
-        state.clone(),
-        crate::payments::x402_payment_middleware,
-    ));
+    let router = {
+        let s = state.clone();
+        router.layer(axum::middleware::from_fn(move |req, next| {
+            crate::payments::x402_payment_middleware(s.clone(), req, next)
+        }))
+    };
 
     router
         .with_state(state)

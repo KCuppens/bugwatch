@@ -1,4 +1,4 @@
-use axum::{extract::State, http::StatusCode};
+use axum::http::StatusCode;
 
 use crate::{
     auth::AuthUser,

@@ -6,5 +6,4 @@ pub mod retention;
 
 pub use alerting::AlertingService;
 pub use monitoring::HealthCheckWorker;
-pub use notifications::NotificationService;
 pub use retention::RetentionService;

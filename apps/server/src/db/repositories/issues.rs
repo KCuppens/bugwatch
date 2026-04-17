@@ -1,6 +1,6 @@
 use crate::db::{models::Issue, DbPool};
 use anyhow::Result;
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use uuid::Uuid;
 
 pub struct IssueRepository;
