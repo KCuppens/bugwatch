@@ -4,10 +4,9 @@ import platform
 import socket
 import sys
 import threading
-import traceback
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from .fingerprint import fingerprint_from_exception
 from .scrubbing import scrub_event
@@ -36,7 +35,7 @@ _ctx_user: contextvars.ContextVar[Optional[UserContext]] = contextvars.ContextVa
 _ctx_request: contextvars.ContextVar[Optional[RequestContext]] = contextvars.ContextVar(
     "bugwatch_request", default=None
 )
-_ctx_breadcrumbs: contextvars.ContextVar[Optional[List[Breadcrumb]]] = contextvars.ContextVar(
+_ctx_breadcrumbs: contextvars.ContextVar[Optional[list[Breadcrumb]]] = contextvars.ContextVar(
     "bugwatch_breadcrumbs", default=None
 )
 
@@ -59,11 +58,11 @@ class BugwatchClient:
         self.options = options
         self.transport = transport or HttpTransport(options)
         self._lock = threading.Lock()
-        self._breadcrumbs: List[Breadcrumb] = []
+        self._breadcrumbs: list[Breadcrumb] = []
         self._user: Optional[UserContext] = None
         self._request: Optional[RequestContext] = None
-        self._tags: Dict[str, str] = {}
-        self._extra: Dict[str, Any] = {}
+        self._tags: dict[str, str] = {}
+        self._extra: dict[str, Any] = {}
 
         # Set default tags
         self._tags["runtime"] = "python"
@@ -81,8 +80,8 @@ class BugwatchClient:
         self,
         error: Optional[BaseException] = None,
         level: Level = Level.ERROR,
-        tags: Optional[Dict[str, str]] = None,
-        extra: Optional[Dict[str, Any]] = None,
+        tags: Optional[dict[str, str]] = None,
+        extra: Optional[dict[str, Any]] = None,
     ) -> str:
         """
         Capture an exception and send it to Bugwatch.
@@ -159,8 +158,8 @@ class BugwatchClient:
         self,
         message: str,
         level: Level = Level.INFO,
-        tags: Optional[Dict[str, str]] = None,
-        extra: Optional[Dict[str, Any]] = None,
+        tags: Optional[dict[str, str]] = None,
+        extra: Optional[dict[str, Any]] = None,
     ) -> str:
         """
         Capture a message and send it to Bugwatch.
@@ -204,7 +203,7 @@ class BugwatchClient:
         category: str,
         message: str,
         level: Level = Level.INFO,
-        data: Optional[Dict[str, Any]] = None,
+        data: Optional[dict[str, Any]] = None,
         breadcrumb_type: str = "default",
     ) -> None:
         """
@@ -311,8 +310,8 @@ class BugwatchClient:
         level: Level,
         exception: Optional[ExceptionInfo] = None,
         message: Optional[str] = None,
-        tags: Optional[Dict[str, str]] = None,
-        extra: Optional[Dict[str, Any]] = None,
+        tags: Optional[dict[str, str]] = None,
+        extra: Optional[dict[str, Any]] = None,
     ) -> ErrorEvent:
         """Create an error event."""
         event_id = uuid.uuid4().hex
@@ -439,7 +438,7 @@ class BugwatchClient:
 
         return True
 
-    def _extract_locals(self, local_vars: dict) -> Dict[str, Any]:
+    def _extract_locals(self, local_vars: dict) -> dict[str, Any]:
         """Extract and serialize local variables safely."""
         result = {}
         max_len = self.options.max_value_length

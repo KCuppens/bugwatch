@@ -1,7 +1,6 @@
 """Tests for fingerprint generation."""
-import pytest
 
-from bugwatch.fingerprint import generate_fingerprint, fingerprint_from_exception
+from bugwatch.fingerprint import fingerprint_from_exception, generate_fingerprint
 from bugwatch.types import ExceptionInfo, StackFrame
 
 

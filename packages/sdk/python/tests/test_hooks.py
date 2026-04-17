@@ -3,14 +3,12 @@ import logging
 import os
 import sys
 import threading
-from unittest.mock import MagicMock, patch
 
 import pytest
 
 import bugwatch
 from bugwatch import Level
 from bugwatch.integrations.logging import BugwatchHandler, setup_logging
-from bugwatch.transport import NoopTransport
 
 
 class TestEnvironmentVariables:
@@ -131,10 +129,7 @@ class TestThreadingHook:
         """Store original threading hook if available."""
         # Make sure any previous bugwatch is closed first
         bugwatch.close()
-        if sys.version_info >= (3, 8):
-            self.original_threading_hook = threading.excepthook
-        else:
-            self.original_threading_hook = None
+        self.original_threading_hook = threading.excepthook
 
     def teardown_method(self):
         """Restore original hook and clean up."""

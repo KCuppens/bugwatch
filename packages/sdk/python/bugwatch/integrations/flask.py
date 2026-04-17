@@ -1,7 +1,6 @@
 """Flask integration for Bugwatch Python SDK."""
-import sys
 from functools import wraps
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Optional
 
 from .. import get_client, init
 from ..types import Level, RequestContext, UserContext

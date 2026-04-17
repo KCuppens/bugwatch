@@ -2,7 +2,7 @@
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 
 class Level(str, Enum):
@@ -22,11 +22,11 @@ class StackFrame:
     lineno: int
     colno: Optional[int] = None
     context_line: Optional[str] = None
-    pre_context: Optional[List[str]] = None
-    post_context: Optional[List[str]] = None
+    pre_context: Optional[list[str]] = None
+    post_context: Optional[list[str]] = None
     in_app: bool = True
     module: Optional[str] = None
-    vars: Optional[Dict[str, Any]] = None  # Local variables at this frame
+    vars: Optional[dict[str, Any]] = None  # Local variables at this frame
 
 
 @dataclass
@@ -34,7 +34,7 @@ class ExceptionInfo:
     """Information about an exception."""
     type: str
     value: str
-    stacktrace: List[StackFrame] = field(default_factory=list)
+    stacktrace: list[StackFrame] = field(default_factory=list)
     module: Optional[str] = None
 
 
@@ -46,7 +46,7 @@ class Breadcrumb:
     type: str = "default"  # Breadcrumb type: default, http, navigation, error, etc.
     level: Level = Level.INFO
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    data: Optional[Dict[str, Any]] = None
+    data: Optional[dict[str, Any]] = None
 
 
 @dataclass
@@ -56,7 +56,7 @@ class UserContext:
     email: Optional[str] = None
     username: Optional[str] = None
     ip_address: Optional[str] = None
-    extra: Optional[Dict[str, Any]] = None
+    extra: Optional[dict[str, Any]] = None
 
 
 @dataclass
@@ -64,11 +64,11 @@ class RequestContext:
     """HTTP request information for error context."""
     url: Optional[str] = None
     method: Optional[str] = None
-    headers: Optional[Dict[str, str]] = None
+    headers: Optional[dict[str, str]] = None
     query_string: Optional[str] = None
-    data: Optional[Dict[str, Any]] = None
-    cookies: Optional[Dict[str, str]] = None
-    env: Optional[Dict[str, str]] = None
+    data: Optional[dict[str, Any]] = None
+    cookies: Optional[dict[str, str]] = None
+    env: Optional[dict[str, str]] = None
 
 
 @dataclass
@@ -98,9 +98,9 @@ class ErrorEvent:
     runtime: Optional[RuntimeInfo] = None
     request: Optional[RequestContext] = None
     user: Optional[UserContext] = None
-    tags: Dict[str, str] = field(default_factory=dict)
-    extra: Dict[str, Any] = field(default_factory=dict)
-    breadcrumbs: List[Breadcrumb] = field(default_factory=list)
+    tags: dict[str, str] = field(default_factory=dict)
+    extra: dict[str, Any] = field(default_factory=dict)
+    breadcrumbs: list[Breadcrumb] = field(default_factory=list)
     fingerprint: Optional[str] = None
     environment: Optional[str] = None
     release: Optional[str] = None

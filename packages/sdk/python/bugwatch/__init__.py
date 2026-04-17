@@ -22,12 +22,12 @@ Manual capture (optional)::
     except Exception:
         bugwatch.capture_exception()
 """
-import atexit
 import asyncio
+import atexit
 import os
 import sys
 import threading
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Optional
 
 from .client import BugwatchClient, request_scope
 from .fingerprint import fingerprint_from_exception, generate_fingerprint
@@ -223,10 +223,9 @@ def _install_excepthook():
 def _install_threading_hook():
     """Install threading.excepthook (Python 3.8+)."""
     global _original_threading_excepthook
-    if sys.version_info >= (3, 8):
-        if threading.excepthook is not _bugwatch_threading_excepthook:
-            _original_threading_excepthook = threading.excepthook
-            threading.excepthook = _bugwatch_threading_excepthook
+    if threading.excepthook is not _bugwatch_threading_excepthook:
+        _original_threading_excepthook = threading.excepthook
+        threading.excepthook = _bugwatch_threading_excepthook
 
 
 def _install_asyncio_hook():
@@ -530,8 +529,8 @@ def close():
 def capture_exception(
     error: Optional[BaseException] = None,
     level: Level = Level.ERROR,
-    tags: Optional[Dict[str, str]] = None,
-    extra: Optional[Dict[str, Any]] = None,
+    tags: Optional[dict[str, str]] = None,
+    extra: Optional[dict[str, Any]] = None,
 ) -> str:
     """
     Capture an exception and send it to Bugwatch.
@@ -554,8 +553,8 @@ def capture_exception(
 def capture_message(
     message: str,
     level: Level = Level.INFO,
-    tags: Optional[Dict[str, str]] = None,
-    extra: Optional[Dict[str, Any]] = None,
+    tags: Optional[dict[str, str]] = None,
+    extra: Optional[dict[str, Any]] = None,
 ) -> str:
     """
     Capture a message and send it to Bugwatch.
@@ -579,7 +578,7 @@ def add_breadcrumb(
     category: str,
     message: str,
     level: Level = Level.INFO,
-    data: Optional[Dict[str, Any]] = None,
+    data: Optional[dict[str, Any]] = None,
 ) -> None:
     """
     Add a breadcrumb to the trail.

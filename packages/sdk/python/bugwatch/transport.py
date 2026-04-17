@@ -4,7 +4,7 @@ import logging
 from abc import ABC, abstractmethod
 from dataclasses import asdict
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -72,7 +72,7 @@ class HttpTransport(Transport):
             logger.error(f"Error sending event: {e}")
             return False
 
-    def _serialize_event(self, event: ErrorEvent) -> Dict[str, Any]:
+    def _serialize_event(self, event: ErrorEvent) -> dict[str, Any]:
         """Serialize an event to a JSON-compatible dict."""
         from enum import Enum
         data = asdict(event)
@@ -107,11 +107,11 @@ class AsyncHttpTransport(Transport):
             try:
                 import httpx
                 self._client = httpx.AsyncClient(timeout=10.0)
-            except ImportError:
+            except ImportError as err:
                 raise ImportError(
                     "httpx is required for async transport. "
                     "Install it with: pip install bugwatch-sdk[async]"
-                )
+                ) from err
         return self._client
 
     async def send_async(self, event: ErrorEvent) -> bool:
@@ -157,7 +157,7 @@ class AsyncHttpTransport(Transport):
             loop = asyncio.get_event_loop()
             if loop.is_running():
                 # If we're in an async context, schedule as a task
-                future = asyncio.ensure_future(self.send_async(event))
+                asyncio.ensure_future(self.send_async(event))
                 return True  # Optimistic return
             else:
                 return loop.run_until_complete(self.send_async(event))

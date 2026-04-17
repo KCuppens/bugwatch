@@ -1,6 +1,5 @@
 """Django integration for Bugwatch Python SDK."""
-import sys
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Optional
 
 from .. import get_client, init
 from ..types import Level, RequestContext, UserContext
@@ -235,4 +234,3 @@ def _extract_request_context(request: Any) -> Optional[RequestContext]:
 # Backwards compatibility - import CeleryIntegration from standalone module
 # This allows existing Django users to continue using:
 #   from bugwatch.integrations.django import CeleryIntegration
-from .celery import CeleryIntegration

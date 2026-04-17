@@ -1,10 +1,10 @@
 """Framework integrations for Bugwatch Python SDK."""
+from .celery import CeleryIntegration, init_celery
 from .django import BugwatchMiddleware as DjangoBugwatchMiddleware
 from .django import bugwatch_error_handler as django_error_handler
-from .flask import BugwatchFlask, init_flask
 from .fastapi import BugwatchFastAPI, init_fastapi
+from .flask import BugwatchFlask, init_flask
 from .logging import BugwatchHandler, setup_logging
-from .celery import CeleryIntegration, init_celery
 
 __all__ = [
     # Celery

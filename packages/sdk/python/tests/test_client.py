@@ -1,7 +1,6 @@
 """Tests for Bugwatch client."""
-import pytest
 
-from bugwatch import init, get_client, capture_exception, capture_message
+from bugwatch import capture_exception, capture_message, get_client, init
 from bugwatch.client import BugwatchClient
 from bugwatch.transport import NoopTransport
 from bugwatch.types import BugwatchOptions, Level, UserContext
@@ -51,7 +50,7 @@ class TestBugwatchClient:
         error = RuntimeError("explicit error")
         error.__traceback__ = None  # Simulate no traceback
 
-        event_id = self.client.capture_exception(error)
+        self.client.capture_exception(error)
 
         # Even without traceback, it should capture
         assert len(self.transport.events) == 1
