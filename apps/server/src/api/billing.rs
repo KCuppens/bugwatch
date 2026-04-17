@@ -1297,6 +1297,25 @@ mod saas_billing {
             .as_ref()
             .ok_or((StatusCode::BAD_REQUEST, "No Stripe customer".to_string()))?;
 
+        // IDOR guard: verify the payment method belongs to this org's Stripe customer
+        // before setting it as default (prevents cross-customer payment method hijacking).
+        let pm = stripe
+            .get_payment_method(&req.payment_method_id)
+            .await
+            .map_err(|_| {
+                (
+                    StatusCode::NOT_FOUND,
+                    "Payment method not found".to_string(),
+                )
+            })?;
+        let pm_customer = pm.customer.as_ref().map(|c| c.id().to_string());
+        if pm_customer.as_deref() != Some(customer_id.as_str()) {
+            return Err((
+                StatusCode::NOT_FOUND,
+                "Payment method not found".to_string(),
+            ));
+        }
+
         stripe
             .set_default_payment_method(customer_id, &req.payment_method_id)
             .await
@@ -1325,6 +1344,30 @@ mod saas_billing {
             return Err((
                 StatusCode::FORBIDDEN,
                 "Only owner can delete payment methods".to_string(),
+            ));
+        }
+
+        let customer_id = org
+            .stripe_customer_id
+            .as_ref()
+            .ok_or((StatusCode::BAD_REQUEST, "No Stripe customer".to_string()))?;
+
+        // IDOR guard: verify the payment method belongs to this org's Stripe customer
+        // before detaching (prevents cross-customer payment method deletion).
+        let pm = stripe
+            .get_payment_method(&payment_method_id)
+            .await
+            .map_err(|_| {
+                (
+                    StatusCode::NOT_FOUND,
+                    "Payment method not found".to_string(),
+                )
+            })?;
+        let pm_customer = pm.customer.as_ref().map(|c| c.id().to_string());
+        if pm_customer.as_deref() != Some(customer_id.as_str()) {
+            return Err((
+                StatusCode::NOT_FOUND,
+                "Payment method not found".to_string(),
             ));
         }
 

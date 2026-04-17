@@ -10,11 +10,11 @@ use stripe::{
 
 use crate::config::Config;
 
-/// Generate a stable idempotency key prefix seeded from a logical identifier.
-/// Using a UUID suffix ensures uniqueness per call-site invocation, while the
-/// prefix makes logs easier to correlate with the triggering operation.
+/// Generate a stable idempotency key for a Stripe operation.
+/// The prefix encodes all operation inputs so the same logical operation always
+/// produces the same key — Stripe deduplicates retries within its 24-hour window.
 fn idempotency_key(prefix: &str) -> String {
-    format!("{}_{}", prefix, uuid::Uuid::new_v4())
+    prefix.to_string()
 }
 
 /// Retry a Stripe API call on transient errors (5xx, rate limit, network).
@@ -588,6 +588,18 @@ impl StripeClient {
             let i = id.clone();
             let p = params.clone();
             async move { Customer::update(&c, &i, p).await }
+        })
+        .await
+    }
+
+    /// Retrieve a single payment method by ID
+    pub async fn get_payment_method(&self, payment_method_id: &str) -> Result<PaymentMethod> {
+        let id: PaymentMethodId = payment_method_id.parse()?;
+        let client = self.client.clone();
+        stripe_retry(|| {
+            let c = client.clone();
+            let i = id.clone();
+            async move { PaymentMethod::retrieve(&c, &i, &[]).await }
         })
         .await
     }
