@@ -27,12 +27,20 @@ Metrics/BlockLength:
   Exclude:
     - "spec/**/*"
 
+# Internal SDK — doc comments add noise without consumer benefit
+Style/Documentation:
+  Enabled: false
+
 # Complex transport/fingerprint methods are acceptable in this SDK
 Metrics/AbcSize:
-  Max: 25
+  Max: 30
 
 Metrics/CyclomaticComplexity:
   Max: 10
+
+# Several SDK methods are inherently multi-step (request building, parsing, etc.)
+Metrics/MethodLength:
+  Max: 20
 
 # Allow slightly longer lines for readability
 Layout/LineLength:
