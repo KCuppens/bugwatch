@@ -11,10 +11,10 @@
 -- The application-layer upsert now uses ON CONFLICT (user_id) DO UPDATE to
 -- atomically replace the old token when a new reset is requested.
 
--- Add a UNIQUE constraint on user_id (one row per user in the table).
--- Keep the most-recently-expiring token per user; break ties by id (lexicographic).
--- Using a CTE with ROW_NUMBER guarantees exactly one row is kept even when
--- two rows share the same expires_at value (strict < would leave both in that case).
+-- Deduplicate: keep the newest token per user; remove extras.
+-- Safe to re-run: once at most one row per user_id exists the DELETE is a no-op.
+-- Runs outside the DO $$ block because it is a DML statement, not DDL — PostgreSQL
+-- allows mixing DML and DDL in the same migration file without an explicit transaction.
 DELETE FROM password_reset_tokens
 WHERE id IN (
     SELECT id FROM (

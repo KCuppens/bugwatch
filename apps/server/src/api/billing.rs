@@ -624,10 +624,10 @@ mod saas_billing {
                 (StatusCode::INTERNAL_SERVER_ERROR, "Failed to create checkout session. Please try again.".to_string())
             })?;
 
-        let url = session.url.ok_or((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "No checkout URL".to_string(),
-        ))?;
+        let url = session.url.ok_or_else(|| {
+            tracing::error!(session_id = %session.id, org_id = %org.id, "Stripe returned checkout session with no URL");
+            (StatusCode::INTERNAL_SERVER_ERROR, "Failed to create checkout session. Please try again.".to_string())
+        })?;
 
         tracing::info!(
             org_id = %org.id,
@@ -752,11 +752,11 @@ mod saas_billing {
                         )
                     })?;
 
+                // Extract common subscription item fields once to avoid repeated .first() calls
+                let sub_item = stripe_subscription.items.data.first();
+
                 // Extract tier from the subscription price ID or session metadata
-                let price_id = stripe_subscription
-                    .items
-                    .data
-                    .first()
+                let price_id = sub_item
                     .and_then(|item| item.price.as_ref())
                     .map(|price| price.id.to_string());
                 let tier = price_id
@@ -778,18 +778,10 @@ mod saas_billing {
                     })?;
 
                 // Calculate seats from quantity
-                let seats = stripe_subscription
-                    .items
-                    .data
-                    .first()
-                    .and_then(|item| item.quantity)
-                    .unwrap_or(1) as i32;
+                let seats = sub_item.and_then(|item| item.quantity).unwrap_or(1) as i32;
 
                 // Determine billing interval
-                let billing_interval = stripe_subscription
-                    .items
-                    .data
-                    .first()
+                let billing_interval = sub_item
                     .and_then(|item| item.price.as_ref())
                     .and_then(|price| price.recurring.as_ref())
                     .map(|r| match r.interval {
@@ -1345,8 +1337,6 @@ mod saas_billing {
                 tracing::warn!(org_id = %org.id, new_seats = req.seats, "Seat update rejected: member count exceeds new seat value (concurrent add_member race)");
                 (StatusCode::CONFLICT, "Cannot reduce seats below current member count.".to_string())
             })?;
-        let _ = updated_org;
-
         Ok(Json(ChangePlanResponse {
             success: true,
             tier: org.tier,
@@ -1530,10 +1520,13 @@ mod saas_billing {
             .as_ref()
             .ok_or((StatusCode::BAD_REQUEST, "No Stripe customer".to_string()))?;
 
-        let intent = stripe
-            .create_setup_intent(customer_id)
-            .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        let intent = stripe.create_setup_intent(customer_id).await.map_err(|e| {
+            tracing::error!(org_id = %org.id, "Failed to create setup intent: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to create payment setup. Please try again.".to_string(),
+            )
+        })?;
 
         let client_secret = intent.client_secret.ok_or((
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -1593,7 +1586,10 @@ mod saas_billing {
         stripe
             .set_default_payment_method(customer_id, &req.payment_method_id)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            .map_err(|e| {
+                tracing::error!(org_id = %org.id, pm_id = %req.payment_method_id, "Failed to set default payment method: {}", e);
+                (StatusCode::INTERNAL_SERVER_ERROR, "Failed to update default payment method. Please try again.".to_string())
+            })?;
 
         Ok(Json(serde_json::json!({ "success": true })))
     }
@@ -1648,7 +1644,10 @@ mod saas_billing {
         stripe
             .detach_payment_method(&payment_method_id)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            .map_err(|e| {
+                tracing::error!(org_id = %org.id, pm_id = %payment_method_id, "Failed to detach payment method: {}", e);
+                (StatusCode::INTERNAL_SERVER_ERROR, "Failed to remove payment method. Please try again.".to_string())
+            })?;
 
         Ok(Json(serde_json::json!({ "success": true })))
     }
@@ -1727,10 +1726,13 @@ mod saas_billing {
             .as_ref()
             .ok_or((StatusCode::NOT_FOUND, "No billing setup".to_string()))?;
 
-        let tax_ids = stripe
-            .list_tax_ids(customer_id)
-            .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        let tax_ids = stripe.list_tax_ids(customer_id).await.map_err(|e| {
+            tracing::error!(org_id = %org.id, "Failed to list tax IDs: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to retrieve tax information. Please try again.".to_string(),
+            )
+        })?;
 
         Ok(Json(TaxIdsResponse { tax_ids }))
     }

@@ -37,7 +37,12 @@ where
 
     for attempt in 0..=max_retries {
         match op().await {
-            Ok(val) => return Ok(val),
+            Ok(val) => {
+                if attempt > 0 {
+                    tracing::info!(attempt, "Stripe call succeeded after {} retries", attempt);
+                }
+                return Ok(val);
+            }
             Err(e) => {
                 // Only retry on server errors, rate limits, or network issues
                 let retryable = matches!(
@@ -287,8 +292,12 @@ impl StripeClient {
         let mut update_params = stripe::UpdateSubscriptionItem::new();
         update_params.quantity = Some(new_seats as u64);
 
+        let ikey = idempotency_key(&format!("update_seats_{}_{}", subscription_id, new_seats));
+        let idem_client = client
+            .clone()
+            .with_strategy(stripe::RequestStrategy::Idempotent(ikey));
         stripe_retry(|| {
-            let c = client.clone();
+            let c = idem_client.clone();
             let iid = item_id.clone();
             let p = update_params.clone();
             async move { stripe::SubscriptionItem::update(&c, &iid, p).await }
@@ -414,7 +423,9 @@ impl StripeClient {
         .await?;
 
         let new_unit_amount = new_price.unit_amount.unwrap_or(0);
-        let new_amount = new_unit_amount * seats;
+        let new_amount = new_unit_amount
+            .checked_mul(seats)
+            .ok_or_else(|| anyhow!("Seat count overflow computing proration amount"))?;
 
         Ok(ProrationPreview {
             current_amount_cents: current_amount,
@@ -454,7 +465,7 @@ impl StripeClient {
             .map(|inv| InvoiceSummary {
                 id: inv.id.to_string(),
                 number: inv.number,
-                status: inv.status.map(|s| format!("{}", s)),
+                status: inv.status.map(|s| s.to_string()),
                 amount_due: inv.amount_due,
                 amount_paid: inv.amount_paid,
                 currency: inv.currency.map(|c| c.to_string()),
@@ -513,7 +524,7 @@ impl StripeClient {
             id: invoice.id.to_string(),
             customer_id,
             number: invoice.number,
-            status: invoice.status.map(|s| format!("{}", s)),
+            status: invoice.status.map(|s| s.to_string()),
             amount_due: invoice.amount_due,
             amount_paid: invoice.amount_paid,
             amount_remaining: invoice.amount_remaining,

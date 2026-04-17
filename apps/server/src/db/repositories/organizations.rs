@@ -130,7 +130,9 @@ impl OrganizationRepository {
     }
 
     /// Invalidate the org-user cache. Call after any mutation to organizations.
-    fn clear_org_cache() {
+    /// Clears all entries (not per-org) — intentional trade-off: targeted eviction
+    /// would require a reverse user→org index. Acceptable for current write volume.
+    pub(crate) fn clear_org_cache() {
         org_user_cache().clear();
         tracing::debug!("org_user_cache cleared");
     }
@@ -565,8 +567,8 @@ impl UsageRepository {
         pool: &DbPool,
         organization_id: &str,
         metric: &str,
-        period_start: &str,
-        period_end: &str,
+        period_start: chrono::DateTime<chrono::Utc>,
+        period_end: chrono::DateTime<chrono::Utc>,
         amount: i32,
     ) -> Result<UsageRecord> {
         let id = Uuid::new_v4().to_string();
