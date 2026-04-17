@@ -1,5 +1,5 @@
 # Stage 1: Build the Rust binary (self-hosted, no --features saas)
-FROM rust:1.82-bookworm AS builder
+FROM rust:1.85-bookworm AS builder
 
 WORKDIR /usr/src/bugwatch/apps/server
 
