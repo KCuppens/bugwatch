@@ -43,6 +43,38 @@ impl OrganizationRepository {
         .map_err(Into::into)
     }
 
+    /// Atomically create an organization only if the owner has no existing organization.
+    /// Returns Ok(Some(org)) on creation, Ok(None) if the owner already has one.
+    /// Prevents TOCTOU races in concurrent create_organization or create_checkout calls.
+    pub async fn create_if_owner_not_exists(
+        pool: &DbPool,
+        owner_id: &str,
+        name: &str,
+        slug: &str,
+    ) -> Result<Option<Organization>> {
+        let id = Uuid::new_v4().to_string();
+
+        let result = sqlx::query_as::<_, Organization>(
+            r#"
+            INSERT INTO organizations (id, name, slug, owner_id, created_at, updated_at)
+            SELECT $1, $2, $3, $4, now(), now()
+            WHERE NOT EXISTS (
+                SELECT 1 FROM organizations WHERE owner_id = $4
+            )
+            RETURNING *
+            "#,
+        )
+        .bind(&id)
+        .bind(name)
+        .bind(slug)
+        .bind(owner_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| anyhow::anyhow!(e))?;
+
+        Ok(result)
+    }
+
     /// Find organization by ID
     pub async fn find_by_id(pool: &DbPool, id: &str) -> Result<Option<Organization>> {
         sqlx::query_as::<_, Organization>("SELECT * FROM organizations WHERE id = $1")
@@ -153,6 +185,54 @@ impl OrganizationRepository {
         .await?;
         org_user_cache().clear();
         Ok(result)
+    }
+
+    /// Atomically activate a subscription only if it has not already been recorded.
+    /// Returns Ok(true) if the row was updated, Ok(false) if already processed.
+    /// Prevents concurrent verify_checkout calls from double-processing the same session.
+    pub async fn activate_subscription_if_new(
+        pool: &DbPool,
+        id: &str,
+        subscription_id: &str,
+        tier: &str,
+        seats: i32,
+        subscription_status: &str,
+        billing_interval: Option<&str>,
+        current_period_start: Option<chrono::DateTime<chrono::Utc>>,
+        current_period_end: Option<chrono::DateTime<chrono::Utc>>,
+        cancel_at_period_end: bool,
+    ) -> Result<bool> {
+        let now = chrono::Utc::now();
+        let result = sqlx::query(
+            r#"
+            UPDATE organizations SET
+                tier = $1,
+                seats = $2,
+                stripe_subscription_id = $3,
+                subscription_status = $4,
+                billing_interval = $5,
+                current_period_start = $6,
+                current_period_end = $7,
+                cancel_at_period_end = $8,
+                updated_at = $9
+            WHERE id = $10
+              AND (stripe_subscription_id IS NULL OR stripe_subscription_id IS DISTINCT FROM $3)
+            "#,
+        )
+        .bind(tier)
+        .bind(seats)
+        .bind(subscription_id)
+        .bind(subscription_status)
+        .bind(billing_interval)
+        .bind(current_period_start)
+        .bind(current_period_end)
+        .bind(cancel_at_period_end)
+        .bind(&now)
+        .bind(id)
+        .execute(pool)
+        .await?;
+        org_user_cache().clear();
+        Ok(result.rows_affected() > 0)
     }
 
     /// Set Stripe customer ID
@@ -339,6 +419,40 @@ impl OrganizationMemberRepository {
         .map_err(Into::into)
     }
 
+    /// Atomically add a member only if the current seat count is below the seat limit.
+    /// Returns Ok(Some(member)) on success, Ok(None) if the seat limit is already reached.
+    /// Prevents TOCTOU races where concurrent add_member calls both pass the seat check.
+    pub async fn add_if_seat_available(
+        pool: &DbPool,
+        organization_id: &str,
+        user_id: &str,
+        role: &str,
+        seat_limit: i32,
+    ) -> Result<Option<OrganizationMember>> {
+        let id = Uuid::new_v4().to_string();
+        let now = chrono::Utc::now();
+
+        let result = sqlx::query_as::<_, OrganizationMember>(
+            r#"
+            INSERT INTO organization_members (id, organization_id, user_id, role, created_at)
+            SELECT $1, $2, $3, $4, $5
+            WHERE (SELECT COUNT(*) FROM organization_members WHERE organization_id = $2) < $6
+            RETURNING *
+            "#,
+        )
+        .bind(&id)
+        .bind(organization_id)
+        .bind(user_id)
+        .bind(role)
+        .bind(&now)
+        .bind(seat_limit as i64)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| anyhow::anyhow!(e))?;
+
+        Ok(result)
+    }
+
     /// Remove a member from an organization
     pub async fn remove(pool: &DbPool, organization_id: &str, user_id: &str) -> Result<()> {
         sqlx::query("DELETE FROM organization_members WHERE organization_id = $1 AND user_id = $2")
@@ -368,6 +482,22 @@ impl OrganizationMemberRepository {
                 .fetch_one(pool)
                 .await?;
         Ok(row.0 as i32)
+    }
+
+    /// Fetch a single member row by org + user (point-lookup, avoids full list scan).
+    pub async fn find_by_user_in_org(
+        pool: &DbPool,
+        organization_id: &str,
+        user_id: &str,
+    ) -> Result<Option<OrganizationMember>> {
+        sqlx::query_as::<_, OrganizationMember>(
+            "SELECT * FROM organization_members WHERE organization_id = $1 AND user_id = $2 LIMIT 1",
+        )
+        .bind(organization_id)
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(Into::into)
     }
 
     /// Check if user is member of organization

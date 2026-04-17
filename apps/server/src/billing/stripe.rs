@@ -18,7 +18,11 @@ use crate::config::Config;
 /// Do NOT use this for operations that are intentionally non-idempotent
 /// (e.g. SetupIntent creation — each add-card flow needs a fresh intent).
 fn idempotency_key(prefix: &str) -> String {
-    debug_assert!(prefix.len() <= 255, "idempotency key exceeds 255 bytes");
+    assert!(
+        prefix.len() <= 255,
+        "idempotency key exceeds 255 bytes: {}",
+        prefix.len()
+    );
     prefix.to_string()
 }
 
@@ -30,7 +34,6 @@ where
     Fut: std::future::Future<Output = Result<T, stripe::StripeError>>,
 {
     let max_retries = 3u32;
-    let mut last_err = None;
 
     for attempt in 0..=max_retries {
         match op().await {
@@ -60,15 +63,11 @@ where
                     e
                 );
                 tokio::time::sleep(delay).await;
-                last_err = Some(e);
             }
         }
     }
 
-    Err(anyhow!(
-        "Stripe API failed after retries: {}",
-        last_err.map(|e| e.to_string()).unwrap_or_default()
-    ))
+    unreachable!("stripe_retry loop exited without returning")
 }
 
 /// Stripe client wrapper for billing operations
@@ -265,7 +264,7 @@ impl StripeClient {
         &self,
         subscription_id: &str,
         new_seats: i64,
-    ) -> Result<stripe::Subscription> {
+    ) -> Result<()> {
         let id: SubscriptionId = subscription_id.parse()?;
         let client = self.client.clone();
 
@@ -295,13 +294,7 @@ impl StripeClient {
         })
         .await?;
 
-        // Re-fetch the updated subscription
-        stripe_retry(|| {
-            let c = client.clone();
-            let i = id.clone();
-            async move { stripe::Subscription::retrieve(&c, &i, &[]).await }
-        })
-        .await
+        Ok(())
     }
 
     /// Check if a payment intent succeeded
@@ -361,8 +354,15 @@ impl StripeClient {
             ..Default::default()
         }]);
 
+        let ikey = idempotency_key(&format!(
+            "update_tier_{}_{}_{}_{}",
+            subscription_id, new_tier, annual, seats
+        ));
+        let update_client = client
+            .clone()
+            .with_strategy(stripe::RequestStrategy::Idempotent(ikey));
         stripe_retry(|| {
-            let c = client.clone();
+            let c = update_client.clone();
             let i = id.clone();
             let p = params.clone();
             async move { stripe::Subscription::update(&c, &i, p).await }
@@ -453,7 +453,7 @@ impl StripeClient {
             .map(|inv| InvoiceSummary {
                 id: inv.id.to_string(),
                 number: inv.number,
-                status: inv.status.map(|s| format!("{:?}", s)),
+                status: inv.status.map(|s| format!("{}", s)),
                 amount_due: inv.amount_due,
                 amount_paid: inv.amount_paid,
                 currency: inv.currency.map(|c| c.to_string()),
@@ -512,7 +512,7 @@ impl StripeClient {
             id: invoice.id.to_string(),
             customer_id,
             number: invoice.number,
-            status: invoice.status.map(|s| format!("{:?}", s)),
+            status: invoice.status.map(|s| format!("{}", s)),
             amount_due: invoice.amount_due,
             amount_paid: invoice.amount_paid,
             amount_remaining: invoice.amount_remaining,
@@ -566,7 +566,7 @@ impl StripeClient {
                 });
                 PaymentMethodSummary {
                     id: pm.id.to_string(),
-                    type_: "card".to_string(),
+                    type_: format!("{}", pm.type_),
                     card: card_info,
                     created: Some(pm.created.to_string()),
                 }
@@ -670,7 +670,7 @@ impl StripeClient {
                 percent_off: coupon.percent_off,
                 amount_off: coupon.amount_off,
                 currency: coupon.currency.map(|c| c.to_string()),
-                duration: format!("{:?}", coupon.duration),
+                duration: format!("{}", coupon.duration),
                 duration_in_months: coupon.duration_in_months.map(|m| m as i32),
                 valid: coupon.valid.unwrap_or(false),
                 name: coupon.name.clone(),
@@ -693,7 +693,7 @@ impl StripeClient {
             percent_off: coupon.percent_off,
             amount_off: coupon.amount_off,
             currency: coupon.currency.map(|c| c.to_string()),
-            duration: format!("{:?}", coupon.duration),
+            duration: format!("{}", coupon.duration),
             duration_in_months: coupon.duration_in_months.map(|m| m as i32),
             valid: coupon.valid.unwrap_or(false),
             name: coupon.name,
