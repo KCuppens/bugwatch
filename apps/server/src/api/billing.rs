@@ -235,15 +235,23 @@ pub async fn list_members(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    // Fetch user info for each member
     let mut response = Vec::new();
     for member in members {
-        if let Ok(Some(u)) = UserRepository::find_by_id(&state.db, &member.user_id).await {
-            response.push(MemberResponse {
+        match UserRepository::find_by_id(&state.db, &member.user_id).await {
+            Ok(Some(u)) => response.push(MemberResponse {
                 member,
                 user_email: u.email,
                 user_name: u.name,
-            });
+            }),
+            Ok(None) => tracing::warn!(
+                user_id = %member.user_id,
+                "Member has no matching user record — orphaned membership"
+            ),
+            Err(e) => tracing::error!(
+                user_id = %member.user_id,
+                "DB error fetching member user: {}",
+                e
+            ),
         }
     }
 
@@ -306,6 +314,12 @@ pub async fn add_member(
     }
 
     let role = req.role.unwrap_or_else(|| "member".to_string());
+    if !matches!(role.as_str(), "member" | "admin") {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Invalid role. Must be 'member' or 'admin'.".to_string(),
+        ));
+    }
     let member = OrganizationMemberRepository::add(&state.db, &org.id, &target_user.id, &role)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -388,6 +402,13 @@ pub async fn update_member_role(
         ));
     }
 
+    if !matches!(req.role.as_str(), "member" | "admin") {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Invalid role. Must be 'member' or 'admin'.".to_string(),
+        ));
+    }
+
     OrganizationMemberRepository::update_role(&state.db, &org.id, &member_user_id, &req.role)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -449,6 +470,13 @@ mod saas_billing {
         State(state): State<AppState>,
         Json(req): Json<CreateCheckoutRequest>,
     ) -> Result<Json<CheckoutResponse>, (StatusCode, String)> {
+        if !matches!(req.tier.as_str(), "pro" | "team") {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "Invalid tier. Must be 'pro' or 'team'.".to_string(),
+            ));
+        }
+
         let stripe = state.stripe.as_ref().ok_or((
             StatusCode::SERVICE_UNAVAILABLE,
             "Stripe not configured".to_string(),
@@ -530,10 +558,11 @@ mod saas_billing {
         let seats = req.seats.unwrap_or(1).max(1) as i64;
         let annual = req.annual.unwrap_or(false);
 
-        // Validate redirect URLs share the same origin as APP_URL to prevent open-redirect
-        let allowed_origin = state.config.app_url.trim_end_matches('/');
-        if !req.success_url.starts_with(allowed_origin)
-            || !req.cancel_url.starts_with(allowed_origin)
+        // Validate redirect URLs — require exact origin prefix with trailing slash to prevent
+        // subdomain spoofing (e.g. app.example.com.evil.com passing a bare starts_with check).
+        let allowed_origin = format!("{}/", state.config.app_url.trim_end_matches('/'));
+        if !req.success_url.starts_with(&allowed_origin)
+            || !req.cancel_url.starts_with(&allowed_origin)
         {
             return Err((StatusCode::BAD_REQUEST, "Invalid redirect URL".to_string()));
         }
@@ -720,12 +749,12 @@ mod saas_billing {
                 })?;
 
                 tracing::info!(
-                    "Verified checkout session {} for org {}: tier={}, seats={}, subscription={}",
-                    req.session_id,
-                    org.id,
-                    tier,
-                    seats,
-                    subscription_id
+                    session_id = %req.session_id,
+                    org_id = %org.id,
+                    tier = %tier,
+                    seats = seats,
+                    subscription_id = %subscription_id,
+                    "Checkout session verified successfully"
                 );
 
                 Ok(Json(VerifyCheckoutResponse {
@@ -809,9 +838,10 @@ mod saas_billing {
             "No Stripe customer. Please upgrade first.".to_string(),
         ))?;
 
-        // Validate return_url shares the same origin as APP_URL to prevent open-redirect
-        let allowed_origin = state.config.app_url.trim_end_matches('/');
-        if !req.return_url.starts_with(allowed_origin) {
+        // Validate return_url — require exact origin prefix with trailing slash to prevent
+        // subdomain spoofing (e.g. app.example.com.evil.com passing a bare starts_with check).
+        let allowed_origin = format!("{}/", state.config.app_url.trim_end_matches('/'));
+        if !req.return_url.starts_with(&allowed_origin) {
             return Err((StatusCode::BAD_REQUEST, "Invalid redirect URL".to_string()));
         }
 
@@ -854,10 +884,18 @@ mod saas_billing {
             "No active subscription".to_string(),
         ))?;
 
+        let immediately = req.immediately.unwrap_or(false);
         stripe
-            .cancel_subscription(&subscription_id, req.immediately.unwrap_or(false))
+            .cancel_subscription(&subscription_id, immediately)
             .await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+        tracing::info!(
+            org_id = %org.id,
+            subscription_id = %subscription_id,
+            immediately = immediately,
+            "Subscription cancelled"
+        );
 
         Ok(StatusCode::NO_CONTENT)
     }
@@ -888,7 +926,21 @@ mod saas_billing {
                     .with_ymd_and_hms(now.year(), now.month(), 1, 0, 0, 0)
                     .single()
                     .unwrap_or(now);
-                let end = start + chrono::Duration::days(30);
+                // Compute first day of next month as the exclusive period end
+                let next_month = if now.month() == 12 {
+                    1
+                } else {
+                    now.month() + 1
+                };
+                let next_year = if now.month() == 12 {
+                    now.year() + 1
+                } else {
+                    now.year()
+                };
+                let end = chrono::Utc
+                    .with_ymd_and_hms(next_year, next_month, 1, 0, 0, 0)
+                    .single()
+                    .unwrap_or(now);
                 (start, end)
             }
         };
@@ -937,6 +989,13 @@ mod saas_billing {
         State(state): State<AppState>,
         Json(req): Json<ChangePlanRequest>,
     ) -> Result<Json<ChangePlanResponse>, (StatusCode, String)> {
+        if !matches!(req.tier.as_str(), "pro" | "team") {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "Invalid tier. Must be 'pro' or 'team'.".to_string(),
+            ));
+        }
+
         let stripe = state.stripe.as_ref().ok_or((
             StatusCode::SERVICE_UNAVAILABLE,
             "Stripe not configured".to_string(),
@@ -1080,16 +1139,39 @@ mod saas_billing {
             "No active subscription".to_string(),
         ))?;
 
+        // Guard: cannot reduce seats below occupied count
+        let current_count = OrganizationMemberRepository::count(&state.db, &org.id)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        if req.seats < current_count {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "Cannot reduce seats below current member count ({})",
+                    current_count
+                ),
+            ));
+        }
+
         // Update in Stripe
         stripe
             .update_subscription_seats(subscription_id, req.seats as i64)
             .await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-        // Update local database
+        // Update local database — if this fails Stripe and DB are out of sync
         OrganizationRepository::update_seats(&state.db, &org.id, req.seats)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            .map_err(|e| {
+                tracing::error!(
+                    org_id = %org.id,
+                    subscription_id = %subscription_id,
+                    new_seats = req.seats,
+                    "CRITICAL: Stripe seats updated but local DB sync failed — manual reconciliation needed: {}",
+                    e
+                );
+                (StatusCode::INTERNAL_SERVER_ERROR, "Seats updated in Stripe but failed to sync locally. Please contact support.".to_string())
+            })?;
 
         Ok(Json(ChangePlanResponse {
             success: true,
@@ -1401,11 +1483,6 @@ mod saas_billing {
             "Stripe not configured".to_string(),
         ))?;
 
-        // Verify user exists (basic auth check)
-        let _org = OrganizationRepository::find_by_user(&state.db, &user.id)
-            .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
         let coupon = stripe
             .validate_coupon(&req.code)
             .await
@@ -1492,26 +1569,13 @@ mod saas_billing {
             .as_ref()
             .ok_or((StatusCode::BAD_REQUEST, "No Stripe customer".to_string()))?;
 
-        let tax_id = stripe
-            .add_tax_id(customer_id, &req.type_, &req.value)
-            .await
-            .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
-
-        // Also store in local database
-        OrganizationRepository::update_tax_info(&state.db, &org.id, Some(&req.value), None, None)
-            .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-        Ok(Json(TaxIdInfo {
-            id: tax_id.id.to_string(),
-            type_: format!("{:?}", tax_id.type_),
-            value: tax_id.value.unwrap_or_default(),
-            verification_status: tax_id
-                .verification
-                .as_ref()
-                .map(|v| format!("{:?}", v.status)),
-            country: tax_id.country,
-        }))
+        // Tax ID management requires async-stripe 0.39+ — not yet available.
+        // Return 501 so the frontend can show a "coming soon" message.
+        let _ = (stripe, customer_id, req);
+        Err((
+            StatusCode::NOT_IMPLEMENTED,
+            "Tax ID management is not yet available.".to_string(),
+        ))
     }
 
     // ============================================================================

@@ -11,9 +11,14 @@ use stripe::{
 use crate::config::Config;
 
 /// Generate a stable idempotency key for a Stripe operation.
-/// The prefix encodes all operation inputs so the same logical operation always
-/// produces the same key — Stripe deduplicates retries within its 24-hour window.
+///
+/// The prefix must encode all operation inputs so the same logical operation
+/// always produces the same key — Stripe deduplicates retries within 24 h.
+/// Keys must be ≤ 255 ASCII bytes; callers are responsible for ensuring this.
+/// Do NOT use this for operations that are intentionally non-idempotent
+/// (e.g. SetupIntent creation — each add-card flow needs a fresh intent).
 fn idempotency_key(prefix: &str) -> String {
+    debug_assert!(prefix.len() <= 255, "idempotency key exceeds 255 bytes");
     prefix.to_string()
 }
 
@@ -392,8 +397,11 @@ impl StripeClient {
             .items
             .data
             .iter()
-            .filter_map(|item| item.price.as_ref())
-            .filter_map(|price| price.unit_amount)
+            .filter_map(|item| {
+                let unit = item.price.as_ref()?.unit_amount?;
+                let qty = item.quantity.unwrap_or(1) as i64;
+                Some(unit * qty)
+            })
             .sum::<i64>();
 
         // Retrieve the actual new price from Stripe to get the real unit amount
