@@ -680,7 +680,11 @@ mod saas_billing {
         let session = stripe
             .retrieve_checkout_session(&req.session_id)
             .await
-            .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid session: {}", e)))?;
+            .map_err(|e| {
+                tracing::warn!(session_id = %req.session_id, "Stripe session retrieval failed: {}", e);
+                // Use 503 for API/network errors (retryable), 400 only for parse failures
+                (StatusCode::SERVICE_UNAVAILABLE, "Unable to verify checkout session. Please try again or contact support.".to_string())
+            })?;
 
         // Verify the session belongs to this organization's customer
         let session_customer_id = session
@@ -826,10 +830,25 @@ mod saas_billing {
                 })?;
 
                 if !updated {
-                    // A concurrent request already activated this subscription
+                    // A concurrent request already activated this subscription; re-fetch for
+                    // fresh state so the client doesn't receive a null subscription.
+                    let fresh_org = OrganizationRepository::find_by_user(&state.db, &user.id)
+                        .await
+                        .ok()
+                        .flatten();
+                    let fresh_sub = fresh_org.as_ref().map(|o| SubscriptionResponse {
+                        tier: o.tier.clone(),
+                        seats: o.seats,
+                        subscription_status: o.subscription_status.clone(),
+                        billing_interval: o.billing_interval.clone(),
+                        current_period_start: o.current_period_start,
+                        current_period_end: o.current_period_end,
+                        cancel_at_period_end: o.cancel_at_period_end,
+                        has_stripe: o.stripe_subscription_id.is_some(),
+                    });
                     return Ok(Json(VerifyCheckoutResponse {
                         success: true,
-                        subscription: None,
+                        subscription: fresh_sub,
                         message: "Subscription already active".to_string(),
                         already_processed: true,
                     }));
@@ -899,8 +918,7 @@ mod saas_billing {
             }
         }
 
-        // Otherwise, we'll default to determining by price later in the webhook
-        // For now, return None and let the caller default to "pro"
+        // No tier in session metadata; caller will attempt to derive from price ID.
         None
     }
 
@@ -980,7 +998,19 @@ mod saas_billing {
         stripe
             .cancel_subscription(&subscription_id, immediately)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            .map_err(|e| {
+                tracing::error!(
+                    org_id = %org.id,
+                    subscription_id = %subscription_id,
+                    immediately = immediately,
+                    "Stripe subscription cancellation failed: {}",
+                    e
+                );
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Failed to cancel subscription. Please try again.".to_string(),
+                )
+            })?;
 
         tracing::info!(
             org_id = %org.id,
@@ -1297,8 +1327,9 @@ mod saas_billing {
                 (StatusCode::INTERNAL_SERVER_ERROR, "Failed to update seats. Please try again.".to_string())
             })?;
 
-        // Update local database — if this fails Stripe and DB are out of sync
-        OrganizationRepository::update_seats(&state.db, &org.id, req.seats)
+        // Update local database atomically — guard rejects if a concurrent add_member
+        // slipped in between the check above and now, keeping seats >= member count.
+        let updated_org = OrganizationRepository::update_seats(&state.db, &org.id, req.seats)
             .await
             .map_err(|e| {
                 tracing::error!(
@@ -1309,7 +1340,12 @@ mod saas_billing {
                     e
                 );
                 (StatusCode::INTERNAL_SERVER_ERROR, "Seats updated in Stripe but failed to sync locally. Please contact support.".to_string())
+            })?
+            .ok_or_else(|| {
+                tracing::warn!(org_id = %org.id, new_seats = req.seats, "Seat update rejected: member count exceeds new seat value (concurrent add_member race)");
+                (StatusCode::CONFLICT, "Cannot reduce seats below current member count.".to_string())
             })?;
+        let _ = updated_org;
 
         Ok(Json(ChangePlanResponse {
             success: true,
@@ -1446,13 +1482,22 @@ mod saas_billing {
         let methods = stripe
             .list_payment_methods(customer_id)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            .map_err(|e| {
+                tracing::error!(org_id = %org.id, "Failed to list payment methods: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Failed to retrieve payment methods. Please try again.".to_string(),
+                )
+            })?;
 
         // Get default payment method from customer
-        let customer = stripe
-            .get_customer(customer_id)
-            .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        let customer = stripe.get_customer(customer_id).await.map_err(|e| {
+            tracing::error!(org_id = %org.id, "Failed to retrieve Stripe customer: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to retrieve payment methods. Please try again.".to_string(),
+            )
+        })?;
 
         let default_pm = customer
             .invoice_settings
@@ -1757,14 +1802,28 @@ mod saas_billing {
             .await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-        // WARNING: these unit prices must stay in sync with the Stripe price objects
-        // identified by STRIPE_PRICE_ID_PRO_MONTHLY / STRIPE_PRICE_ID_TEAM_MONTHLY.
-        // Update these constants if prices change in Stripe.
+        // WARNING: these unit prices must stay in sync with the Stripe price objects.
+        // Annual prices reflect the effective monthly cost (annual total / 12).
         const PRICE_PRO_MONTHLY_CENTS: i64 = 1200; // $12/seat/month
+        const PRICE_PRO_ANNUAL_MONTHLY_CENTS: i64 = 1000; // $120/seat/year ÷ 12
         const PRICE_TEAM_MONTHLY_CENTS: i64 = 2100; // $21/seat/month
+        const PRICE_TEAM_ANNUAL_MONTHLY_CENTS: i64 = 1750; // $210/seat/year ÷ 12
+        let annual = org.billing_interval.as_deref() == Some("annual");
         let monthly_cost_cents = match org.tier.as_str() {
-            "pro" => PRICE_PRO_MONTHLY_CENTS * org.seats as i64,
-            "team" => PRICE_TEAM_MONTHLY_CENTS * org.seats as i64,
+            "pro" => {
+                if annual {
+                    PRICE_PRO_ANNUAL_MONTHLY_CENTS * org.seats as i64
+                } else {
+                    PRICE_PRO_MONTHLY_CENTS * org.seats as i64
+                }
+            }
+            "team" => {
+                if annual {
+                    PRICE_TEAM_ANNUAL_MONTHLY_CENTS * org.seats as i64
+                } else {
+                    PRICE_TEAM_MONTHLY_CENTS * org.seats as i64
+                }
+            }
             _ => 0,
         };
 

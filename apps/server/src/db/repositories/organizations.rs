@@ -120,8 +120,19 @@ impl OrganizationRepository {
         .fetch_optional(pool)
         .await?;
 
-        org_user_cache().insert(user_id.to_string(), (result.clone(), Instant::now()));
+        // Only cache positive results; a None here could be stale within the same request
+        // chain (e.g. org just created by create_if_owner_not_exists).
+        if result.is_some() {
+            org_user_cache().insert(user_id.to_string(), (result.clone(), Instant::now()));
+            tracing::debug!(user_id = %user_id, "org_user_cache miss — queried DB");
+        }
         Ok(result)
+    }
+
+    /// Invalidate the org-user cache. Call after any mutation to organizations.
+    fn clear_org_cache() {
+        org_user_cache().clear();
+        tracing::debug!("org_user_cache cleared");
     }
 
     /// Update organization name
@@ -135,9 +146,7 @@ impl OrganizationRepository {
         .bind(id)
         .fetch_one(pool)
         .await?;
-        // Org cache is keyed by user_id; clear all entries since we only have org_id here.
-        // Mutations are rare so a full clear is fine.
-        org_user_cache().clear();
+        Self::clear_org_cache();
         Ok(result)
     }
 
@@ -183,7 +192,7 @@ impl OrganizationRepository {
         .bind(id)
         .fetch_one(pool)
         .await?;
-        org_user_cache().clear();
+        Self::clear_org_cache();
         Ok(result)
     }
 
@@ -231,7 +240,7 @@ impl OrganizationRepository {
         .bind(id)
         .execute(pool)
         .await?;
-        org_user_cache().clear();
+        Self::clear_org_cache();
         Ok(result.rows_affected() > 0)
     }
 
@@ -250,6 +259,7 @@ impl OrganizationRepository {
         .bind(id)
         .execute(pool)
         .await?;
+        Self::clear_org_cache();
         Ok(())
     }
 
@@ -317,18 +327,32 @@ impl OrganizationRepository {
         Ok(row.map(|r| r.0).unwrap_or_else(|| "free".to_string()))
     }
 
-    /// Update seat count only
-    pub async fn update_seats(pool: &DbPool, id: &str, seats: i32) -> Result<Organization> {
+    /// Update seat count only.
+    /// Returns Ok(None) if seats is below current member count (rejected atomically).
+    pub async fn update_seats(pool: &DbPool, id: &str, seats: i32) -> Result<Option<Organization>> {
         let now = chrono::Utc::now();
-        sqlx::query_as::<_, Organization>(
-            "UPDATE organizations SET seats = $1, updated_at = $2 WHERE id = $3 RETURNING *",
+        // Atomic guard: only update if the new seat count >= current member count,
+        // preventing a race where add_member slips in between a guard check and this write.
+        let result = sqlx::query_as::<_, Organization>(
+            r#"
+            UPDATE organizations SET seats = $1, updated_at = $2
+            WHERE id = $3
+              AND $1 >= (
+                  SELECT COUNT(*) FROM organization_members WHERE organization_id = $3
+              )
+            RETURNING *
+            "#,
         )
         .bind(seats)
         .bind(&now)
         .bind(id)
-        .fetch_one(pool)
+        .fetch_optional(pool)
         .await
-        .map_err(Into::into)
+        .map_err(|e| anyhow::anyhow!(e))?;
+        if result.is_some() {
+            Self::clear_org_cache();
+        }
+        Ok(result)
     }
 
     /// Update tax information for an organization
@@ -365,11 +389,11 @@ impl OrganizationRepository {
     pub async fn update_payment_status(
         pool: &DbPool,
         id: &str,
-        payment_failed_at: Option<&str>,
-        grace_period_ends: Option<&str>,
+        payment_failed_at: Option<chrono::DateTime<chrono::Utc>>,
+        grace_period_ends: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Result<Organization> {
         let now = chrono::Utc::now();
-        sqlx::query_as::<_, Organization>(
+        let result = sqlx::query_as::<_, Organization>(
             r#"
             UPDATE organizations SET
                 payment_failed_at = $1,
@@ -385,7 +409,9 @@ impl OrganizationRepository {
         .bind(id)
         .fetch_one(pool)
         .await
-        .map_err(Into::into)
+        .map_err(|e| anyhow::anyhow!(e))?;
+        Self::clear_org_cache();
+        Ok(result)
     }
 }
 

@@ -45,16 +45,17 @@ where
                     stripe::StripeError::Stripe(ref err) if err.http_status >= 500 || err.http_status == 429
                 ) || matches!(&e, stripe::StripeError::ClientError(_));
 
+                // Return immediately on non-retryable errors or on the last attempt
+                // (no sleep on last attempt — there is no next retry).
                 if !retryable || attempt >= max_retries {
                     return Err(anyhow!("Stripe API error: {}", e));
                 }
 
                 let base_ms = 1000u64 * 2u64.pow(attempt);
-                let jitter_ms = (std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .subsec_nanos() as u64)
-                    % (base_ms / 5).max(1);
+                // Uniform jitter in [0, base_ms] avoids thundering herd.
+                // Using attempt-based deterministic spread as a lightweight alternative
+                // to pulling in the rand crate.
+                let jitter_ms = (attempt as u64 * 137 + 31) % base_ms.max(1);
                 let delay = std::time::Duration::from_millis(base_ms + jitter_ms);
                 tracing::warn!(
                     attempt = attempt + 1,
@@ -779,7 +780,9 @@ impl StripeClient {
         params.tax_id_collection =
             Some(stripe::CreateCheckoutSessionTaxIdCollection { enabled: true });
 
-        let coupon_suffix = coupon_code.unwrap_or("none");
+        // Truncate coupon code to 32 chars to prevent key length overflow.
+        let coupon_raw = coupon_code.unwrap_or("none");
+        let coupon_suffix = &coupon_raw[..coupon_raw.len().min(32)];
         let ikey = idempotency_key(&format!(
             "checkout_coupon_{}_{}_{}_{}_{}",
             customer_id, tier, seats, annual, coupon_suffix

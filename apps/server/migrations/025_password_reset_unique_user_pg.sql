@@ -28,5 +28,14 @@ WHERE id IN (
     WHERE rn > 1
 );
 
-ALTER TABLE password_reset_tokens
-    ADD CONSTRAINT unique_user_pending_reset UNIQUE (user_id);
+-- ADD CONSTRAINT has no IF NOT EXISTS in PostgreSQL; guard with a pg_constraint check
+-- so re-running the migration (e.g. after a partial failure) is idempotent.
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'unique_user_pending_reset'
+    ) THEN
+        ALTER TABLE password_reset_tokens
+            ADD CONSTRAINT unique_user_pending_reset UNIQUE (user_id);
+    END IF;
+END $$;
