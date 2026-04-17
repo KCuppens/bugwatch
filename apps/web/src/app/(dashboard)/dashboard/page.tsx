@@ -477,16 +477,19 @@ export default function DashboardPage() {
     return () => controller.abort();
   }, [selectedProject]);
 
-  // Live polling (10s interval)
+  // Live polling (30s interval)
   useEffect(() => {
     if (!isLive || !selectedProject) return;
 
     let cancelled = false;
+    let polling = false; // prevent overlapping concurrent polls
     let interval: ReturnType<typeof setInterval> | null = null;
     let titleFocusHandler: (() => void) | null = null;
     let clearNewIdsTimer: ReturnType<typeof setTimeout> | null = null;
 
     async function pollIssues() {
+      if (polling || cancelled) return;
+      polling = true;
       try {
         const response = await issuesApi.list(selectedProject!.id);
         if (cancelled) return;
@@ -536,6 +539,8 @@ export default function DashboardPage() {
         setIssues(response.data);
       } catch {
         // Silent fail for polling
+      } finally {
+        polling = false;
       }
     }
 
@@ -554,6 +559,8 @@ export default function DashboardPage() {
     }
 
     if (!document.hidden) {
+      // Poll immediately on activation, then on the regular interval
+      pollIssues();
       interval = setInterval(pollIssues, POLL_INTERVAL_MS);
     }
     document.addEventListener("visibilitychange", handleVisibility);

@@ -1114,16 +1114,25 @@ mod saas_billing {
             "Stripe not configured".to_string(),
         ))?;
 
-        // Verify user has an org (access control)
-        let _org = OrganizationRepository::find_by_user(&state.db, &user.id)
+        let org = OrganizationRepository::find_by_user(&state.db, &user.id)
             .await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
             .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
+
+        let customer_id = org
+            .stripe_customer_id
+            .as_ref()
+            .ok_or((StatusCode::NOT_FOUND, "No billing history".to_string()))?;
 
         let invoice = stripe
             .get_invoice(&invoice_id)
             .await
             .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
+
+        // Verify the invoice belongs to this org's Stripe customer (prevents IDOR)
+        if invoice.customer_id.as_deref() != Some(customer_id.as_str()) {
+            return Err((StatusCode::NOT_FOUND, "Invoice not found".to_string()));
+        }
 
         Ok(Json(invoice))
     }

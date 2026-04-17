@@ -93,36 +93,68 @@ impl PerformanceRepository {
         transaction_id: &str,
         spans: &[SpanInput],
     ) -> Result<()> {
-        for span in spans {
-            let id = uuid::Uuid::new_v4().to_string();
-            let started_at = chrono::DateTime::parse_from_rfc3339(&span.started_at)
-                .map(|dt| dt.with_timezone(&Utc))
-                .unwrap_or_else(|_| Utc::now());
-            let finished_at = chrono::DateTime::parse_from_rfc3339(&span.finished_at)
-                .map(|dt| dt.with_timezone(&Utc))
-                .unwrap_or_else(|_| Utc::now());
-            let data_str = span.data.as_ref().map(|d| d.to_string());
-
-            sqlx::query(
-                r#"
-                INSERT INTO spans (id, transaction_id, span_id, parent_span_id, op, description, status, duration_ms, started_at, finished_at, data, created_at)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
-                "#,
-            )
-            .bind(&id)
-            .bind(transaction_id)
-            .bind(&span.span_id)
-            .bind(&span.parent_span_id)
-            .bind(&span.op)
-            .bind(&span.description)
-            .bind(&span.status)
-            .bind(span.duration_ms)
-            .bind(started_at)
-            .bind(finished_at)
-            .bind(&data_str)
-            .execute(pool)
-            .await?;
+        if spans.is_empty() {
+            return Ok(());
         }
+
+        struct SpanRow {
+            id: String,
+            transaction_id: String,
+            span_id: String,
+            parent_span_id: Option<String>,
+            op: String,
+            description: Option<String>,
+            status: Option<String>,
+            duration_ms: f64,
+            started_at: DateTime<Utc>,
+            finished_at: DateTime<Utc>,
+            data_str: Option<String>,
+            created_at: DateTime<Utc>,
+        }
+
+        let now = Utc::now();
+        let rows: Vec<SpanRow> = spans
+            .iter()
+            .map(|span| SpanRow {
+                id: uuid::Uuid::new_v4().to_string(),
+                transaction_id: transaction_id.to_owned(),
+                span_id: span.span_id.clone(),
+                parent_span_id: span.parent_span_id.clone(),
+                op: span.op.clone(),
+                description: span.description.clone(),
+                status: span.status.clone(),
+                duration_ms: span.duration_ms,
+                started_at: chrono::DateTime::parse_from_rfc3339(&span.started_at)
+                    .map(|dt| dt.with_timezone(&Utc))
+                    .unwrap_or(now),
+                finished_at: chrono::DateTime::parse_from_rfc3339(&span.finished_at)
+                    .map(|dt| dt.with_timezone(&Utc))
+                    .unwrap_or(now),
+                data_str: span.data.as_ref().map(|d| d.to_string()),
+                created_at: now,
+            })
+            .collect();
+
+        let mut qb: sqlx::QueryBuilder<sqlx::Postgres> = sqlx::QueryBuilder::new(
+            "INSERT INTO spans (id, transaction_id, span_id, parent_span_id, op, description, status, duration_ms, started_at, finished_at, data, created_at) ",
+        );
+
+        qb.push_values(rows, |mut b, row| {
+            b.push_bind(row.id)
+                .push_bind(row.transaction_id)
+                .push_bind(row.span_id)
+                .push_bind(row.parent_span_id)
+                .push_bind(row.op)
+                .push_bind(row.description)
+                .push_bind(row.status)
+                .push_bind(row.duration_ms)
+                .push_bind(row.started_at)
+                .push_bind(row.finished_at)
+                .push_bind(row.data_str)
+                .push_bind(row.created_at);
+        });
+
+        qb.build().execute(pool).await?;
 
         Ok(())
     }

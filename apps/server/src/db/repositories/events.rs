@@ -106,21 +106,105 @@ impl EventRepository {
         Ok(count > 0)
     }
 
+    /// Count distinct user IDs seen in an issue's events.
+    pub async fn count_unique_users(pool: &DbPool, issue_id: &str) -> Result<i64> {
+        let (count,): (i64,) = sqlx::query_as(
+            r#"SELECT COUNT(DISTINCT payload::jsonb -> 'user' ->> 'id')
+               FROM events WHERE issue_id = $1
+               AND payload::jsonb -> 'user' ->> 'id' IS NOT NULL"#,
+        )
+        .bind(issue_id)
+        .fetch_one(pool)
+        .await?;
+        Ok(count)
+    }
+
+    /// Top-N browser or OS distribution from event payloads.
+    /// `json_path` is the JSONB path fragment, e.g. `'tags'->>'browser'`.
+    pub async fn top_tag_values(
+        pool: &DbPool,
+        issue_id: &str,
+        tag_key: &str,
+        limit: i64,
+    ) -> Result<Vec<(String, i64)>> {
+        let sql = format!(
+            r#"SELECT payload::jsonb -> 'tags' ->> $2 AS val, COUNT(*)::bigint AS cnt
+               FROM events
+               WHERE issue_id = $1
+                 AND payload::jsonb -> 'tags' ->> $2 IS NOT NULL
+               GROUP BY val ORDER BY cnt DESC LIMIT $3"#
+        );
+        let rows: Vec<(String, i64)> = sqlx::query_as(&sql)
+            .bind(issue_id)
+            .bind(tag_key)
+            .bind(limit)
+            .fetch_all(pool)
+            .await?;
+        Ok(rows)
+    }
+
+    /// Count events grouped into fixed-size time buckets for charting.
+    /// Returns `(bucket_index, count)` pairs — missing buckets have count 0.
+    pub async fn count_by_time_buckets(
+        pool: &DbPool,
+        issue_id: &str,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+        bucket_size_secs: i64,
+    ) -> Result<Vec<(i64, i64)>> {
+        let rows: Vec<(i64, i64)> = sqlx::query_as(
+            r#"
+            SELECT
+                FLOOR(EXTRACT(EPOCH FROM (timestamp - $2)) / $3)::bigint AS bucket_idx,
+                COUNT(*)::bigint AS cnt
+            FROM events
+            WHERE issue_id = $1
+              AND timestamp >= $2
+              AND timestamp < $4
+            GROUP BY bucket_idx
+            ORDER BY bucket_idx ASC
+            "#,
+        )
+        .bind(issue_id)
+        .bind(start)
+        .bind(bucket_size_secs)
+        .bind(end)
+        .fetch_all(pool)
+        .await?;
+        Ok(rows)
+    }
+
+    /// Count events in a time range for trend calculation.
+    pub async fn count_in_range(
+        pool: &DbPool,
+        issue_id: &str,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+    ) -> Result<i64> {
+        let (count,): (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM events WHERE issue_id = $1 AND timestamp >= $2 AND timestamp < $3",
+        )
+        .bind(issue_id)
+        .bind(start)
+        .bind(end)
+        .fetch_one(pool)
+        .await?;
+        Ok(count)
+    }
+
     /// Cleanup old events to prevent database bloat.
     /// Each organization's effective retention is `base_days + o.x402_extra_retention_days`,
     /// so orgs that paid for extended retention via x402 micropayments keep their events longer.
     pub async fn cleanup_old_events(pool: &DbPool, base_days: i32) -> Result<u64> {
+        // DELETE USING avoids a correlated subquery and lets the planner use join optimisations
         let result = sqlx::query(
             r#"
-            DELETE FROM events
-            WHERE id IN (
-                SELECT e.id
-                FROM events e
-                JOIN issues i ON e.issue_id = i.id
-                JOIN projects p ON i.project_id = p.id
-                JOIN organizations o ON p.organization_id = o.id
-                WHERE e.timestamp < NOW() - make_interval(days => $1 + o.x402_extra_retention_days)
-            )
+            DELETE FROM events e
+            USING issues i, projects p, organizations o
+            WHERE e.issue_id = i.id
+              AND i.project_id = p.id
+              AND p.organization_id = o.id
+              AND e.timestamp < NOW() - make_interval(days => $1 + o.x402_extra_retention_days)
             "#,
         )
         .bind(base_days)

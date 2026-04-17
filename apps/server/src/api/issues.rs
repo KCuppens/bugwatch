@@ -536,45 +536,42 @@ pub async fn get_frequency(
         )));
     }
 
-    // Get events for the issue within the time range
     let period = params.period.as_deref().unwrap_or("24h");
     let (hours, bucket_size_hours): (i64, i64) = match period {
-        "7d" => (168, 24),  // 7 days, daily buckets
-        "30d" => (720, 24), // 30 days, daily buckets
-        _ => (24, 1),       // 24 hours, hourly buckets
+        "7d" => (168, 24),
+        "30d" => (720, 24),
+        _ => (24, 1),
     };
 
-    let events = EventRepository::find_by_issue(&state.db, &issue_id, 1000, 0).await?;
-
-    // Group events into time buckets
     let now = chrono::Utc::now();
     let start_time = now - chrono::Duration::hours(hours);
+    let bucket_size_secs = bucket_size_hours * 3600;
     let num_buckets = (hours / bucket_size_hours) as usize;
 
+    // Aggregate counts in the DB — avoids loading up to 1000 events into memory
+    let bucket_counts = EventRepository::count_by_time_buckets(
+        &state.db,
+        &issue_id,
+        start_time,
+        now,
+        bucket_size_secs,
+    )
+    .await?;
+
     let mut buckets: Vec<FrequencyBucket> = (0..num_buckets)
-        .map(|i| {
-            let bucket_start = start_time + chrono::Duration::hours(i as i64 * bucket_size_hours);
-            FrequencyBucket {
-                timestamp: bucket_start.to_rfc3339(),
-                count: 0,
-            }
+        .map(|i| FrequencyBucket {
+            timestamp: (start_time + chrono::Duration::hours(i as i64 * bucket_size_hours))
+                .to_rfc3339(),
+            count: 0,
         })
         .collect();
 
-    // Count events in each bucket
     let mut total_in_period: u32 = 0;
-
-    for event in &events {
-        let event_time = event.timestamp;
-        if event_time >= start_time && event_time <= now {
-            let hours_since_start = (event_time - start_time).num_hours();
-            // Clamp bucket_index to valid range (0 to num_buckets-1)
-            let bucket_index = std::cmp::min(
-                (hours_since_start / bucket_size_hours) as usize,
-                buckets.len().saturating_sub(1),
-            );
-            buckets[bucket_index].count += 1;
-            total_in_period += 1;
+    for (idx, cnt) in bucket_counts {
+        let i = idx as usize;
+        if i < buckets.len() {
+            buckets[i].count = cnt as u32;
+            total_in_period += cnt as u32;
         }
     }
 
@@ -978,143 +975,57 @@ pub async fn get_impact(
         )));
     }
 
-    // Get all events for this issue
-    let events = EventRepository::find_by_issue(&state.db, &issue_id, 1000, 0).await?;
-
     let now = chrono::Utc::now();
     let one_hour_ago = now - chrono::Duration::hours(1);
     let two_hours_ago = now - chrono::Duration::hours(2);
 
-    // Track unique values
-    let mut unique_users: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut unique_sessions: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut browser_counts: HashMap<String, u32> = HashMap::new();
-    let mut os_counts: HashMap<String, u32> = HashMap::new();
+    // Run all aggregation queries in parallel — avoids loading events into memory
+    let (unique_users, last_hour_count, prev_hour_count, browser_rows, os_rows, total_events) = tokio::try_join!(
+        EventRepository::count_unique_users(&state.db, &issue_id),
+        EventRepository::count_in_range(&state.db, &issue_id, one_hour_ago, now),
+        EventRepository::count_in_range(&state.db, &issue_id, two_hours_ago, one_hour_ago),
+        EventRepository::top_tag_values(&state.db, &issue_id, "browser", 5),
+        EventRepository::top_tag_values(&state.db, &issue_id, "os.name", 5),
+        EventRepository::count_by_issue(&state.db, &issue_id),
+    )?;
 
-    let mut last_hour_count = 0u32;
-    let mut prev_hour_count = 0u32;
-
-    for event in &events {
-        // Parse event payload
-        if let Ok(payload) = serde_json::from_str::<serde_json::Value>(&event.payload) {
-            // Count unique users
-            if let Some(user_id) = payload
-                .get("user")
-                .and_then(|u| u.get("id"))
-                .and_then(|v| v.as_str())
-            {
-                unique_users.insert(user_id.to_string());
-            }
-
-            // Count unique sessions (use IP as proxy if no session ID)
-            if let Some(session_id) = payload.get("session_id").and_then(|v| v.as_str()) {
-                unique_sessions.insert(session_id.to_string());
-            } else if let Some(ip) = payload
-                .get("user")
-                .and_then(|u| u.get("ip_address"))
-                .and_then(|v| v.as_str())
-            {
-                unique_sessions.insert(ip.to_string());
-            }
-
-            // Browser distribution
-            if let Some(browser) = payload
-                .get("tags")
-                .and_then(|t| t.get("browser"))
-                .and_then(|v| v.as_str())
-            {
-                *browser_counts.entry(browser.to_string()).or_insert(0) += 1;
-            } else if let Some(runtime) = payload
-                .get("tags")
-                .and_then(|t| t.get("runtime"))
-                .and_then(|v| v.as_str())
-            {
-                *browser_counts.entry(runtime.to_string()).or_insert(0) += 1;
-            }
-
-            // OS distribution
-            if let Some(os) = payload
-                .get("tags")
-                .and_then(|t| t.get("os.name"))
-                .and_then(|v| v.as_str())
-            {
-                *os_counts.entry(os.to_string()).or_insert(0) += 1;
-            }
-        }
-
-        // Calculate trend
-        let event_time = event.timestamp;
-        if event_time >= one_hour_ago {
-            last_hour_count += 1;
-        } else if event_time >= two_hours_ago {
-            prev_hour_count += 1;
-        }
-    }
-
-    // Calculate trend percentage
     let trend_percent = if prev_hour_count > 0 {
         ((last_hour_count as f64 - prev_hour_count as f64) / prev_hour_count as f64 * 100.0).round()
             as i32
     } else if last_hour_count > 0 {
-        100 // New issue, 100% increase
+        100
     } else {
         0
     };
 
-    // Calculate if trending
     let is_trending = trend_percent > 50 && last_hour_count > 5;
 
-    // Convert browser/OS counts to sorted lists (top 5)
-    let mut browsers: Vec<_> = browser_counts.into_iter().collect();
-    browsers.sort_by(|a, b| b.1.cmp(&a.1));
-    let browsers: Vec<DistributionItem> = browsers
-        .into_iter()
-        .take(5)
-        .map(|(name, count)| {
-            let percentage = if events.len() > 0 {
-                (count as f64 / events.len() as f64 * 100.0).round() as u32
-            } else {
-                0
-            };
-            DistributionItem {
+    let to_distribution = |rows: Vec<(String, i64)>, total: i64| -> Vec<DistributionItem> {
+        rows.into_iter()
+            .map(|(name, count)| DistributionItem {
+                percentage: if total > 0 {
+                    (count as f64 / total as f64 * 100.0).round() as u32
+                } else {
+                    0
+                },
+                count: count as u32,
                 name,
-                count,
-                percentage,
-            }
-        })
-        .collect();
-
-    let mut oses: Vec<_> = os_counts.into_iter().collect();
-    oses.sort_by(|a, b| b.1.cmp(&a.1));
-    let oses: Vec<DistributionItem> = oses
-        .into_iter()
-        .take(5)
-        .map(|(name, count)| {
-            let percentage = if events.len() > 0 {
-                (count as f64 / events.len() as f64 * 100.0).round() as u32
-            } else {
-                0
-            };
-            DistributionItem {
-                name,
-                count,
-                percentage,
-            }
-        })
-        .collect();
+            })
+            .collect()
+    };
 
     Ok(Json(ApiResponse {
         data: ImpactData {
-            unique_users: unique_users.len() as u32,
-            unique_sessions: unique_sessions.len() as u32,
-            total_events: events.len() as u32,
+            unique_users: unique_users as u32,
+            unique_sessions: 0, // session_id is not a standardised tag; omit rather than guess
+            total_events: total_events as u32,
             first_seen: issue.first_seen.to_rfc3339(),
             last_seen: issue.last_seen.to_rfc3339(),
-            last_hour_count,
+            last_hour_count: last_hour_count as u32,
             trend_percent,
             is_trending,
-            browsers,
-            operating_systems: oses,
+            browsers: to_distribution(browser_rows, total_events),
+            operating_systems: to_distribution(os_rows, total_events),
         },
     }))
 }

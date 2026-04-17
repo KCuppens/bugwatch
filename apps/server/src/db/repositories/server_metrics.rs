@@ -203,7 +203,8 @@ impl ServerMetricsRepository {
         let metrics = sqlx::query_as::<_, ServerMetric>(
             "SELECT * FROM server_metrics
              WHERE server_db_id = $1 AND recorded_at >= $2 AND recorded_at <= $3
-             ORDER BY recorded_at ASC",
+             ORDER BY recorded_at ASC
+             LIMIT 10000",
         )
         .bind(server_db_id)
         .bind(from)

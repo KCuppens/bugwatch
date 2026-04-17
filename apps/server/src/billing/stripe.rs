@@ -495,8 +495,14 @@ impl StripeClient {
             })
             .unwrap_or_default();
 
+        let customer_id = invoice.customer.as_ref().map(|c| match c {
+            stripe::Expandable::Id(id) => id.to_string(),
+            stripe::Expandable::Object(c) => c.id.to_string(),
+        });
+
         Ok(InvoiceDetail {
             id: invoice.id.to_string(),
+            customer_id,
             number: invoice.number,
             status: invoice.status.map(|s| format!("{:?}", s)),
             amount_due: invoice.amount_due,
@@ -833,6 +839,7 @@ pub struct InvoiceSummary {
 #[derive(Debug, Clone, Serialize)]
 pub struct InvoiceDetail {
     pub id: String,
+    pub customer_id: Option<String>,
     pub number: Option<String>,
     pub status: Option<String>,
     pub amount_due: Option<i64>,

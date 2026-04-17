@@ -536,40 +536,31 @@ impl IssueRepository {
             return Ok(vec![]);
         }
 
-        let mut param_idx = 1;
-        let placeholders: Vec<String> = project_ids
-            .iter()
-            .enumerate()
-            .map(|(i, _)| format!("${}", param_idx + i))
-            .collect();
-        param_idx += project_ids.len();
+        // Use = ANY($1) with a Postgres text array — single bind regardless of project count
+        let issues = if let Some(s) = status {
+            sqlx::query_as::<_, Issue>(
+                "SELECT * FROM issues WHERE project_id = ANY($1) AND status = $2
+                 ORDER BY last_seen DESC LIMIT $3 OFFSET $4",
+            )
+            .bind(project_ids)
+            .bind(s)
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(pool)
+            .await?
+        } else {
+            sqlx::query_as::<_, Issue>(
+                "SELECT * FROM issues WHERE project_id = ANY($1)
+                 ORDER BY last_seen DESC LIMIT $2 OFFSET $3",
+            )
+            .bind(project_ids)
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(pool)
+            .await?
+        };
 
-        let mut query = format!(
-            "SELECT * FROM issues WHERE project_id IN ({})",
-            placeholders.join(",")
-        );
-
-        if let Some(s) = status {
-            query.push_str(&format!(" AND status = ${}", param_idx));
-            param_idx += 1;
-        }
-
-        query.push_str(&format!(
-            " ORDER BY last_seen DESC LIMIT ${} OFFSET ${}",
-            param_idx,
-            param_idx + 1
-        ));
-
-        let mut q = sqlx::query_as::<_, Issue>(&query);
-        for pid in project_ids {
-            q = q.bind(pid);
-        }
-        if let Some(s) = status {
-            q = q.bind(s);
-        }
-        q = q.bind(limit).bind(offset);
-
-        q.fetch_all(pool).await.map_err(Into::into)
+        Ok(issues)
     }
 
     /// Count issues across multiple projects
@@ -582,32 +573,19 @@ impl IssueRepository {
             return Ok(0);
         }
 
-        let mut param_idx = 1;
-        let placeholders: Vec<String> = project_ids
-            .iter()
-            .enumerate()
-            .map(|(i, _)| format!("${}", param_idx + i))
-            .collect();
-        param_idx += project_ids.len();
+        let (count,): (i64,) = if let Some(s) = status {
+            sqlx::query_as("SELECT COUNT(*) FROM issues WHERE project_id = ANY($1) AND status = $2")
+                .bind(project_ids)
+                .bind(s)
+                .fetch_one(pool)
+                .await?
+        } else {
+            sqlx::query_as("SELECT COUNT(*) FROM issues WHERE project_id = ANY($1)")
+                .bind(project_ids)
+                .fetch_one(pool)
+                .await?
+        };
 
-        let mut query = format!(
-            "SELECT COUNT(*) FROM issues WHERE project_id IN ({})",
-            placeholders.join(",")
-        );
-
-        if let Some(s) = status {
-            query.push_str(&format!(" AND status = ${}", param_idx));
-        }
-
-        let mut q = sqlx::query_as::<_, (i64,)>(&query);
-        for pid in project_ids {
-            q = q.bind(pid);
-        }
-        if let Some(s) = status {
-            q = q.bind(s);
-        }
-
-        let (count,) = q.fetch_one(pool).await?;
         Ok(count)
     }
 

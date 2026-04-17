@@ -139,23 +139,39 @@ impl OnChainVerifier {
             "id": 1
         });
 
-        let response: RpcResponse = self
-            .client
-            .post(&self.rpc_url)
-            .json(&payload)
-            .send()
-            .await
-            .map_err(|e| format!("RPC request failed: {}", e))?
-            .json()
-            .await
-            .map_err(|e| format!("Failed to parse RPC response: {}", e))?;
+        const MAX_RETRIES: u32 = 3;
+        let mut last_err = String::new();
 
-        if let Some(err) = response.error {
-            return Err(format!("RPC error: {}", err));
+        for attempt in 0..=MAX_RETRIES {
+            if attempt > 0 {
+                let delay_ms = 1000u64 * 2u64.pow(attempt - 1);
+                tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+            }
+
+            let send_result = self.client.post(&self.rpc_url).json(&payload).send().await;
+
+            let http_response = match send_result {
+                Err(e) => {
+                    last_err = format!("RPC request failed: {}", e);
+                    continue; // network error — retry
+                }
+                Ok(r) => r,
+            };
+
+            let response: RpcResponse = match http_response.json().await {
+                Err(e) => return Err(format!("Failed to parse RPC response: {}", e)),
+                Ok(r) => r,
+            };
+
+            if let Some(err) = response.error {
+                return Err(format!("RPC error: {}", err));
+            }
+
+            return response
+                .result
+                .ok_or_else(|| "Transaction not found or not yet confirmed".to_string());
         }
 
-        response
-            .result
-            .ok_or_else(|| "Transaction not found or not yet confirmed".to_string())
+        Err(last_err)
     }
 }
