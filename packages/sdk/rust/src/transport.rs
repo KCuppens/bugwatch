@@ -5,6 +5,13 @@ use thiserror::Error;
 
 use crate::types::{BugwatchOptions, ErrorEvent};
 
+const MAX_RETRIES: u32 = 2;
+const BASE_RETRY_DELAY_MS: u64 = 500;
+
+fn is_retryable_status(status: u16) -> bool {
+    status == 429 || status >= 500
+}
+
 /// Transport errors.
 #[derive(Error, Debug)]
 pub enum TransportError {
@@ -95,7 +102,7 @@ impl HttpTransport {
         })
     }
 
-    /// Send an event synchronously (blocking).
+    /// Send an event synchronously (blocking) with retry.
     #[cfg(feature = "blocking")]
     pub fn send_blocking(&self, event: &ErrorEvent) -> Result<(), TransportError> {
         let client = self
@@ -106,64 +113,95 @@ impl HttpTransport {
         // Serialize explicitly so we get a clear serialization error vs network error
         let body = serde_json::to_vec(event)?;
 
-        let response = client
-            .post(&self.endpoint)
-            .header("Content-Type", "application/json")
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .header(
-                "User-Agent",
-                format!("bugwatch-rust/{}", env!("CARGO_PKG_VERSION")),
-            )
-            .body(body)
-            .send()
-            .map_err(|e| TransportError::Request(e.to_string()))?;
-
-        if response.status().is_success() {
-            if self.debug {
-                tracing::debug!("Event sent successfully: {}", event.event_id);
+        let mut last_err = None;
+        for attempt in 0..=MAX_RETRIES {
+            if attempt > 0 {
+                std::thread::sleep(Duration::from_millis(
+                    BASE_RETRY_DELAY_MS * (1 << (attempt - 1)),
+                ));
             }
-            Ok(())
-        } else {
-            Err(TransportError::Http(format!(
-                "HTTP {} {}",
-                response.status().as_u16(),
-                response.status().as_str()
-            )))
+            match client
+                .post(&self.endpoint)
+                .header("Content-Type", "application/json")
+                .header("Authorization", format!("Bearer {}", self.api_key))
+                .header(
+                    "User-Agent",
+                    format!("bugwatch-rust/{}", env!("CARGO_PKG_VERSION")),
+                )
+                .body(body.clone())
+                .send()
+            {
+                Ok(response) => {
+                    let status = response.status().as_u16();
+                    if response.status().is_success() {
+                        if self.debug {
+                            tracing::debug!("Event sent successfully: {}", event.event_id);
+                        }
+                        return Ok(());
+                    } else if is_retryable_status(status) {
+                        last_err = Some(TransportError::Http(format!("HTTP {}", status)));
+                        continue;
+                    } else {
+                        return Err(TransportError::Http(format!("HTTP {}", status)));
+                    }
+                }
+                Err(e) => {
+                    last_err = Some(TransportError::Request(e.to_string()));
+                    continue;
+                }
+            }
         }
+        Err(last_err.unwrap_or_else(|| TransportError::Request("Unknown error".to_string())))
     }
 
-    /// Send an event asynchronously.
+    /// Send an event asynchronously with retry.
     #[cfg(feature = "async")]
     pub async fn send_async(&self, event: &ErrorEvent) -> Result<(), TransportError> {
         // Serialize explicitly so we get a clear serialization error vs network error
         let body = serde_json::to_vec(event)?;
 
-        let response = self
-            .async_client
-            .post(&self.endpoint)
-            .header("Content-Type", "application/json")
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .header(
-                "User-Agent",
-                format!("bugwatch-rust/{}", env!("CARGO_PKG_VERSION")),
-            )
-            .body(body)
-            .send()
-            .await
-            .map_err(|e| TransportError::Request(e.to_string()))?;
-
-        if response.status().is_success() {
-            if self.debug {
-                tracing::debug!("Event sent successfully: {}", event.event_id);
+        let mut last_err = None;
+        for attempt in 0..=MAX_RETRIES {
+            if attempt > 0 {
+                tokio::time::sleep(Duration::from_millis(
+                    BASE_RETRY_DELAY_MS * (1 << (attempt - 1)),
+                ))
+                .await;
             }
-            Ok(())
-        } else {
-            Err(TransportError::Http(format!(
-                "HTTP {} {}",
-                response.status().as_u16(),
-                response.status().as_str()
-            )))
+            match self
+                .async_client
+                .post(&self.endpoint)
+                .header("Content-Type", "application/json")
+                .header("Authorization", format!("Bearer {}", self.api_key))
+                .header(
+                    "User-Agent",
+                    format!("bugwatch-rust/{}", env!("CARGO_PKG_VERSION")),
+                )
+                .body(body.clone())
+                .send()
+                .await
+            {
+                Ok(response) => {
+                    let status = response.status().as_u16();
+                    if response.status().is_success() {
+                        if self.debug {
+                            tracing::debug!("Event sent successfully: {}", event.event_id);
+                        }
+                        return Ok(());
+                    } else if is_retryable_status(status) {
+                        last_err = Some(TransportError::Http(format!("HTTP {}", status)));
+                        continue;
+                    } else {
+                        return Err(TransportError::Http(format!("HTTP {}", status)));
+                    }
+                }
+                Err(e) => {
+                    last_err = Some(TransportError::Request(e.to_string()));
+                    continue;
+                }
+            }
         }
+        Err(last_err.unwrap_or_else(|| TransportError::Request("Unknown error".to_string())))
     }
 }
 

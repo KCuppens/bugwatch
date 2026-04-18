@@ -137,7 +137,37 @@ pub async fn ingest_transaction(
         }
     }
 
-    // 5. Parse timestamps
+    // 5. Validate field lengths
+    if payload.transaction_name.len() > 200 {
+        return Err(AppError::Validation(
+            "transaction_name too long (max 200 bytes)".into(),
+        ));
+    }
+    if payload.trace_id.len() > 64 {
+        return Err(AppError::Validation(
+            "trace_id too long (max 64 bytes)".into(),
+        ));
+    }
+    if payload.span_id.len() > 64 {
+        return Err(AppError::Validation(
+            "span_id too long (max 64 bytes)".into(),
+        ));
+    }
+    if payload.op.len() > 128 {
+        return Err(AppError::Validation("op too long (max 128 bytes)".into()));
+    }
+    if payload.environment.as_deref().map(|s| s.len()).unwrap_or(0) > 64 {
+        return Err(AppError::Validation(
+            "environment too long (max 64 bytes)".into(),
+        ));
+    }
+    if payload.release.as_deref().map(|s| s.len()).unwrap_or(0) > 200 {
+        return Err(AppError::Validation(
+            "release too long (max 200 bytes)".into(),
+        ));
+    }
+
+    // 6. Parse timestamps
     let started_at = chrono::DateTime::parse_from_rfc3339(&payload.started_at)
         .map(|dt| dt.with_timezone(&chrono::Utc))
         .unwrap_or_else(|_| Utc::now());

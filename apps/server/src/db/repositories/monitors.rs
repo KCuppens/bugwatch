@@ -125,23 +125,13 @@ impl MonitorRepository {
             return Ok(vec![]);
         }
 
-        let placeholders: Vec<String> = project_ids
-            .iter()
-            .enumerate()
-            .map(|(i, _)| format!("${}", i + 1))
-            .collect();
-
-        let query = format!(
-            "SELECT * FROM monitors WHERE project_id IN ({}) AND is_active = TRUE ORDER BY current_status ASC, name ASC",
-            placeholders.join(",")
-        );
-
-        let mut q = sqlx::query_as::<_, Monitor>(&query);
-        for pid in project_ids {
-            q = q.bind(pid);
-        }
-
-        q.fetch_all(pool).await.map_err(Into::into)
+        sqlx::query_as::<_, Monitor>(
+            "SELECT * FROM monitors WHERE project_id = ANY($1) AND is_active = TRUE ORDER BY current_status ASC, name ASC",
+        )
+        .bind(project_ids)
+        .fetch_all(pool)
+        .await
+        .map_err(Into::into)
     }
 
     pub async fn update(
@@ -157,74 +147,33 @@ impl MonitorRepository {
         body: Option<&str>,
         is_active: Option<bool>,
     ) -> Result<Monitor> {
-        // Perform individual updates for each field
-        if let Some(n) = name {
-            sqlx::query("UPDATE monitors SET name = $1 WHERE id = $2")
-                .bind(n)
-                .bind(id)
-                .execute(pool)
-                .await?;
-        }
-        if let Some(u) = url {
-            sqlx::query("UPDATE monitors SET url = $1 WHERE id = $2")
-                .bind(u)
-                .bind(id)
-                .execute(pool)
-                .await?;
-        }
-        if let Some(m) = method {
-            sqlx::query("UPDATE monitors SET method = $1 WHERE id = $2")
-                .bind(m)
-                .bind(id)
-                .execute(pool)
-                .await?;
-        }
-        if let Some(i) = interval_seconds {
-            sqlx::query("UPDATE monitors SET interval_seconds = $1 WHERE id = $2")
-                .bind(i)
-                .bind(id)
-                .execute(pool)
-                .await?;
-        }
-        if let Some(t) = timeout_ms {
-            sqlx::query("UPDATE monitors SET timeout_ms = $1 WHERE id = $2")
-                .bind(t)
-                .bind(id)
-                .execute(pool)
-                .await?;
-        }
-        if let Some(e) = expected_status {
-            sqlx::query("UPDATE monitors SET expected_status = $1 WHERE id = $2")
-                .bind(e)
-                .bind(id)
-                .execute(pool)
-                .await?;
-        }
-        if let Some(h) = headers {
-            sqlx::query("UPDATE monitors SET headers = $1 WHERE id = $2")
-                .bind(h)
-                .bind(id)
-                .execute(pool)
-                .await?;
-        }
-        if let Some(b) = body {
-            sqlx::query("UPDATE monitors SET body = $1 WHERE id = $2")
-                .bind(b)
-                .bind(id)
-                .execute(pool)
-                .await?;
-        }
-        if let Some(a) = is_active {
-            sqlx::query("UPDATE monitors SET is_active = $1 WHERE id = $2")
-                .bind(a)
-                .bind(id)
-                .execute(pool)
-                .await?;
-        }
-
-        Self::find_by_id(pool, id)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("Monitor not found"))
+        sqlx::query_as::<_, Monitor>(
+            "UPDATE monitors
+             SET name = COALESCE($1, name),
+                 url = COALESCE($2, url),
+                 method = COALESCE($3, method),
+                 interval_seconds = COALESCE($4, interval_seconds),
+                 timeout_ms = COALESCE($5, timeout_ms),
+                 expected_status = COALESCE($6, expected_status),
+                 headers = COALESCE($7, headers),
+                 body = COALESCE($8, body),
+                 is_active = COALESCE($9, is_active)
+             WHERE id = $10
+             RETURNING *",
+        )
+        .bind(name)
+        .bind(url)
+        .bind(method)
+        .bind(interval_seconds)
+        .bind(timeout_ms)
+        .bind(expected_status)
+        .bind(headers)
+        .bind(body)
+        .bind(is_active)
+        .bind(id)
+        .fetch_optional(pool)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("Monitor not found"))
     }
 
     pub async fn delete(pool: &DbPool, id: &str) -> Result<()> {

@@ -81,6 +81,18 @@ pub async fn ingest_segment(
         .await?
         .ok_or_else(|| AppError::Unauthorized("Invalid API key".to_string()))?;
 
+    // 1a. Validate field lengths
+    if req.session_id.len() > 128 {
+        return Err(AppError::Validation(
+            "session_id too long (max 128 bytes)".into(),
+        ));
+    }
+    if req.user_agent.as_deref().map(|s| s.len()).unwrap_or(0) > 512 {
+        return Err(AppError::Validation(
+            "user_agent too long (max 512 bytes)".into(),
+        ));
+    }
+
     // 2. Check tier and storage limits
     if !state.config.deployment_mode.is_self_hosted() {
         let replay_org = OrganizationRepository::find_by_project_id(&state.db, &project.id)

@@ -32,6 +32,16 @@ const DEFAULT_CHECKLIST: Record<MilestoneId, boolean> = {
   invite_member: false,
 };
 
+function isOnboardingProfile(v: unknown): v is OnboardingProfile {
+  if (typeof v !== "object" || v === null) return false;
+  const p = v as Record<string, unknown>;
+  return (
+    ["developer", "team_lead", "devops", "founder"].includes(p.role as string) &&
+    ["errors", "uptime", "releases", "observability"].includes(p.use_case as string) &&
+    ["solo", "small", "medium", "large"].includes(p.team_size as string)
+  );
+}
+
 function readLocalStorage<T>(key: string, fallback: T): T {
   if (typeof window === "undefined") return fallback;
   try {
@@ -56,9 +66,10 @@ function writeLocalStorage(key: string, value: unknown): void {
 const OnboardingContext = createContext<OnboardingContextValue | null>(null);
 
 export function OnboardingProvider({ children }: { children: ReactNode }) {
-  const [profile, setProfileState] = useState<OnboardingProfile | null>(() =>
-    readLocalStorage<OnboardingProfile | null>(PROFILE_KEY, null)
-  );
+  const [profile, setProfileState] = useState<OnboardingProfile | null>(() => {
+    const stored = readLocalStorage<unknown>(PROFILE_KEY, null);
+    return isOnboardingProfile(stored) ? stored : null;
+  });
 
   const [checklist, setChecklist] = useState<Record<MilestoneId, boolean>>(() => {
     // Merge against defaults so missing keys from older app versions stay false, not undefined

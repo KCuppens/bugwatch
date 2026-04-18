@@ -992,43 +992,42 @@ export default function DashboardPage() {
         {savedSearches.length > 0 && <div className="h-4 w-px bg-border mx-1 shrink-0" />}
 
         {savedSearches.map((search) => (
-          // Using div+role="button" to avoid nested <button> elements (invalid HTML)
           <div
             key={search.id}
-            role="button"
-            tabIndex={0}
-            aria-pressed={activeFilter === search.id}
-            aria-label={`Filter by saved search: ${search.name}`}
-            onClick={() => {
-              if (activeFilter === search.id) {
-                setActiveFilter(null);
-                setSearchResults(null);
-              } else {
-                setActiveFilter(search.id);
-                if (search.query) {
-                  const q = search.query.toLowerCase();
-                  setSearchResults(
-                    issues.filter(
-                      (i) =>
-                        i.title.toLowerCase().includes(q) ||
-                        i.fingerprint.toLowerCase().includes(q) ||
-                        (i.level && i.level.toLowerCase().includes(q))
-                    )
-                  );
-                }
-              }
-            }}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") e.currentTarget.click();
-            }}
-            className={`group flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap border transition-all cursor-pointer ${
+            className={`group inline-flex items-center rounded-full text-xs font-medium whitespace-nowrap border transition-all ${
               activeFilter === search.id
                 ? "bg-[hsl(var(--accent))] text-[hsl(var(--accent-foreground))] border-[hsl(var(--accent))]"
                 : "bg-[hsl(var(--surface-1))] text-muted-foreground border-border hover:border-[hsl(var(--accent))]/30 hover:text-foreground"
             }`}
           >
-            <Bookmark className="h-3 w-3" aria-hidden="true" />
-            {search.name}
+            <button
+              type="button"
+              aria-pressed={activeFilter === search.id}
+              aria-label={`Filter by saved search: ${search.name}`}
+              onClick={() => {
+                if (activeFilter === search.id) {
+                  setActiveFilter(null);
+                  setSearchResults(null);
+                } else {
+                  setActiveFilter(search.id);
+                  if (search.query) {
+                    const q = search.query.toLowerCase();
+                    setSearchResults(
+                      issues.filter(
+                        (i) =>
+                          i.title.toLowerCase().includes(q) ||
+                          i.fingerprint.toLowerCase().includes(q) ||
+                          (i.level && i.level.toLowerCase().includes(q))
+                      )
+                    );
+                  }
+                }
+              }}
+              className="flex items-center gap-1.5 pl-3 pr-2 py-1.5"
+            >
+              <Bookmark className="h-3 w-3" aria-hidden="true" />
+              {search.name}
+            </button>
             <button
               type="button"
               aria-label={`Remove saved search: ${search.name}`}
@@ -1037,7 +1036,7 @@ export default function DashboardPage() {
                 deleteSearch(search.id);
                 toast.success("Search removed");
               }}
-              className="ml-1 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus:opacity-100 transition-opacity"
+              className="pr-2 py-1.5 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus:opacity-100 transition-opacity"
             >
               <X className="h-3 w-3" aria-hidden="true" />
             </button>

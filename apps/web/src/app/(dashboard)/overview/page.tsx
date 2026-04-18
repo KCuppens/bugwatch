@@ -386,7 +386,7 @@ export default function OverviewPage() {
           ))}
         </div>
       ) : (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <dl className="grid grid-cols-2 md:grid-cols-4 gap-3" aria-label="Summary statistics">
           {/* Unresolved */}
           <div className="surface-card p-4 card-hover">
             <p className="text-[11px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider">
@@ -460,7 +460,7 @@ export default function OverviewPage() {
               <p className="text-xs text-muted-foreground mt-2">No monitors configured</p>
             )}
           </div>
-        </div>
+        </dl>
       )}
 
       {/* Search Bar */}

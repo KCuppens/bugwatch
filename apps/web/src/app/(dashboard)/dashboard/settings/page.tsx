@@ -406,7 +406,12 @@ export default function SettingsPage() {
       )}
 
       {activeTab === "notifications" && (
-        <div role="tabpanel" id="settings-panel-notifications" aria-labelledby="settings-tab-notifications" className="space-y-6">
+        <div
+          role="tabpanel"
+          id="settings-panel-notifications"
+          aria-labelledby="settings-tab-notifications"
+          className="space-y-6"
+        >
           <Card>
             <CardHeader>
               <CardTitle>Notification Preferences</CardTitle>
@@ -570,7 +575,7 @@ export default function SettingsPage() {
                   </div>
                   <div>
                     <p className="text-sm font-medium">Password</p>
-                    <p className="text-xs text-muted-foreground">Last changed: Unknown</p>
+                    <p className="text-xs text-muted-foreground">Last changed: Never recorded</p>
                   </div>
                 </div>
                 <Button variant="outline" onClick={() => setPasswordDialogOpen(true)}>

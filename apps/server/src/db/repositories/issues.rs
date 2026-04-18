@@ -166,119 +166,7 @@ impl IssueRepository {
         let mut query = String::from("SELECT * FROM issues WHERE project_id = $1");
         let mut params: Vec<String> = vec![project_id.to_string()];
 
-        // Status filter (multiple values)
-        if let Some(statuses) = &filters.status {
-            if !statuses.is_empty() {
-                let placeholders: Vec<String> = statuses
-                    .iter()
-                    .enumerate()
-                    .map(|(i, _)| format!("${}", param_idx + i))
-                    .collect();
-                query.push_str(&format!(" AND status IN ({})", placeholders.join(",")));
-                params.extend(statuses.clone());
-                param_idx += statuses.len();
-            }
-        }
-
-        // Level filter (multiple values)
-        if let Some(levels) = &filters.level {
-            if !levels.is_empty() {
-                let placeholders: Vec<String> = levels
-                    .iter()
-                    .enumerate()
-                    .map(|(i, _)| format!("${}", param_idx + i))
-                    .collect();
-                query.push_str(&format!(" AND level IN ({})", placeholders.join(",")));
-                params.extend(levels.clone());
-                param_idx += levels.len();
-            }
-        }
-
-        // Environment filter (multiple values)
-        if let Some(environments) = &filters.environment {
-            if !environments.is_empty() {
-                let placeholders: Vec<String> = environments
-                    .iter()
-                    .enumerate()
-                    .map(|(i, _)| format!("${}", param_idx + i))
-                    .collect();
-                query.push_str(&format!(" AND environment IN ({})", placeholders.join(",")));
-                params.extend(environments.clone());
-                param_idx += environments.len();
-            }
-        }
-
-        // Count filters
-        if let Some(v) = filters.count_gt {
-            query.push_str(&format!(" AND count > ${}", param_idx));
-            params.push(v.to_string());
-            param_idx += 1;
-        }
-        if let Some(v) = filters.count_lt {
-            query.push_str(&format!(" AND count < ${}", param_idx));
-            params.push(v.to_string());
-            param_idx += 1;
-        }
-        if let Some(v) = filters.count_gte {
-            query.push_str(&format!(" AND count >= ${}", param_idx));
-            params.push(v.to_string());
-            param_idx += 1;
-        }
-        if let Some(v) = filters.count_lte {
-            query.push_str(&format!(" AND count <= ${}", param_idx));
-            params.push(v.to_string());
-            param_idx += 1;
-        }
-
-        // Users filters
-        if let Some(v) = filters.users_gt {
-            query.push_str(&format!(" AND user_count > ${}", param_idx));
-            params.push(v.to_string());
-            param_idx += 1;
-        }
-        if let Some(v) = filters.users_lt {
-            query.push_str(&format!(" AND user_count < ${}", param_idx));
-            params.push(v.to_string());
-            param_idx += 1;
-        }
-
-        // Date filters
-        if let Some(v) = &filters.first_seen_after {
-            query.push_str(&format!(" AND first_seen > ${}", param_idx));
-            params.push(v.clone());
-            param_idx += 1;
-        }
-        if let Some(v) = &filters.first_seen_before {
-            query.push_str(&format!(" AND first_seen < ${}", param_idx));
-            params.push(v.clone());
-            param_idx += 1;
-        }
-        if let Some(v) = &filters.last_seen_after {
-            query.push_str(&format!(" AND last_seen > ${}", param_idx));
-            params.push(v.clone());
-            param_idx += 1;
-        }
-        if let Some(v) = &filters.last_seen_before {
-            query.push_str(&format!(" AND last_seen < ${}", param_idx));
-            params.push(v.clone());
-            param_idx += 1;
-        }
-
-        // Text search (title and fingerprint) - escape LIKE wildcards
-        if let Some(text) = &filters.text {
-            let escaped = text
-                .replace('\\', "\\\\")
-                .replace('%', "\\%")
-                .replace('_', "\\_");
-            query.push_str(&format!(
-                " AND (title LIKE ${} ESCAPE '\\' OR fingerprint LIKE ${} ESCAPE '\\')",
-                param_idx,
-                param_idx + 1
-            ));
-            params.push(format!("%{}%", escaped));
-            params.push(format!("%{}%", escaped));
-            param_idx += 2;
-        }
+        build_filter_clauses(filters, &mut query, &mut params, &mut param_idx);
 
         // Sorting
         let sort_col = match sort_field {
@@ -318,118 +206,7 @@ impl IssueRepository {
         let mut query = String::from("SELECT COUNT(*) FROM issues WHERE project_id = $1");
         let mut params: Vec<String> = vec![project_id.to_string()];
 
-        // Status filter
-        if let Some(statuses) = &filters.status {
-            if !statuses.is_empty() {
-                let placeholders: Vec<String> = statuses
-                    .iter()
-                    .enumerate()
-                    .map(|(i, _)| format!("${}", param_idx + i))
-                    .collect();
-                query.push_str(&format!(" AND status IN ({})", placeholders.join(",")));
-                params.extend(statuses.clone());
-                param_idx += statuses.len();
-            }
-        }
-
-        // Level filter
-        if let Some(levels) = &filters.level {
-            if !levels.is_empty() {
-                let placeholders: Vec<String> = levels
-                    .iter()
-                    .enumerate()
-                    .map(|(i, _)| format!("${}", param_idx + i))
-                    .collect();
-                query.push_str(&format!(" AND level IN ({})", placeholders.join(",")));
-                params.extend(levels.clone());
-                param_idx += levels.len();
-            }
-        }
-
-        // Environment filter
-        if let Some(environments) = &filters.environment {
-            if !environments.is_empty() {
-                let placeholders: Vec<String> = environments
-                    .iter()
-                    .enumerate()
-                    .map(|(i, _)| format!("${}", param_idx + i))
-                    .collect();
-                query.push_str(&format!(" AND environment IN ({})", placeholders.join(",")));
-                params.extend(environments.clone());
-                param_idx += environments.len();
-            }
-        }
-
-        // Count filters (all variants for consistency with search)
-        if let Some(v) = filters.count_gt {
-            query.push_str(&format!(" AND count > ${}", param_idx));
-            params.push(v.to_string());
-            param_idx += 1;
-        }
-        if let Some(v) = filters.count_lt {
-            query.push_str(&format!(" AND count < ${}", param_idx));
-            params.push(v.to_string());
-            param_idx += 1;
-        }
-        if let Some(v) = filters.count_gte {
-            query.push_str(&format!(" AND count >= ${}", param_idx));
-            params.push(v.to_string());
-            param_idx += 1;
-        }
-        if let Some(v) = filters.count_lte {
-            query.push_str(&format!(" AND count <= ${}", param_idx));
-            params.push(v.to_string());
-            param_idx += 1;
-        }
-
-        // Users filters
-        if let Some(v) = filters.users_gt {
-            query.push_str(&format!(" AND user_count > ${}", param_idx));
-            params.push(v.to_string());
-            param_idx += 1;
-        }
-        if let Some(v) = filters.users_lt {
-            query.push_str(&format!(" AND user_count < ${}", param_idx));
-            params.push(v.to_string());
-            param_idx += 1;
-        }
-
-        // Date filters (all variants for consistency with search)
-        if let Some(v) = &filters.first_seen_after {
-            query.push_str(&format!(" AND first_seen > ${}", param_idx));
-            params.push(v.clone());
-            param_idx += 1;
-        }
-        if let Some(v) = &filters.first_seen_before {
-            query.push_str(&format!(" AND first_seen < ${}", param_idx));
-            params.push(v.clone());
-            param_idx += 1;
-        }
-        if let Some(v) = &filters.last_seen_after {
-            query.push_str(&format!(" AND last_seen > ${}", param_idx));
-            params.push(v.clone());
-            param_idx += 1;
-        }
-        if let Some(v) = &filters.last_seen_before {
-            query.push_str(&format!(" AND last_seen < ${}", param_idx));
-            params.push(v.clone());
-            param_idx += 1;
-        }
-
-        // Text search - escape LIKE wildcards
-        if let Some(text) = &filters.text {
-            let escaped = text
-                .replace('\\', "\\\\")
-                .replace('%', "\\%")
-                .replace('_', "\\_");
-            query.push_str(&format!(
-                " AND (title LIKE ${} ESCAPE '\\' OR fingerprint LIKE ${} ESCAPE '\\')",
-                param_idx,
-                param_idx + 1
-            ));
-            params.push(format!("%{}%", escaped));
-            params.push(format!("%{}%", escaped));
-        }
+        build_filter_clauses(filters, &mut query, &mut params, &mut param_idx);
 
         let mut q = sqlx::query_as::<_, (i64,)>(&query);
         for p in &params {
@@ -482,6 +259,77 @@ impl IssueRepository {
             status,
             environment,
         })
+    }
+}
+
+/// Append WHERE clause conditions for all search filters to the query builder.
+/// Mutates `query`, `params`, and `param_idx` in-place.
+fn build_filter_clauses(
+    filters: &SearchFilters,
+    query: &mut String,
+    params: &mut Vec<String>,
+    param_idx: &mut usize,
+) {
+    for (field, values) in [
+        ("status", &filters.status),
+        ("level", &filters.level),
+        ("environment", &filters.environment),
+    ] {
+        if let Some(vals) = values {
+            if !vals.is_empty() {
+                let placeholders: Vec<String> = vals
+                    .iter()
+                    .enumerate()
+                    .map(|(i, _)| format!("${}", *param_idx + i))
+                    .collect();
+                query.push_str(&format!(" AND {} IN ({})", field, placeholders.join(",")));
+                params.extend(vals.clone());
+                *param_idx += vals.len();
+            }
+        }
+    }
+
+    for (opt_val, clause) in [
+        (filters.count_gt, "count >"),
+        (filters.count_lt, "count <"),
+        (filters.count_gte, "count >="),
+        (filters.count_lte, "count <="),
+        (filters.users_gt, "user_count >"),
+        (filters.users_lt, "user_count <"),
+    ] {
+        if let Some(v) = opt_val {
+            query.push_str(&format!(" AND {} ${}", clause, *param_idx));
+            params.push(v.to_string());
+            *param_idx += 1;
+        }
+    }
+
+    for (opt_val, clause) in [
+        (&filters.first_seen_after, "first_seen >"),
+        (&filters.first_seen_before, "first_seen <"),
+        (&filters.last_seen_after, "last_seen >"),
+        (&filters.last_seen_before, "last_seen <"),
+    ] {
+        if let Some(v) = opt_val {
+            query.push_str(&format!(" AND {} ${}", clause, *param_idx));
+            params.push(v.clone());
+            *param_idx += 1;
+        }
+    }
+
+    if let Some(text) = &filters.text {
+        let escaped = text
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_");
+        query.push_str(&format!(
+            " AND (title LIKE ${} ESCAPE '\\' OR fingerprint LIKE ${} ESCAPE '\\')",
+            *param_idx,
+            *param_idx + 1
+        ));
+        params.push(format!("%{}%", escaped));
+        params.push(format!("%{}%", escaped));
+        *param_idx += 2;
     }
 }
 

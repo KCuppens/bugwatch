@@ -26,13 +26,13 @@ services:
       - JWT_SECRET=${JWT_SECRET:?JWT_SECRET is required}
       - ENVIRONMENT=production
       - RUST_LOG=info
-      # Stripe configuration
-      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY}
-      - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET}
-      - STRIPE_PRICE_ID_PRO_MONTHLY=${STRIPE_PRICE_ID_PRO_MONTHLY}
-      - STRIPE_PRICE_ID_PRO_ANNUAL=${STRIPE_PRICE_ID_PRO_ANNUAL}
-      - STRIPE_PRICE_ID_TEAM_MONTHLY=${STRIPE_PRICE_ID_TEAM_MONTHLY}
-      - STRIPE_PRICE_ID_TEAM_ANNUAL=${STRIPE_PRICE_ID_TEAM_ANNUAL}
+      # Stripe configuration (required for hosted billing; omit for self-hosted free deployments)
+      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY:-}
+      - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET:-}
+      - STRIPE_PRICE_ID_PRO_MONTHLY=${STRIPE_PRICE_ID_PRO_MONTHLY:-}
+      - STRIPE_PRICE_ID_PRO_ANNUAL=${STRIPE_PRICE_ID_PRO_ANNUAL:-}
+      - STRIPE_PRICE_ID_TEAM_MONTHLY=${STRIPE_PRICE_ID_TEAM_MONTHLY:-}
+      - STRIPE_PRICE_ID_TEAM_ANNUAL=${STRIPE_PRICE_ID_TEAM_ANNUAL:-}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
       interval: 30s

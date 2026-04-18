@@ -516,6 +516,8 @@ fn create_app(state: AppState) -> Router {
         .layer(DefaultBodyLimit::max(2 * 1024 * 1024)) // 2MB max body size
         // Security headers — prevent clickjacking, MIME sniffing, and control referrer
         .layer(axum::middleware::from_fn(security_headers))
+        // Request correlation IDs — propagate or generate x-request-id for tracing
+        .layer(axum::middleware::from_fn(request_id_middleware))
 }
 
 /// Security headers middleware — sets X-Frame-Options, X-Content-Type-Options,
@@ -543,6 +545,36 @@ async fn security_headers(
         HeaderName::from_static("permissions-policy"),
         HeaderValue::from_static("camera=(), microphone=(), geolocation=()"),
     );
+    headers.insert(
+        HeaderName::from_static("content-security-policy"),
+        HeaderValue::from_static("default-src 'none'; frame-ancestors 'none'"),
+    );
+    headers.insert(
+        HeaderName::from_static("strict-transport-security"),
+        HeaderValue::from_static("max-age=63072000; includeSubDomains"),
+    );
+    response
+}
+
+/// Propagates an incoming `x-request-id` header or generates a new UUID,
+/// then echoes it back in the response for end-to-end request tracing.
+async fn request_id_middleware(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let request_id = req
+        .headers()
+        .get("x-request-id")
+        .and_then(|v| v.to_str().ok())
+        .map(String::from)
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+
+    let mut response = next.run(req).await;
+    if let Ok(val) = HeaderValue::from_str(&request_id) {
+        response
+            .headers_mut()
+            .insert(HeaderName::from_static("x-request-id"), val);
+    }
     response
 }
 

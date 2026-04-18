@@ -255,8 +255,10 @@ pub async fn oauth_callback(
     use hmac::{Hmac, Mac};
     use sha2::Sha256;
     type HmacSha256 = Hmac<Sha256>;
-    let mut mac = HmacSha256::new_from_slice(state.config.jwt_secret.as_bytes())
-        .expect("HMAC can take key of any size");
+    let oauth_secret =
+        std::env::var("OAUTH_STATE_SECRET").unwrap_or_else(|_| state.config.jwt_secret.clone());
+    let mut mac =
+        HmacSha256::new_from_slice(oauth_secret.as_bytes()).expect("HMAC can take key of any size");
     mac.update(state_data.as_bytes());
     let expected = hex::encode(mac.finalize().into_bytes());
     if signature != expected {

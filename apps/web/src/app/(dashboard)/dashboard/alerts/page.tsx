@@ -513,13 +513,28 @@ export default function AlertsPage() {
                             <span className="text-sm text-muted-foreground">
                               {rule.channel_ids.length} channel{rule.channel_ids.length !== 1 ? "s" : ""}
                             </span>
-                            <Button variant="ghost" size="icon" aria-label={`Edit rule: ${rule.name}`} onClick={() => openEditRule(rule)}>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              aria-label={`Edit rule: ${rule.name}`}
+                              onClick={() => openEditRule(rule)}
+                            >
                               <Pencil className="h-4 w-4" />
                             </Button>
-                            <Button variant="ghost" size="icon" aria-label={`${rule.is_active ? 'Disable' : 'Enable'} rule: ${rule.name}`} onClick={() => handleToggleRule(rule)}>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              aria-label={`${rule.is_active ? "Disable" : "Enable"} rule: ${rule.name}`}
+                              onClick={() => handleToggleRule(rule)}
+                            >
                               <Power className={`h-4 w-4 ${rule.is_active ? "text-bug" : ""}`} />
                             </Button>
-                            <Button variant="ghost" size="icon" aria-label={`Delete rule: ${rule.name}`} onClick={() => setDeleteRuleTarget(rule)}>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              aria-label={`Delete rule: ${rule.name}`}
+                              onClick={() => setDeleteRuleTarget(rule)}
+                            >
                               <Trash2 className="h-4 w-4 text-destructive" />
                             </Button>
                           </div>
@@ -584,13 +599,28 @@ export default function AlertsPage() {
                               <Send className="mr-2 h-3 w-3" />
                               Test
                             </Button>
-                            <Button variant="ghost" size="icon" onClick={() => openEditChannel(channel)}>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              aria-label={`Edit channel: ${channel.name}`}
+                              onClick={() => openEditChannel(channel)}
+                            >
                               <Pencil className="h-4 w-4" />
                             </Button>
-                            <Button variant="ghost" size="icon" onClick={() => handleToggleChannel(channel)}>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              aria-label={`${channel.is_active ? "Disable" : "Enable"} channel: ${channel.name}`}
+                              onClick={() => handleToggleChannel(channel)}
+                            >
                               <Power className={`h-4 w-4 ${channel.is_active ? "text-bug" : ""}`} />
                             </Button>
-                            <Button variant="ghost" size="icon" onClick={() => setDeleteChannelTarget(channel)}>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              aria-label={`Delete channel: ${channel.name}`}
+                              onClick={() => setDeleteChannelTarget(channel)}
+                            >
                               <Trash2 className="h-4 w-4 text-destructive" />
                             </Button>
                           </div>

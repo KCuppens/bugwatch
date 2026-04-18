@@ -68,11 +68,19 @@ pub async fn stripe_webhook(
     info!("Received Stripe webhook: {} ({})", event_type, event_id);
 
     // Check for duplicate events
-    if let Ok(exists) = BillingEventRepository::exists_by_stripe_event(&state.db, event_id).await {
-        if exists {
-            info!("Duplicate webhook event, skipping: {}", event_id);
-            return Ok(StatusCode::OK);
+    let exists = match BillingEventRepository::exists_by_stripe_event(&state.db, event_id).await {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!(event_id = %event_id, "Failed to check for duplicate webhook: {}", e);
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Database error".to_string(),
+            ));
         }
+    };
+    if exists {
+        info!("Duplicate webhook event, skipping: {}", event_id);
+        return Ok(StatusCode::OK);
     }
 
     // Handle different event types
@@ -270,7 +278,7 @@ async fn handle_invoice_paid(
         OrganizationRepository::find_by_stripe_customer(&state.db, customer_id).await
     {
         // Record billing event
-        BillingEventRepository::create(
+        if let Err(e) = BillingEventRepository::create(
             &state.db,
             &org.id,
             "invoice.paid",
@@ -280,7 +288,9 @@ async fn handle_invoice_paid(
             None,
         )
         .await
-        .ok();
+        {
+            tracing::error!(org_id = %org.id, event_id = %event_id, "Failed to record billing event: {}", e);
+        }
 
         info!("Invoice paid for org {}: {} cents", org.id, amount_paid);
     }
@@ -311,7 +321,7 @@ async fn handle_invoice_payment_failed(
         OrganizationRepository::find_by_stripe_customer(&state.db, customer_id).await
     {
         // Record billing event
-        BillingEventRepository::create(
+        if let Err(e) = BillingEventRepository::create(
             &state.db,
             &org.id,
             "invoice.payment_failed",
@@ -321,10 +331,10 @@ async fn handle_invoice_payment_failed(
             None,
         )
         .await
-        .ok();
+        {
+            tracing::error!(org_id = %org.id, event_id = %event_id, "Failed to record billing event: {}", e);
+        }
 
-        // Update subscription status to past_due
-        // Note: In production, you might want to send a notification email here
         warn!("Payment failed for org {}", org.id);
     }
 

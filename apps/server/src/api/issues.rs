@@ -537,6 +537,11 @@ pub async fn get_frequency(
     }
 
     let period = params.period.as_deref().unwrap_or("24h");
+    if !matches!(period, "24h" | "7d" | "30d") {
+        return Err(AppError::BadRequest(
+            "Invalid period. Must be one of: 24h, 7d, 30d".to_string(),
+        ));
+    }
     let (hours, bucket_size_hours): (i64, i64) = match period {
         "7d" => (168, 24),
         "30d" => (720, 24),
@@ -1080,11 +1085,7 @@ fn parse_flexible_timestamp(timestamp: &str) -> Option<chrono::DateTime<chrono::
         "%Y-%m-%d %H:%M:%S",
     ];
 
-    let ts_naive = if timestamp.ends_with('Z') {
-        &timestamp[..timestamp.len() - 1]
-    } else {
-        timestamp
-    };
+    let ts_naive = timestamp.strip_suffix('Z').unwrap_or(timestamp);
     for fmt in &naive_formats {
         if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(ts_naive, fmt) {
             return Some(dt.and_utc());
@@ -1222,18 +1223,17 @@ pub async fn list_across_projects(
         Some(params.status.as_str())
     };
 
-    // Get issues across all projects
-    let issues = IssueRepository::find_across_projects(
-        &state.db,
-        &project_ids,
-        status_filter,
-        limit as i64,
-        offset,
-    )
-    .await?;
-
-    let total =
-        IssueRepository::count_across_projects(&state.db, &project_ids, status_filter).await?;
+    // Run list and count in parallel — no ordering dependency between them
+    let (issues, total) = tokio::try_join!(
+        IssueRepository::find_across_projects(
+            &state.db,
+            &project_ids,
+            status_filter,
+            limit as i64,
+            offset,
+        ),
+        IssueRepository::count_across_projects(&state.db, &project_ids, status_filter),
+    )?;
     let total_pages = ((total as f64) / (limit as f64)).ceil() as u32;
 
     // Enrich issues with project info
@@ -1361,8 +1361,6 @@ pub async fn get_stats_by_project(
     }
 
     let project_ids: Vec<String> = projects.iter().map(|p| p.id.clone()).collect();
-    let _project_map: HashMap<String, &crate::db::models::Project> =
-        projects.iter().map(|p| (p.id.clone(), p)).collect();
 
     // Get stats for all projects
     let stats = IssueRepository::get_stats_by_project(&state.db, &project_ids).await?;

@@ -2,19 +2,10 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-} from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   Dialog,
   DialogContent,
@@ -51,15 +42,7 @@ import {
 } from "@/lib/api";
 import { useProject } from "@/lib/project-context";
 import { toast } from "sonner";
-import {
-  AreaChart,
-  Area,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-} from "recharts";
+import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 
 function formatRelativeTime(dateString: string | null): string {
   if (!dateString) return "Never";
@@ -151,13 +134,7 @@ function LoadingSkeleton() {
 }
 
 // Expanded detail panel for a single monitor
-function MonitorDetail({
-  projectId,
-  monitorId,
-}: {
-  projectId: string;
-  monitorId: string;
-}) {
+function MonitorDetail({ projectId, monitorId }: { projectId: string; monitorId: string }) {
   const [detail, setDetail] = useState<MonitorDetailResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -168,7 +145,7 @@ function MonitorDetail({
       try {
         const data = await monitorsApi.get(projectId, monitorId);
         if (!cancelled) setDetail(data);
-      } catch (err) {
+      } catch {
         if (!cancelled) toast.error("Failed to load monitor details");
       } finally {
         if (!cancelled) setIsLoading(false);
@@ -190,23 +167,16 @@ function MonitorDetail({
   }
 
   if (!detail) {
-    return (
-      <div className="mt-4 border-t pt-4 text-sm text-muted-foreground">
-        Failed to load details.
-      </div>
-    );
+    return <div className="mt-4 border-t pt-4 text-sm text-muted-foreground">Failed to load details.</div>;
   }
 
-  const chartData = [...detail.recent_checks]
-    .reverse()
-    .map((check: MonitorCheck) => ({
-      time: formatCheckTime(check.checked_at),
-      response_time: check.response_time_ms ?? 0,
-      status: check.status,
-    }));
+  const chartData = [...detail.recent_checks].reverse().map((check: MonitorCheck) => ({
+    time: formatCheckTime(check.checked_at),
+    response_time: check.response_time_ms ?? 0,
+    status: check.status,
+  }));
 
-  const lastCheck =
-    detail.recent_checks.length > 0 ? detail.recent_checks[0] : null;
+  const lastCheck = detail.recent_checks.length > 0 ? detail.recent_checks[0] : null;
 
   return (
     <div className="mt-4 border-t pt-4 space-y-6">
@@ -214,7 +184,8 @@ function MonitorDetail({
       {chartData.length > 0 && (
         <div>
           <h4 className="text-sm font-medium mb-2">Response Time</h4>
-          <div className="h-48 w-full">
+          <figure className="h-48 w-full">
+            <figcaption className="sr-only">Response time chart for this monitor over recent checks</figcaption>
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={chartData}>
                 <defs>
@@ -224,11 +195,7 @@ function MonitorDetail({
                   </linearGradient>
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
-                <XAxis
-                  dataKey="time"
-                  tick={{ fontSize: 11 }}
-                  className="text-muted-foreground"
-                />
+                <XAxis dataKey="time" tick={{ fontSize: 11 }} className="text-muted-foreground" />
                 <YAxis
                   tick={{ fontSize: 11 }}
                   className="text-muted-foreground"
@@ -252,7 +219,7 @@ function MonitorDetail({
                 />
               </AreaChart>
             </ResponsiveContainer>
-          </div>
+          </figure>
         </div>
       )}
 
@@ -274,9 +241,7 @@ function MonitorDetail({
             <div>
               <p className="text-muted-foreground">Response Time</p>
               <p className="font-medium">
-                {lastCheck.response_time_ms !== null
-                  ? `${lastCheck.response_time_ms}ms`
-                  : "N/A"}
+                {lastCheck.response_time_ms !== null ? `${lastCheck.response_time_ms}ms` : "N/A"}
               </p>
             </div>
             <div>
@@ -295,20 +260,13 @@ function MonitorDetail({
 
       {/* Incident Timeline */}
       <div>
-        <h4 className="text-sm font-medium mb-2">
-          Recent Incidents ({detail.recent_incidents.length})
-        </h4>
+        <h4 className="text-sm font-medium mb-2">Recent Incidents ({detail.recent_incidents.length})</h4>
         {detail.recent_incidents.length === 0 ? (
-          <p className="text-sm text-muted-foreground">
-            No recent incidents. Looking good!
-          </p>
+          <p className="text-sm text-muted-foreground">No recent incidents. Looking good!</p>
         ) : (
           <div className="space-y-2">
             {detail.recent_incidents.map((incident: MonitorIncident) => (
-              <div
-                key={incident.id}
-                className="flex items-start gap-3 rounded-md border p-3 text-sm"
-              >
+              <div key={incident.id} className="flex items-start gap-3 rounded-md border p-3 text-sm">
                 <div
                   className={`mt-0.5 h-2 w-2 rounded-full flex-shrink-0 ${
                     incident.resolved_at ? "bg-green-500" : "bg-red-500"
@@ -316,23 +274,15 @@ function MonitorDetail({
                 />
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
-                    <span className="font-medium">
-                      {incident.resolved_at ? "Resolved" : "Ongoing"}
-                    </span>
-                    <span className="text-muted-foreground">
-                      Started {formatIncidentDate(incident.started_at)}
-                    </span>
+                    <span className="font-medium">{incident.resolved_at ? "Resolved" : "Ongoing"}</span>
+                    <span className="text-muted-foreground">Started {formatIncidentDate(incident.started_at)}</span>
                     {incident.resolved_at && (
                       <span className="text-muted-foreground">
                         - Resolved {formatIncidentDate(incident.resolved_at)}
                       </span>
                     )}
                   </div>
-                  {incident.cause && (
-                    <p className="text-muted-foreground mt-1 truncate">
-                      {incident.cause}
-                    </p>
-                  )}
+                  {incident.cause && <p className="text-muted-foreground mt-1 truncate">{incident.cause}</p>}
                 </div>
               </div>
             ))}
@@ -358,6 +308,9 @@ export default function UptimePage() {
   const [monitorToDelete, setMonitorToDelete] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
+  // Bulk delete confirmation state
+  const [bulkDeleteConfirmOpen, setBulkDeleteConfirmOpen] = useState(false);
+
   // Form state
   const [newMonitor, setNewMonitor] = useState({
     name: "",
@@ -366,24 +319,27 @@ export default function UptimePage() {
     interval_seconds: 60,
   });
 
-  const fetchMonitors = useCallback(async (showLoading = false) => {
-    if (!selectedProject) {
-      setMonitors([]);
-      setIsLoading(false);
-      return;
-    }
+  const fetchMonitors = useCallback(
+    async (showLoading = false) => {
+      if (!selectedProject) {
+        setMonitors([]);
+        setIsLoading(false);
+        return;
+      }
 
-    if (showLoading) setIsLoading(true);
-    try {
-      const response = await monitorsApi.list(selectedProject.id);
-      setMonitors(response.data);
-    } catch (err) {
-      toast.error("Failed to fetch monitors");
-      setMonitors([]);
-    } finally {
-      setIsLoading(false);
-    }
-  }, [selectedProject]);
+      if (showLoading) setIsLoading(true);
+      try {
+        const response = await monitorsApi.list(selectedProject.id);
+        setMonitors(response.data);
+      } catch {
+        toast.error("Failed to fetch monitors");
+        setMonitors([]);
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [selectedProject]
+  );
 
   // Fetch monitors when selected project changes
   useEffect(() => {
@@ -398,7 +354,10 @@ export default function UptimePage() {
 
     function handleVisibility() {
       if (document.hidden) {
-        if (interval) { clearInterval(interval); interval = null; }
+        if (interval) {
+          clearInterval(interval);
+          interval = null;
+        }
       } else {
         fetchMonitors();
         interval = setInterval(fetchMonitors, 30000);
@@ -431,7 +390,7 @@ export default function UptimePage() {
       setShowCreateModal(false);
       setNewMonitor({ name: "", url: "", method: "GET", interval_seconds: 60 });
       toast.success("Monitor created successfully");
-    } catch (err) {
+    } catch {
       toast.error("Failed to create monitor");
     } finally {
       setIsCreating(false);
@@ -446,12 +405,8 @@ export default function UptimePage() {
         is_active: !monitor.is_active,
       });
       setMonitors(monitors.map((m) => (m.id === monitor.id ? response : m)));
-      toast.success(
-        response.is_active
-          ? `Monitor "${monitor.name}" resumed`
-          : `Monitor "${monitor.name}" paused`
-      );
-    } catch (err) {
+      toast.success(response.is_active ? `Monitor "${monitor.name}" resumed` : `Monitor "${monitor.name}" paused`);
+    } catch {
       toast.error("Failed to update monitor status");
     }
   }
@@ -474,7 +429,7 @@ export default function UptimePage() {
       toast.success("Monitor deleted");
       setDeleteConfirmOpen(false);
       setMonitorToDelete(null);
-    } catch (err) {
+    } catch {
       toast.error("Failed to delete monitor");
     } finally {
       setIsDeleting(false);
@@ -492,12 +447,14 @@ export default function UptimePage() {
     if (!selectedProject) return;
     const ids = Array.from(selectedMonitors);
     for (const id of ids) {
-      const monitor = monitors.find(m => m.id === id);
+      const monitor = monitors.find((m) => m.id === id);
       if (monitor?.is_active) {
         try {
           const response = await monitorsApi.update(selectedProject.id, id, { is_active: false });
-          setMonitors(prev => prev.map(m => m.id === id ? response : m));
-        } catch { /* ignore */ }
+          setMonitors((prev) => prev.map((m) => (m.id === id ? response : m)));
+        } catch {
+          /* ignore */
+        }
       }
     }
     setSelectedMonitors(new Set());
@@ -508,12 +465,14 @@ export default function UptimePage() {
     if (!selectedProject) return;
     const ids = Array.from(selectedMonitors);
     for (const id of ids) {
-      const monitor = monitors.find(m => m.id === id);
+      const monitor = monitors.find((m) => m.id === id);
       if (!monitor?.is_active) {
         try {
           const response = await monitorsApi.update(selectedProject.id, id, { is_active: true });
-          setMonitors(prev => prev.map(m => m.id === id ? response : m));
-        } catch { /* ignore */ }
+          setMonitors((prev) => prev.map((m) => (m.id === id ? response : m)));
+        } catch {
+          /* ignore */
+        }
       }
     }
     setSelectedMonitors(new Set());
@@ -522,15 +481,22 @@ export default function UptimePage() {
 
   async function handleBulkDelete() {
     if (!selectedProject) return;
-    if (!window.confirm(`Delete ${selectedMonitors.size} monitors? This cannot be undone.`)) return;
+    setBulkDeleteConfirmOpen(true);
+  }
+
+  async function handleConfirmBulkDelete() {
+    if (!selectedProject) return;
     const ids = Array.from(selectedMonitors);
     for (const id of ids) {
       try {
         await monitorsApi.delete(selectedProject.id, id);
-        setMonitors(prev => prev.filter(m => m.id !== id));
-      } catch { /* ignore */ }
+        setMonitors((prev) => prev.filter((m) => m.id !== id));
+      } catch {
+        /* ignore */
+      }
     }
     setSelectedMonitors(new Set());
+    setBulkDeleteConfirmOpen(false);
     toast.success(`${ids.length} monitors deleted`);
   }
 
@@ -538,13 +504,15 @@ export default function UptimePage() {
   const activeMonitors = monitors.filter((m) => m.is_active).length;
   const upMonitors = monitors.filter((m) => m.current_status === "up").length;
   const monitorsWithUptime = monitors.filter((m) => m.uptime_24h !== null && m.uptime_24h !== undefined);
-  const avgUptime = monitorsWithUptime.length > 0
-    ? monitorsWithUptime.reduce((sum, m) => sum + m.uptime_24h!, 0) / monitorsWithUptime.length
-    : null;
+  const avgUptime =
+    monitorsWithUptime.length > 0
+      ? monitorsWithUptime.reduce((sum, m) => sum + m.uptime_24h!, 0) / monitorsWithUptime.length
+      : null;
   const monitorsWithResponse = monitors.filter((m) => m.avg_response_24h !== null && m.avg_response_24h !== undefined);
-  const avgResponse = monitorsWithResponse.length > 0
-    ? monitorsWithResponse.reduce((sum, m) => sum + m.avg_response_24h!, 0) / monitorsWithResponse.length
-    : null;
+  const avgResponse =
+    monitorsWithResponse.length > 0
+      ? monitorsWithResponse.reduce((sum, m) => sum + m.avg_response_24h!, 0) / monitorsWithResponse.length
+      : null;
 
   return (
     <div className="space-y-6">
@@ -604,7 +572,9 @@ export default function UptimePage() {
               <CardContent className="flex items-center gap-3 p-4">
                 <Globe className="h-4 w-4 text-muted-foreground" />
                 <div>
-                  <p className="font-display text-2xl font-semibold tabular-nums">{upMonitors}/{monitors.length}</p>
+                  <p className="font-display text-2xl font-semibold tabular-nums">
+                    {upMonitors}/{monitors.length}
+                  </p>
                   <p className="text-caption uppercase tracking-wide text-muted-foreground">Currently Up</p>
                 </div>
               </CardContent>
@@ -628,7 +598,12 @@ export default function UptimePage() {
                   <Trash2 className="h-3 w-3 mr-1" />
                   Delete
                 </Button>
-                <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setSelectedMonitors(new Set())}>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-7 text-xs"
+                  onClick={() => setSelectedMonitors(new Set())}
+                >
                   Clear
                 </Button>
               </div>
@@ -642,15 +617,19 @@ export default function UptimePage() {
                 <EmptyState
                   icon={<Activity />}
                   title="No monitors yet"
-                  description={selectedProject
-                    ? "Add your first uptime monitor to start tracking the availability of your websites and APIs."
-                    : "Select a project from the sidebar to view and create monitors."}
-                  action={selectedProject ? (
-                    <Button onClick={() => setShowCreateModal(true)}>
-                      <Plus className="mr-2 h-4 w-4" />
-                      Create Your First Monitor
-                    </Button>
-                  ) : undefined}
+                  description={
+                    selectedProject
+                      ? "Add your first uptime monitor to start tracking the availability of your websites and APIs."
+                      : "Select a project from the sidebar to view and create monitors."
+                  }
+                  action={
+                    selectedProject ? (
+                      <Button onClick={() => setShowCreateModal(true)}>
+                        <Plus className="mr-2 h-4 w-4" />
+                        Create Your First Monitor
+                      </Button>
+                    ) : undefined
+                  }
                 />
               </CardContent>
             </Card>
@@ -666,19 +645,28 @@ export default function UptimePage() {
                         aria-expanded={isExpanded}
                         aria-controls={`monitor-detail-${monitor.id}`}
                         className="flex items-center justify-between cursor-pointer w-full text-left"
-                        onClick={() =>
-                          setExpandedMonitorId(isExpanded ? null : monitor.id)
-                        }
+                        onClick={() => setExpandedMonitorId(isExpanded ? null : monitor.id)}
                       >
                         <div className="flex items-center gap-4">
                           <button
                             role="checkbox"
                             aria-checked={selectedMonitors.has(monitor.id)}
                             aria-label={`Select ${monitor.name}`}
-                            onClick={(e) => { e.stopPropagation(); toggleMonitorSelection(monitor.id); }}
-                            onKeyDown={(e) => { if (e.key === ' ') { e.preventDefault(); e.stopPropagation(); toggleMonitorSelection(monitor.id); } }}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              toggleMonitorSelection(monitor.id);
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === " ") {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                toggleMonitorSelection(monitor.id);
+                              }
+                            }}
                             className={`w-4 h-4 rounded border-2 flex items-center justify-center transition-all shrink-0 ${
-                              selectedMonitors.has(monitor.id) ? 'bg-accent-2 border-accent-2' : 'border-muted-foreground/30 hover:border-accent-2/50'
+                              selectedMonitors.has(monitor.id)
+                                ? "bg-accent-2 border-accent-2"
+                                : "border-muted-foreground/30 hover:border-accent-2/50"
                             }`}
                           >
                             {selectedMonitors.has(monitor.id) && <Check className="h-3 w-3 text-accent-2-foreground" />}
@@ -688,8 +676,8 @@ export default function UptimePage() {
                               monitor.current_status === "up"
                                 ? "bg-bug/10"
                                 : monitor.current_status === "down"
-                                ? "bg-red-100 dark:bg-red-950"
-                                : "bg-gray-100 dark:bg-gray-800"
+                                  ? "bg-red-100 dark:bg-red-950"
+                                  : "bg-gray-100 dark:bg-gray-800"
                             }`}
                           >
                             {monitor.current_status === "up" ? (
@@ -727,24 +715,18 @@ export default function UptimePage() {
                         <div className="flex items-center gap-6">
                           <div className="text-right">
                             <p className="text-sm font-medium">
-                              {monitor.uptime_24h !== null
-                                ? `${monitor.uptime_24h.toFixed(1)}%`
-                                : "-"}
+                              {monitor.uptime_24h !== null ? `${monitor.uptime_24h.toFixed(1)}%` : "-"}
                             </p>
                             <p className="text-xs text-muted-foreground">Uptime</p>
                           </div>
                           <div className="text-right">
                             <p className="text-sm font-medium">
-                              {monitor.avg_response_24h !== null
-                                ? `${Math.round(monitor.avg_response_24h)}ms`
-                                : "-"}
+                              {monitor.avg_response_24h !== null ? `${Math.round(monitor.avg_response_24h)}ms` : "-"}
                             </p>
                             <p className="text-xs text-muted-foreground">Response</p>
                           </div>
                           <div className="text-right">
-                            <p className="text-sm font-medium">
-                              {formatRelativeTime(monitor.last_checked_at)}
-                            </p>
+                            <p className="text-sm font-medium">{formatRelativeTime(monitor.last_checked_at)}</p>
                             <p className="text-xs text-muted-foreground">Last Check</p>
                           </div>
                           <div className="flex items-center gap-2">
@@ -757,11 +739,7 @@ export default function UptimePage() {
                               }}
                               aria-label={monitor.is_active ? `Pause ${monitor.name}` : `Resume ${monitor.name}`}
                             >
-                              {monitor.is_active ? (
-                                <Pause className="h-4 w-4" />
-                              ) : (
-                                <Play className="h-4 w-4" />
-                              )}
+                              {monitor.is_active ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
                             </Button>
                             <Button
                               variant="ghost"
@@ -786,10 +764,7 @@ export default function UptimePage() {
                       {/* Expanded inline detail */}
                       <div id={`monitor-detail-${monitor.id}`}>
                         {isExpanded && selectedProject && (
-                          <MonitorDetail
-                            projectId={selectedProject.id}
-                            monitorId={monitor.id}
-                          />
+                          <MonitorDetail projectId={selectedProject.id} monitorId={monitor.id} />
                         )}
                       </div>
                     </CardContent>
@@ -802,16 +777,17 @@ export default function UptimePage() {
       )}
 
       {/* Create Monitor Dialog */}
-      <Dialog open={showCreateModal} onOpenChange={(open) => {
-        setShowCreateModal(open);
-        if (!open) setNewMonitor({ name: "", url: "", method: "GET", interval_seconds: 60 });
-      }}>
+      <Dialog
+        open={showCreateModal}
+        onOpenChange={(open) => {
+          setShowCreateModal(open);
+          if (!open) setNewMonitor({ name: "", url: "", method: "GET", interval_seconds: 60 });
+        }}
+      >
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Create Monitor</DialogTitle>
-            <DialogDescription>
-              Add a new uptime monitor to track endpoint availability.
-            </DialogDescription>
+            <DialogDescription>Add a new uptime monitor to track endpoint availability.</DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-2">
@@ -820,9 +796,7 @@ export default function UptimePage() {
                 id="name"
                 placeholder="My API"
                 value={newMonitor.name}
-                onChange={(e) =>
-                  setNewMonitor({ ...newMonitor, name: e.target.value })
-                }
+                onChange={(e) => setNewMonitor({ ...newMonitor, name: e.target.value })}
               />
             </div>
             <div className="space-y-2">
@@ -831,20 +805,13 @@ export default function UptimePage() {
                 id="url"
                 placeholder="https://api.example.com/health"
                 value={newMonitor.url}
-                onChange={(e) =>
-                  setNewMonitor({ ...newMonitor, url: e.target.value })
-                }
+                onChange={(e) => setNewMonitor({ ...newMonitor, url: e.target.value })}
               />
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label htmlFor="method">Method</Label>
-                <Select
-                  value={newMonitor.method}
-                  onValueChange={(v) =>
-                    setNewMonitor({ ...newMonitor, method: v })
-                  }
-                >
+                <Select value={newMonitor.method} onValueChange={(v) => setNewMonitor({ ...newMonitor, method: v })}>
                   <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
@@ -859,9 +826,7 @@ export default function UptimePage() {
                 <Label htmlFor="interval">Check Interval</Label>
                 <Select
                   value={String(newMonitor.interval_seconds)}
-                  onValueChange={(v) =>
-                    setNewMonitor({ ...newMonitor, interval_seconds: Number(v) })
-                  }
+                  onValueChange={(v) => setNewMonitor({ ...newMonitor, interval_seconds: Number(v) })}
                 >
                   <SelectTrigger>
                     <SelectValue />
@@ -877,21 +842,11 @@ export default function UptimePage() {
             </div>
           </div>
           <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setShowCreateModal(false)}
-            >
+            <Button variant="outline" onClick={() => setShowCreateModal(false)}>
               Cancel
             </Button>
-            <Button
-              onClick={handleCreateMonitor}
-              disabled={isCreating || !newMonitor.name || !newMonitor.url}
-            >
-              {isCreating ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <Plus className="mr-2 h-4 w-4" />
-              )}
+            <Button onClick={handleCreateMonitor} disabled={isCreating || !newMonitor.name || !newMonitor.url}>
+              {isCreating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Plus className="mr-2 h-4 w-4" />}
               Create Monitor
             </Button>
           </DialogFooter>
@@ -911,6 +866,16 @@ export default function UptimePage() {
         variant="destructive"
         onConfirm={handleConfirmDelete}
         loading={isDeleting}
+      />
+
+      <ConfirmDialog
+        open={bulkDeleteConfirmOpen}
+        onOpenChange={setBulkDeleteConfirmOpen}
+        title={`Delete ${selectedMonitors.size} Monitors`}
+        description={`Are you sure you want to delete ${selectedMonitors.size} monitors? This action cannot be undone and all associated check history will be lost.`}
+        confirmLabel="Delete All"
+        variant="destructive"
+        onConfirm={handleConfirmBulkDelete}
       />
     </div>
   );

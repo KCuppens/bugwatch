@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useParams, useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
@@ -135,6 +135,34 @@ export default function IssueDetailPage() {
 
   // Breadcrumb filter
   const [breadcrumbFilter, setBreadcrumbFilter] = useState<string>("all");
+
+  const filteredBreadcrumbs = useMemo(() => {
+    if (!issue?.breadcrumbs) return [];
+    return issue.breadcrumbs.filter((crumb) => {
+      if (breadcrumbFilter === "all") return true;
+      const cat = ((crumb.category ?? "") || (crumb.type ?? "")).toLowerCase();
+      if (breadcrumbFilter === "http") return ["http", "xhr", "fetch"].includes(cat);
+      if (breadcrumbFilter === "navigation") return cat === "navigation";
+      if (breadcrumbFilter === "console") return cat === "console";
+      if (breadcrumbFilter === "error") return crumb.level === "error";
+      return true;
+    });
+  }, [issue?.breadcrumbs, breadcrumbFilter]);
+
+  const chartBuckets = useMemo(() => {
+    if (!frequencyData) return [];
+    if (frequencyPeriod === "24h") {
+      return frequencyData.buckets.reduce<{ timestamp: string; count: number }[]>((acc, b, i) => {
+        const gi = Math.floor(i / 4);
+        if (!acc[gi]) acc[gi] = { timestamp: b.timestamp, count: 0 };
+        acc[gi]!.count += b.count;
+        return acc;
+      }, []);
+    }
+    return frequencyData.buckets;
+  }, [frequencyData, frequencyPeriod]);
+
+  const chartMax = useMemo(() => Math.max(...chartBuckets.map((b) => b.count), 1), [chartBuckets]);
 
   // Comments (UI-only state — data comes from hook)
   const [newComment, setNewComment] = useState("");
@@ -848,15 +876,7 @@ export default function IssueDetailPage() {
                     <p className="text-center text-muted-foreground py-6 text-sm">No breadcrumbs captured</p>
                   ) : (
                     (() => {
-                      const filtered = issue.breadcrumbs.filter((crumb) => {
-                        if (breadcrumbFilter === "all") return true;
-                        const cat = (crumb.category || crumb.type || "").toLowerCase();
-                        if (breadcrumbFilter === "http") return ["http", "xhr", "fetch"].includes(cat);
-                        if (breadcrumbFilter === "navigation") return cat === "navigation";
-                        if (breadcrumbFilter === "console") return cat === "console";
-                        if (breadcrumbFilter === "error") return crumb.level === "error";
-                        return true;
-                      });
+                      const filtered = filteredBreadcrumbs;
                       if (filtered.length === 0)
                         return (
                           <p className="text-center text-muted-foreground py-6 text-sm">No matching breadcrumbs</p>
@@ -1172,20 +1192,7 @@ export default function IssueDetailPage() {
                     aria-label={`Frequency chart: ${frequencyData.total} events in the last ${frequencyPeriod}`}
                   >
                     {(() => {
-                      const buckets =
-                        frequencyPeriod === "24h"
-                          ? frequencyData.buckets.reduce(
-                              (acc, b, i) => {
-                                const gi = Math.floor(i / 4);
-                                if (!acc[gi]) acc[gi] = { timestamp: b.timestamp, count: 0 };
-                                acc[gi]!.count += b.count;
-                                return acc;
-                              },
-                              [] as { timestamp: string; count: number }[]
-                            )
-                          : frequencyData.buckets;
-                      const max = Math.max(...buckets.map((b) => b.count), 1);
-                      return buckets.map((b, i) => (
+                      return chartBuckets.map((b, i) => (
                         <div
                           key={i}
                           className="flex-1 group relative"
@@ -1194,7 +1201,7 @@ export default function IssueDetailPage() {
                           <div
                             className={`w-full rounded-t transition-colors ${b.count > 0 ? "bg-blue-600 hover:bg-blue-500" : "bg-muted"}`}
                             style={{
-                              height: `${Math.max((b.count / max) * 100, b.count > 0 ? 15 : 3)}%`,
+                              height: `${Math.max((b.count / chartMax) * 100, b.count > 0 ? 15 : 3)}%`,
                               minHeight: b.count > 0 ? "4px" : "2px",
                             }}
                           />
@@ -1396,7 +1403,7 @@ export default function IssueDetailPage() {
               ) : comments.length === 0 ? (
                 <p className="text-xs text-muted-foreground py-2">No comments yet</p>
               ) : (
-                <div className="space-y-2">
+                <div id="comment-list" className="space-y-2">
                   {(showAllComments ? comments : comments.slice(0, 3)).map((comment) => (
                     <div key={comment.id} className="group flex items-start gap-2 text-sm">
                       <div className="h-6 w-6 rounded-full bg-accent-2/15 text-accent-2 flex items-center justify-center text-xs font-medium shrink-0">
@@ -1472,6 +1479,7 @@ export default function IssueDetailPage() {
                     <button
                       onClick={() => setShowAllComments(true)}
                       aria-expanded={showAllComments}
+                      aria-controls="comment-list"
                       className="text-xs text-accent-2 hover:underline w-full text-center pt-1"
                     >
                       View all {comments.length} comments

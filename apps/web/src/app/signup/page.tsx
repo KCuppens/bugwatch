@@ -277,6 +277,7 @@ export default function SignupPage() {
                   required
                   autoComplete="new-password"
                   disabled={isLoading}
+                  aria-describedby="confirm-password-hint"
                   className={`${inputClass} pr-10`}
                 />
                 <button
@@ -289,7 +290,7 @@ export default function SignupPage() {
                 </button>
               </div>
               {confirmPassword && (
-                <div className="flex items-center gap-1.5 text-xs mt-1">
+                <div id="confirm-password-hint" aria-live="polite" className="flex items-center gap-1.5 text-xs mt-1">
                   {passwordsMatch ? (
                     <>
                       <Check className="h-3.5 w-3.5 text-[hsl(var(--accent))]" />

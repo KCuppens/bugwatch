@@ -399,6 +399,7 @@ export class BatchTransport implements Transport {
   private maxBatchSize: number;
   private flushInterval: number;
   private timer: ReturnType<typeof setInterval> | null = null;
+  private flushing = false;
 
   constructor(transport: Transport, options: { maxBatchSize?: number; flushInterval?: number } = {}) {
     this.transport = transport;
@@ -418,6 +419,7 @@ export class BatchTransport implements Transport {
   }
 
   async flush(): Promise<void> {
+    if (this.flushing) return;
     if (this.queue.length === 0) {
       // Also flush the underlying transport's in-flight requests
       if (this.transport.flush) {
@@ -426,19 +428,26 @@ export class BatchTransport implements Transport {
       return;
     }
 
-    const events = this.queue.splice(0, this.maxBatchSize);
+    this.flushing = true;
+    try {
+      const events = this.queue.splice(0, this.maxBatchSize);
 
-    // Send events in parallel, don't fail the batch if individual events fail
-    await Promise.allSettled(events.map((event) => this.transport.send(event)));
+      // Send events in parallel, don't fail the batch if individual events fail
+      await Promise.allSettled(events.map((event) => this.transport.send(event)));
 
-    // If there are still events in the queue, flush recursively
-    if (this.queue.length > 0) {
-      await this.flush();
-    }
+      // If there are still events in the queue, flush recursively
+      if (this.queue.length > 0) {
+        this.flushing = false;
+        await this.flush();
+        return;
+      }
 
-    // Wait for underlying transport's in-flight requests
-    if (this.transport.flush) {
-      await this.transport.flush();
+      // Wait for underlying transport's in-flight requests
+      if (this.transport.flush) {
+        await this.transport.flush();
+      }
+    } finally {
+      this.flushing = false;
     }
   }
 

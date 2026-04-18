@@ -1,19 +1,10 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
-import {
-  Card,
-  CardContent,
-} from "@/components/ui/card";
+import { useState, useEffect, useCallback, useMemo } from "react";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   Cpu,
   MemoryStick,
@@ -31,21 +22,9 @@ import {
   AlertCircle,
 } from "lucide-react";
 import { toast } from "sonner";
-import {
-  serversApi,
-  type ServerInfo,
-  type ServerMetricData,
-} from "@/lib/api";
+import { serversApi, type ServerInfo, type ServerMetricData } from "@/lib/api";
 import { useProject } from "@/lib/project-context";
-import {
-  AreaChart,
-  Area,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-} from "recharts";
+import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 
 function formatBytes(bytes: number | null): string {
   if (bytes === null || bytes === undefined) return "N/A";
@@ -97,9 +76,26 @@ export default function ServerPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [hasAgent, setHasAgent] = useState<boolean | null>(null);
   const [copiedInstall, setCopiedInstall] = useState(false);
-  const [processSort, setProcessSort] = useState<{ field: "cpu" | "mem" | "name"; dir: "asc" | "desc" }>({ field: "cpu", dir: "desc" });
+  const [processSort, setProcessSort] = useState<{ field: "cpu" | "mem" | "name"; dir: "asc" | "desc" }>({
+    field: "cpu",
+    dir: "desc",
+  });
   const [processFilter, setProcessFilter] = useState("");
   const [showAllProcesses, setShowAllProcesses] = useState(false);
+
+  const displayedProcesses = useMemo(() => {
+    if (!latest?.processes) return [];
+    const filtered = latest.processes.filter(
+      (p) => !processFilter || p.name.toLowerCase().includes(processFilter.toLowerCase())
+    );
+    const sorted = [...filtered].sort((a, b) => {
+      const dir = processSort.dir === "asc" ? 1 : -1;
+      if (processSort.field === "cpu") return (a.cpu_percent - b.cpu_percent) * dir;
+      if (processSort.field === "mem") return (a.mem_percent - b.mem_percent) * dir;
+      return a.name.localeCompare(b.name) * dir;
+    });
+    return showAllProcesses ? sorted : sorted.slice(0, 10);
+  }, [latest?.processes, processFilter, processSort, showAllProcesses]);
 
   // Fetch servers when project changes
   useEffect(() => {
@@ -137,7 +133,7 @@ export default function ServerPage() {
           setServers([]);
           setSelectedServer(null);
         }
-      } catch (err) {
+      } catch {
         if (cancelled) return;
         toast.error("Failed to load servers");
         setHasAgent(false);
@@ -146,7 +142,9 @@ export default function ServerPage() {
       }
     }
     fetchServers();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [selectedProject]);
 
   // Fetch metrics when server/period changes
@@ -160,7 +158,7 @@ export default function ServerPage() {
       setMetrics(metricsRes.data);
       setLatest(latestRes.data);
       setServerInfo(latestRes.server);
-    } catch (err) {
+    } catch {
       toast.error("Failed to load metrics");
     }
   }, [selectedProject, selectedServer, period]);
@@ -180,7 +178,10 @@ export default function ServerPage() {
     }
 
     function stopPolling() {
-      if (interval) { clearInterval(interval); interval = null; }
+      if (interval) {
+        clearInterval(interval);
+        interval = null;
+      }
     }
 
     function handleVisibilityChange() {
@@ -244,9 +245,7 @@ export default function ServerPage() {
       <div className="space-y-6">
         <div>
           <h1 className="font-display text-heading-lg">Server Monitoring</h1>
-          <p className="text-muted-foreground mt-1">
-            Select a project from the sidebar to view server metrics.
-          </p>
+          <p className="text-muted-foreground mt-1">Select a project from the sidebar to view server metrics.</p>
         </div>
       </div>
     );
@@ -258,9 +257,7 @@ export default function ServerPage() {
       <div className="space-y-6">
         <div>
           <h1 className="font-display text-heading-lg">Server Monitoring</h1>
-          <p className="text-muted-foreground mt-1">
-            Monitor your server health alongside error tracking
-          </p>
+          <p className="text-muted-foreground mt-1">Monitor your server health alongside error tracking</p>
         </div>
 
         <Card className="border-border-subtle">
@@ -286,7 +283,9 @@ export default function ServerPage() {
                   className="h-7 text-xs"
                   onClick={() => {
                     try {
-                      navigator.clipboard.writeText(`curl -sSL https://install.bugwatch.dev | bash -s -- --api-key ${apiKey}`);
+                      navigator.clipboard.writeText(
+                        `curl -sSL https://install.bugwatch.dev | bash -s -- --api-key ${apiKey}`
+                      );
                       setCopiedInstall(true);
                       toast.success("Install command copied");
                       setTimeout(() => setCopiedInstall(false), 2000);
@@ -295,7 +294,11 @@ export default function ServerPage() {
                     }
                   }}
                 >
-                  {copiedInstall ? <Check className="h-3 w-3 mr-1 text-green-500" /> : <Copy className="h-3 w-3 mr-1" />}
+                  {copiedInstall ? (
+                    <Check className="h-3 w-3 mr-1 text-green-500" />
+                  ) : (
+                    <Copy className="h-3 w-3 mr-1" />
+                  )}
                   {copiedInstall ? "Copied" : "Copy"}
                 </Button>
               </div>
@@ -304,8 +307,7 @@ export default function ServerPage() {
               </code>
             </div>
             <p className="text-xs text-muted-foreground">
-              The agent collects metrics every 60 seconds and sends them securely to BugWatch.
-              No root access required.
+              The agent collects metrics every 60 seconds and sends them securely to BugWatch. No root access required.
             </p>
           </CardContent>
         </Card>
@@ -328,7 +330,7 @@ export default function ServerPage() {
 
   // Check if agent is offline (no data in 5+ minutes)
   const isAgentOffline = latest?.recorded_at
-    ? (Date.now() - new Date(latest.recorded_at).getTime()) > 5 * 60 * 1000
+    ? Date.now() - new Date(latest.recorded_at).getTime() > 5 * 60 * 1000
     : false;
 
   const formatTimeAgo = (dateString: string) => {
@@ -387,9 +389,7 @@ export default function ServerPage() {
                 variant="ghost"
                 size="sm"
                 className={`px-3 py-1.5 text-xs ${
-                  period === p
-                    ? "bg-accent-2/12 text-accent-2"
-                    : "text-muted-foreground hover:text-foreground"
+                  period === p ? "bg-accent-2/12 text-accent-2" : "text-muted-foreground hover:text-foreground"
                 }`}
                 onClick={() => setPeriod(p)}
               >
@@ -408,7 +408,9 @@ export default function ServerPage() {
               <Cpu className="h-4 w-4 text-muted-foreground" />
               <span className="text-xs text-muted-foreground">CPU</span>
             </div>
-            <p className={`font-display text-2xl font-semibold tabular-nums ${getStatusColor(latest?.cpu_usage_percent ?? null)}`}>
+            <p
+              className={`font-display text-2xl font-semibold tabular-nums ${getStatusColor(latest?.cpu_usage_percent ?? null)}`}
+            >
               {latest?.cpu_usage_percent !== null && latest?.cpu_usage_percent !== undefined
                 ? `${latest.cpu_usage_percent.toFixed(1)}%`
                 : "N/A"}
@@ -428,7 +430,9 @@ export default function ServerPage() {
               <MemoryStick className="h-4 w-4 text-muted-foreground" />
               <span className="text-xs text-muted-foreground">Memory</span>
             </div>
-            <p className={`font-display text-2xl font-semibold tabular-nums ${getStatusColor(latest?.mem_usage_percent ?? null)}`}>
+            <p
+              className={`font-display text-2xl font-semibold tabular-nums ${getStatusColor(latest?.mem_usage_percent ?? null)}`}
+            >
               {latest?.mem_usage_percent !== null && latest?.mem_usage_percent !== undefined
                 ? `${latest.mem_usage_percent.toFixed(1)}%`
                 : "N/A"}
@@ -444,23 +448,22 @@ export default function ServerPage() {
           </CardContent>
         </Card>
 
-        <Card className={`border ${getStatusBg(
-          latest?.disks?.[0]?.usage_percent ?? null
-        )}`}>
+        <Card className={`border ${getStatusBg(latest?.disks?.[0]?.usage_percent ?? null)}`}>
           <CardContent className="p-4">
             <div className="flex items-center gap-2 mb-2">
               <HardDrive className="h-4 w-4 text-muted-foreground" />
               <span className="text-xs text-muted-foreground">Disk</span>
             </div>
-            <p className={`font-display text-2xl font-semibold tabular-nums ${getStatusColor(
-              latest?.disks?.[0]?.usage_percent ?? null
-            )}`}>
-              {latest?.disks?.[0]?.usage_percent !== undefined
-                ? `${latest.disks[0].usage_percent.toFixed(1)}%`
-                : "N/A"}
+            <p
+              className={`font-display text-2xl font-semibold tabular-nums ${getStatusColor(
+                latest?.disks?.[0]?.usage_percent ?? null
+              )}`}
+            >
+              {latest?.disks?.[0]?.usage_percent !== undefined ? `${latest.disks[0].usage_percent.toFixed(1)}%` : "N/A"}
             </p>
             <p className="text-xs text-muted-foreground mt-1">
-              {latest?.disks?.[0] && `${formatBytes(latest.disks[0].used_bytes)} / ${formatBytes(latest.disks[0].total_bytes)}`}
+              {latest?.disks?.[0] &&
+                `${formatBytes(latest.disks[0].used_bytes)} / ${formatBytes(latest.disks[0].total_bytes)}`}
             </p>
             <div className="mt-2 flex items-center gap-0.5 h-1.5 rounded-full overflow-hidden bg-surface-3">
               <div className="h-full bg-green-500/60" style={{ width: "70%" }} />
@@ -477,9 +480,7 @@ export default function ServerPage() {
               <span className="text-xs text-muted-foreground">Load Average</span>
             </div>
             <p className="font-display text-2xl font-semibold tabular-nums">
-              {latest?.load_avg_1 !== null && latest?.load_avg_1 !== undefined
-                ? latest.load_avg_1.toFixed(2)
-                : "N/A"}
+              {latest?.load_avg_1 !== null && latest?.load_avg_1 !== undefined ? latest.load_avg_1.toFixed(2) : "N/A"}
             </p>
             <p className="text-xs text-muted-foreground mt-1">
               {latest?.load_avg_5 != null && `5m: ${latest?.load_avg_5?.toFixed(2)}`}
@@ -500,20 +501,36 @@ export default function ServerPage() {
         <Card className="border-border-subtle">
           <CardContent className="p-4">
             <h3 className="text-sm font-medium mb-4">CPU Usage</h3>
-            <div className="h-48">
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={chartData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-                  <XAxis dataKey="time" tick={{ fontSize: 11, fill: "#888" }} />
-                  <YAxis domain={[0, 100]} tick={{ fontSize: 11, fill: "#888" }} unit="%" />
-                  <Tooltip
-                    contentStyle={{ backgroundColor: "#1a1a2e", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "8px" }}
-                    labelStyle={{ color: "#888" }}
-                  />
-                  <Area type="monotone" dataKey="cpu" stroke="#3b82f6" fill="#3b82f6" fillOpacity={0.1} name="CPU %" />
-                </AreaChart>
-              </ResponsiveContainer>
-            </div>
+            <figure>
+              <figcaption className="sr-only">
+                CPU usage over {period}: current {latest?.cpu_usage_percent?.toFixed(1) ?? "—"}%
+              </figcaption>
+              <div className="h-48">
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={chartData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+                    <XAxis dataKey="time" tick={{ fontSize: 11, fill: "#888" }} />
+                    <YAxis domain={[0, 100]} tick={{ fontSize: 11, fill: "#888" }} unit="%" />
+                    <Tooltip
+                      contentStyle={{
+                        backgroundColor: "#1a1a2e",
+                        border: "1px solid rgba(255,255,255,0.1)",
+                        borderRadius: "8px",
+                      }}
+                      labelStyle={{ color: "#888" }}
+                    />
+                    <Area
+                      type="monotone"
+                      dataKey="cpu"
+                      stroke="#3b82f6"
+                      fill="#3b82f6"
+                      fillOpacity={0.1}
+                      name="CPU %"
+                    />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </div>
+            </figure>
           </CardContent>
         </Card>
 
@@ -521,20 +538,36 @@ export default function ServerPage() {
         <Card className="border-border-subtle">
           <CardContent className="p-4">
             <h3 className="text-sm font-medium mb-4">Memory Usage</h3>
-            <div className="h-48">
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={chartData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-                  <XAxis dataKey="time" tick={{ fontSize: 11, fill: "#888" }} />
-                  <YAxis domain={[0, 100]} tick={{ fontSize: 11, fill: "#888" }} unit="%" />
-                  <Tooltip
-                    contentStyle={{ backgroundColor: "#1a1a2e", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "8px" }}
-                    labelStyle={{ color: "#888" }}
-                  />
-                  <Area type="monotone" dataKey="memory" stroke="#8b5cf6" fill="#8b5cf6" fillOpacity={0.1} name="Memory %" />
-                </AreaChart>
-              </ResponsiveContainer>
-            </div>
+            <figure>
+              <figcaption className="sr-only">
+                Memory usage over {period}: current {latest?.mem_usage_percent?.toFixed(1) ?? "—"}%
+              </figcaption>
+              <div className="h-48">
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={chartData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+                    <XAxis dataKey="time" tick={{ fontSize: 11, fill: "#888" }} />
+                    <YAxis domain={[0, 100]} tick={{ fontSize: 11, fill: "#888" }} unit="%" />
+                    <Tooltip
+                      contentStyle={{
+                        backgroundColor: "#1a1a2e",
+                        border: "1px solid rgba(255,255,255,0.1)",
+                        borderRadius: "8px",
+                      }}
+                      labelStyle={{ color: "#888" }}
+                    />
+                    <Area
+                      type="monotone"
+                      dataKey="memory"
+                      stroke="#8b5cf6"
+                      fill="#8b5cf6"
+                      fillOpacity={0.1}
+                      name="Memory %"
+                    />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </div>
+            </figure>
           </CardContent>
         </Card>
 
@@ -542,22 +575,29 @@ export default function ServerPage() {
         <Card className="border-border-subtle">
           <CardContent className="p-4">
             <h3 className="text-sm font-medium mb-4">Network I/O</h3>
-            <div className="h-48">
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={chartData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-                  <XAxis dataKey="time" tick={{ fontSize: 11, fill: "#888" }} />
-                  <YAxis tick={{ fontSize: 11, fill: "#888" }} />
-                  <Tooltip
-                    contentStyle={{ backgroundColor: "#1a1a2e", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "8px" }}
-                    labelStyle={{ color: "#888" }}
-                    formatter={(value: number) => formatBytes(value) + "/s"}
-                  />
-                  <Area type="monotone" dataKey="netRx" stroke="#10b981" fill="#10b981" fillOpacity={0.1} name="RX" />
-                  <Area type="monotone" dataKey="netTx" stroke="#f59e0b" fill="#f59e0b" fillOpacity={0.1} name="TX" />
-                </AreaChart>
-              </ResponsiveContainer>
-            </div>
+            <figure>
+              <figcaption className="sr-only">Network I/O over {period}</figcaption>
+              <div className="h-48">
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={chartData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+                    <XAxis dataKey="time" tick={{ fontSize: 11, fill: "#888" }} />
+                    <YAxis tick={{ fontSize: 11, fill: "#888" }} />
+                    <Tooltip
+                      contentStyle={{
+                        backgroundColor: "#1a1a2e",
+                        border: "1px solid rgba(255,255,255,0.1)",
+                        borderRadius: "8px",
+                      }}
+                      labelStyle={{ color: "#888" }}
+                      formatter={(value: number) => formatBytes(value) + "/s"}
+                    />
+                    <Area type="monotone" dataKey="netRx" stroke="#10b981" fill="#10b981" fillOpacity={0.1} name="RX" />
+                    <Area type="monotone" dataKey="netTx" stroke="#f59e0b" fill="#f59e0b" fillOpacity={0.1} name="TX" />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </div>
+            </figure>
           </CardContent>
         </Card>
 
@@ -565,22 +605,52 @@ export default function ServerPage() {
         <Card className="border-border-subtle">
           <CardContent className="p-4">
             <h3 className="text-sm font-medium mb-4">Load Average</h3>
-            <div className="h-48">
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={chartData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-                  <XAxis dataKey="time" tick={{ fontSize: 11, fill: "#888" }} />
-                  <YAxis tick={{ fontSize: 11, fill: "#888" }} />
-                  <Tooltip
-                    contentStyle={{ backgroundColor: "#1a1a2e", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "8px" }}
-                    labelStyle={{ color: "#888" }}
-                  />
-                  <Area type="monotone" dataKey="load1" stroke="#3b82f6" fill="#3b82f6" fillOpacity={0.05} name="1m" />
-                  <Area type="monotone" dataKey="load5" stroke="#8b5cf6" fill="#8b5cf6" fillOpacity={0.05} name="5m" />
-                  <Area type="monotone" dataKey="load15" stroke="#ec4899" fill="#ec4899" fillOpacity={0.05} name="15m" />
-                </AreaChart>
-              </ResponsiveContainer>
-            </div>
+            <figure>
+              <figcaption className="sr-only">
+                Load average over {period}: 1m {latest?.load_avg_1?.toFixed(2) ?? "—"}
+              </figcaption>
+              <div className="h-48">
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={chartData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+                    <XAxis dataKey="time" tick={{ fontSize: 11, fill: "#888" }} />
+                    <YAxis tick={{ fontSize: 11, fill: "#888" }} />
+                    <Tooltip
+                      contentStyle={{
+                        backgroundColor: "#1a1a2e",
+                        border: "1px solid rgba(255,255,255,0.1)",
+                        borderRadius: "8px",
+                      }}
+                      labelStyle={{ color: "#888" }}
+                    />
+                    <Area
+                      type="monotone"
+                      dataKey="load1"
+                      stroke="#3b82f6"
+                      fill="#3b82f6"
+                      fillOpacity={0.05}
+                      name="1m"
+                    />
+                    <Area
+                      type="monotone"
+                      dataKey="load5"
+                      stroke="#8b5cf6"
+                      fill="#8b5cf6"
+                      fillOpacity={0.05}
+                      name="5m"
+                    />
+                    <Area
+                      type="monotone"
+                      dataKey="load15"
+                      stroke="#ec4899"
+                      fill="#ec4899"
+                      fillOpacity={0.05}
+                      name="15m"
+                    />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </div>
+            </figure>
           </CardContent>
         </Card>
       </div>
@@ -623,7 +693,7 @@ export default function ServerPage() {
           <CardContent className="p-4">
             <h3 className="text-sm font-medium mb-3">Disk Usage</h3>
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+              <table className="w-full text-sm" aria-label="Disk usage">
                 <thead>
                   <tr className="text-muted-foreground text-left border-b border-border-subtle">
                     <th className="pb-2 font-medium">Mount</th>
@@ -650,8 +720,8 @@ export default function ServerPage() {
                                 disk.usage_percent >= 90
                                   ? "bg-red-500"
                                   : disk.usage_percent >= 70
-                                  ? "bg-yellow-500"
-                                  : "bg-green-500"
+                                    ? "bg-yellow-500"
+                                    : "bg-green-500"
                               }`}
                               style={{ width: `${Math.min(disk.usage_percent, 100)}%` }}
                             />
@@ -671,94 +741,154 @@ export default function ServerPage() {
       )}
 
       {/* Process Table - Sortable & Filterable */}
-      {latest?.processes && latest.processes.length > 0 && (() => {
-        const filtered = latest.processes.filter(p =>
-          !processFilter || p.name.toLowerCase().includes(processFilter.toLowerCase())
-        );
-        const sorted = [...filtered].sort((a, b) => {
-          const dir = processSort.dir === "asc" ? 1 : -1;
-          if (processSort.field === "cpu") return (a.cpu_percent - b.cpu_percent) * dir;
-          if (processSort.field === "mem") return (a.mem_percent - b.mem_percent) * dir;
-          return a.name.localeCompare(b.name) * dir;
-        });
-        const displayed = showAllProcesses ? sorted : sorted.slice(0, 10);
+      {latest?.processes &&
+        latest.processes.length > 0 &&
+        (() => {
+          const filteredCount = latest.processes.filter(
+            (p) => !processFilter || p.name.toLowerCase().includes(processFilter.toLowerCase())
+          ).length;
 
-        const SortIcon = ({ field }: { field: typeof processSort.field }) => {
-          if (processSort.field !== field) return null;
-          return processSort.dir === "desc" ? <ChevronDown className="h-3 w-3 inline ml-0.5" /> : <ChevronUp className="h-3 w-3 inline ml-0.5" />;
-        };
+          const SortIcon = ({ field }: { field: typeof processSort.field }) => {
+            if (processSort.field !== field) return null;
+            return processSort.dir === "desc" ? (
+              <ChevronDown className="h-3 w-3 inline ml-0.5" />
+            ) : (
+              <ChevronUp className="h-3 w-3 inline ml-0.5" />
+            );
+          };
 
-        const toggleSort = (field: typeof processSort.field) => {
-          setProcessSort(prev => ({
-            field,
-            dir: prev.field === field && prev.dir === "desc" ? "asc" : "desc",
-          }));
-        };
+          const toggleSort = (field: typeof processSort.field) => {
+            setProcessSort((prev) => ({
+              field,
+              dir: prev.field === field && prev.dir === "desc" ? "asc" : "desc",
+            }));
+          };
 
-        return (
-          <Card className="border-border-subtle">
-            <CardContent className="p-4">
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="text-sm font-medium">Processes ({filtered.length})</h3>
-                <div className="flex items-center gap-2">
-                  <div className="relative">
-                    <Search className="h-3.5 w-3.5 absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground" />
-                    <input
-                      type="text"
-                      placeholder="Filter..."
-                      value={processFilter}
-                      onChange={(e) => setProcessFilter(e.target.value)}
-                      className="h-7 pl-7 pr-2 text-xs rounded-md border bg-background w-36"
-                    />
+          return (
+            <Card className="border-border-subtle">
+              <CardContent className="p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-sm font-medium">Processes ({filteredCount})</h3>
+                  <div className="flex items-center gap-2">
+                    <div className="relative">
+                      <Search className="h-3.5 w-3.5 absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                      <input
+                        type="text"
+                        placeholder="Filter..."
+                        value={processFilter}
+                        onChange={(e) => setProcessFilter(e.target.value)}
+                        className="h-7 pl-7 pr-2 text-xs rounded-md border bg-background w-36"
+                      />
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 text-xs"
+                      onClick={() => setShowAllProcesses(!showAllProcesses)}
+                    >
+                      {showAllProcesses ? "Show top 10" : `Show all ${filteredCount}`}
+                    </Button>
                   </div>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-7 text-xs"
-                    onClick={() => setShowAllProcesses(!showAllProcesses)}
-                  >
-                    {showAllProcesses ? "Show top 10" : `Show all ${filtered.length}`}
-                  </Button>
                 </div>
-              </div>
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="text-muted-foreground text-left border-b border-border-subtle">
-                      <th className="pb-2 font-medium">PID</th>
-                      <th className="pb-2 font-medium cursor-pointer hover:text-foreground" onClick={() => toggleSort("name")}>
-                        Name <SortIcon field="name" />
-                      </th>
-                      <th className="pb-2 font-medium">User</th>
-                      <th className="pb-2 font-medium cursor-pointer hover:text-foreground" onClick={() => toggleSort("cpu")}>
-                        CPU % <SortIcon field="cpu" />
-                      </th>
-                      <th className="pb-2 font-medium cursor-pointer hover:text-foreground" onClick={() => toggleSort("mem")}>
-                        MEM % <SortIcon field="mem" />
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {displayed.map((proc, i) => (
-                      <tr key={i} className="border-b border-border-subtle hover:bg-surface-3 transition-colors">
-                        <td className="py-2 font-mono text-xs">{proc.pid}</td>
-                        <td className="py-2">{proc.name}</td>
-                        <td className="py-2 text-muted-foreground">{proc.user || "—"}</td>
-                        <td className="py-2">
-                          <span className={getStatusColor(proc.cpu_percent)}>{proc.cpu_percent.toFixed(1)}%</span>
-                        </td>
-                        <td className="py-2">
-                          <span className={getStatusColor(proc.mem_percent)}>{proc.mem_percent.toFixed(1)}%</span>
-                        </td>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm" aria-label="Running processes">
+                    <thead>
+                      <tr className="text-muted-foreground text-left border-b border-border-subtle">
+                        <th scope="col" className="pb-2 font-medium">
+                          PID
+                        </th>
+                        <th
+                          scope="col"
+                          role="columnheader"
+                          tabIndex={0}
+                          className="pb-2 font-medium cursor-pointer hover:text-foreground"
+                          aria-sort={
+                            processSort.field === "name"
+                              ? processSort.dir === "asc"
+                                ? "ascending"
+                                : "descending"
+                              : "none"
+                          }
+                          onClick={() => toggleSort("name")}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              toggleSort("name");
+                            }
+                          }}
+                        >
+                          Name <SortIcon field="name" />
+                        </th>
+                        <th scope="col" className="pb-2 font-medium">
+                          User
+                        </th>
+                        <th
+                          scope="col"
+                          role="columnheader"
+                          tabIndex={0}
+                          className="pb-2 font-medium cursor-pointer hover:text-foreground"
+                          aria-sort={
+                            processSort.field === "cpu"
+                              ? processSort.dir === "asc"
+                                ? "ascending"
+                                : "descending"
+                              : "none"
+                          }
+                          onClick={() => toggleSort("cpu")}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              toggleSort("cpu");
+                            }
+                          }}
+                        >
+                          CPU % <SortIcon field="cpu" />
+                        </th>
+                        <th
+                          scope="col"
+                          role="columnheader"
+                          tabIndex={0}
+                          className="pb-2 font-medium cursor-pointer hover:text-foreground"
+                          aria-sort={
+                            processSort.field === "mem"
+                              ? processSort.dir === "asc"
+                                ? "ascending"
+                                : "descending"
+                              : "none"
+                          }
+                          onClick={() => toggleSort("mem")}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              toggleSort("mem");
+                            }
+                          }}
+                        >
+                          MEM % <SortIcon field="mem" />
+                        </th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </CardContent>
-          </Card>
-        );
-      })()}
+                    </thead>
+                    <tbody>
+                      {displayedProcesses.map((proc, i) => (
+                        <tr key={i} className="border-b border-border-subtle hover:bg-surface-3 transition-colors">
+                          <td className="py-2 font-mono text-xs">{proc.pid}</td>
+                          <td className="py-2">{proc.name}</td>
+                          <td className="py-2 text-muted-foreground">{proc.user || "—"}</td>
+                          <td className="py-2">
+                            <span className={getStatusColor(proc.cpu_percent)}>{proc.cpu_percent.toFixed(1)}%</span>
+                          </td>
+                          <td className="py-2">
+                            <span className={getStatusColor(proc.mem_percent)}>{proc.mem_percent.toFixed(1)}%</span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </CardContent>
+            </Card>
+          );
+        })()}
 
       {/* Docker Table */}
       {latest?.docker && latest.docker.length > 0 && (
@@ -769,13 +899,21 @@ export default function ServerPage() {
               Docker Containers
             </h3>
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+              <table className="w-full text-sm" aria-label="Docker containers">
                 <thead>
                   <tr className="text-muted-foreground text-left border-b border-border-subtle">
-                    <th className="pb-2 font-medium">Name</th>
-                    <th className="pb-2 font-medium">Status</th>
-                    <th className="pb-2 font-medium">CPU %</th>
-                    <th className="pb-2 font-medium">Memory</th>
+                    <th scope="col" className="pb-2 font-medium">
+                      Name
+                    </th>
+                    <th scope="col" className="pb-2 font-medium">
+                      Status
+                    </th>
+                    <th scope="col" className="pb-2 font-medium">
+                      CPU %
+                    </th>
+                    <th scope="col" className="pb-2 font-medium">
+                      Memory
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
@@ -783,11 +921,13 @@ export default function ServerPage() {
                     <tr key={i} className="border-b border-border-subtle">
                       <td className="py-2 font-mono text-xs">{container.name}</td>
                       <td className="py-2">
-                        <span className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full ${
-                          container.status.toLowerCase().includes("up")
-                            ? "bg-green-500/10 text-green-400"
-                            : "bg-red-500/10 text-red-400"
-                        }`}>
+                        <span
+                          className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full ${
+                            container.status.toLowerCase().includes("up")
+                              ? "bg-green-500/10 text-green-400"
+                              : "bg-red-500/10 text-red-400"
+                          }`}
+                        >
                           {container.status}
                         </span>
                       </td>

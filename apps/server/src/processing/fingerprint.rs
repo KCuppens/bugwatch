@@ -132,18 +132,16 @@ pub fn generate_fingerprint(exception: &ExceptionInfo) -> String {
     // 1. Exception type
     components.push(exception.exception_type.clone());
 
-    // 2. Top in-app frame (the throw site)
-    // Using only the topmost frame ensures the same error thrown from different
-    // call paths (e.g., handleSubmit vs handleRetry) groups into one issue.
-    // The combination of type + throw location + normalized message is specific enough.
-    let in_app_frames: Vec<&StackFrame> = exception
+    // 2. Top in-app frame (the throw site), falling back to the topmost frame if none
+    // are marked in-app. Without a frame component, errors with the same type and
+    // normalized message (e.g., generic "fetch failed") would all merge into one issue.
+    let frame = exception
         .stacktrace
         .iter()
-        .filter(|f| f.in_app)
-        .take(1)
-        .collect();
+        .find(|f| f.in_app)
+        .or_else(|| exception.stacktrace.first());
 
-    for frame in in_app_frames {
+    if let Some(frame) = frame {
         components.push(format!("{}:{}", frame.filename, frame.function));
     }
 
@@ -194,8 +192,13 @@ fn normalize_message(message: &str) -> String {
 pub fn generate_title(exception: &ExceptionInfo) -> String {
     let value = unminify_react_error(&exception.value);
 
-    let short_message = if value.len() > 100 {
-        format!("{}...", &value[..97])
+    let short_message = if value.chars().count() > 100 {
+        let cut = value
+            .char_indices()
+            .nth(97)
+            .map(|(i, _)| i)
+            .unwrap_or(value.len());
+        format!("{}...", &value[..cut])
     } else {
         value
     };
