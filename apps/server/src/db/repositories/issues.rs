@@ -1,6 +1,7 @@
 use crate::db::{models::Issue, DbPool};
 use anyhow::Result;
 use chrono::Utc;
+use tracing::warn;
 use uuid::Uuid;
 
 pub struct IssueRepository;
@@ -151,12 +152,15 @@ impl IssueRepository {
         project_id: &str,
         status: &str,
     ) -> Result<()> {
-        sqlx::query("UPDATE issues SET status = $1 WHERE id = $2 AND project_id = $3")
+        let result = sqlx::query("UPDATE issues SET status = $1 WHERE id = $2 AND project_id = $3")
             .bind(status)
             .bind(id)
             .bind(project_id)
             .execute(pool)
             .await?;
+        if result.rows_affected() == 0 {
+            warn!(issue_id = %id, project_id = %project_id, "update_status_for_project matched 0 rows — issue may not exist in this project");
+        }
         Ok(())
     }
 
@@ -257,15 +261,16 @@ impl IssueRepository {
         let mut environment = std::collections::HashMap::new();
 
         for (facet_type, facet_value, count) in rows {
+            let count_u32 = u32::try_from(count).unwrap_or(u32::MAX);
             match facet_type.as_str() {
                 "level" => {
-                    level.insert(facet_value, count as u32);
+                    level.insert(facet_value, count_u32);
                 }
                 "status" => {
-                    status.insert(facet_value, count as u32);
+                    status.insert(facet_value, count_u32);
                 }
                 "environment" => {
-                    environment.insert(facet_value, count as u32);
+                    environment.insert(facet_value, count_u32);
                 }
                 _ => {}
             }

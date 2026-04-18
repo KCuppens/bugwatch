@@ -1,7 +1,7 @@
 use anyhow::Result;
 use serde::Deserialize;
 use std::sync::Arc;
-use tracing::{error, info};
+use tracing::{error, info, Instrument};
 
 use super::notifications::{AlertPayload, NotificationService};
 use crate::db::{
@@ -252,20 +252,24 @@ impl AlertingService {
         let app_url = self.app_url.clone();
         let mut join_set: tokio::task::JoinSet<(String, Result<()>)> = tokio::task::JoinSet::new();
 
+        let span = tracing::Span::current();
         for (rule, payload) in matches {
             let pool = pool.clone();
             let notification_service = Arc::clone(&notification_service);
             let app_url = app_url.clone();
-            join_set.spawn(async move {
-                let svc = AlertingService {
-                    pool,
-                    notification_service,
-                    app_url,
-                };
-                let rule_id = rule.id.clone();
-                let result = svc.send_alert(&rule, &payload, cooldown_minutes).await;
-                (rule_id, result)
-            });
+            join_set.spawn(
+                async move {
+                    let svc = AlertingService {
+                        pool,
+                        notification_service,
+                        app_url,
+                    };
+                    let rule_id = rule.id.clone();
+                    let result = svc.send_alert(&rule, &payload, cooldown_minutes).await;
+                    (rule_id, result)
+                }
+                .instrument(span.clone()),
+            );
         }
 
         while let Some(join_result) = join_set.join_next().await {
@@ -623,8 +627,8 @@ impl AlertingService {
             }
         }
 
-        let channel_ids: Vec<String> = match serde_json::from_str(&rule.actions) {
-            Ok(ids) => ids,
+        let channel_ids: Vec<String> = match serde_json::from_str::<Vec<String>>(&rule.actions) {
+            Ok(ids) => ids.into_iter().filter(|id| !id.trim().is_empty()).collect(),
             Err(e) => {
                 error!(rule_id = %rule_id, "Failed to parse channel IDs from actions JSON: {}", e);
                 return Ok(());
