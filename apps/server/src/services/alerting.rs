@@ -252,11 +252,11 @@ impl AlertingService {
         let app_url = self.app_url.clone();
         let mut join_set: tokio::task::JoinSet<(String, Result<()>)> = tokio::task::JoinSet::new();
 
-        let span = tracing::Span::current();
         for (rule, payload) in matches {
             let pool = pool.clone();
             let notification_service = Arc::clone(&notification_service);
             let app_url = app_url.clone();
+            let task_span = tracing::info_span!("alert_send", rule_id = %rule.id);
             join_set.spawn(
                 async move {
                     let svc = AlertingService {
@@ -268,7 +268,7 @@ impl AlertingService {
                     let result = svc.send_alert(&rule, &payload, cooldown_minutes).await;
                     (rule_id, result)
                 }
-                .instrument(span.clone()),
+                .instrument(task_span),
             );
         }
 
