@@ -640,12 +640,19 @@ export default function UptimePage() {
                 return (
                   <Card key={monitor.id}>
                     <CardContent className="p-4">
-                      <button
-                        type="button"
+                      <div
+                        role="button"
+                        tabIndex={0}
                         aria-expanded={isExpanded}
                         aria-controls={`monitor-detail-${monitor.id}`}
                         className="flex items-center justify-between cursor-pointer w-full text-left"
                         onClick={() => setExpandedMonitorId(isExpanded ? null : monitor.id)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            setExpandedMonitorId(isExpanded ? null : monitor.id);
+                          }
+                        }}
                       >
                         <div className="flex items-center gap-4">
                           <button
@@ -759,7 +766,7 @@ export default function UptimePage() {
                             )}
                           </div>
                         </div>
-                      </button>
+                      </div>
 
                       {/* Expanded inline detail */}
                       <div id={`monitor-detail-${monitor.id}`}>

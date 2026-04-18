@@ -42,11 +42,7 @@ interface UseSearchReturn {
   addToHistory: (query: string) => void;
 }
 
-export function useSearch({
-  projectId,
-  initialQuery = "",
-  debounceMs = 300,
-}: UseSearchOptions): UseSearchReturn {
+export function useSearch({ projectId, initialQuery = "", debounceMs = 300 }: UseSearchOptions): UseSearchReturn {
   // Query state
   const [query, setQuery] = useState(initialQuery);
   const [parsedQuery, setParsedQuery] = useState<ParsedQuery | null>(null);
@@ -75,9 +71,7 @@ export function useSearch({
   const suggestions = useMemo(() => {
     if (!isAutocompleteOpen) return [];
 
-    const existingFilters = parsedQuery?.tokens
-      .filter((t) => t.type === "field" && t.field)
-      .map((t) => t.field!) || [];
+    const existingFilters = parsedQuery?.tokens.filter((t) => t.type === "field" && t.field).map((t) => t.field!) || [];
 
     return getSuggestions(
       {
@@ -154,34 +148,35 @@ export function useSearch({
   queryRef.current = query;
 
   // Search function that can be called directly
-  const performSearch = useCallback(async (searchQuery: string) => {
-    if (!projectId) {
-      setResults([]);
-      setFacets(null);
-      return;
-    }
+  const performSearch = useCallback(
+    async (searchQuery: string) => {
+      if (!projectId) {
+        setResults([]);
+        setFacets(null);
+        return;
+      }
 
-    setIsLoading(true);
-    setError(null);
+      setIsLoading(true);
+      setError(null);
 
-    try {
-      const parsed = parseQuery(searchQuery);
-      const response = await issuesApi.search(projectId, {
-        filters: convertFilters(parsed),
-        sort: parsed.sort
-          ? { field: parsed.sort.field, direction: parsed.sort.direction }
-          : undefined,
-      });
+      try {
+        const parsed = parseQuery(searchQuery);
+        const response = await issuesApi.search(projectId, {
+          filters: convertFilters(parsed),
+          sort: parsed.sort ? { field: parsed.sort.field, direction: parsed.sort.direction } : undefined,
+        });
 
-      setResults(response.data);
-      setFacets(response.facets);
-    } catch (err) {
-      console.error("Search failed:", err);
-      setError("Search failed. Please try again.");
-    } finally {
-      setIsLoading(false);
-    }
-  }, [projectId, convertFilters]);
+        setResults(response.data);
+        setFacets(response.facets);
+      } catch (err) {
+        console.error("Search failed:", err);
+        setError("Search failed. Please try again.");
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [projectId, convertFilters]
+  );
 
   // Execute search when debounced query changes
   useEffect(() => {
@@ -199,12 +194,14 @@ export function useSearch({
 
       try {
         const parsed = parseQuery(debouncedQuery);
-        const response = await issuesApi.search(projectId, {
-          filters: convertFilters(parsed),
-          sort: parsed.sort
-            ? { field: parsed.sort.field, direction: parsed.sort.direction }
-            : undefined,
-        }, { signal: controller.signal });
+        const response = await issuesApi.search(
+          projectId,
+          {
+            filters: convertFilters(parsed),
+            sort: parsed.sort ? { field: parsed.sort.field, direction: parsed.sort.direction } : undefined,
+          },
+          { signal: controller.signal }
+        );
 
         setResults(response.data);
         setFacets(response.facets);
@@ -243,59 +240,59 @@ export function useSearch({
   }, []);
 
   // Select a suggestion
-  const selectSuggestion = useCallback((suggestion: Suggestion) => {
-    let newQuery: string;
+  const selectSuggestion = useCallback(
+    (suggestion: Suggestion) => {
+      let newQuery: string;
 
-    if (suggestion.type === "history" || suggestion.type === "saved") {
-      // Replace entire query
-      newQuery = suggestion.value;
-    } else {
-      // Append to query
-      const currentQuery = query.trim();
-
-      // If the suggestion is a field completion (e.g., "level:")
-      // and we're already typing that field, replace the partial
-      const words = currentQuery.split(/\s+/);
-      const lastWord = words[words.length - 1] || "";
-
-      if (suggestion.type === "field" && lastWord && !lastWord.includes(":")) {
-        // Replace partial field name with complete one
-        words[words.length - 1] = suggestion.value;
-        newQuery = words.join(" ");
-      } else if (suggestion.type === "value") {
-        // Replace the current field:partial with field:value
-        if (lastWord.includes(":")) {
-          words[words.length - 1] = suggestion.value;
-          newQuery = words.join(" ") + " ";
-        } else {
-          newQuery = currentQuery + (currentQuery ? " " : "") + suggestion.value + " ";
-        }
+      if (suggestion.type === "history" || suggestion.type === "saved") {
+        // Replace entire query
+        newQuery = suggestion.value;
       } else {
-        newQuery = currentQuery + (currentQuery ? " " : "") + suggestion.value;
+        // Append to query
+        const currentQuery = query.trim();
+
+        // If the suggestion is a field completion (e.g., "level:")
+        // and we're already typing that field, replace the partial
+        const words = currentQuery.split(/\s+/);
+        const lastWord = words[words.length - 1] || "";
+
+        if (suggestion.type === "field" && lastWord && !lastWord.includes(":")) {
+          // Replace partial field name with complete one
+          words[words.length - 1] = suggestion.value;
+          newQuery = words.join(" ");
+        } else if (suggestion.type === "value") {
+          // Replace the current field:partial with field:value
+          if (lastWord.includes(":")) {
+            words[words.length - 1] = suggestion.value;
+            newQuery = words.join(" ") + " ";
+          } else {
+            newQuery = currentQuery + (currentQuery ? " " : "") + suggestion.value + " ";
+          }
+        } else {
+          newQuery = currentQuery + (currentQuery ? " " : "") + suggestion.value;
+        }
       }
-    }
 
-    setQuery(newQuery);
-    setAutocompleteOpen(false);
+      setQuery(newQuery);
+      setAutocompleteOpen(false);
 
-    // Trigger immediate search for value suggestions (complete filters)
-    if (suggestion.type === "value" || suggestion.type === "history" || suggestion.type === "saved") {
-      // Use setTimeout to ensure state is updated before search
-      setTimeout(() => {
+      // Trigger immediate search for value suggestions (complete filters)
+      if (suggestion.type === "value" || suggestion.type === "history" || suggestion.type === "saved") {
         performSearch(newQuery.trim());
-      }, 0);
-    }
-  }, [query, performSearch]);
+      }
+    },
+    [query, performSearch]
+  );
 
   // Trigger search with a specific query (for quick filters)
-  const triggerSearch = useCallback((searchQuery: string) => {
-    setQuery(searchQuery);
-    setAutocompleteOpen(false);
-    // Use setTimeout to ensure state is updated
-    setTimeout(() => {
+  const triggerSearch = useCallback(
+    (searchQuery: string) => {
+      setQuery(searchQuery);
+      setAutocompleteOpen(false);
       performSearch(searchQuery.trim());
-    }, 0);
-  }, [performSearch]);
+    },
+    [performSearch]
+  );
 
   return {
     query,

@@ -158,6 +158,24 @@ export class HttpTransport implements Transport {
     });
   }
 
+  /**
+   * Execute a POST request with timeout/abort handling.
+   */
+  private async executeRequest(url: string, body: string, headers: Record<string, string>): Promise<Response> {
+    const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+    const timeoutId = controller ? setTimeout(() => controller.abort(), this.timeoutMs) : null;
+    try {
+      return await this.fetch(url, {
+        method: "POST",
+        headers,
+        body,
+        ...(controller && { signal: controller.signal }),
+      });
+    } finally {
+      if (timeoutId !== null) clearTimeout(timeoutId);
+    }
+  }
+
   private async sendWithRetry(event: ErrorEvent, attempt = 0, persistOnFailure = true): Promise<void> {
     const url = `${this.endpoint}/api/v1/events`;
 
@@ -166,68 +184,53 @@ export class HttpTransport implements Transport {
     }
 
     try {
-      const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
-      const timeoutId = controller ? setTimeout(() => controller.abort(), this.timeoutMs) : null;
+      const body = serializeWithTruncation(event);
+      const response = await this.executeRequest(url, body, {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${this.apiKey}`,
+        "X-Bugwatch-SDK": event.sdk?.name || "bugwatch-core",
+        "X-Bugwatch-SDK-Version": event.sdk?.version || "0.1.0",
+      });
 
-      try {
-        const body = serializeWithTruncation(event);
-
-        const response = await this.fetch(url, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${this.apiKey}`,
-            "X-Bugwatch-SDK": event.sdk?.name || "bugwatch-core",
-            "X-Bugwatch-SDK-Version": event.sdk?.version || "0.1.0",
-          },
-          body,
-          ...(controller && { signal: controller.signal }),
-        });
-
-        if (!response.ok) {
-          // Handle rate limiting with backoff
-          if (response.status === 429) {
-            const retryAfter = response.headers.get("Retry-After");
-            const parsed = retryAfter ? parseInt(retryAfter, 10) : NaN;
-            const backoffMs = !isNaN(parsed) && parsed > 0 ? parsed * 1000 : 60_000;
-            this.rateLimitedUntil = Date.now() + backoffMs;
-
-            if (this.debug) {
-              console.warn(`[Bugwatch] Rate limited. Backing off for ${backoffMs}ms`);
-            }
-            try {
-              this.onDropped?.(event.event_id, "rate_limited");
-            } catch {
-              /* */
-            }
-            return;
-          }
-
-          if (isRetryableStatus(response.status) && attempt < MAX_RETRIES) {
-            const delay = BASE_RETRY_DELAY_MS * Math.pow(2, attempt) + Math.random() * 200;
-            await new Promise((resolve) => setTimeout(resolve, delay));
-            return this.sendWithRetry(event, attempt + 1);
-          }
+      if (!response.ok) {
+        // Handle rate limiting with backoff
+        if (response.status === 429) {
+          const retryAfter = response.headers.get("Retry-After");
+          const parsed = retryAfter ? parseInt(retryAfter, 10) : NaN;
+          const backoffMs = !isNaN(parsed) && parsed > 0 ? parsed * 1000 : 60_000;
+          this.rateLimitedUntil = Date.now() + backoffMs;
 
           if (this.debug) {
-            const errorText = await response.text().catch(() => "");
-            console.error("[Bugwatch] Failed to send event:", response.status, errorText);
+            console.warn(`[Bugwatch] Rate limited. Backing off for ${backoffMs}ms`);
           }
           try {
-            this.onDropped?.(event.event_id, "network_error");
+            this.onDropped?.(event.event_id, "rate_limited");
           } catch {
             /* */
           }
           return;
         }
 
+        if (isRetryableStatus(response.status) && attempt < MAX_RETRIES) {
+          const delay = BASE_RETRY_DELAY_MS * Math.pow(2, attempt) + Math.random() * 200;
+          await new Promise((resolve) => setTimeout(resolve, delay));
+          return this.sendWithRetry(event, attempt + 1);
+        }
+
         if (this.debug) {
-          console.log("[Bugwatch] Event sent successfully:", event.event_id);
+          const errorText = await response.text().catch(() => "");
+          console.error("[Bugwatch] Failed to send event:", response.status, errorText);
         }
-      } finally {
-        if (timeoutId !== null) {
-          clearTimeout(timeoutId);
+        try {
+          this.onDropped?.(event.event_id, "network_error");
+        } catch {
+          /* */
         }
+        return;
+      }
+
+      if (this.debug) {
+        console.log("[Bugwatch] Event sent successfully:", event.event_id);
       }
     } catch (error) {
       // Retry on network errors (timeout, connection refused, etc.)
@@ -289,49 +292,35 @@ export class HttpTransport implements Transport {
 
       for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
         try {
-          const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
-          const timeoutId = controller ? setTimeout(() => controller.abort(), this.timeoutMs) : null;
+          const response = await this.executeRequest(url, body, {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${this.apiKey}`,
+            "X-Bugwatch-SDK": "bugwatch-core",
+          });
 
-          try {
-            const response = await this.fetch(url, {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                Authorization: `Bearer ${this.apiKey}`,
-                "X-Bugwatch-SDK": "bugwatch-core",
-              },
-              body,
-              ...(controller && { signal: controller.signal }),
-            });
-
-            if (!response.ok) {
-              if (response.status === 429) {
-                const retryAfter = response.headers.get("Retry-After");
-                const parsed = retryAfter ? parseInt(retryAfter, 10) : NaN;
-                const backoffMs = !isNaN(parsed) && parsed > 0 ? parsed * 1000 : 60_000;
-                this.rateLimitedUntil = Date.now() + backoffMs;
-                return;
-              }
-              if (isRetryableStatus(response.status) && attempt < MAX_RETRIES) {
-                const delay = BASE_RETRY_DELAY_MS * Math.pow(2, attempt) + Math.random() * 200;
-                await new Promise((resolve) => setTimeout(resolve, delay));
-                continue;
-              }
-              if (this.debug) {
-                console.error("[Bugwatch] Failed to send transaction:", response.status);
-              }
+          if (!response.ok) {
+            if (response.status === 429) {
+              const retryAfter = response.headers.get("Retry-After");
+              const parsed = retryAfter ? parseInt(retryAfter, 10) : NaN;
+              const backoffMs = !isNaN(parsed) && parsed > 0 ? parsed * 1000 : 60_000;
+              this.rateLimitedUntil = Date.now() + backoffMs;
               return;
             }
-
+            if (isRetryableStatus(response.status) && attempt < MAX_RETRIES) {
+              const delay = BASE_RETRY_DELAY_MS * Math.pow(2, attempt) + Math.random() * 200;
+              await new Promise((resolve) => setTimeout(resolve, delay));
+              continue;
+            }
             if (this.debug) {
-              console.log("[Bugwatch] Transaction sent successfully:", event.transaction_name);
+              console.error("[Bugwatch] Failed to send transaction:", response.status);
             }
             return;
-          } finally {
-            if (timeoutId !== null) {
-              clearTimeout(timeoutId);
-            }
           }
+
+          if (this.debug) {
+            console.log("[Bugwatch] Transaction sent successfully:", event.transaction_name);
+          }
+          return;
         } catch (error) {
           if (attempt < MAX_RETRIES) {
             const delay = BASE_RETRY_DELAY_MS * Math.pow(2, attempt) + Math.random() * 200;

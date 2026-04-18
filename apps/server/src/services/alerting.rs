@@ -1,5 +1,6 @@
 use anyhow::Result;
 use serde::Deserialize;
+use std::sync::Arc;
 use tracing::{error, info};
 
 use super::notifications::{AlertPayload, NotificationService};
@@ -15,7 +16,7 @@ use crate::db::{
 /// Alerting service for triggering and sending alerts
 pub struct AlertingService {
     pool: DbPool,
-    notification_service: NotificationService,
+    notification_service: Arc<NotificationService>,
     app_url: String,
 }
 
@@ -180,7 +181,7 @@ fn parse_alert_condition(rule: &AlertRule) -> Option<AlertCondition> {
 /// Send a notification with up to 3 attempts (exponential back-off: 500ms,
 /// 1000ms). Transient delivery failures no longer silently drop alerts.
 async fn send_with_retry(
-    notification_service: &NotificationService,
+    notification_service: Arc<NotificationService>,
     channel: &NotificationChannel,
     payload: &AlertPayload,
     rule_id: &str,
@@ -214,10 +215,33 @@ async fn send_with_retry(
 // ─────────────────────────────────────────────────────────────────────────────
 
 impl AlertingService {
+    /// Loop over `rules`, evaluate each with `matcher`, and call `send_alert`
+    /// for every rule that produces a payload. Centralises the parse→match→send
+    /// pattern shared by all event-driven `on_*` handlers.
+    async fn evaluate_rules_and_alert(
+        &self,
+        rules: Vec<AlertRule>,
+        cooldown_minutes: Option<i32>,
+        matcher: impl Fn(&AlertCondition) -> Option<AlertPayload>,
+    ) -> Result<()> {
+        for rule in &rules {
+            let condition = match parse_alert_condition(rule) {
+                Some(c) => c,
+                None => continue,
+            };
+            if let Some(payload) = matcher(&condition) {
+                if let Err(e) = self.send_alert(rule, &payload, cooldown_minutes).await {
+                    error!(rule_id = %rule.id, "Alert delivery failed after retries: {}", e);
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub async fn new(pool: DbPool, app_url: String) -> Self {
         Self {
             pool,
-            notification_service: NotificationService::new().await,
+            notification_service: Arc::new(NotificationService::new().await),
             app_url,
         }
     }
@@ -243,23 +267,16 @@ impl AlertingService {
             project_id
         );
 
-        for rule in rules {
-            let condition = match parse_alert_condition(&rule) {
-                Some(c) => c,
-                None => continue,
-            };
-
-            // Check if condition matches
-            let matches = match &condition {
-                AlertCondition::NewIssue { level } => {
-                    level.is_none() || level.as_deref() == Some(&issue.level)
-                }
-                _ => false,
-            };
-
-            if matches {
-                tracing::debug!("Alert rule '{}' matches new_issue condition", rule.name);
-                let payload = AlertPayload {
+        let app_url = self.app_url.clone();
+        // 5-minute cooldown prevents duplicate alerts from SDK retries on
+        // the same error (on_new_issue is fired for every ingest, not just
+        // the first one that creates the issue).
+        self.evaluate_rules_and_alert(rules, Some(5), |condition| match condition {
+            AlertCondition::NewIssue { level }
+                if level.is_none() || level.as_deref() == Some(&issue.level) =>
+            {
+                tracing::debug!("Alert rule matches new_issue condition");
+                Some(AlertPayload {
                     title: format!("New {} in {}", issue.level, project.name),
                     message: issue.title.clone(),
                     severity: issue.level.clone(),
@@ -268,7 +285,7 @@ impl AlertingService {
                     trigger_id: Some(issue.id.clone()),
                     url: Some(format!(
                         "{}/dashboard/issues/{}?project={}",
-                        self.app_url, issue.id, project_id
+                        app_url, issue.id, project_id
                     )),
                     timestamp: chrono::Utc::now().to_rfc3339(),
                     project_id: None,
@@ -276,24 +293,11 @@ impl AlertingService {
                     stack_trace: None,
                     affected_users: None,
                     frequency: None,
-                };
-
-                // 5-minute cooldown prevents duplicate alerts from SDK retries on
-                // the same error (on_new_issue is fired for every ingest, not just
-                // the first one that creates the issue).
-                if let Err(e) = self.send_alert(&rule, &payload, Some(5)).await {
-                    error!(rule_id = %rule.id, "Alert delivery failed after retries: {}", e);
-                }
-            } else {
-                tracing::debug!(
-                    "Alert rule '{}' does not match (condition: {:?})",
-                    rule.name,
-                    condition
-                );
+                })
             }
-        }
-
-        Ok(())
+            _ => None,
+        })
+        .await
     }
 
     /// Trigger alerts for a monitor going down
@@ -322,37 +326,26 @@ impl AlertingService {
             project_id
         );
 
-        for rule in rules {
-            let condition = match parse_alert_condition(&rule) {
-                Some(c) => c,
-                None => continue,
-            };
-
-            // Check if condition matches
-            let matches = match &condition {
-                AlertCondition::MonitorDown { monitor_id } => {
-                    monitor_id.is_none() || monitor_id.as_deref() == Some(&monitor.id)
-                }
-                _ => false,
-            };
-
-            if matches {
-                tracing::debug!("Alert rule '{}' matches monitor_down condition", rule.name);
-                let message = match error_message {
-                    Some(e) => format!("{} is DOWN: {}", monitor.name, e),
-                    None => format!("{} is DOWN", monitor.name),
-                };
-
-                let payload = AlertPayload {
+        let app_url = self.app_url.clone();
+        let message = match error_message {
+            Some(e) => format!("{} is DOWN: {}", monitor.name, e),
+            None => format!("{} is DOWN", monitor.name),
+        };
+        // 5-minute cooldown prevents duplicate alerts from repeated down checks.
+        self.evaluate_rules_and_alert(rules, Some(5), |condition| match condition {
+            AlertCondition::MonitorDown { monitor_id }
+                if monitor_id.is_none() || monitor_id.as_deref() == Some(&monitor.id) =>
+            {
+                Some(AlertPayload {
                     title: format!("Monitor Down: {}", monitor.name),
-                    message,
+                    message: message.clone(),
                     severity: "error".to_string(),
                     project_name: project.name.clone(),
                     trigger_type: "monitor_down".to_string(),
                     trigger_id: Some(monitor.id.clone()),
                     url: Some(format!(
                         "{}/dashboard/uptime?project={}",
-                        self.app_url, project_id
+                        app_url, project_id
                     )),
                     timestamp: chrono::Utc::now().to_rfc3339(),
                     project_id: None,
@@ -360,22 +353,11 @@ impl AlertingService {
                     stack_trace: None,
                     affected_users: None,
                     frequency: None,
-                };
-
-                // 5-minute cooldown prevents duplicate alerts from repeated down checks.
-                if let Err(e) = self.send_alert(&rule, &payload, Some(5)).await {
-                    error!(rule_id = %rule.id, "Alert delivery failed after retries: {}", e);
-                }
-            } else {
-                tracing::debug!(
-                    "Alert rule '{}' does not match (condition type: {:?})",
-                    rule.name,
-                    condition
-                );
+                })
             }
-        }
-
-        Ok(())
+            _ => None,
+        })
+        .await
     }
 
     /// Trigger alerts for a monitor recovering
@@ -385,22 +367,13 @@ impl AlertingService {
             None => return Ok(()),
         };
 
-        for rule in rules {
-            let condition = match parse_alert_condition(&rule) {
-                Some(c) => c,
-                None => continue,
-            };
-
-            // Check if condition matches
-            let matches = match &condition {
-                AlertCondition::MonitorRecovery { monitor_id } => {
-                    monitor_id.is_none() || monitor_id.as_deref() == Some(&monitor.id)
-                }
-                _ => false,
-            };
-
-            if matches {
-                let payload = AlertPayload {
+        let app_url = self.app_url.clone();
+        // 5-minute cooldown prevents duplicate alerts from rapid recovery/down cycling.
+        self.evaluate_rules_and_alert(rules, Some(5), |condition| match condition {
+            AlertCondition::MonitorRecovery { monitor_id }
+                if monitor_id.is_none() || monitor_id.as_deref() == Some(&monitor.id) =>
+            {
+                Some(AlertPayload {
                     title: format!("Monitor Recovered: {}", monitor.name),
                     message: format!("{} is back UP", monitor.name),
                     severity: "info".to_string(),
@@ -409,7 +382,7 @@ impl AlertingService {
                     trigger_id: Some(monitor.id.clone()),
                     url: Some(format!(
                         "{}/dashboard/uptime?project={}",
-                        self.app_url, project_id
+                        app_url, project_id
                     )),
                     timestamp: chrono::Utc::now().to_rfc3339(),
                     project_id: None,
@@ -417,16 +390,11 @@ impl AlertingService {
                     stack_trace: None,
                     affected_users: None,
                     frequency: None,
-                };
-
-                // 5-minute cooldown prevents duplicate alerts from rapid recovery/down cycling.
-                if let Err(e) = self.send_alert(&rule, &payload, Some(5)).await {
-                    error!(rule_id = %rule.id, "Alert delivery failed after retries: {}", e);
-                }
+                })
             }
-        }
-
-        Ok(())
+            _ => None,
+        })
+        .await
     }
 
     /// Trigger alerts for server metric thresholds
@@ -648,16 +616,14 @@ impl AlertingService {
                 }
             };
 
-        // Index channels by ID for quick lookup
-        let channel_map: std::collections::HashMap<String, _> =
+        // Index channels by ID using owned values so channels can be moved into tasks.
+        let mut channel_map: std::collections::HashMap<String, _> =
             channels.into_iter().map(|c| (c.id.clone(), c)).collect();
 
-        // Collect the first webhook action that requests a status change — applied
-        // once after the loop so multiple channels can't race to overwrite each other.
-        let mut webhook_action: Option<String> = None;
-
+        // Phase 1: create alert logs for all active channels (sequential, fast DB writes).
+        let mut channel_log_pairs: Vec<(NotificationChannel, String)> = Vec::new();
         for channel_id in &channel_ids {
-            let channel = match channel_map.get(channel_id) {
+            let channel = match channel_map.remove(channel_id) {
                 Some(c) if c.is_active => c,
                 Some(c) => {
                     info!("Channel '{}' is inactive, skipping", c.name);
@@ -669,7 +635,6 @@ impl AlertingService {
                 }
             };
 
-            // Create log entry
             let log = match AlertLogRepository::create(
                 &self.pool,
                 rule_id.as_str(),
@@ -687,19 +652,38 @@ impl AlertingService {
                 }
             };
 
-            // Send notification (3 attempts with exponential back-off)
-            match send_with_retry(&self.notification_service, channel, payload, rule_id).await {
-                Ok(action) => {
-                    if let Err(e) = AlertLogRepository::mark_sent(&self.pool, &log.id).await {
+            channel_log_pairs.push((channel, log.id));
+        }
+
+        // Phase 2: fan out notification sends concurrently — each channel is
+        // independent, so serialising them just adds latency for no benefit.
+        type SendOutcome = (NotificationChannel, String, Result<Option<String>>);
+        let mut join_set: tokio::task::JoinSet<SendOutcome> = tokio::task::JoinSet::new();
+
+        for (channel, log_id) in channel_log_pairs {
+            let svc = Arc::clone(&self.notification_service);
+            let payload_clone = payload.clone();
+            let rule_id_str = rule_id.to_string();
+            join_set.spawn(async move {
+                let result = send_with_retry(svc, &channel, &payload_clone, &rule_id_str).await;
+                (channel, log_id, result)
+            });
+        }
+
+        // Phase 3: collect results and mark logs; record the first webhook action.
+        // Collect the first resolve/ignore action — applied once after the loop so
+        // multiple channels can't race to overwrite each other.
+        let mut webhook_action: Option<String> = None;
+        while let Some(join_result) = join_set.join_next().await {
+            match join_result {
+                Ok((channel, log_id, Ok(action))) => {
+                    if let Err(e) = AlertLogRepository::mark_sent(&self.pool, &log_id).await {
                         error!("Failed to mark log as sent: {}", e);
                     }
                     info!(
                         "Alert sent via {} channel '{}'",
                         channel.channel_type, channel.name
                     );
-
-                    // Record the first resolve/ignore action; later channels are ignored
-                    // so the issue status is only updated once per alert evaluation.
                     if webhook_action.is_none() {
                         if let Some(action) = action {
                             if matches!(action.as_str(), "resolve" | "ignore") {
@@ -708,14 +692,17 @@ impl AlertingService {
                         }
                     }
                 }
-                Err(e) => {
+                Ok((_, log_id, Err(e))) => {
                     let error_msg = e.to_string();
                     error!("Failed to send alert: {}", error_msg);
                     if let Err(e) =
-                        AlertLogRepository::mark_failed(&self.pool, &log.id, &error_msg).await
+                        AlertLogRepository::mark_failed(&self.pool, &log_id, &error_msg).await
                     {
                         error!("Failed to mark log as failed: {}", e);
                     }
+                }
+                Err(e) => {
+                    error!("Alert send task panicked: {}", e);
                 }
             }
         }

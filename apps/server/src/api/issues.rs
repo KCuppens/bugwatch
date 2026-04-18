@@ -9,9 +9,13 @@ use super::{ApiResponse, PaginatedResponse, PaginationMeta, PaginationParams};
 use crate::{
     auth::{AuthIdentity, EitherAuth},
     billing::tiers::can_access_feature,
-    db::repositories::{
-        issues::{Facets, ProjectStats, SearchFilters},
-        EventRepository, IssueRepository, OrganizationRepository, ProjectRepository,
+    db::{
+        models::Project,
+        repositories::{
+            issues::{Facets, ProjectStats, SearchFilters},
+            EventRepository, IssueRepository, OrganizationRepository, ProjectRepository,
+        },
+        DbPool,
     },
     AppError, AppResult, AppState,
 };
@@ -61,6 +65,22 @@ pub struct UpdateIssueRequest {
     pub status: Option<String>,
 }
 
+/// Verify a project exists and the caller is authorised to access it.
+/// Returns the project on success, 404 if missing, 403 if access denied.
+async fn require_project_access(
+    db: &DbPool,
+    auth: &EitherAuth,
+    project_id: &str,
+) -> AppResult<Project> {
+    let project = ProjectRepository::find_by_id(db, project_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound(format!("Project {} not found", project_id)))?;
+    if !auth.can_access_project(db, &project).await {
+        return Err(AppError::Forbidden("Access denied".to_string()));
+    }
+    Ok(project)
+}
+
 /// GET /api/v1/projects/:project_id/issues
 pub async fn list(
     State(state): State<AppState>,
@@ -69,14 +89,7 @@ pub async fn list(
     Query(params): Query<PaginationParams>,
     Query(filters): Query<IssueFilters>,
 ) -> AppResult<Json<PaginatedResponse<IssueResponse>>> {
-    // Verify project access
-    let project = ProjectRepository::find_by_id(&state.db, &project_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound(format!("Project {} not found", project_id)))?;
-
-    if !auth.can_access_project(&state.db, &project).await {
-        return Err(AppError::Forbidden("Access denied".to_string()));
-    }
+    require_project_access(&state.db, &auth, &project_id).await?;
 
     let page = params.page.max(1);
     let per_page = params.per_page.min(100).max(1);
@@ -119,14 +132,7 @@ pub async fn search(
 ) -> AppResult<Json<SearchResponse>> {
     let start = std::time::Instant::now();
 
-    // Verify project access
-    let project = ProjectRepository::find_by_id(&state.db, &project_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound(format!("Project {} not found", project_id)))?;
-
-    if !auth.can_access_project(&state.db, &project).await {
-        return Err(AppError::Forbidden("Access denied".to_string()));
-    }
+    require_project_access(&state.db, &auth, &project_id).await?;
 
     let page = req.page.unwrap_or(1).max(1);
     let per_page = req.per_page.unwrap_or(50).min(100).max(1);
@@ -250,14 +256,7 @@ pub async fn get(
     auth: EitherAuth,
     Path((project_id, issue_id)): Path<(String, String)>,
 ) -> AppResult<Json<ApiResponse<IssueDetail>>> {
-    // Verify project access
-    let project = ProjectRepository::find_by_id(&state.db, &project_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound(format!("Project {} not found", project_id)))?;
-
-    if !auth.can_access_project(&state.db, &project).await {
-        return Err(AppError::Forbidden("Access denied".to_string()));
-    }
+    require_project_access(&state.db, &auth, &project_id).await?;
 
     // Get issue
     let issue = IssueRepository::find_by_id(&state.db, &issue_id)
@@ -341,14 +340,7 @@ pub async fn update(
     Path((project_id, issue_id)): Path<(String, String)>,
     Json(req): Json<UpdateIssueRequest>,
 ) -> AppResult<Json<ApiResponse<IssueResponse>>> {
-    // Verify project access
-    let project = ProjectRepository::find_by_id(&state.db, &project_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound(format!("Project {} not found", project_id)))?;
-
-    if !auth.can_access_project(&state.db, &project).await {
-        return Err(AppError::Forbidden("Access denied".to_string()));
-    }
+    require_project_access(&state.db, &auth, &project_id).await?;
 
     if !auth.has_permission("write") {
         return Err(AppError::Forbidden("write permission required".to_string()));
@@ -395,14 +387,7 @@ pub async fn delete(
     auth: EitherAuth,
     Path((project_id, issue_id)): Path<(String, String)>,
 ) -> AppResult<Json<ApiResponse<serde_json::Value>>> {
-    // Verify project access
-    let project = ProjectRepository::find_by_id(&state.db, &project_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound(format!("Project {} not found", project_id)))?;
-
-    if !auth.can_access_project(&state.db, &project).await {
-        return Err(AppError::Forbidden("Access denied".to_string()));
-    }
+    require_project_access(&state.db, &auth, &project_id).await?;
 
     if !auth.has_permission("write") {
         return Err(AppError::Forbidden("write permission required".to_string()));
@@ -434,14 +419,7 @@ pub async fn get_event(
     auth: EitherAuth,
     Path((project_id, issue_id, event_id)): Path<(String, String, String)>,
 ) -> AppResult<Json<ApiResponse<EventDetail>>> {
-    // Verify project access
-    let project = ProjectRepository::find_by_id(&state.db, &project_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound(format!("Project {} not found", project_id)))?;
-
-    if !auth.can_access_project(&state.db, &project).await {
-        return Err(AppError::Forbidden("Access denied".to_string()));
-    }
+    require_project_access(&state.db, &auth, &project_id).await?;
 
     // Get issue to verify it belongs to project
     let issue = IssueRepository::find_by_id(&state.db, &issue_id)
@@ -515,14 +493,7 @@ pub async fn get_frequency(
     Path((project_id, issue_id)): Path<(String, String)>,
     Query(params): Query<FrequencyParams>,
 ) -> AppResult<Json<ApiResponse<FrequencyData>>> {
-    // Verify project access
-    let project = ProjectRepository::find_by_id(&state.db, &project_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound(format!("Project {} not found", project_id)))?;
-
-    if !auth.can_access_project(&state.db, &project).await {
-        return Err(AppError::Forbidden("Access denied".to_string()));
-    }
+    require_project_access(&state.db, &auth, &project_id).await?;
 
     // Get issue to verify it belongs to project
     let issue = IssueRepository::find_by_id(&state.db, &issue_id)

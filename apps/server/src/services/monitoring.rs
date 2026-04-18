@@ -69,50 +69,39 @@ impl HealthCheckWorker {
         }
     }
 
-    /// Process all monitors that need checking
+    /// Process all monitors that need checking.
+    /// Uses SELECT FOR UPDATE SKIP LOCKED to claim a batch atomically, preventing
+    /// duplicate checks when multiple worker instances run concurrently.
     async fn process_monitors(&self) -> Result<()> {
-        let monitors = MonitorRepository::list_active(&self.pool).await?;
+        let monitors =
+            MonitorRepository::claim_due_monitors(&self.pool, MAX_CONCURRENT_CHECKS as i32).await?;
 
         for monitor in monitors {
-            if self.should_check(&monitor) {
-                // Acquire semaphore permit to limit concurrent checks
-                let Ok(permit) = self.semaphore.clone().acquire_owned().await else {
-                    warn!(
-                        "Failed to acquire semaphore permit for monitor {}",
-                        monitor.id
-                    );
-                    continue;
-                };
+            // Acquire semaphore permit to limit concurrent checks
+            let Ok(permit) = self.semaphore.clone().acquire_owned().await else {
+                warn!(
+                    "Failed to acquire semaphore permit for monitor {}",
+                    monitor.id
+                );
+                continue;
+            };
 
-                // Spawn check in background to not block other checks
-                let pool = self.pool.clone();
-                let client = self.client.clone();
-                let monitor = monitor.clone();
-                let alerting = self.alerting.clone();
+            // Spawn check in background to not block other checks
+            let pool = self.pool.clone();
+            let client = self.client.clone();
+            let monitor = monitor.clone();
+            let alerting = self.alerting.clone();
 
-                tokio::spawn(async move {
-                    // Hold permit until check completes
-                    let _permit = permit;
-                    if let Err(e) = check_monitor(&pool, &client, &monitor, &alerting).await {
-                        error!("Error checking monitor {}: {}", monitor.id, e);
-                    }
-                });
-            }
+            tokio::spawn(async move {
+                // Hold permit until check completes
+                let _permit = permit;
+                if let Err(e) = check_monitor(&pool, &client, &monitor, &alerting).await {
+                    error!("Error checking monitor {}: {}", monitor.id, e);
+                }
+            });
         }
 
         Ok(())
-    }
-
-    /// Check if a monitor needs to be checked
-    fn should_check(&self, monitor: &Monitor) -> bool {
-        match &monitor.last_checked_at {
-            None => true, // Never checked
-            Some(last_time) => {
-                let now = chrono::Utc::now();
-                let elapsed = now.signed_duration_since(*last_time);
-                elapsed.num_seconds() >= monitor.interval_seconds as i64
-            }
-        }
     }
 }
 

@@ -298,7 +298,7 @@ fn build_filter_clauses(
         (filters.users_lt, "user_count <"),
     ] {
         if let Some(v) = opt_val {
-            query.push_str(&format!(" AND {} ${}", clause, *param_idx));
+            query.push_str(&format!(" AND {} ${}::bigint", clause, *param_idx));
             params.push(v.to_string());
             *param_idx += 1;
         }

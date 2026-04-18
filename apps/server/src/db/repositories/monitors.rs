@@ -117,6 +117,35 @@ impl MonitorRepository {
         .map_err(Into::into)
     }
 
+    /// Atomically claim up to `batch_size` monitors that are due for a health check.
+    /// Sets `last_checked_at = NOW()` so concurrent workers skip claimed rows via
+    /// FOR UPDATE SKIP LOCKED, preventing duplicate checks across replicas.
+    pub async fn claim_due_monitors(pool: &DbPool, batch_size: i32) -> Result<Vec<Monitor>> {
+        sqlx::query_as::<_, Monitor>(
+            r#"
+            WITH claimed AS (
+                SELECT id FROM monitors
+                WHERE is_active = TRUE
+                  AND (
+                      last_checked_at IS NULL
+                      OR last_checked_at + (interval '1 second' * interval_seconds) <= NOW()
+                  )
+                ORDER BY last_checked_at ASC NULLS FIRST
+                LIMIT $1
+                FOR UPDATE SKIP LOCKED
+            )
+            UPDATE monitors
+            SET last_checked_at = NOW()
+            WHERE id IN (SELECT id FROM claimed)
+            RETURNING *
+            "#,
+        )
+        .bind(batch_size)
+        .fetch_all(pool)
+        .await
+        .map_err(Into::into)
+    }
+
     pub async fn list_active_across_projects(
         pool: &DbPool,
         project_ids: &[String],
