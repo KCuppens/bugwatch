@@ -108,7 +108,10 @@ async function handleResponse<T>(response: Response): Promise<T> {
     let errorData: ApiErrorResponse | null = null;
     if (text) {
       try {
-        errorData = JSON.parse(text) as ApiErrorResponse;
+        const parsed: unknown = JSON.parse(text);
+        if (parsed !== null && typeof parsed === "object" && "error" in parsed) {
+          errorData = parsed as ApiErrorResponse;
+        }
       } catch {
         // Response wasn't valid JSON
       }
