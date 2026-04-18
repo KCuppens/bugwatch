@@ -1072,7 +1072,7 @@ fn parse_flexible_timestamp(timestamp: &str) -> Option<chrono::DateTime<chrono::
         }
     }
 
-    // Try without timezone (assume UTC)
+    // Try without timezone (assume UTC); strip trailing 'Z' first (some systems emit it)
     let naive_formats = [
         "%Y-%m-%dT%H:%M:%S%.f",
         "%Y-%m-%dT%H:%M:%S",
@@ -1080,19 +1080,14 @@ fn parse_flexible_timestamp(timestamp: &str) -> Option<chrono::DateTime<chrono::
         "%Y-%m-%d %H:%M:%S",
     ];
 
+    let ts_naive = if timestamp.ends_with('Z') {
+        &timestamp[..timestamp.len() - 1]
+    } else {
+        timestamp
+    };
     for fmt in &naive_formats {
-        if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(timestamp, fmt) {
+        if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(ts_naive, fmt) {
             return Some(dt.and_utc());
-        }
-    }
-
-    // Handle 'Z' suffix (UTC) - some systems use this
-    if timestamp.ends_with('Z') {
-        let ts_without_z = &timestamp[..timestamp.len() - 1];
-        for fmt in &["%Y-%m-%dT%H:%M:%S%.f", "%Y-%m-%dT%H:%M:%S"] {
-            if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(ts_without_z, fmt) {
-                return Some(dt.and_utc());
-            }
         }
     }
 

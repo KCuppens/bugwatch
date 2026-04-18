@@ -1,5 +1,5 @@
 -- x402 micropayment tracking
-CREATE TABLE agent_payments (
+CREATE TABLE IF NOT EXISTS agent_payments (
     id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
     nonce VARCHAR(64) NOT NULL UNIQUE,
     agent_key_id TEXT REFERENCES agent_keys(id),
@@ -18,12 +18,12 @@ CREATE TABLE agent_payments (
     consumed_at TIMESTAMPTZ
 );
 
-CREATE INDEX idx_agent_payments_nonce ON agent_payments(nonce);
-CREATE INDEX idx_agent_payments_org ON agent_payments(organization_id);
-CREATE INDEX idx_agent_payments_agent_key ON agent_payments(agent_key_id);
+CREATE INDEX IF NOT EXISTS idx_agent_payments_nonce ON agent_payments(nonce);
+CREATE INDEX IF NOT EXISTS idx_agent_payments_org ON agent_payments(organization_id);
+CREATE INDEX IF NOT EXISTS idx_agent_payments_agent_key ON agent_payments(agent_key_id);
 
 ALTER TABLE organizations
-    ADD COLUMN x402_extra_projects       INTEGER NOT NULL DEFAULT 0,
-    ADD COLUMN x402_extra_monitors       INTEGER NOT NULL DEFAULT 0,
-    ADD COLUMN x402_extra_storage_bytes  BIGINT  NOT NULL DEFAULT 0,
-    ADD COLUMN x402_extra_retention_days INTEGER NOT NULL DEFAULT 0;
+    ADD COLUMN IF NOT EXISTS x402_extra_projects       INTEGER NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS x402_extra_monitors       INTEGER NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS x402_extra_storage_bytes  BIGINT  NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS x402_extra_retention_days INTEGER NOT NULL DEFAULT 0;
