@@ -468,8 +468,7 @@ impl AlertingService {
             None => return Ok(()),
         };
 
-        // Parse disks_json once before the loop so it is not re-deserialized
-        // for each active rule that includes a ServerDiskHigh condition.
+        // Parse disks_json once — re-deserializing per rule would be wasteful.
         let disks: Vec<serde_json::Value> = metric
             .disks_json
             .as_deref()
@@ -480,48 +479,30 @@ impl AlertingService {
             })
             .unwrap_or_default();
 
-        for rule in rules {
-            let condition = match parse_alert_condition(&rule) {
-                Some(c) => c,
-                None => continue,
-            };
-
-            let Some(alert_msg) = evaluate_metric_condition(
-                &condition,
-                server_db_id,
-                metric,
-                &server.hostname,
-                &disks,
-            ) else {
-                continue;
-            };
-
-            let payload = AlertPayload {
-                title: format!("Server Alert: {}", server.hostname),
-                message: alert_msg,
-                severity: "warning".to_string(),
-                project_name: project.name.clone(),
-                trigger_type: "server_metric".to_string(),
-                trigger_id: Some(server_db_id.to_string()),
-                url: Some(format!(
-                    "{}/dashboard/server?project={}",
-                    self.app_url, project_id
-                )),
-                timestamp: chrono::Utc::now().to_rfc3339(),
-                project_id: None,
-                issue: None,
-                stack_trace: None,
-                affected_users: None,
-                frequency: None,
-            };
-
-            // Cooldown enforced atomically inside send_alert (15-minute window)
-            if let Err(e) = self.send_alert(&rule, &payload, Some(15)).await {
-                error!(rule_id = %rule.id, "Alert delivery failed after retries: {}", e);
-            }
-        }
-
-        Ok(())
+        let app_url = self.app_url.clone();
+        // 15-minute cooldown enforced atomically inside send_alert.
+        self.evaluate_rules_and_alert(rules, Some(15), |condition| {
+            evaluate_metric_condition(condition, server_db_id, metric, &server.hostname, &disks)
+                .map(|alert_msg| AlertPayload {
+                    title: format!("Server Alert: {}", server.hostname),
+                    message: alert_msg,
+                    severity: "warning".to_string(),
+                    project_name: project.name.clone(),
+                    trigger_type: "server_metric".to_string(),
+                    trigger_id: Some(server_db_id.to_string()),
+                    url: Some(format!(
+                        "{}/dashboard/server?project={}",
+                        app_url, project_id
+                    )),
+                    timestamp: chrono::Utc::now().to_rfc3339(),
+                    project_id: None,
+                    issue: None,
+                    stack_trace: None,
+                    affected_users: None,
+                    frequency: None,
+                })
+        })
+        .await
     }
 
     /// Trigger alerts for servers that have gone offline
