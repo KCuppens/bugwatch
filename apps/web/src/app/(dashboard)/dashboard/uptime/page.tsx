@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -359,7 +359,7 @@ export default function UptimePage() {
           interval = null;
         }
       } else {
-        fetchMonitors();
+        fetchMonitors(true);
         interval = setInterval(fetchMonitors, 30000);
       }
     }
@@ -445,38 +445,36 @@ export default function UptimePage() {
 
   async function handleBulkPause() {
     if (!selectedProject) return;
-    const ids = Array.from(selectedMonitors);
-    for (const id of ids) {
-      const monitor = monitors.find((m) => m.id === id);
-      if (monitor?.is_active) {
-        try {
-          const response = await monitorsApi.update(selectedProject.id, id, { is_active: false });
-          setMonitors((prev) => prev.map((m) => (m.id === id ? response : m)));
-        } catch {
-          /* ignore */
-        }
-      }
-    }
+    const ids = Array.from(selectedMonitors).filter((id) => monitors.find((m) => m.id === id)?.is_active);
+    const results = await Promise.allSettled(
+      ids.map((id) => monitorsApi.update(selectedProject.id, id, { is_active: false }))
+    );
+    const updated = results.flatMap((r, i) => (r.status === "fulfilled" ? [{ id: ids[i], data: r.value }] : []));
+    setMonitors((prev) => prev.map((m) => updated.find((u) => u.id === m.id)?.data ?? m));
     setSelectedMonitors(new Set());
-    toast.success(`${ids.length} monitors paused`);
+    const succeeded = updated.length;
+    if (succeeded < ids.length) {
+      toast.warning(`${succeeded} of ${ids.length} monitors paused`);
+    } else {
+      toast.success(`${succeeded} monitor${succeeded !== 1 ? "s" : ""} paused`);
+    }
   }
 
   async function handleBulkResume() {
     if (!selectedProject) return;
-    const ids = Array.from(selectedMonitors);
-    for (const id of ids) {
-      const monitor = monitors.find((m) => m.id === id);
-      if (!monitor?.is_active) {
-        try {
-          const response = await monitorsApi.update(selectedProject.id, id, { is_active: true });
-          setMonitors((prev) => prev.map((m) => (m.id === id ? response : m)));
-        } catch {
-          /* ignore */
-        }
-      }
-    }
+    const ids = Array.from(selectedMonitors).filter((id) => !monitors.find((m) => m.id === id)?.is_active);
+    const results = await Promise.allSettled(
+      ids.map((id) => monitorsApi.update(selectedProject.id, id, { is_active: true }))
+    );
+    const updated = results.flatMap((r, i) => (r.status === "fulfilled" ? [{ id: ids[i], data: r.value }] : []));
+    setMonitors((prev) => prev.map((m) => updated.find((u) => u.id === m.id)?.data ?? m));
     setSelectedMonitors(new Set());
-    toast.success(`${ids.length} monitors resumed`);
+    const succeeded = updated.length;
+    if (succeeded < ids.length) {
+      toast.warning(`${succeeded} of ${ids.length} monitors resumed`);
+    } else {
+      toast.success(`${succeeded} monitor${succeeded !== 1 ? "s" : ""} resumed`);
+    }
   }
 
   async function handleBulkDelete() {
@@ -487,32 +485,33 @@ export default function UptimePage() {
   async function handleConfirmBulkDelete() {
     if (!selectedProject) return;
     const ids = Array.from(selectedMonitors);
-    for (const id of ids) {
-      try {
-        await monitorsApi.delete(selectedProject.id, id);
-        setMonitors((prev) => prev.filter((m) => m.id !== id));
-      } catch {
-        /* ignore */
-      }
-    }
+    const results = await Promise.allSettled(ids.map((id) => monitorsApi.delete(selectedProject.id, id)));
+    const deletedIds = new Set(ids.filter((_, i) => results[i]?.status === "fulfilled"));
+    setMonitors((prev) => prev.filter((m) => !deletedIds.has(m.id)));
     setSelectedMonitors(new Set());
     setBulkDeleteConfirmOpen(false);
-    toast.success(`${ids.length} monitors deleted`);
+    const succeeded = deletedIds.size;
+    if (succeeded < ids.length) {
+      toast.warning(`${succeeded} of ${ids.length} monitors deleted`);
+    } else {
+      toast.success(`${succeeded} monitor${succeeded !== 1 ? "s" : ""} deleted`);
+    }
   }
 
-  // Calculate stats
-  const activeMonitors = monitors.filter((m) => m.is_active).length;
-  const upMonitors = monitors.filter((m) => m.current_status === "up").length;
-  const monitorsWithUptime = monitors.filter((m) => m.uptime_24h !== null && m.uptime_24h !== undefined);
-  const avgUptime =
-    monitorsWithUptime.length > 0
-      ? monitorsWithUptime.reduce((sum, m) => sum + m.uptime_24h!, 0) / monitorsWithUptime.length
-      : null;
-  const monitorsWithResponse = monitors.filter((m) => m.avg_response_24h !== null && m.avg_response_24h !== undefined);
-  const avgResponse =
-    monitorsWithResponse.length > 0
-      ? monitorsWithResponse.reduce((sum, m) => sum + m.avg_response_24h!, 0) / monitorsWithResponse.length
-      : null;
+  // Calculate stats — memoized so re-renders from selectedMonitors/modal state don't recompute
+  const { activeMonitors, upMonitors, avgUptime, avgResponse } = useMemo(() => {
+    const active = monitors.filter((m) => m.is_active).length;
+    const up = monitors.filter((m) => m.current_status === "up").length;
+    const withUptime = monitors.filter((m) => m.uptime_24h != null);
+    const uptime =
+      withUptime.length > 0 ? withUptime.reduce((sum, m) => sum + m.uptime_24h!, 0) / withUptime.length : null;
+    const withResponse = monitors.filter((m) => m.avg_response_24h != null);
+    const response =
+      withResponse.length > 0
+        ? withResponse.reduce((sum, m) => sum + m.avg_response_24h!, 0) / withResponse.length
+        : null;
+    return { activeMonitors: active, upMonitors: up, avgUptime: uptime, avgResponse: response };
+  }, [monitors]);
 
   return (
     <div className="space-y-6">
@@ -640,33 +639,16 @@ export default function UptimePage() {
                 return (
                   <Card key={monitor.id}>
                     <CardContent className="p-4">
-                      <div
-                        role="button"
-                        tabIndex={0}
-                        aria-expanded={isExpanded}
-                        aria-controls={`monitor-detail-${monitor.id}`}
-                        className="flex items-center justify-between cursor-pointer w-full text-left"
-                        onClick={() => setExpandedMonitorId(isExpanded ? null : monitor.id)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter" || e.key === " ") {
-                            e.preventDefault();
-                            setExpandedMonitorId(isExpanded ? null : monitor.id);
-                          }
-                        }}
-                      >
+                      <div className="flex items-center justify-between w-full">
                         <div className="flex items-center gap-4">
                           <button
                             role="checkbox"
                             aria-checked={selectedMonitors.has(monitor.id)}
                             aria-label={`Select ${monitor.name}`}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              toggleMonitorSelection(monitor.id);
-                            }}
+                            onClick={() => toggleMonitorSelection(monitor.id)}
                             onKeyDown={(e) => {
                               if (e.key === " ") {
                                 e.preventDefault();
-                                e.stopPropagation();
                                 toggleMonitorSelection(monitor.id);
                               }
                             }}
@@ -740,10 +722,7 @@ export default function UptimePage() {
                             <Button
                               variant="ghost"
                               size="icon"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleToggleMonitor(monitor);
-                              }}
+                              onClick={() => handleToggleMonitor(monitor)}
                               aria-label={monitor.is_active ? `Pause ${monitor.name}` : `Resume ${monitor.name}`}
                             >
                               {monitor.is_active ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
@@ -751,19 +730,24 @@ export default function UptimePage() {
                             <Button
                               variant="ghost"
                               size="icon"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleDeleteClick(monitor.id);
-                              }}
+                              onClick={() => handleDeleteClick(monitor.id)}
                               aria-label={`Delete ${monitor.name}`}
                             >
                               <Trash2 className="h-4 w-4 text-destructive" />
                             </Button>
-                            {isExpanded ? (
-                              <ChevronUp className="h-4 w-4 text-muted-foreground" />
-                            ) : (
-                              <ChevronDown className="h-4 w-4 text-muted-foreground" />
-                            )}
+                            <button
+                              aria-label={`${isExpanded ? "Collapse" : "Expand"} ${monitor.name} details`}
+                              aria-expanded={isExpanded}
+                              aria-controls={`monitor-detail-${monitor.id}`}
+                              onClick={() => setExpandedMonitorId(isExpanded ? null : monitor.id)}
+                              className="p-1 rounded hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                            >
+                              {isExpanded ? (
+                                <ChevronUp className="h-4 w-4 text-muted-foreground" />
+                              ) : (
+                                <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                              )}
+                            </button>
                           </div>
                         </div>
                       </div>

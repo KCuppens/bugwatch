@@ -76,6 +76,8 @@ impl HealthCheckWorker {
         let monitors =
             MonitorRepository::claim_due_monitors(&self.pool, MAX_CONCURRENT_CHECKS as i32).await?;
 
+        tracing::debug!(claimed = monitors.len(), "Claimed monitors for this cycle");
+
         for monitor in monitors {
             // Acquire semaphore permit to limit concurrent checks
             let Ok(permit) = self.semaphore.clone().acquire_owned().await else {
@@ -136,8 +138,11 @@ async fn check_monitor(
     let start = Instant::now();
 
     // Parse headers
-    let headers: std::collections::HashMap<String, String> =
-        serde_json::from_str(&monitor.headers).unwrap_or_default();
+    let headers: std::collections::HashMap<String, String> = serde_json::from_str(&monitor.headers)
+        .unwrap_or_else(|e| {
+            warn!(monitor_id = %monitor.id, "Failed to parse monitor headers: {}", e);
+            Default::default()
+        });
 
     // Build request
     let mut request = match monitor.method.to_uppercase().as_str() {
@@ -150,8 +155,12 @@ async fn check_monitor(
         _ => client.get(&monitor.url),
     };
 
-    // Add headers
-    for (key, value) in headers {
+    // Add headers (cap at 20, limit key/value to 1 KB each to prevent memory amplification)
+    for (key, value) in headers.into_iter().take(20) {
+        if key.len() > 1024 || value.len() > 1024 {
+            warn!(monitor_id = %monitor.id, "Skipping oversized header '{}'", key);
+            continue;
+        }
         request = request.header(&key, &value);
     }
 

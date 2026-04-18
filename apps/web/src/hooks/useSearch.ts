@@ -147,7 +147,10 @@ export function useSearch({ projectId, initialQuery = "", debounceMs = 300 }: Us
   const queryRef = useRef(query);
   queryRef.current = query;
 
-  // Search function that can be called directly
+  // Ref to cancel in-flight immediate searches when a newer one starts
+  const performSearchControllerRef = useRef<AbortController | null>(null);
+
+  // Search function that can be called directly (bypasses debounce)
   const performSearch = useCallback(
     async (searchQuery: string) => {
       if (!projectId) {
@@ -156,23 +159,35 @@ export function useSearch({ projectId, initialQuery = "", debounceMs = 300 }: Us
         return;
       }
 
+      // Cancel any in-flight immediate search
+      performSearchControllerRef.current?.abort();
+      const controller = new AbortController();
+      performSearchControllerRef.current = controller;
+
       setIsLoading(true);
       setError(null);
 
       try {
         const parsed = parseQuery(searchQuery);
-        const response = await issuesApi.search(projectId, {
-          filters: convertFilters(parsed),
-          sort: parsed.sort ? { field: parsed.sort.field, direction: parsed.sort.direction } : undefined,
-        });
+        const response = await issuesApi.search(
+          projectId,
+          {
+            filters: convertFilters(parsed),
+            sort: parsed.sort ? { field: parsed.sort.field, direction: parsed.sort.direction } : undefined,
+          },
+          { signal: controller.signal }
+        );
 
         setResults(response.data);
         setFacets(response.facets);
       } catch (err) {
+        if (err instanceof DOMException && err.name === "AbortError") return;
         console.error("Search failed:", err);
         setError("Search failed. Please try again.");
       } finally {
-        setIsLoading(false);
+        if (!controller.signal.aborted) {
+          setIsLoading(false);
+        }
       }
     },
     [projectId, convertFilters]
@@ -224,13 +239,14 @@ export function useSearch({ projectId, initialQuery = "", debounceMs = 300 }: Us
     };
   }, [projectId, debouncedQuery, convertFilters]);
 
-  // Execute search (manual trigger)
+  // Execute search (manual trigger — bypasses debounce for instant response on Enter)
   const executeSearch = useCallback(() => {
     if (query.trim()) {
       addToHistory(query.trim());
+      performSearch(query.trim());
     }
     setAutocompleteOpen(false);
-  }, [query, addToHistory]);
+  }, [query, addToHistory, performSearch]);
 
   // Clear search
   const clearSearch = useCallback(() => {

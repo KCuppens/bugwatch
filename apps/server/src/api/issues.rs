@@ -76,6 +76,7 @@ async fn require_project_access(
         .await?
         .ok_or_else(|| AppError::NotFound(format!("Project {} not found", project_id)))?;
     if !auth.can_access_project(db, &project).await {
+        tracing::warn!(project_id = %project_id, "Access denied to project");
         return Err(AppError::Forbidden("Access denied".to_string()));
     }
     Ok(project)
@@ -930,14 +931,7 @@ pub async fn get_impact(
     auth: EitherAuth,
     Path((project_id, issue_id)): Path<(String, String)>,
 ) -> AppResult<Json<ApiResponse<ImpactData>>> {
-    // Verify project access
-    let project = ProjectRepository::find_by_id(&state.db, &project_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound(format!("Project {} not found", project_id)))?;
-
-    if !auth.can_access_project(&state.db, &project).await {
-        return Err(AppError::Forbidden("Access denied".to_string()));
-    }
+    require_project_access(&state.db, &auth, &project_id).await?;
 
     // Get issue to verify it belongs to project
     let issue = IssueRepository::find_by_id(&state.db, &issue_id)
@@ -1025,45 +1019,6 @@ pub struct DistributionItem {
     pub name: String,
     pub count: u32,
     pub percentage: u32,
-}
-
-/// Parse timestamp with multiple format support for flexibility
-fn parse_flexible_timestamp(timestamp: &str) -> Option<chrono::DateTime<chrono::Utc>> {
-    // Try RFC3339 first (most common) - handles 2024-01-15T14:22:00+00:00
-    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(timestamp) {
-        return Some(dt.with_timezone(&chrono::Utc));
-    }
-
-    // Try ISO 8601 formats with timezone
-    let tz_formats = [
-        "%Y-%m-%dT%H:%M:%S%.f%:z", // 2024-01-15T14:22:00.123456+00:00
-        "%Y-%m-%dT%H:%M:%S%:z",    // 2024-01-15T14:22:00+00:00
-        "%Y-%m-%dT%H:%M:%S%.f%z",  // 2024-01-15T14:22:00.123456+0000
-        "%Y-%m-%dT%H:%M:%S%z",     // 2024-01-15T14:22:00+0000
-    ];
-
-    for fmt in &tz_formats {
-        if let Ok(dt) = chrono::DateTime::parse_from_str(timestamp, fmt) {
-            return Some(dt.with_timezone(&chrono::Utc));
-        }
-    }
-
-    // Try without timezone (assume UTC); strip trailing 'Z' first (some systems emit it)
-    let naive_formats = [
-        "%Y-%m-%dT%H:%M:%S%.f",
-        "%Y-%m-%dT%H:%M:%S",
-        "%Y-%m-%d %H:%M:%S%.f",
-        "%Y-%m-%d %H:%M:%S",
-    ];
-
-    let ts_naive = timestamp.strip_suffix('Z').unwrap_or(timestamp);
-    for fmt in &naive_formats {
-        if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(ts_naive, fmt) {
-            return Some(dt.and_utc());
-        }
-    }
-
-    None
 }
 
 // ============================================================================

@@ -233,6 +233,8 @@ impl AlertingService {
                 if let Err(e) = self.send_alert(rule, &payload, cooldown_minutes).await {
                     error!(rule_id = %rule.id, "Alert delivery failed after retries: {}", e);
                 }
+            } else {
+                tracing::debug!(rule_id = %rule.id, rule_name = %rule.name, "Alert rule evaluated — no match");
             }
         }
         Ok(())
@@ -362,6 +364,11 @@ impl AlertingService {
 
     /// Trigger alerts for a monitor recovering
     pub async fn on_monitor_recovery(&self, project_id: &str, monitor: &Monitor) -> Result<()> {
+        tracing::debug!(
+            monitor_id = %monitor.id,
+            monitor_name = %monitor.name,
+            "on_monitor_recovery triggered"
+        );
         let (project, rules) = match get_project_and_rules(&self.pool, project_id).await? {
             Some(pr) => pr,
             None => return Ok(()),
@@ -477,21 +484,12 @@ impl AlertingService {
             None => return Ok(()),
         };
 
-        for rule in rules {
-            let condition = match parse_alert_condition(&rule) {
-                Some(c) => c,
-                None => continue,
-            };
-
-            let matches = match &condition {
-                AlertCondition::ServerOffline { server_id, .. } => {
-                    server_id.is_none() || server_id.as_deref() == Some(&server.id)
-                }
-                _ => false,
-            };
-
-            if matches {
-                let payload = AlertPayload {
+        let app_url = self.app_url.clone();
+        self.evaluate_rules_and_alert(rules, Some(15), |condition| match condition {
+            AlertCondition::ServerOffline { server_id, .. }
+                if server_id.is_none() || server_id.as_deref() == Some(&server.id) =>
+            {
+                Some(AlertPayload {
                     title: format!("Server Offline: {}", server.hostname),
                     message: format!(
                         "{} has not reported metrics since {}",
@@ -504,7 +502,7 @@ impl AlertingService {
                     trigger_id: Some(server.id.clone()),
                     url: Some(format!(
                         "{}/dashboard/server?project={}",
-                        self.app_url, &server.project_id
+                        app_url, &server.project_id
                     )),
                     timestamp: chrono::Utc::now().to_rfc3339(),
                     project_id: None,
@@ -512,16 +510,11 @@ impl AlertingService {
                     stack_trace: None,
                     affected_users: None,
                     frequency: None,
-                };
-
-                // Cooldown enforced atomically inside send_alert (15-minute window)
-                if let Err(e) = self.send_alert(&rule, &payload, Some(15)).await {
-                    error!(rule_id = %rule.id, "Alert delivery failed after retries: {}", e);
-                }
+                })
             }
-        }
-
-        Ok(())
+            _ => None,
+        })
+        .await
     }
 
     /// Send alert to all configured channels.
