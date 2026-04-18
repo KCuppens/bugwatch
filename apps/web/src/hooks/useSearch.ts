@@ -147,6 +147,10 @@ export function useSearch({ projectId, initialQuery = "", debounceMs = 300 }: Us
   const queryRef = useRef(query);
   queryRef.current = query;
 
+  // Track which project facets were last loaded for — get_facets is project-wide
+  // (filter-agnostic on the backend), so facets only need to refresh on project change.
+  const facetsProjectRef = useRef<string | undefined>(undefined);
+
   // Ref to cancel in-flight immediate searches when a newer one starts
   const performSearchControllerRef = useRef<AbortController | null>(null);
 
@@ -179,7 +183,10 @@ export function useSearch({ projectId, initialQuery = "", debounceMs = 300 }: Us
         );
 
         setResults(response.data);
-        setFacets(response.facets);
+        if (facetsProjectRef.current !== projectId) {
+          facetsProjectRef.current = projectId;
+          setFacets(response.facets);
+        }
       } catch (err) {
         if (err instanceof DOMException && err.name === "AbortError") return;
         console.error("Search failed:", err);
@@ -219,7 +226,10 @@ export function useSearch({ projectId, initialQuery = "", debounceMs = 300 }: Us
         );
 
         setResults(response.data);
-        setFacets(response.facets);
+        if (facetsProjectRef.current !== projectId) {
+          facetsProjectRef.current = projectId;
+          setFacets(response.facets);
+        }
       } catch (err) {
         // Ignore AbortError - expected when effect cleanup runs
         if (err instanceof DOMException && err.name === "AbortError") return;

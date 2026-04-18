@@ -218,25 +218,68 @@ impl AlertingService {
     /// Loop over `rules`, evaluate each with `matcher`, and call `send_alert`
     /// for every rule that produces a payload. Centralises the parse→match→send
     /// pattern shared by all event-driven `on_*` handlers.
+    ///
+    /// Phase 1 (sequential, CPU-only): parse conditions and collect matching
+    /// (rule, payload) pairs. Phase 2 (concurrent): fan out send_alert tasks
+    /// via JoinSet so multiple matching rules don't block each other.
     async fn evaluate_rules_and_alert(
         &self,
         rules: Vec<AlertRule>,
         cooldown_minutes: Option<i32>,
         matcher: impl Fn(&AlertCondition) -> Option<AlertPayload>,
     ) -> Result<()> {
-        for rule in &rules {
-            let condition = match parse_alert_condition(rule) {
+        // Phase 1: collect matches (CPU-only, no I/O)
+        let mut matches: Vec<(AlertRule, AlertPayload)> = Vec::new();
+        for rule in rules {
+            let condition = match parse_alert_condition(&rule) {
                 Some(c) => c,
                 None => continue,
             };
             if let Some(payload) = matcher(&condition) {
-                if let Err(e) = self.send_alert(rule, &payload, cooldown_minutes).await {
-                    error!(rule_id = %rule.id, "Alert delivery failed after retries: {}", e);
-                }
+                matches.push((rule, payload));
             } else {
                 tracing::debug!(rule_id = %rule.id, rule_name = %rule.name, "Alert rule evaluated — no match");
             }
         }
+
+        if matches.is_empty() {
+            return Ok(());
+        }
+
+        // Phase 2: fan out sends concurrently — each rule is independent
+        let pool = self.pool.clone();
+        let notification_service = Arc::clone(&self.notification_service);
+        let app_url = self.app_url.clone();
+        let mut join_set: tokio::task::JoinSet<(String, Result<()>)> = tokio::task::JoinSet::new();
+
+        for (rule, payload) in matches {
+            let pool = pool.clone();
+            let notification_service = Arc::clone(&notification_service);
+            let app_url = app_url.clone();
+            join_set.spawn(async move {
+                let svc = AlertingService {
+                    pool,
+                    notification_service,
+                    app_url,
+                };
+                let rule_id = rule.id.clone();
+                let result = svc.send_alert(&rule, &payload, cooldown_minutes).await;
+                (rule_id, result)
+            });
+        }
+
+        while let Some(join_result) = join_set.join_next().await {
+            match join_result {
+                Ok((rule_id, Err(e))) => {
+                    error!(rule_id = %rule_id, "Alert delivery failed after retries: {}", e);
+                }
+                Ok((_, Ok(()))) => {}
+                Err(e) => {
+                    error!("Alert send task panicked: {}", e);
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -709,7 +752,14 @@ impl AlertingService {
                     _ => None, // Unknown actions are no-ops
                 };
                 if let Some(status) = new_status {
-                    match IssueRepository::update_status(&self.pool, issue_id, status).await {
+                    match IssueRepository::update_status_for_project(
+                        &self.pool,
+                        issue_id,
+                        &rule.project_id,
+                        status,
+                    )
+                    .await
+                    {
                         Ok(_) => info!(
                             rule_id = %rule_id,
                             "Webhook action '{}' applied to issue {}",

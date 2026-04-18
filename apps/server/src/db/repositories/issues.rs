@@ -143,6 +143,23 @@ impl IssueRepository {
         Ok(())
     }
 
+    /// Update status only when the issue belongs to the given project — prevents
+    /// a webhook action from reaching issues outside the rule's project.
+    pub async fn update_status_for_project(
+        pool: &DbPool,
+        id: &str,
+        project_id: &str,
+        status: &str,
+    ) -> Result<()> {
+        sqlx::query("UPDATE issues SET status = $1 WHERE id = $2 AND project_id = $3")
+            .bind(status)
+            .bind(id)
+            .bind(project_id)
+            .execute(pool)
+            .await?;
+        Ok(())
+    }
+
     pub async fn delete(pool: &DbPool, id: &str) -> Result<()> {
         sqlx::query("DELETE FROM issues WHERE id = $1")
             .bind(id)
