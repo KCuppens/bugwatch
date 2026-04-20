@@ -26,7 +26,7 @@ services:
       - JWT_SECRET=${JWT_SECRET:?JWT_SECRET is required}
       - PASSWORD_RESET_SECRET=${PASSWORD_RESET_SECRET:-}  # required for password reset emails; falls back to JWT_SECRET
       - OAUTH_STATE_SECRET=${OAUTH_STATE_SECRET:-}         # required for OAuth integrations; falls back to JWT_SECRET
-      - BUGWATCH_ENCRYPTION_KEY=${BUGWATCH_ENCRYPTION_KEY:-}  # required for integration token encryption
+      - BUGWATCH_ENCRYPTION_KEY=${BUGWATCH_ENCRYPTION_KEY:?BUGWATCH_ENCRYPTION_KEY is required for integration token encryption}
       - APP_URL=${APP_URL:-http://localhost:3001}
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:3001}
       - BUGWATCH_MODE=${BUGWATCH_MODE:-self-hosted}

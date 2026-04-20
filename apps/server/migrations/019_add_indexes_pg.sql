@@ -7,5 +7,4 @@ CREATE INDEX IF NOT EXISTS idx_transactions_project_started ON transactions(proj
 -- Issue links: webhook sync queries by provider + external ID
 CREATE INDEX IF NOT EXISTS idx_issue_links_provider_external ON issue_links(provider, external_issue_id);
 
--- Events: JSONB GIN index for deduplication queries
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_events_payload_gin ON events USING GIN ((payload::jsonb));
+-- Events GIN index moved to 019b_events_gin_index_pg.sql (requires no-transaction)

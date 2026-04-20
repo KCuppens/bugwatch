@@ -107,6 +107,24 @@ async fn main() -> Result<()> {
     // Initialize database
     let db = db::init_with_pool_size(&config.database_url, config.database_max_connections).await?;
 
+    // Warn if the DB still has legacy 16-char (64-bit) fingerprints from before the 128-bit upgrade.
+    // Those issues will not deduplicate with new events until the fingerprints are backfilled.
+    // To resolve: DELETE FROM issues WHERE char_length(fingerprint) = 16; (lets them re-create fresh)
+    if let Ok(row) = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM issues WHERE char_length(fingerprint) = 16"
+    )
+    .fetch_one(&db)
+    .await
+    {
+        if row > 0 {
+            tracing::warn!(
+                count = row,
+                "Legacy 16-char fingerprints detected — these issues will not deduplicate with new events. \
+                 Run: DELETE FROM issues WHERE char_length(fingerprint) = 16"
+            );
+        }
+    }
+
     // Initialize Stripe client (SaaS mode only)
     #[cfg(feature = "saas")]
     let stripe = {
@@ -568,6 +586,8 @@ async fn request_id_middleware(
         .and_then(|v| v.to_str().ok())
         .map(String::from)
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+
+    tracing::Span::current().record("request_id", request_id.as_str());
 
     let mut response = next.run(req).await;
     if let Ok(val) = HeaderValue::from_str(&request_id) {
