@@ -144,6 +144,20 @@ impl IssueRepository {
         Ok(())
     }
 
+    pub async fn update_status_returning(
+        pool: &DbPool,
+        id: &str,
+        status: &str,
+    ) -> Result<Option<Issue>> {
+        let issue =
+            sqlx::query_as::<_, Issue>("UPDATE issues SET status = $1 WHERE id = $2 RETURNING *")
+                .bind(status)
+                .bind(id)
+                .fetch_optional(pool)
+                .await?;
+        Ok(issue)
+    }
+
     /// Update status only when the issue belongs to the given project — prevents
     /// a webhook action from reaching issues outside the rule's project.
     pub async fn update_status_for_project(

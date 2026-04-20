@@ -137,9 +137,9 @@ async function handleResponse<T>(response: Response): Promise<T> {
   }
 
   // Handle empty successful responses (e.g. 204 No Content, DELETE/logout endpoints).
-  // Callers for no-body endpoints typically ignore the return value.
+  // Callers for no-body endpoints must not access the return value — it is undefined at runtime.
   if (!text) {
-    return {} as T;
+    return undefined as unknown as T;
   }
 
   try {

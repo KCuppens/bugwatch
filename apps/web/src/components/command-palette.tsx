@@ -1,6 +1,15 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef, createContext, useContext, type ReactNode } from "react";
+import {
+  useEffect,
+  useState,
+  useCallback,
+  useRef,
+  createContext,
+  useContext,
+  type ReactNode,
+  type MutableRefObject,
+} from "react";
 import { useRouter } from "next/navigation";
 import { Command } from "cmdk";
 import {
@@ -31,6 +40,7 @@ import { toast } from "sonner";
 interface CommandPaletteContextValue {
   open: boolean;
   setOpen: (open: boolean) => void;
+  issuesCacheRef: MutableRefObject<{ data: IssueWithProject[]; timestamp: number } | null>;
 }
 
 const CommandPaletteContext = createContext<CommandPaletteContextValue | null>(null);
@@ -45,6 +55,7 @@ export function useCommandPalette() {
 
 export function CommandPaletteProvider({ children }: { children: ReactNode }) {
   const [open, setOpen] = useState(false);
+  const issuesCacheRef = useRef<{ data: IssueWithProject[]; timestamp: number } | null>(null);
 
   // Toggle with keyboard shortcut
   useEffect(() => {
@@ -60,9 +71,9 @@ export function CommandPaletteProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <CommandPaletteContext.Provider value={{ open, setOpen }}>
+    <CommandPaletteContext.Provider value={{ open, setOpen, issuesCacheRef }}>
       {children}
-      <CommandPaletteContent open={open} setOpen={setOpen} />
+      <CommandPaletteContent open={open} setOpen={setOpen} issuesCacheRef={issuesCacheRef} />
     </CommandPaletteContext.Provider>
   );
 }
@@ -70,16 +81,16 @@ export function CommandPaletteProvider({ children }: { children: ReactNode }) {
 interface CommandPaletteContentProps {
   open: boolean;
   setOpen: (open: boolean) => void;
+  issuesCacheRef: MutableRefObject<{ data: IssueWithProject[]; timestamp: number } | null>;
 }
 
-function CommandPaletteContent({ open, setOpen }: CommandPaletteContentProps) {
+function CommandPaletteContent({ open, setOpen, issuesCacheRef }: CommandPaletteContentProps) {
   const router = useRouter();
   const { logout } = useAuth();
   const { setTheme } = useTheme();
   const { projects, selectedProject, selectProject } = useProject();
   const [search, setSearch] = useState("");
   const [recentIssues, setRecentIssues] = useState<IssueWithProject[]>([]);
-  const issuesCacheRef = useRef<{ data: IssueWithProject[]; timestamp: number } | null>(null);
 
   // Fetch real issues when palette opens (with 30s cache)
   useEffect(() => {
@@ -126,10 +137,15 @@ function CommandPaletteContent({ open, setOpen }: CommandPaletteContentProps) {
   return (
     <div className="fixed inset-0 z-50">
       {/* Backdrop */}
-      <div className="fixed inset-0 bg-black/50" onClick={() => setOpen(false)} />
+      <div aria-hidden="true" className="fixed inset-0 bg-black/50" onClick={() => setOpen(false)} />
 
       {/* Command Dialog */}
-      <div className="fixed left-1/2 top-[18%] w-full max-w-xl -translate-x-1/2 surface-raised overflow-hidden">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Command palette"
+        className="fixed left-1/2 top-[18%] w-full max-w-xl -translate-x-1/2 surface-raised overflow-hidden"
+      >
         <Command className="rounded-2xl" loop>
           <div className="flex items-center border-b border-border-subtle px-4">
             <Search className="mr-2 h-4 w-4 shrink-0 text-muted-foreground" />

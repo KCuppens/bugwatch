@@ -1,21 +1,9 @@
 "use client";
 
 import { useMemo } from "react";
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
-import {
-  MousePointer,
-  Globe,
-  AlertCircle,
-  Camera,
-  Code,
-  List,
-} from "lucide-react";
+import { MousePointer, Globe, AlertCircle, Camera, Code, List } from "lucide-react";
 
 export interface ReplayEvent {
   time: number;
@@ -77,8 +65,7 @@ export function ReplayEventList({ events, currentTime }: ReplayEventListProps) {
     return events.filter((e) => e.type !== "dom");
   }, [events]);
 
-  // Limit to last 200 events to prevent performance issues
-  const displayEvents = significantEvents.slice(-200);
+  const displayEvents = useMemo(() => significantEvents.slice(-200), [significantEvents]);
 
   return (
     <Card className="bg-surface-2 border border-border-subtle h-fit max-h-[600px] flex flex-col">
@@ -101,8 +88,7 @@ export function ReplayEventList({ events, currentTime }: ReplayEventListProps) {
             {displayEvents.map((evt, i) => {
               const Icon = getEventIcon(evt.type);
               const isPast = evt.time <= currentTime;
-              const isCurrent =
-                Math.abs(evt.time - currentTime) < 500;
+              const isCurrent = Math.abs(evt.time - currentTime) < 500;
 
               return (
                 <div
@@ -110,7 +96,7 @@ export function ReplayEventList({ events, currentTime }: ReplayEventListProps) {
                   className={cn(
                     "flex items-center gap-2 px-4 py-2 text-xs transition-colors",
                     isCurrent && "bg-accent/10",
-                    !isPast && "opacity-40",
+                    !isPast && "opacity-40"
                   )}
                 >
                   <Icon
@@ -122,15 +108,11 @@ export function ReplayEventList({ events, currentTime }: ReplayEventListProps) {
                           ? "text-blue-500"
                           : evt.type === "snapshot"
                             ? "text-yellow-500"
-                            : "text-muted-foreground",
+                            : "text-muted-foreground"
                     )}
                   />
-                  <span className="flex-1 truncate">
-                    {getEventLabel(evt.type)}
-                  </span>
-                  <span className="text-muted-foreground font-mono shrink-0">
-                    {formatTimeOffset(evt.time)}
-                  </span>
+                  <span className="flex-1 truncate">{getEventLabel(evt.type)}</span>
+                  <span className="text-muted-foreground font-mono shrink-0">{formatTimeOffset(evt.time)}</span>
                 </div>
               );
             })}

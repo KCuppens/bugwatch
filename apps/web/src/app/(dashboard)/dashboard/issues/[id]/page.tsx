@@ -488,7 +488,7 @@ export default function IssueDetailPage() {
       <div className="sticky top-0 z-30 -mx-6 px-6 py-3 bg-background/95 backdrop-blur border-b">
         <div className="flex items-center justify-between gap-4">
           <div className="flex items-center gap-3 min-w-0">
-            <Link href="/dashboard">
+            <Link href={projectId ? `/dashboard?project=${projectId}` : "/dashboard"}>
               <Button variant="ghost" size="icon" className="shrink-0 h-8 w-8" aria-label="Back to dashboard">
                 <ArrowLeft className="h-4 w-4" aria-hidden="true" />
               </Button>
@@ -1109,55 +1109,61 @@ export default function IssueDetailPage() {
         {/* ── RIGHT COLUMN: Sidebar ── */}
         <div className="space-y-4">
           {/* Stats */}
-          <div className="grid grid-cols-2 gap-3">
+          <dl className="grid grid-cols-2 gap-3">
             <div className="rounded-lg border p-3">
               <div className="flex items-center gap-2">
-                <TrendingUp className="h-4 w-4 text-muted-foreground" />
-                <p className="font-display text-2xl font-semibold tabular-nums">{issue.count}</p>
+                <TrendingUp className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+                <dd className="font-display text-2xl font-semibold tabular-nums">{issue.count}</dd>
               </div>
-              <p className="text-xs text-muted-foreground">Events</p>
+              <dt className="text-xs text-muted-foreground">Events</dt>
             </div>
             <div className="rounded-lg border p-3">
               <div className="flex items-center gap-2">
-                <Users className="h-4 w-4 text-muted-foreground" />
-                <p className="font-display text-2xl font-semibold tabular-nums">{issue.user_count}</p>
+                <Users className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+                <dd className="font-display text-2xl font-semibold tabular-nums">{issue.user_count}</dd>
               </div>
-              <p className="text-xs text-muted-foreground">Users</p>
-            </div>
-            <div className="rounded-lg border p-3">
-              <div className="flex items-center gap-2">
-                <Clock className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
-                <time dateTime={issue.first_seen} className="text-sm font-medium">
-                  {new Date(issue.first_seen).toLocaleDateString()}
-                </time>
-              </div>
-              <p className="text-xs text-muted-foreground">First seen</p>
+              <dt className="text-xs text-muted-foreground">Users</dt>
             </div>
             <div className="rounded-lg border p-3">
               <div className="flex items-center gap-2">
                 <Clock className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
-                <time dateTime={issue.last_seen} className="text-sm font-medium">
-                  {formatRelativeTime(issue.last_seen)}
-                </time>
+                <dd>
+                  <time dateTime={issue.first_seen} className="text-sm font-medium">
+                    {formatRelativeTime(issue.first_seen)}
+                  </time>
+                </dd>
               </div>
-              <p className="text-xs text-muted-foreground">Last seen</p>
+              <dt className="text-xs text-muted-foreground">First seen</dt>
+            </div>
+            <div className="rounded-lg border p-3">
+              <div className="flex items-center gap-2">
+                <Clock className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+                <dd>
+                  <time dateTime={issue.last_seen} className="text-sm font-medium">
+                    {formatRelativeTime(issue.last_seen)}
+                  </time>
+                </dd>
+              </div>
+              <dt className="text-xs text-muted-foreground">Last seen</dt>
             </div>
             {issue.environment && (
               <div className="col-span-2 rounded-lg border p-3">
                 <div className="flex items-center gap-2">
-                  <Globe className="h-4 w-4 text-muted-foreground" />
-                  <span
-                    className={`px-2 py-0.5 rounded-full text-xs font-medium ${
-                      (ENVIRONMENT_COLORS[issue.environment] ?? ENVIRONMENT_COLORS.production)!.bg
-                    } ${(ENVIRONMENT_COLORS[issue.environment] ?? ENVIRONMENT_COLORS.production)!.text}`}
-                  >
-                    {issue.environment}
-                  </span>
+                  <Globe className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+                  <dd>
+                    <span
+                      className={`px-2 py-0.5 rounded-full text-xs font-medium ${
+                        (ENVIRONMENT_COLORS[issue.environment] ?? ENVIRONMENT_COLORS.production)!.bg
+                      } ${(ENVIRONMENT_COLORS[issue.environment] ?? ENVIRONMENT_COLORS.production)!.text}`}
+                    >
+                      {issue.environment}
+                    </span>
+                  </dd>
                 </div>
-                <p className="text-xs text-muted-foreground mt-1">Environment</p>
+                <dt className="text-xs text-muted-foreground mt-1">Environment</dt>
               </div>
             )}
-          </div>
+          </dl>
 
           {/* Frequency Chart */}
           <Card>

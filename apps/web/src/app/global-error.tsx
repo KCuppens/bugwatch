@@ -8,27 +8,23 @@ import { useEffect } from "react";
  * This component catches root-level errors in the Next.js app and reports them
  * to BugWatch. It provides a user-friendly error page with a retry option.
  */
-export default function GlobalError({
-  error,
-  reset,
-}: {
-  error: Error & { digest?: string };
-  reset: () => void;
-}) {
+export default function GlobalError({ error, reset }: { error: Error & { digest?: string }; reset: () => void }) {
   useEffect(() => {
     // Report the error to BugWatch
-    import("@bugwatch/nextjs").then(({ captureException, setTag }) => {
-      setTag("source", "bugwatch-self-monitoring");
-      captureException(error, {
-        tags: {
-          mechanism: "global-error-boundary",
-          digest: error.digest || "unknown",
-        },
+    import("@bugwatch/nextjs")
+      .then(({ captureException, setTag }) => {
+        setTag("source", "bugwatch-self-monitoring");
+        captureException(error, {
+          tags: {
+            mechanism: "global-error-boundary",
+            digest: error.digest || "unknown",
+          },
+        });
+      })
+      .catch(() => {
+        // BugWatch SDK not available, log to console as fallback
+        console.error("[GlobalError] Unhandled error:", error);
       });
-    }).catch(() => {
-      // BugWatch SDK not available, log to console as fallback
-      console.error("[GlobalError] Unhandled error:", error);
-    });
   }, [error]);
 
   return (
@@ -48,6 +44,8 @@ export default function GlobalError({
           }}
         >
           <div
+            role="alert"
+            aria-live="assertive"
             style={{
               maxWidth: "500px",
               textAlign: "center",
@@ -68,8 +66,7 @@ export default function GlobalError({
                 marginBottom: "1.5rem",
               }}
             >
-              An unexpected error occurred. Our team has been notified and is
-              working to fix the issue.
+              An unexpected error occurred. Our team has been notified and is working to fix the issue.
             </p>
             <button
               onClick={() => reset()}

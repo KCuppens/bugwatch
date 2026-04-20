@@ -5,7 +5,7 @@ import { captureException } from "@bugwatch/nextjs";
 
 interface Props {
   children: ReactNode;
-  fallback: ReactNode;
+  fallback: ReactNode | ((reset: () => void) => ReactNode);
 }
 
 interface State {
@@ -27,9 +27,14 @@ export class ErrorBoundary extends Component<Props, State> {
     captureException(error, { extra: { componentStack: info.componentStack } });
   }
 
+  reset = () => {
+    this.setState({ hasError: false });
+  };
+
   override render() {
     if (this.state.hasError) {
-      return this.props.fallback;
+      const { fallback } = this.props;
+      return typeof fallback === "function" ? fallback(this.reset) : fallback;
     }
     return this.props.children;
   }

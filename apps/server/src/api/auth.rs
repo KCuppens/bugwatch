@@ -35,18 +35,18 @@ fn build_auth_cookies(
     access_max_age: i64,
     refresh_max_age: i64,
     secure: bool,
-) -> Vec<HeaderValue> {
+) -> AppResult<Vec<HeaderValue>> {
     let secure_flag = if secure { "; Secure" } else { "" };
-    vec![
+    Ok(vec![
         HeaderValue::from_str(&format!(
             "access_token={access_token}; HttpOnly; SameSite=Strict; Path=/{secure_flag}; Max-Age={access_max_age}"
         ))
-        .unwrap_or_else(|_| HeaderValue::from_static("")),
+        .map_err(|e| AppError::Internal(format!("Failed to build access_token cookie: {e}")))?,
         HeaderValue::from_str(&format!(
             "refresh_token={refresh_token}; HttpOnly; SameSite=Strict; Path=/api/v1/auth{secure_flag}; Max-Age={refresh_max_age}"
         ))
-        .unwrap_or_else(|_| HeaderValue::from_static("")),
-    ]
+        .map_err(|e| AppError::Internal(format!("Failed to build refresh_token cookie: {e}")))?,
+    ])
 }
 
 /// Build Set-Cookie headers that clear auth cookies (for logout).
@@ -202,7 +202,7 @@ async fn issue_tokens_for_session(
         config.jwt_access_expiration,
         config.jwt_refresh_expiration,
         secure,
-    ) {
+    )? {
         response_headers.append(header::SET_COOKIE, cookie);
     }
 
@@ -468,7 +468,7 @@ pub async fn refresh(
         state.config.jwt_access_expiration,
         state.config.jwt_refresh_expiration,
         secure,
-    ) {
+    )? {
         response_headers.append(header::SET_COOKIE, cookie);
     }
 

@@ -178,7 +178,10 @@ pub async fn search(
     };
 
     let sort_field = req.sort.as_ref().map(|s| s.field.as_str());
-    let sort_direction = req.sort.as_ref().and_then(|s| s.direction.as_deref());
+    let sort_direction = req
+        .sort
+        .as_ref()
+        .and_then(|s| s.direction.map(|d| d.as_str()));
 
     // Run search, count, and facet queries in parallel
     let (issues, total, facets) = tokio::try_join!(
@@ -237,10 +240,26 @@ pub struct SearchFiltersRequest {
     pub text: Option<String>,
 }
 
+#[derive(Debug, Deserialize, Clone, Copy)]
+#[serde(rename_all = "lowercase")]
+pub enum SortDirection {
+    Asc,
+    Desc,
+}
+
+impl SortDirection {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SortDirection::Asc => "asc",
+            SortDirection::Desc => "desc",
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct SortConfig {
     pub field: String,
-    pub direction: Option<String>,
+    pub direction: Option<SortDirection>,
 }
 
 #[derive(Debug, Serialize)]
@@ -360,8 +379,8 @@ pub async fn update(
         )));
     }
 
-    // Update status if provided
-    if let Some(status) = &req.status {
+    // Update status if provided; use RETURNING to avoid a second round-trip
+    let updated = if let Some(status) = &req.status {
         let valid_statuses = ["unresolved", "resolved", "ignored"];
         if !valid_statuses.contains(&status.as_str()) {
             return Err(AppError::Validation(format!(
@@ -369,13 +388,12 @@ pub async fn update(
                 valid_statuses.join(", ")
             )));
         }
-        IssueRepository::update_status(&state.db, &issue_id, status).await?;
-    }
-
-    // Fetch updated issue
-    let updated = IssueRepository::find_by_id(&state.db, &issue_id)
-        .await?
-        .ok_or_else(|| AppError::Internal("Failed to fetch updated issue".to_string()))?;
+        IssueRepository::update_status_returning(&state.db, &issue_id, status)
+            .await?
+            .ok_or_else(|| AppError::Internal("Failed to fetch updated issue".to_string()))?
+    } else {
+        issue
+    };
 
     Ok(Json(ApiResponse {
         data: IssueResponse::from(updated),

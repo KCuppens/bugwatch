@@ -1,26 +1,10 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import {
-  Play,
-  Pause,
-  Loader2,
-  Video,
-  Clock,
-  Monitor,
-} from "lucide-react";
-import {
-  replayApi,
-  type SessionRecording,
-  type SegmentData,
-} from "@/lib/api";
+import { Play, Pause, Loader2, Video, Clock, Monitor } from "lucide-react";
+import { replayApi, type SessionRecording, type SegmentData } from "@/lib/api";
 import { ReplayTimeline } from "./ReplayTimeline";
 import { ReplayEventList } from "./ReplayEventList";
 
@@ -221,9 +205,7 @@ export function ReplayPlayer({ recordingId, projectId }: ReplayPlayerProps) {
               Session {recording.session_id}
               <span
                 className={`ml-2 inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium ${
-                  recording.is_complete
-                    ? "bg-green-500/15 text-green-500"
-                    : "bg-yellow-500/15 text-yellow-500"
+                  recording.is_complete ? "bg-green-500/15 text-green-500" : "bg-yellow-500/15 text-yellow-500"
                 }`}
               >
                 {recording.is_complete ? "Complete" : "Recording"}
@@ -234,9 +216,7 @@ export function ReplayPlayer({ recordingId, projectId }: ReplayPlayerProps) {
             <div className="flex flex-wrap gap-4 text-xs text-muted-foreground">
               <div className="flex items-center gap-1">
                 <Clock className="h-3 w-3" />
-                {recording.duration_ms
-                  ? `${Math.round(recording.duration_ms / 1000)}s`
-                  : "--"}
+                {recording.duration_ms ? `${Math.round(recording.duration_ms / 1000)}s` : "--"}
               </div>
               {recording.screen_width && recording.screen_height && (
                 <div className="flex items-center gap-1">
@@ -245,9 +225,7 @@ export function ReplayPlayer({ recordingId, projectId }: ReplayPlayerProps) {
                 </div>
               )}
               <div>{recording.segment_count} segments</div>
-              <div>
-                {new Date(recording.started_at).toLocaleString()}
-              </div>
+              <div>{new Date(recording.started_at).toLocaleString()}</div>
             </div>
           </CardContent>
         </Card>
@@ -257,13 +235,8 @@ export function ReplayPlayer({ recordingId, projectId }: ReplayPlayerProps) {
         {/* Player area */}
         <div className="space-y-3">
           <Card className="bg-surface-2 border border-border-subtle overflow-hidden">
-            <div
-              ref={playerRef}
-              className="w-full min-h-[450px] bg-black flex items-center justify-center"
-            >
-              {segments.length === 0 && (
-                <p className="text-white/50 text-sm">No replay data available</p>
-              )}
+            <div ref={playerRef} className="w-full min-h-[450px] bg-black flex items-center justify-center">
+              {segments.length === 0 && <p className="text-white/50 text-sm">No replay data available</p>}
             </div>
           </Card>
 
@@ -278,11 +251,7 @@ export function ReplayPlayer({ recordingId, projectId }: ReplayPlayerProps) {
                   onClick={togglePlay}
                   aria-label={isPlaying ? "Pause replay" : "Play replay"}
                 >
-                  {isPlaying ? (
-                    <Pause className="h-4 w-4" />
-                  ) : (
-                    <Play className="h-4 w-4" />
-                  )}
+                  {isPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
                 </Button>
 
                 <div className="flex-1">
@@ -291,6 +260,7 @@ export function ReplayPlayer({ recordingId, projectId }: ReplayPlayerProps) {
                       duration={recording.duration_ms || 0}
                       currentTime={currentTime}
                       events={events}
+                      onSeek={setCurrentTime}
                     />
                   )}
                 </div>
@@ -298,11 +268,7 @@ export function ReplayPlayer({ recordingId, projectId }: ReplayPlayerProps) {
                 <div className="flex items-center gap-1 text-xs text-muted-foreground">
                   <span>{Math.round(currentTime / 1000)}s</span>
                   <span>/</span>
-                  <span>
-                    {recording?.duration_ms
-                      ? `${Math.round(recording.duration_ms / 1000)}s`
-                      : "--"}
-                  </span>
+                  <span>{recording?.duration_ms ? `${Math.round(recording.duration_ms / 1000)}s` : "--"}</span>
                 </div>
 
                 {/* Speed controls */}

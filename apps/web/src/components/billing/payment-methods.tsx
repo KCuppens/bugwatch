@@ -1,13 +1,15 @@
-'use client';
+"use client";
 
-import { useEffect, useState } from 'react';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
-import { Skeleton } from '@/components/ui/skeleton';
-import { CreditCard, Plus, Trash2, Check, Loader2 } from 'lucide-react';
-import { billingApi, type PaymentMethod } from '@/lib/api';
-import { isValidHttpUrl } from '@/lib/url-utils';
+import { useEffect, useState } from "react";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
+import { CreditCard, Plus, Trash2, Check, Loader2 } from "lucide-react";
+import { billingApi, type PaymentMethod } from "@/lib/api";
+import { isValidHttpUrl } from "@/lib/url-utils";
+import { ConfirmDialog } from "@/components/confirm-dialog";
+import { toast } from "sonner";
 
 interface PaymentMethodsProps {
   isOwner: boolean;
@@ -18,6 +20,7 @@ export function PaymentMethods({ isOwner }: PaymentMethodsProps) {
   const [defaultPaymentMethodId, setDefaultPaymentMethodId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
   useEffect(() => {
     fetchPaymentMethods();
@@ -29,7 +32,7 @@ export function PaymentMethods({ isOwner }: PaymentMethodsProps) {
       setPaymentMethods(response.payment_methods);
       setDefaultPaymentMethodId(response.default_payment_method || null);
     } catch (error) {
-      console.error('Failed to load payment methods:', error);
+      console.error("Failed to load payment methods:", error);
     } finally {
       setLoading(false);
     }
@@ -43,29 +46,35 @@ export function PaymentMethods({ isOwner }: PaymentMethodsProps) {
       await billingApi.setDefaultPaymentMethod(paymentMethodId);
       await fetchPaymentMethods();
     } catch (error) {
-      console.error('Failed to set default payment method:', error);
+      console.error("Failed to set default payment method:", error);
+      toast.error("Failed to set default payment method");
     } finally {
       setActionLoading(null);
     }
   };
 
   const handleDelete = async (paymentMethodId: string) => {
-    const confirmed = window.confirm('Are you sure you want to remove this payment method? This action cannot be undone.');
-    if (!confirmed) return;
+    setDeleteConfirmId(paymentMethodId);
+  };
 
+  const confirmDelete = async () => {
+    if (!deleteConfirmId) return;
+    const paymentMethodId = deleteConfirmId;
+    setDeleteConfirmId(null);
     setActionLoading(paymentMethodId);
     try {
       await billingApi.deletePaymentMethod(paymentMethodId);
-      setPaymentMethods(prev => prev.filter(pm => pm.id !== paymentMethodId));
+      setPaymentMethods((prev) => prev.filter((pm) => pm.id !== paymentMethodId));
     } catch (error) {
-      console.error('Failed to delete payment method:', error);
+      console.error("Failed to delete payment method:", error);
+      toast.error("Failed to remove payment method");
     } finally {
       setActionLoading(null);
     }
   };
 
   const handleAddCard = async () => {
-    setActionLoading('add');
+    setActionLoading("add");
     try {
       // Create a setup intent for Stripe Elements (if implementing client-side)
       await billingApi.createSetupIntent();
@@ -74,7 +83,7 @@ export function PaymentMethods({ isOwner }: PaymentMethodsProps) {
       if (!isValidHttpUrl(portalResponse.portal_url)) return;
       window.location.href = portalResponse.portal_url;
     } catch (error) {
-      console.error('Failed to add payment method:', error);
+      console.error("Failed to add payment method:", error);
     } finally {
       setActionLoading(null);
     }
@@ -107,6 +116,7 @@ export function PaymentMethods({ isOwner }: PaymentMethodsProps) {
   }
 
   return (
+    <>
       <Card>
         <CardHeader>
           <div className="flex items-center justify-between">
@@ -115,12 +125,10 @@ export function PaymentMethods({ isOwner }: PaymentMethodsProps) {
                 <CreditCard className="h-5 w-5" />
                 Payment Methods
               </CardTitle>
-              <CardDescription>
-                Manage your saved payment methods
-              </CardDescription>
+              <CardDescription>Manage your saved payment methods</CardDescription>
             </div>
-            <Button onClick={handleAddCard} disabled={actionLoading === 'add'}>
-              {actionLoading === 'add' ? (
+            <Button onClick={handleAddCard} disabled={actionLoading === "add"}>
+              {actionLoading === "add" ? (
                 <Loader2 className="h-4 w-4 mr-2 animate-spin" />
               ) : (
                 <Plus className="h-4 w-4 mr-2" />
@@ -133,30 +141,19 @@ export function PaymentMethods({ isOwner }: PaymentMethodsProps) {
           {paymentMethods.length === 0 ? (
             <div className="text-center py-8">
               <CreditCard className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
-              <p className="text-sm text-muted-foreground">
-                No payment methods saved
-              </p>
-              <p className="text-xs text-muted-foreground mt-1">
-                Add a card to enable automatic billing
-              </p>
+              <p className="text-sm text-muted-foreground">No payment methods saved</p>
+              <p className="text-xs text-muted-foreground mt-1">Add a card to enable automatic billing</p>
             </div>
           ) : (
             <div className="space-y-3">
               {paymentMethods.map((pm) => (
-                <div
-                  key={pm.id}
-                  className="flex items-center justify-between p-4 border rounded-lg"
-                >
+                <div key={pm.id} className="flex items-center justify-between p-4 border rounded-lg">
                   <div className="flex items-center gap-4">
                     {getCardBrandIcon()}
                     <div>
                       <div className="flex items-center gap-2">
-                        <span className="font-medium capitalize">
-                          {pm.card?.brand || pm.type}
-                        </span>
-                        <span className="text-muted-foreground">
-                          ending in {pm.card?.last4 || '****'}
-                        </span>
+                        <span className="font-medium capitalize">{pm.card?.brand || pm.type}</span>
+                        <span className="text-muted-foreground">ending in {pm.card?.last4 || "****"}</span>
                         {isDefault(pm.id) && (
                           <Badge variant="secondary" className="ml-2">
                             Default
@@ -165,7 +162,7 @@ export function PaymentMethods({ isOwner }: PaymentMethodsProps) {
                       </div>
                       {pm.card && (
                         <p className="text-sm text-muted-foreground">
-                          Expires {pm.card.exp_month.toString().padStart(2, '0')}/{pm.card.exp_year}
+                          Expires {pm.card.exp_month.toString().padStart(2, "0")}/{pm.card.exp_year}
                         </p>
                       )}
                     </div>
@@ -204,5 +201,17 @@ export function PaymentMethods({ isOwner }: PaymentMethodsProps) {
           )}
         </CardContent>
       </Card>
+      <ConfirmDialog
+        open={deleteConfirmId !== null}
+        onOpenChange={(open) => {
+          if (!open) setDeleteConfirmId(null);
+        }}
+        title="Remove payment method"
+        description="Are you sure you want to remove this payment method? This action cannot be undone."
+        confirmLabel="Remove"
+        variant="destructive"
+        onConfirm={confirmDelete}
+      />
+    </>
   );
 }

@@ -67,7 +67,9 @@ export function NotificationCenter() {
             {notifications.map((notification) => (
               <div
                 key={notification.id}
-                className="flex items-start gap-3 px-3 py-2.5 hover:bg-muted/50 transition-colors w-full text-left"
+                role="menuitem"
+                tabIndex={0}
+                className="flex items-start gap-3 px-3 py-2.5 hover:bg-muted/50 focus:bg-muted/50 focus:outline-none transition-colors w-full text-left cursor-default"
               >
                 <div className="mt-0.5">{getTriggerIcon(notification.trigger_type)}</div>
                 <div className="flex-1 min-w-0">

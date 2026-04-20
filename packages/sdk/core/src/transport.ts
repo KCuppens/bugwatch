@@ -221,6 +221,18 @@ export class HttpTransport implements Transport {
           const errorText = await response.text().catch(() => "");
           console.error("[Bugwatch] Failed to send event:", response.status, errorText);
         }
+
+        // Server error after all retries — persist for next session if enabled
+        if (persistOnFailure) {
+          try {
+            const ok = await this.persistentQueue.enqueue(event);
+            if (ok && this.debug) {
+              console.log("[Bugwatch] Event persisted to offline queue after server error:", event.event_id);
+            }
+          } catch {
+            // Queue itself failed — silent drop
+          }
+        }
         try {
           this.onDropped?.(event.event_id, "network_error");
         } catch {
@@ -335,7 +347,7 @@ export class HttpTransport implements Transport {
     })();
     this.inFlightRequests.add(promise);
     promise.finally(() => this.inFlightRequests.delete(promise));
-    await promise;
+    // Fire-and-forget: return immediately; callers that need completion can call flush()
   }
 
   /**

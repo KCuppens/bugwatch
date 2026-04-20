@@ -1,9 +1,9 @@
-'use client';
+"use client";
 
-import { useState } from 'react';
-import { BellOff, Clock, X } from 'lucide-react';
-import { alertsApi } from '@/lib/api';
-import { toast } from 'sonner';
+import { useState } from "react";
+import { BellOff, Clock, X } from "lucide-react";
+import { alertsApi } from "@/lib/api";
+import { toast } from "sonner";
 
 interface MuteSchedulerProps {
   ruleId: string;
@@ -14,20 +14,14 @@ interface MuteSchedulerProps {
 }
 
 const PRESET_DURATIONS = [
-  { label: '1 hour', minutes: 60 },
-  { label: '4 hours', minutes: 240 },
-  { label: '24 hours', minutes: 1440 },
+  { label: "1 hour", minutes: 60 },
+  { label: "4 hours", minutes: 240 },
+  { label: "24 hours", minutes: 1440 },
 ];
 
-export function MuteScheduler({
-  ruleId,
-  projectId,
-  isMuted,
-  mutedUntil,
-  onMuteChange,
-}: MuteSchedulerProps) {
+export function MuteScheduler({ ruleId, projectId, isMuted, mutedUntil, onMuteChange }: MuteSchedulerProps) {
   const [showOptions, setShowOptions] = useState(false);
-  const [customMinutes, setCustomMinutes] = useState('');
+  const [customMinutes, setCustomMinutes] = useState("");
   const [loading, setLoading] = useState(false);
 
   const handleMute = async (minutes: number) => {
@@ -36,10 +30,10 @@ export function MuteScheduler({
       await alertsApi.muteRule(projectId, ruleId, minutes);
       toast.success(`Alert muted for ${formatDuration(minutes)}`);
       setShowOptions(false);
-      setCustomMinutes('');
+      setCustomMinutes("");
       onMuteChange();
     } catch {
-      toast.error('Failed to mute alert rule');
+      toast.error("Failed to mute alert rule");
     } finally {
       setLoading(false);
     }
@@ -49,10 +43,10 @@ export function MuteScheduler({
     setLoading(true);
     try {
       await alertsApi.unmuteRule(projectId, ruleId);
-      toast.success('Alert unmuted');
+      toast.success("Alert unmuted");
       onMuteChange();
     } catch {
-      toast.error('Failed to unmute alert rule');
+      toast.error("Failed to unmute alert rule");
     } finally {
       setLoading(false);
     }
@@ -61,7 +55,7 @@ export function MuteScheduler({
   const handleCustomMute = () => {
     const mins = parseInt(customMinutes, 10);
     if (isNaN(mins) || mins <= 0) {
-      toast.error('Enter a valid number of minutes');
+      toast.error("Enter a valid number of minutes");
       return;
     }
     handleMute(mins);
@@ -92,9 +86,7 @@ export function MuteScheduler({
         <div className="flex items-center gap-1.5 rounded-md border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-amber-500">
           <BellOff className="h-3.5 w-3.5" />
           <span className="text-xs font-medium">Muted</span>
-          {remaining && (
-            <span className="text-xs text-amber-400/70">{remaining}</span>
-          )}
+          {remaining && <span className="text-xs text-amber-400/70">{remaining}</span>}
         </div>
         <button
           onClick={handleUnmute}
@@ -118,13 +110,18 @@ export function MuteScheduler({
       </button>
 
       {showOptions && (
-        <div className="absolute right-0 top-full z-50 mt-1 w-64 rounded-lg border border-border-subtle bg-surface-1 p-3 shadow-xl">
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Mute duration"
+          onKeyDown={(e) => {
+            if (e.key === "Escape") setShowOptions(false);
+          }}
+          className="absolute right-0 top-full z-50 mt-1 w-64 rounded-lg border border-border-subtle bg-surface-1 p-3 shadow-xl"
+        >
           <div className="mb-2 flex items-center justify-between">
             <span className="text-sm font-medium text-foreground">Mute Duration</span>
-            <button
-              onClick={() => setShowOptions(false)}
-              className="text-muted-foreground hover:text-foreground"
-            >
+            <button onClick={() => setShowOptions(false)} className="text-muted-foreground hover:text-foreground">
               <X className="h-4 w-4" />
             </button>
           </div>

@@ -181,6 +181,7 @@ export function IssueSearchBar({
         <input
           ref={inputRef}
           type="text"
+          aria-label="Search issues"
           placeholder="Search issues... (/)"
           value={query}
           onChange={handleInputChange}
