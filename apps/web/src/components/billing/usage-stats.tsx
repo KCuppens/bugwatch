@@ -53,7 +53,7 @@ export function UsageStats({ tier }: UsageStatsProps) {
 
   const eventsLimit = getTierRateLimit(tier) * 60 * 24 * 30; // Monthly estimate
   const eventsUsed = getUsageByMetric('events');
-  const eventsPercent = Math.min((eventsUsed / eventsLimit) * 100, 100);
+  const eventsPercent = eventsLimit > 0 ? Math.min((eventsUsed / eventsLimit) * 100, 100) : 0;
 
   if (loading) {
     return (

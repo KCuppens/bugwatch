@@ -157,7 +157,7 @@ pub struct IssueComment {
 
 /// Alert condition variants stored as JSON in `alert_rules.condition`.
 /// Single canonical definition shared by the API layer and alerting service.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum AlertCondition {
     #[serde(rename = "new_issue")]

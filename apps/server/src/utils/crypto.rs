@@ -18,13 +18,15 @@ const ENCRYPTED_V2_PREFIX: &str = "enc2:";
 /// HKDF provides proper domain separation and avoids the length-extension
 /// weakness of raw SHA-256 hashing.
 fn derive_key_hkdf(secret: &str) -> [u8; 32] {
-    // Extract: PRK = HMAC-SHA256(salt, IKM)
+    // RFC 5869 HKDF-Extract: PRK = HMAC-SHA256(salt=key, IKM=secret)
+    // salt = b"bugwatch-token-key-v2" (fixed, domain-separating)
+    // IKM  = secret (the raw encryption key material)
     let mut mac = HmacSha256::new_from_slice(b"bugwatch-token-key-v2")
         .expect("HMAC accepts any key size");
     mac.update(secret.as_bytes());
     let prk = mac.finalize().into_bytes();
 
-    // Expand (one 32-byte block): T(1) = HMAC-SHA256(PRK, info || 0x01)
+    // RFC 5869 HKDF-Expand (single block): T(1) = HMAC-SHA256(PRK, info=b"aes256gcm" || 0x01)
     let mut mac =
         HmacSha256::new_from_slice(&prk).expect("HMAC accepts any key size");
     mac.update(b"aes256gcm\x01");
@@ -71,8 +73,9 @@ pub fn decrypt_token(encrypted: &str, key: &str) -> Result<String> {
     } else if let Some(d) = encrypted.strip_prefix(ENCRYPTED_V1_PREFIX) {
         (d, derive_key_v1(key))
     } else {
-        // Bare format (no prefix) — treat as v1 legacy
-        (encrypted, derive_key_v1(key))
+        return Err(anyhow!(
+            "Token is not in encrypted format — expected 'enc:' or 'enc2:' prefix"
+        ));
     };
 
     let parts: Vec<&str> = data.splitn(2, ':').collect();

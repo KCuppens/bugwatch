@@ -27,6 +27,7 @@ export function BillingDashboard() {
     fetchDashboard();
   }, []);
 
+  // Dashboard API returns amounts in USD; currency code is not included in the response
   const formatCurrency = (amountCents: number) => {
     return new Intl.NumberFormat(undefined, {
       style: 'currency',
@@ -62,7 +63,7 @@ export function BillingDashboard() {
 
   if (!dashboard) {
     return (
-      <div className="flex items-center gap-3 p-4 rounded-lg border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-950/20 text-red-800 dark:text-red-200">
+      <div role="alert" className="flex items-center gap-3 p-4 rounded-lg border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-950/20 text-red-800 dark:text-red-200">
         <AlertCircle className="h-5 w-5 shrink-0" />
         <div className="flex-1">
           <p className="text-sm font-medium">Failed to load billing dashboard</p>

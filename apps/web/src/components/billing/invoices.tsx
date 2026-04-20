@@ -146,8 +146,11 @@ export function Invoices() {
             {invoices.map((invoice) => (
               <div key={invoice.id} className="border rounded-lg">
                 <div
+                  role="button"
+                  tabIndex={0}
                   className="flex items-center justify-between p-4 cursor-pointer hover:bg-muted/50"
                   onClick={() => handleToggleExpand(invoice.id)}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') handleToggleExpand(invoice.id); }}
                 >
                   <div className="flex items-center gap-4">
                     <div>

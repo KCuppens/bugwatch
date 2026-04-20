@@ -7,6 +7,7 @@ import { Badge } from '@/components/ui/badge';
 import { Loader2, ExternalLink, Calendar, CreditCard, Users } from 'lucide-react';
 import { billingApi, type Subscription, type Organization } from '@/lib/api';
 import { isValidHttpUrl } from '@/lib/url-utils';
+import { toast } from 'sonner';
 import { getTierDisplayName, getTierRateLimit, type Tier } from '@/hooks/use-feature';
 
 interface PlanCardProps {
@@ -30,6 +31,7 @@ export function PlanCard({ organization, subscription, isOwner, onRefresh: _onRe
       window.location.href = response.portal_url;
     } catch (error) {
       console.error('Failed to open billing portal:', error);
+      toast.error('Failed to open billing portal. Please try again.');
     } finally {
       setLoading(false);
     }

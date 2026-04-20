@@ -201,7 +201,7 @@ impl AlertingService {
             let task_span = tracing::info_span!("alert_send", rule_id = %rule.id);
             join_set.spawn(
                 async move {
-                    let _permit = sem.acquire_owned().await;
+                    let _semaphore_permit = sem.acquire_owned().await; // held for task duration to cap concurrency
                     let svc = AlertingService {
                         pool,
                         notification_service,
