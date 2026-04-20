@@ -156,8 +156,8 @@ pub fn generate_fingerprint(exception: &ExceptionInfo) -> String {
     hasher.update(input.as_bytes());
     let result = hasher.finalize();
 
-    // Return first 16 hex characters
-    hex::encode(&result[..8])
+    // Return first 32 hex characters (128-bit) — reduces collision risk at scale
+    hex::encode(&result[..16])
 }
 
 /// Normalize error message by stripping variable data.

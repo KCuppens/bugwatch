@@ -1,11 +1,11 @@
 use anyhow::Result;
-use serde::Deserialize;
 use std::sync::Arc;
+use tokio::sync::Semaphore;
 use tracing::{error, info, Instrument};
 
 use super::notifications::{AlertPayload, NotificationService};
 use crate::db::{
-    models::{AlertRule, Issue, Monitor, NotificationChannel, Project, ServerMetric},
+    models::{AlertCondition, AlertRule, Issue, Monitor, NotificationChannel, Project, ServerMetric},
     repositories::{
         AlertLogRepository, AlertRuleRepository, IssueRepository, NotificationChannelRepository,
         ProjectRepository, ServerRepository,
@@ -18,66 +18,6 @@ pub struct AlertingService {
     pool: DbPool,
     notification_service: Arc<NotificationService>,
     app_url: String,
-}
-
-/// Alert condition types (deserialized from JSON)
-#[derive(Debug, Deserialize)]
-#[serde(tag = "type")]
-pub enum AlertCondition {
-    #[serde(rename = "new_issue")]
-    NewIssue {
-        #[serde(default)]
-        level: Option<String>,
-    },
-    #[serde(rename = "issue_frequency")]
-    IssueFrequency {
-        #[allow(dead_code)]
-        threshold: u32,
-        #[allow(dead_code)]
-        window_minutes: u32,
-    },
-    #[serde(rename = "monitor_down")]
-    MonitorDown {
-        #[serde(default)]
-        monitor_id: Option<String>,
-    },
-    #[serde(rename = "monitor_recovery")]
-    MonitorRecovery {
-        #[serde(default)]
-        monitor_id: Option<String>,
-    },
-    #[serde(rename = "server_cpu_high")]
-    ServerCpuHigh {
-        threshold_percent: f64,
-        #[serde(default)]
-        server_id: Option<String>,
-    },
-    #[serde(rename = "server_memory_high")]
-    ServerMemoryHigh {
-        threshold_percent: f64,
-        #[serde(default)]
-        server_id: Option<String>,
-    },
-    #[serde(rename = "server_disk_high")]
-    ServerDiskHigh {
-        threshold_percent: f64,
-        #[serde(default)]
-        mount: Option<String>,
-        #[serde(default)]
-        server_id: Option<String>,
-    },
-    #[serde(rename = "server_offline")]
-    ServerOffline {
-        #[allow(dead_code)]
-        #[serde(default = "default_missing_minutes")]
-        missing_minutes: u32,
-        #[serde(default)]
-        server_id: Option<String>,
-    },
-}
-
-fn default_missing_minutes() -> u32 {
-    5
 }
 
 // ─── Shared helpers ──────────────────────────────────────────────────────────
@@ -178,43 +118,42 @@ fn parse_alert_condition(rule: &AlertRule) -> Option<AlertCondition> {
     }
 }
 
-/// Send a notification with up to 3 attempts (exponential back-off: 500ms,
-/// 1000ms). Transient delivery failures no longer silently drop alerts.
-async fn send_with_retry(
-    notification_service: Arc<NotificationService>,
-    channel: &NotificationChannel,
-    payload: &AlertPayload,
-    rule_id: &str,
-) -> Result<Option<String>> {
-    use rand::Rng;
-    let mut last_err = anyhow::anyhow!("no attempts made");
-    for attempt in 0u32..3 {
-        if attempt > 0 {
-            let base_ms = 500u64 * (1 << (attempt - 1));
-            let jitter_ms = rand::thread_rng().gen_range(0u64..=100);
-            tokio::time::sleep(std::time::Duration::from_millis(base_ms + jitter_ms)).await;
-        }
-        match notification_service.send(channel, payload).await {
-            Ok(action) => return Ok(action),
-            Err(e) => {
-                tracing::warn!(
-                    attempt = attempt + 1,
-                    rule_id = %rule_id,
-                    channel_id = %channel.id,
-                    "Alert send attempt {} of 3 failed: {}",
-                    attempt + 1,
-                    e
-                );
-                last_err = e;
-            }
-        }
-    }
-    Err(last_err)
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 
 impl AlertingService {
+    /// Send a notification with up to 3 attempts (exponential back-off: 500ms, 1000ms).
+    async fn send_with_retry(
+        notification_service: Arc<NotificationService>,
+        channel: &NotificationChannel,
+        payload: &AlertPayload,
+        rule_id: &str,
+    ) -> Result<Option<String>> {
+        use rand::Rng;
+        let mut last_err = anyhow::anyhow!("no attempts made");
+        for attempt in 0u32..3 {
+            if attempt > 0 {
+                let base_ms = 500u64 * (1 << (attempt - 1));
+                let jitter_ms = rand::thread_rng().gen_range(0u64..=100);
+                tokio::time::sleep(std::time::Duration::from_millis(base_ms + jitter_ms)).await;
+            }
+            match notification_service.send(channel, payload).await {
+                Ok(action) => return Ok(action),
+                Err(e) => {
+                    tracing::warn!(
+                        attempt = attempt + 1,
+                        rule_id = %rule_id,
+                        channel_id = %channel.id,
+                        "Alert send attempt {} of 3 failed: {}",
+                        attempt + 1,
+                        e
+                    );
+                    last_err = e;
+                }
+            }
+        }
+        Err(last_err)
+    }
+
     /// Loop over `rules`, evaluate each with `matcher`, and call `send_alert`
     /// for every rule that produces a payload. Centralises the parse→match→send
     /// pattern shared by all event-driven `on_*` handlers.
@@ -246,19 +185,23 @@ impl AlertingService {
             return Ok(());
         }
 
-        // Phase 2: fan out sends concurrently — each rule is independent
+        // Phase 2: fan out sends concurrently — each rule is independent.
+        // Semaphore caps concurrent DB + HTTP calls to prevent connection pool exhaustion.
         let pool = self.pool.clone();
         let notification_service = Arc::clone(&self.notification_service);
         let app_url = self.app_url.clone();
+        let semaphore = Arc::new(Semaphore::new(10));
         let mut join_set: tokio::task::JoinSet<(String, Result<()>)> = tokio::task::JoinSet::new();
 
         for (rule, payload) in matches {
             let pool = pool.clone();
             let notification_service = Arc::clone(&notification_service);
             let app_url = app_url.clone();
+            let sem = Arc::clone(&semaphore);
             let task_span = tracing::info_span!("alert_send", rule_id = %rule.id);
             join_set.spawn(
                 async move {
+                    let _permit = sem.acquire_owned().await;
                     let svc = AlertingService {
                         pool,
                         notification_service,
@@ -686,7 +629,7 @@ impl AlertingService {
             let payload_clone = payload.clone();
             let rule_id_str = rule_id.to_string();
             join_set.spawn(async move {
-                let result = send_with_retry(svc, &channel, &payload_clone, &rule_id_str).await;
+                let result = AlertingService::send_with_retry(svc, &channel, &payload_clone, &rule_id_str).await;
                 (channel, log_id, result)
             });
         }

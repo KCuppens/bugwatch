@@ -155,6 +155,61 @@ pub struct IssueComment {
     pub updated_at: DateTime<Utc>,
 }
 
+/// Alert condition variants stored as JSON in `alert_rules.condition`.
+/// Single canonical definition shared by the API layer and alerting service.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum AlertCondition {
+    #[serde(rename = "new_issue")]
+    NewIssue {
+        #[serde(default)]
+        level: Option<String>,
+    },
+    #[serde(rename = "issue_frequency")]
+    IssueFrequency { threshold: u32, window_minutes: u32 },
+    #[serde(rename = "monitor_down")]
+    MonitorDown {
+        #[serde(default)]
+        monitor_id: Option<String>,
+    },
+    #[serde(rename = "monitor_recovery")]
+    MonitorRecovery {
+        #[serde(default)]
+        monitor_id: Option<String>,
+    },
+    #[serde(rename = "server_cpu_high")]
+    ServerCpuHigh {
+        threshold_percent: f64,
+        #[serde(default)]
+        server_id: Option<String>,
+    },
+    #[serde(rename = "server_memory_high")]
+    ServerMemoryHigh {
+        threshold_percent: f64,
+        #[serde(default)]
+        server_id: Option<String>,
+    },
+    #[serde(rename = "server_disk_high")]
+    ServerDiskHigh {
+        threshold_percent: f64,
+        #[serde(default)]
+        mount: Option<String>,
+        #[serde(default)]
+        server_id: Option<String>,
+    },
+    #[serde(rename = "server_offline")]
+    ServerOffline {
+        #[serde(default = "default_missing_minutes")]
+        missing_minutes: u32,
+        #[serde(default)]
+        server_id: Option<String>,
+    },
+}
+
+fn default_missing_minutes() -> u32 {
+    5
+}
+
 // ============================================================================
 // Billing & Organization Models
 // ============================================================================
