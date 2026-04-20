@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Activity, Zap, AlertTriangle } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Activity, Zap, AlertTriangle, RefreshCw } from "lucide-react";
 import { billingApi, type UsageRecord } from "@/lib/api";
 import { getTierRateLimit, type Tier } from "@/hooks/use-feature";
 
@@ -23,25 +24,29 @@ export function UsageStats({ tier }: UsageStatsProps) {
   const [usageData, setUsageData] = useState<UsageData | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    async function fetchUsage() {
-      try {
-        const response = await billingApi.getUsage();
-        setUsageData(response);
-      } catch (err) {
-        setError("Failed to load usage data");
-        console.error(err);
-      } finally {
-        setLoading(false);
-      }
+  const fetchUsage = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const response = await billingApi.getUsage();
+      setUsageData(response);
+    } catch (err) {
+      setError("Failed to load usage data");
+      console.error(err);
+    } finally {
+      setLoading(false);
     }
-
-    fetchUsage();
   }, []);
 
+  useEffect(() => {
+    fetchUsage();
+  }, [fetchUsage]);
+
+  // O(1) metric lookup via Map — avoids O(n) find on every render.
+  const usageIndex = useMemo(() => new Map((usageData?.usage ?? []).map((u) => [u.metric, u])), [usageData]);
+
   const getUsageByMetric = (metric: string): number => {
-    const record = usageData?.usage.find((u) => u.metric === metric);
-    return record?.count || 0;
+    return usageIndex.get(metric)?.count ?? 0;
   };
 
   const formatDate = (dateStr: string) => {
@@ -80,9 +85,15 @@ export function UsageStats({ tier }: UsageStatsProps) {
           <CardTitle>Usage This Period</CardTitle>
         </CardHeader>
         <CardContent>
-          <div role="alert" className="flex items-center gap-2 text-destructive">
-            <AlertTriangle className="h-4 w-4" />
-            <span>{error}</span>
+          <div role="alert" className="flex items-center justify-between gap-2 text-destructive">
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="h-4 w-4" />
+              <span>{error}</span>
+            </div>
+            <Button variant="outline" size="sm" onClick={fetchUsage}>
+              <RefreshCw className="h-3 w-3 mr-1" aria-hidden="true" />
+              Retry
+            </Button>
           </div>
         </CardContent>
       </Card>

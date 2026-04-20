@@ -273,13 +273,13 @@ impl Config {
             encryption_key: env::var("BUGWATCH_ENCRYPTION_KEY").ok(),
             password_reset_secret: env::var("PASSWORD_RESET_SECRET")
                 .unwrap_or_else(|_| {
-                    eprintln!("WARNING: PASSWORD_RESET_SECRET not set — falling back to JWT_SECRET. Set a dedicated PASSWORD_RESET_SECRET in production.");
+                    tracing::warn!("PASSWORD_RESET_SECRET not set — falling back to JWT_SECRET. Set a dedicated PASSWORD_RESET_SECRET in production.");
                     env::var("JWT_SECRET")
                         .expect("FATAL: JWT_SECRET environment variable is required.")
                 }),
             oauth_state_secret: env::var("OAUTH_STATE_SECRET")
                 .unwrap_or_else(|_| {
-                    eprintln!("WARNING: OAUTH_STATE_SECRET not set — falling back to JWT_SECRET. Set a dedicated OAUTH_STATE_SECRET in production.");
+                    tracing::warn!("OAUTH_STATE_SECRET not set — falling back to JWT_SECRET. Set a dedicated OAUTH_STATE_SECRET in production.");
                     env::var("JWT_SECRET")
                         .expect("FATAL: JWT_SECRET environment variable is required.")
                 }),

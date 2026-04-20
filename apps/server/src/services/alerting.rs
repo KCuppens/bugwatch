@@ -170,6 +170,7 @@ impl AlertingService {
         matcher: impl Fn(&AlertCondition) -> Option<AlertPayload>,
     ) -> Result<()> {
         // Phase 1: collect matches (CPU-only, no I/O)
+        let total_rules = rules.len();
         let mut matches: Vec<(AlertRule, AlertPayload)> = Vec::new();
         for rule in rules {
             let condition = match parse_alert_condition(&rule) {
@@ -187,6 +188,7 @@ impl AlertingService {
             return Ok(());
         }
 
+        let matches_count = matches.len();
         // Phase 2: fan out sends concurrently — each rule is independent.
         // Semaphore caps concurrent DB + HTTP calls to prevent connection pool exhaustion.
         let pool = self.pool.clone();
@@ -218,17 +220,30 @@ impl AlertingService {
             );
         }
 
+        let mut ok_count: usize = 0;
+        let mut err_count: usize = 0;
         while let Some(join_result) = join_set.join_next().await {
             match join_result {
                 Ok((rule_id, Err(e))) => {
+                    err_count += 1;
                     error!(rule_id = %rule_id, "Alert delivery failed after retries: {}", e);
                 }
-                Ok((_, Ok(()))) => {}
+                Ok((_, Ok(()))) => {
+                    ok_count += 1;
+                }
                 Err(e) => {
+                    err_count += 1;
                     error!("Alert send task panicked: {}", e);
                 }
             }
         }
+        tracing::info!(
+            rules_evaluated = total_rules,
+            rules_matched = matches_count,
+            sends_succeeded = ok_count,
+            sends_failed = err_count,
+            "Alert evaluation completed"
+        );
 
         Ok(())
     }

@@ -1,5 +1,6 @@
 use anyhow::Result;
 use tracing::{error, info};
+use uuid::Uuid;
 
 use crate::db::{
     repositories::{
@@ -71,7 +72,8 @@ impl RetentionService {
     /// Each step runs independently — a failure in one step is logged but does not
     /// prevent subsequent steps from running.
     pub async fn run_cleanup(&self) -> Result<()> {
-        info!("Running data retention cleanup...");
+        let run_id = Uuid::new_v4();
+        info!(run_id = %run_id, "Running data retention cleanup...");
         let mut first_err: Option<anyhow::Error> = None;
 
         // Cleanup old events using per-org effective retention:

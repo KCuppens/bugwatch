@@ -27,11 +27,12 @@ export function BillingDashboard() {
     fetchDashboard();
   }, []);
 
-  // Dashboard API returns amounts in USD; currency code is not included in the response
-  const formatCurrency = (amountCents: number) => {
+  // Dashboard API returns amounts in USD; currency code is not included in the response.
+  // Pass currencyCode explicitly if the API ever supports multi-currency responses.
+  const formatCurrency = (amountCents: number, currencyCode = "USD") => {
     return new Intl.NumberFormat(undefined, {
       style: "currency",
-      currency: "USD",
+      currency: currencyCode,
     }).format(amountCents / 100);
   };
 

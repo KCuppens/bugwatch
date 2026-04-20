@@ -269,7 +269,9 @@ pub async fn oauth_callback(
     let ts: i64 = timestamp
         .parse()
         .map_err(|_| AppError::BadRequest("Invalid state".to_string()))?;
-    if chrono::Utc::now().timestamp() - ts > 600 {
+    // Reject states older than 10 minutes OR with a timestamp in the future (clock skew > 5 min).
+    let now = chrono::Utc::now().timestamp();
+    if (now - ts).abs() > 600 || ts > now + 300 {
         return Err(AppError::BadRequest("OAuth state expired".to_string()));
     }
 

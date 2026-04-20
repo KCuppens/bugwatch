@@ -323,8 +323,11 @@ pub struct ChannelResponse {
 
 impl From<NotificationChannel> for ChannelResponse {
     fn from(channel: NotificationChannel) -> Self {
-        let config: serde_json::Value =
-            serde_json::from_str(&channel.config).unwrap_or(serde_json::Value::Null);
+        let config: serde_json::Value = serde_json::from_str(&channel.config)
+            .inspect_err(|e| {
+                tracing::warn!(channel_id = %channel.id, error = %e, "Failed to parse channel config JSON");
+            })
+            .unwrap_or(serde_json::Value::Null);
 
         Self {
             id: channel.id,

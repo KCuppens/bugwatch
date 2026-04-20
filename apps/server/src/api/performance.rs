@@ -170,10 +170,14 @@ pub async fn ingest_transaction(
     // 5. Parse timestamps
     let started_at = chrono::DateTime::parse_from_rfc3339(&payload.started_at)
         .map(|dt| dt.with_timezone(&chrono::Utc))
-        .map_err(|_| AppError::Validation("started_at must be a valid RFC3339 timestamp".into()))?;
+        .map_err(|e| {
+            tracing::warn!(timestamp = %payload.started_at, error = %e, "Invalid started_at RFC3339 timestamp");
+            AppError::Validation("started_at must be a valid RFC3339 timestamp".into())
+        })?;
     let finished_at = chrono::DateTime::parse_from_rfc3339(&payload.finished_at)
         .map(|dt| dt.with_timezone(&chrono::Utc))
-        .map_err(|_| {
+        .map_err(|e| {
+            tracing::warn!(timestamp = %payload.finished_at, error = %e, "Invalid finished_at RFC3339 timestamp");
             AppError::Validation("finished_at must be a valid RFC3339 timestamp".into())
         })?;
 
@@ -215,8 +219,13 @@ pub async fn ingest_transaction(
 
     PerformanceRepository::create_transaction(&state.db, &transaction).await?;
 
-    // 6. Create spans if provided
+    // 6. Create spans if provided (cap at 100 to prevent unbounded DB inserts)
     if let Some(spans) = payload.spans {
+        if spans.len() > 100 {
+            return Err(AppError::Validation(
+                "Too many spans per transaction (max 100)".into(),
+            ));
+        }
         if !spans.is_empty() {
             PerformanceRepository::create_spans(&state.db, &txn_id, &spans).await?;
         }

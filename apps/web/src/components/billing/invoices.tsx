@@ -77,20 +77,40 @@ export function Invoices() {
     switch (status) {
       case "paid":
         return (
-          <Badge variant="default" className="bg-green-500">
+          <Badge variant="default" className="bg-green-500" aria-label="Invoice status: Paid">
             Paid
           </Badge>
         );
       case "open":
-        return <Badge variant="secondary">Open</Badge>;
+        return (
+          <Badge variant="secondary" aria-label="Invoice status: Open">
+            Open
+          </Badge>
+        );
       case "draft":
-        return <Badge variant="outline">Draft</Badge>;
+        return (
+          <Badge variant="outline" aria-label="Invoice status: Draft">
+            Draft
+          </Badge>
+        );
       case "uncollectible":
-        return <Badge variant="destructive">Uncollectible</Badge>;
+        return (
+          <Badge variant="destructive" aria-label="Invoice status: Uncollectible">
+            Uncollectible
+          </Badge>
+        );
       case "void":
-        return <Badge variant="outline">Void</Badge>;
+        return (
+          <Badge variant="outline" aria-label="Invoice status: Void">
+            Void
+          </Badge>
+        );
       default:
-        return <Badge variant="secondary">{status || "Unknown"}</Badge>;
+        return (
+          <Badge variant="secondary" aria-label={`Invoice status: ${status || "Unknown"}`}>
+            {status || "Unknown"}
+          </Badge>
+        );
     }
   };
 
@@ -151,7 +171,7 @@ export function Invoices() {
                   aria-expanded={expandedInvoice === invoice.id}
                   aria-controls={`invoice-details-${invoice.id}`}
                   aria-label={`Toggle details for invoice ${invoice.number || invoice.id.slice(-8)}, ${formatDate(invoice.created)}, ${formatCurrency(invoice.amount_due, invoice.currency)}, status: ${invoice.status ?? "unknown"}`}
-                  className="flex items-center justify-between p-4 cursor-pointer hover:bg-muted/50"
+                  className="flex items-center justify-between p-4 cursor-pointer hover:bg-muted/50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring rounded-t-lg"
                   onClick={() => handleToggleExpand(invoice.id)}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" || e.key === " ") {

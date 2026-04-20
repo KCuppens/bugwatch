@@ -222,6 +222,12 @@ pub async fn ingest(
                     "Tag key/value too long (max 256 characters each)".to_string(),
                 ));
             }
+            // Reject control characters (except tab/newline) and null bytes in tag values.
+            if v.contains('\0') || v.chars().any(|c| c.is_control() && c != '\t' && c != '\n') {
+                return Err(AppError::Validation(
+                    "Tag values cannot contain null bytes or control characters".to_string(),
+                ));
+            }
         }
     }
 
