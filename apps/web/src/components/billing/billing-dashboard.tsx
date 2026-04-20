@@ -28,7 +28,7 @@ export function BillingDashboard() {
   }, []);
 
   const formatCurrency = (amountCents: number) => {
-    return new Intl.NumberFormat('en-US', {
+    return new Intl.NumberFormat(undefined, {
       style: 'currency',
       currency: 'USD',
     }).format(amountCents / 100);
@@ -36,7 +36,7 @@ export function BillingDashboard() {
 
   const formatDate = (dateStr: string | null) => {
     if (!dateStr) return 'N/A';
-    return new Date(dateStr).toLocaleDateString('en-US', {
+    return new Date(dateStr).toLocaleDateString(undefined, {
       month: 'short',
       day: 'numeric',
       year: 'numeric',

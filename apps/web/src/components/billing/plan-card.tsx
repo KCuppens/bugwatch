@@ -37,7 +37,7 @@ export function PlanCard({ organization, subscription, isOwner, onRefresh: _onRe
 
   const formatDate = (dateStr: string | null) => {
     if (!dateStr) return null;
-    return new Date(dateStr).toLocaleDateString('en-US', {
+    return new Date(dateStr).toLocaleDateString(undefined, {
       year: 'numeric',
       month: 'long',
       day: 'numeric',

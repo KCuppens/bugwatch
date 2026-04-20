@@ -58,7 +58,7 @@ export function Invoices() {
 
   const formatCurrency = (amount: number | null, currency: string | null) => {
     if (amount === null || currency === null) return '$0.00';
-    return new Intl.NumberFormat('en-US', {
+    return new Intl.NumberFormat(undefined, {
       style: 'currency',
       currency: currency.toUpperCase(),
     }).format(amount / 100);
@@ -66,7 +66,7 @@ export function Invoices() {
 
   const formatDate = (dateStr: string | null) => {
     if (!dateStr) return 'N/A';
-    return new Date(dateStr).toLocaleDateString('en-US', {
+    return new Date(dateStr).toLocaleDateString(undefined, {
       year: 'numeric',
       month: 'short',
       day: 'numeric',
