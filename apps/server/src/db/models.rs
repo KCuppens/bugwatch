@@ -400,7 +400,9 @@ pub struct Integration {
     pub id: String,
     pub organization_id: String,
     pub provider: String,
+    #[serde(skip_serializing)]
     pub access_token: String,
+    #[serde(skip_serializing)]
     pub refresh_token: Option<String>,
     pub token_expires_at: Option<DateTime<Utc>>,
     pub external_user_id: Option<String>,

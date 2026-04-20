@@ -1,11 +1,11 @@
-'use client';
+"use client";
 
-import { useEffect, useState } from 'react';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Skeleton } from '@/components/ui/skeleton';
-import { DollarSign, Users, Calendar, AlertCircle } from 'lucide-react';
-import { billingApi, type BillingDashboard as BillingDashboardType } from '@/lib/api';
-import { toast } from 'sonner';
+import { useEffect, useState } from "react";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
+import { DollarSign, Users, Calendar, AlertCircle } from "lucide-react";
+import { billingApi, type BillingDashboard as BillingDashboardType } from "@/lib/api";
+import { toast } from "sonner";
 
 export function BillingDashboard() {
   const [dashboard, setDashboard] = useState<BillingDashboardType | null>(null);
@@ -17,8 +17,8 @@ export function BillingDashboard() {
         const data = await billingApi.getBillingDashboard();
         setDashboard(data);
       } catch (error) {
-        console.error('Failed to load billing dashboard:', error);
-        toast.error('Failed to load billing dashboard');
+        console.error("Failed to load billing dashboard:", error);
+        toast.error("Failed to load billing dashboard");
       } finally {
         setLoading(false);
       }
@@ -30,17 +30,17 @@ export function BillingDashboard() {
   // Dashboard API returns amounts in USD; currency code is not included in the response
   const formatCurrency = (amountCents: number) => {
     return new Intl.NumberFormat(undefined, {
-      style: 'currency',
-      currency: 'USD',
+      style: "currency",
+      currency: "USD",
     }).format(amountCents / 100);
   };
 
   const formatDate = (dateStr: string | null) => {
-    if (!dateStr) return 'N/A';
+    if (!dateStr) return "N/A";
     return new Date(dateStr).toLocaleDateString(undefined, {
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric',
+      month: "short",
+      day: "numeric",
+      year: "numeric",
     });
   };
 
@@ -63,16 +63,16 @@ export function BillingDashboard() {
 
   if (!dashboard) {
     return (
-      <div role="alert" className="flex items-center gap-3 p-4 rounded-lg border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-950/20 text-red-800 dark:text-red-200">
+      <div
+        role="alert"
+        className="flex items-center gap-3 p-4 rounded-lg border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-950/20 text-red-800 dark:text-red-200"
+      >
         <AlertCircle className="h-5 w-5 shrink-0" />
         <div className="flex-1">
           <p className="text-sm font-medium">Failed to load billing dashboard</p>
           <p className="text-xs mt-0.5 opacity-80">Please try refreshing the page.</p>
         </div>
-        <button
-          onClick={() => window.location.reload()}
-          className="text-sm font-medium hover:underline shrink-0"
-        >
+        <button onClick={() => window.location.reload()} className="text-sm font-medium hover:underline shrink-0">
           Retry
         </button>
       </div>
@@ -83,7 +83,10 @@ export function BillingDashboard() {
     <div className="space-y-4">
       {/* Past Due Warning */}
       {dashboard.is_past_due && (
-        <div className="flex items-center gap-2 p-4 rounded-lg bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-800 text-red-800 dark:text-red-200">
+        <div
+          role="alert"
+          className="flex items-center gap-2 p-4 rounded-lg bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-800 text-red-800 dark:text-red-200"
+        >
           <AlertCircle className="h-5 w-5" />
           <span>Your payment is past due. Please update your payment method to avoid service interruption.</span>
         </div>
@@ -91,7 +94,10 @@ export function BillingDashboard() {
 
       {/* Cancellation Warning */}
       {dashboard.cancel_at_period_end && (
-        <div className="flex items-center gap-2 p-4 rounded-lg bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-200">
+        <div
+          role="alert"
+          className="flex items-center gap-2 p-4 rounded-lg bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-200"
+        >
           <AlertCircle className="h-5 w-5" />
           <span>Your subscription will be canceled at the end of the current billing period.</span>
         </div>
@@ -105,9 +111,7 @@ export function BillingDashboard() {
           </CardHeader>
           <CardContent>
             <div className="font-display text-2xl font-semibold capitalize">{dashboard.current_tier}</div>
-            <p className="text-xs text-muted-foreground">
-              Active subscription
-            </p>
+            <p className="text-xs text-muted-foreground">Active subscription</p>
           </CardContent>
         </Card>
 
@@ -117,10 +121,10 @@ export function BillingDashboard() {
             <DollarSign className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="font-display text-2xl font-semibold tabular-nums">{formatCurrency(dashboard.monthly_cost_cents)}</div>
-            <p className="text-xs text-muted-foreground">
-              Per month
-            </p>
+            <div className="font-display text-2xl font-semibold tabular-nums">
+              {formatCurrency(dashboard.monthly_cost_cents)}
+            </div>
+            <p className="text-xs text-muted-foreground">Per month</p>
           </CardContent>
         </Card>
 
@@ -133,9 +137,7 @@ export function BillingDashboard() {
             <div className="font-display text-2xl font-semibold tabular-nums">
               {dashboard.seats_used} / {dashboard.seats_total}
             </div>
-            <p className="text-xs text-muted-foreground">
-              Used / Total
-            </p>
+            <p className="text-xs text-muted-foreground">Used / Total</p>
           </CardContent>
         </Card>
 
@@ -147,19 +149,13 @@ export function BillingDashboard() {
           <CardContent>
             {dashboard.billing_period_start ? (
               <>
-                <div className="text-sm font-bold">
-                  {formatDate(dashboard.billing_period_start)}
-                </div>
+                <div className="text-sm font-bold">{formatDate(dashboard.billing_period_start)}</div>
                 {dashboard.billing_period_end && (
-                  <p className="text-xs text-muted-foreground">
-                    to {formatDate(dashboard.billing_period_end)}
-                  </p>
+                  <p className="text-xs text-muted-foreground">to {formatDate(dashboard.billing_period_end)}</p>
                 )}
               </>
             ) : (
-              <div className="text-sm text-muted-foreground">
-                No active billing period
-              </div>
+              <div className="text-sm text-muted-foreground">No active billing period</div>
             )}
           </CardContent>
         </Card>

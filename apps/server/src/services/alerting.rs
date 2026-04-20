@@ -5,7 +5,9 @@ use tracing::{error, info, Instrument};
 
 use super::notifications::{AlertPayload, NotificationService};
 use crate::db::{
-    models::{AlertCondition, AlertRule, Issue, Monitor, NotificationChannel, Project, ServerMetric},
+    models::{
+        AlertCondition, AlertRule, Issue, Monitor, NotificationChannel, Project, ServerMetric,
+    },
     repositories::{
         AlertLogRepository, AlertRuleRepository, IssueRepository, NotificationChannelRepository,
         ProjectRepository, ServerRepository,
@@ -201,7 +203,8 @@ impl AlertingService {
             let task_span = tracing::info_span!("alert_send", rule_id = %rule.id);
             join_set.spawn(
                 async move {
-                    let _semaphore_permit = sem.acquire_owned().await; // held for task duration to cap concurrency
+                    let _semaphore_permit =
+                        sem.acquire_owned().await.expect("alert semaphore closed"); // held for task duration to cap concurrency
                     let svc = AlertingService {
                         pool,
                         notification_service,
@@ -629,7 +632,9 @@ impl AlertingService {
             let payload_clone = payload.clone();
             let rule_id_str = rule_id.to_string();
             join_set.spawn(async move {
-                let result = AlertingService::send_with_retry(svc, &channel, &payload_clone, &rule_id_str).await;
+                let result =
+                    AlertingService::send_with_retry(svc, &channel, &payload_clone, &rule_id_str)
+                        .await;
                 (channel, log_id, result)
             });
         }

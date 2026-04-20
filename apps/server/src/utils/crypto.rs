@@ -21,14 +21,13 @@ fn derive_key_hkdf(secret: &str) -> [u8; 32] {
     // RFC 5869 HKDF-Extract: PRK = HMAC-SHA256(salt=key, IKM=secret)
     // salt = b"bugwatch-token-key-v2" (fixed, domain-separating)
     // IKM  = secret (the raw encryption key material)
-    let mut mac = HmacSha256::new_from_slice(b"bugwatch-token-key-v2")
+    let mut mac = <HmacSha256 as KeyInit>::new_from_slice(b"bugwatch-token-key-v2")
         .expect("HMAC accepts any key size");
     mac.update(secret.as_bytes());
     let prk = mac.finalize().into_bytes();
 
     // RFC 5869 HKDF-Expand (single block): T(1) = HMAC-SHA256(PRK, info=b"aes256gcm" || 0x01)
-    let mut mac =
-        HmacSha256::new_from_slice(&prk).expect("HMAC accepts any key size");
+    let mut mac = <HmacSha256 as KeyInit>::new_from_slice(&prk).expect("HMAC accepts any key size");
     mac.update(b"aes256gcm\x01");
     mac.finalize().into_bytes().into()
 }
@@ -102,9 +101,13 @@ pub fn decrypt_token(encrypted: &str, key: &str) -> Result<String> {
         .map_err(|e| anyhow!("Failed to create cipher: {}", e))?;
 
     let nonce = aes_gcm::Nonce::from_slice(&nonce_bytes);
-    let plaintext = cipher
-        .decrypt(nonce, ciphertext.as_ref())
-        .map_err(|e| anyhow!("Decryption failed: {}", e))?;
+    let plaintext = cipher.decrypt(nonce, ciphertext.as_ref()).map_err(|e| {
+        tracing::warn!(
+            "AES-GCM decryption failed — possible key mismatch or tampered token: {}",
+            e
+        );
+        anyhow!("Decryption failed: {}", e)
+    })?;
 
     String::from_utf8(plaintext).map_err(|e| anyhow!("Invalid UTF-8 in decrypted token: {}", e))
 }
@@ -155,7 +158,9 @@ mod tests {
         let key_bytes = derive_key_v1(key);
         let cipher = Aes256Gcm::new_from_slice(&key_bytes).unwrap();
         let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
-        let ct = cipher.encrypt(&nonce, b"legacy-plaintext".as_ref()).unwrap();
+        let ct = cipher
+            .encrypt(&nonce, b"legacy-plaintext".as_ref())
+            .unwrap();
         let engine = base64::engine::general_purpose::STANDARD;
         let v1_token = format!("enc:{}:{}", engine.encode(nonce), engine.encode(ct));
         assert_eq!(decrypt_token(&v1_token, key).unwrap(), "legacy-plaintext");

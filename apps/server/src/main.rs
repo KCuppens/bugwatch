@@ -110,18 +110,21 @@ async fn main() -> Result<()> {
     // Warn if the DB still has legacy 16-char (64-bit) fingerprints from before the 128-bit upgrade.
     // Those issues will not deduplicate with new events until the fingerprints are backfilled.
     // To resolve: DELETE FROM issues WHERE char_length(fingerprint) = 16; (lets them re-create fresh)
-    if let Ok(row) = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM issues WHERE char_length(fingerprint) = 16"
+    match sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM issues WHERE char_length(fingerprint) = 16)",
     )
     .fetch_one(&db)
     .await
     {
-        if row > 0 {
+        Ok(true) => {
             tracing::warn!(
-                count = row,
                 "Legacy 16-char fingerprints detected — these issues will not deduplicate with new events. \
                  Run: DELETE FROM issues WHERE char_length(fingerprint) = 16"
             );
+        }
+        Ok(false) => {}
+        Err(e) => {
+            tracing::warn!("Could not check for legacy fingerprints at startup: {}", e);
         }
     }
 
@@ -406,6 +409,18 @@ async fn main() -> Result<()> {
 }
 
 fn create_app(state: AppState) -> Router {
+    let allowed_headers = [
+        header::CONTENT_TYPE,
+        header::AUTHORIZATION,
+        header::ACCEPT,
+        header::ORIGIN,
+        HeaderName::from_static("x-api-key"),
+        HeaderName::from_static("x-bugwatch-sdk"),
+        HeaderName::from_static("x-bugwatch-sdk-version"),
+        HeaderName::from_static("x-bugwatch-agent"),
+        HeaderName::from_static("x-payment"),
+    ];
+
     // CORS configuration
     let cors = if state.config.allowed_origins.is_empty()
         && state.config.environment == "development"
@@ -428,17 +443,7 @@ fn create_app(state: AppState) -> Router {
                 Method::DELETE,
                 Method::OPTIONS,
             ])
-            .allow_headers([
-                header::CONTENT_TYPE,
-                header::AUTHORIZATION,
-                header::ACCEPT,
-                header::ORIGIN,
-                HeaderName::from_static("x-api-key"),
-                HeaderName::from_static("x-bugwatch-sdk"),
-                HeaderName::from_static("x-bugwatch-sdk-version"),
-                HeaderName::from_static("x-bugwatch-agent"),
-                HeaderName::from_static("x-payment"),
-            ])
+            .allow_headers(allowed_headers)
             .allow_credentials(true)
     } else if state.config.allowed_origins.is_empty() {
         // Non-development with no origins configured: restrictive default — no credentials
@@ -456,17 +461,7 @@ fn create_app(state: AppState) -> Router {
                 Method::DELETE,
                 Method::OPTIONS,
             ])
-            .allow_headers([
-                header::CONTENT_TYPE,
-                header::AUTHORIZATION,
-                header::ACCEPT,
-                header::ORIGIN,
-                HeaderName::from_static("x-api-key"),
-                HeaderName::from_static("x-bugwatch-sdk"),
-                HeaderName::from_static("x-bugwatch-sdk-version"),
-                HeaderName::from_static("x-bugwatch-agent"),
-                HeaderName::from_static("x-payment"),
-            ])
+            .allow_headers(allowed_headers)
             .allow_credentials(false)
     } else {
         // Production: restrict to configured origins
@@ -486,17 +481,7 @@ fn create_app(state: AppState) -> Router {
                 Method::DELETE,
                 Method::OPTIONS,
             ])
-            .allow_headers([
-                header::CONTENT_TYPE,
-                header::AUTHORIZATION,
-                header::ACCEPT,
-                header::ORIGIN,
-                HeaderName::from_static("x-api-key"),
-                HeaderName::from_static("x-bugwatch-sdk"),
-                HeaderName::from_static("x-bugwatch-sdk-version"),
-                HeaderName::from_static("x-bugwatch-agent"),
-                HeaderName::from_static("x-payment"),
-            ])
+            .allow_headers(allowed_headers)
             .allow_credentials(true)
     };
 
