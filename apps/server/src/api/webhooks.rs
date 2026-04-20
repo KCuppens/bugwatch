@@ -115,11 +115,10 @@ fn verify_stripe_signature(payload: &[u8], signature_header: &str, secret: &str)
     let mut signature = "";
 
     for part in signature_header.split(',') {
-        let kv: Vec<&str> = part.split('=').collect();
-        if kv.len() == 2 {
-            match kv[0] {
-                "t" => timestamp = kv[1],
-                "v1" => signature = kv[1],
+        if let Some((k, v)) = part.split_once('=') {
+            match k {
+                "t" => timestamp = v,
+                "v1" => signature = v,
                 _ => {}
             }
         }

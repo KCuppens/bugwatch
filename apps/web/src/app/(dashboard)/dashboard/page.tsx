@@ -262,6 +262,10 @@ export default function DashboardPage() {
   const [activeFilter, setActiveFilter] = useState<string | null>(null);
   const [newIssueIds, setNewIssueIds] = useState<Set<string>>(new Set());
   const previousIssueIdsRef = useRef<Set<string>>(new Set());
+  // Stable ref so handleStatusChange doesn't need `issues` in its dep array,
+  // preventing IssueRow remounts on every 30s poll.
+  const issuesRef = useRef(issues);
+  issuesRef.current = issues;
 
   // First-error celebration
   const { firstIssue, shouldCelebrate, dismiss } = useFirstError();
@@ -483,6 +487,7 @@ export default function DashboardPage() {
 
     let cancelled = false;
     let polling = false; // prevent overlapping concurrent polls
+    let consecutiveFailures = 0;
     let interval: ReturnType<typeof setInterval> | null = null;
     let titleFocusHandler: (() => void) | null = null;
     let clearNewIdsTimer: ReturnType<typeof setTimeout> | null = null;
@@ -555,7 +560,6 @@ export default function DashboardPage() {
       }
     }
 
-    let consecutiveFailures = 0;
     const POLL_INTERVAL_MS = 30000;
 
     function handleVisibility() {
@@ -608,9 +612,8 @@ export default function DashboardPage() {
   const handleStatusChange = useCallback(
     async (issueId: string, newStatus: string, verb: string, label: string) => {
       if (!selectedProject) return;
-      // Snapshot before setIssues so the undo closure captures a stable value,
-      // not one that could be overwritten by a subsequent call.
-      const previousStatus = issues.find((i) => i.id === issueId)?.status ?? "unresolved";
+      // Read from ref so this callback is stable across polls (not recreated when issues changes).
+      const previousStatus = issuesRef.current.find((i) => i.id === issueId)?.status ?? "unresolved";
       setIssues((prev) => prev.map((i) => (i.id === issueId ? { ...i, status: newStatus } : i)));
 
       toast.success(`Issue ${label}`, {
@@ -634,7 +637,7 @@ export default function DashboardPage() {
         toast.error(`Failed to ${verb} issue`);
       }
     },
-    [selectedProject, issues]
+    [selectedProject]
   );
 
   const handleIgnore = useCallback(

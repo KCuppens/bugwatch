@@ -161,8 +161,7 @@ pub async fn oauth_authorize(
 
     // Generate CSRF-safe state: HMAC-sign the user_id with a dedicated OAuth secret.
     // Falls back to JWT secret if OAUTH_STATE_SECRET is not configured.
-    let oauth_secret =
-        std::env::var("OAUTH_STATE_SECRET").unwrap_or_else(|_| state.config.jwt_secret.clone());
+    let oauth_secret = state.config.oauth_state_secret.clone();
     let state_data = format!("{}:{}", auth_user.id, chrono::Utc::now().timestamp());
     use hmac::{Hmac, Mac};
     use sha2::Sha256;
@@ -255,8 +254,7 @@ pub async fn oauth_callback(
     use hmac::{Hmac, Mac};
     use sha2::Sha256;
     type HmacSha256 = Hmac<Sha256>;
-    let oauth_secret =
-        std::env::var("OAUTH_STATE_SECRET").unwrap_or_else(|_| state.config.jwt_secret.clone());
+    let oauth_secret = state.config.oauth_state_secret.clone();
     let mut mac =
         HmacSha256::new_from_slice(oauth_secret.as_bytes()).expect("HMAC can take key of any size");
     mac.update(state_data.as_bytes());

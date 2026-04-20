@@ -167,15 +167,30 @@ pub async fn ingest_transaction(
         ));
     }
 
-    // 6. Parse timestamps
+    // 5. Parse timestamps
     let started_at = chrono::DateTime::parse_from_rfc3339(&payload.started_at)
         .map(|dt| dt.with_timezone(&chrono::Utc))
-        .unwrap_or_else(|_| Utc::now());
+        .map_err(|_| AppError::Validation("started_at must be a valid RFC3339 timestamp".into()))?;
     let finished_at = chrono::DateTime::parse_from_rfc3339(&payload.finished_at)
         .map(|dt| dt.with_timezone(&chrono::Utc))
-        .unwrap_or_else(|_| Utc::now());
+        .map_err(|_| {
+            AppError::Validation("finished_at must be a valid RFC3339 timestamp".into())
+        })?;
 
-    // 5. Create transaction
+    // Validate tags/data size to prevent unbounded payload storage
+    const MAX_FIELD_SIZE: usize = 65_536; // 64 KB
+    if let Some(ref t) = payload.tags {
+        if t.to_string().len() > MAX_FIELD_SIZE {
+            return Err(AppError::Validation("tags exceeds 64 KB limit".into()));
+        }
+    }
+    if let Some(ref d) = payload.data {
+        if d.to_string().len() > MAX_FIELD_SIZE {
+            return Err(AppError::Validation("data exceeds 64 KB limit".into()));
+        }
+    }
+
+    // 6. Create transaction
     let txn_id = uuid::Uuid::new_v4().to_string();
     let transaction = Transaction {
         id: txn_id.clone(),

@@ -158,6 +158,11 @@ pub struct Config {
     /// means a leaked JWT secret does not also compromise password reset links.
     pub password_reset_secret: String,
 
+    /// Separate HMAC secret for OAuth state parameters.
+    /// Defaults to JWT_SECRET when not set, but a dedicated secret limits the blast radius
+    /// if the JWT secret is ever rotated or compromised.
+    pub oauth_state_secret: String,
+
     /// GitHub webhook secret for verifying webhook signatures
     pub github_webhook_secret: Option<String>,
 
@@ -269,6 +274,12 @@ impl Config {
             password_reset_secret: env::var("PASSWORD_RESET_SECRET")
                 .unwrap_or_else(|_| {
                     eprintln!("WARNING: PASSWORD_RESET_SECRET not set — falling back to JWT_SECRET. Set a dedicated PASSWORD_RESET_SECRET in production.");
+                    env::var("JWT_SECRET")
+                        .expect("FATAL: JWT_SECRET environment variable is required.")
+                }),
+            oauth_state_secret: env::var("OAUTH_STATE_SECRET")
+                .unwrap_or_else(|_| {
+                    eprintln!("WARNING: OAUTH_STATE_SECRET not set — falling back to JWT_SECRET. Set a dedicated OAUTH_STATE_SECRET in production.");
                     env::var("JWT_SECRET")
                         .expect("FATAL: JWT_SECRET environment variable is required.")
                 }),

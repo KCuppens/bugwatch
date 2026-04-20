@@ -17,6 +17,21 @@ use crate::{
 
 use super::events::extract_api_key;
 
+/// Verify the authenticated user owns `project_id`. Returns Forbidden otherwise.
+async fn require_project_owner(
+    db: &crate::db::DbPool,
+    user_id: &str,
+    project_id: &str,
+) -> AppResult<crate::db::models::Project> {
+    let project = ProjectRepository::find_by_id(db, project_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Project not found".to_string()))?;
+    if project.owner_id != user_id {
+        return Err(AppError::Forbidden("Access denied".to_string()));
+    }
+    Ok(project)
+}
+
 // ============================================================================
 // Ingestion Payload Types
 // ============================================================================
@@ -248,14 +263,7 @@ pub async fn list_servers(
     auth_user: AuthUser,
     Path(project_id): Path<String>,
 ) -> AppResult<Json<serde_json::Value>> {
-    let project = ProjectRepository::find_by_id(&state.db, &project_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound("Project not found".to_string()))?;
-
-    if project.owner_id != auth_user.id {
-        return Err(AppError::Forbidden("Access denied".to_string()));
-    }
-
+    require_project_owner(&state.db, &auth_user.id, &project_id).await?;
     let servers = ServerRepository::list_by_project(&state.db, &project_id).await?;
 
     Ok(Json(serde_json::json!({ "data": servers })))
@@ -267,13 +275,7 @@ pub async fn servers_status(
     auth_user: AuthUser,
     Path(project_id): Path<String>,
 ) -> AppResult<Json<serde_json::Value>> {
-    let project = ProjectRepository::find_by_id(&state.db, &project_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound("Project not found".to_string()))?;
-
-    if project.owner_id != auth_user.id {
-        return Err(AppError::Forbidden("Access denied".to_string()));
-    }
+    require_project_owner(&state.db, &auth_user.id, &project_id).await?;
 
     let has_agent = ServerRepository::has_servers(&state.db, &project_id).await?;
     let server_count = if has_agent {
@@ -305,13 +307,7 @@ pub async fn get_server_metrics(
     Path((project_id, server_id)): Path<(String, String)>,
     Query(params): Query<MetricsQuery>,
 ) -> AppResult<Json<serde_json::Value>> {
-    let project = ProjectRepository::find_by_id(&state.db, &project_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound("Project not found".to_string()))?;
-
-    if project.owner_id != auth_user.id {
-        return Err(AppError::Forbidden("Access denied".to_string()));
-    }
+    require_project_owner(&state.db, &auth_user.id, &project_id).await?;
 
     // server_id here is the DB id of the server
     let server = ServerRepository::find_by_id(&state.db, &server_id)
@@ -389,13 +385,7 @@ pub async fn get_latest_metrics(
     auth_user: AuthUser,
     Path((project_id, server_id)): Path<(String, String)>,
 ) -> AppResult<Json<serde_json::Value>> {
-    let project = ProjectRepository::find_by_id(&state.db, &project_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound("Project not found".to_string()))?;
-
-    if project.owner_id != auth_user.id {
-        return Err(AppError::Forbidden("Access denied".to_string()));
-    }
+    require_project_owner(&state.db, &auth_user.id, &project_id).await?;
 
     let server = ServerRepository::find_by_id(&state.db, &server_id)
         .await?

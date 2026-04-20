@@ -1,5 +1,5 @@
 use anyhow::Result;
-use tracing::info;
+use tracing::{error, info};
 
 use crate::db::{
     repositories::{
@@ -68,94 +68,129 @@ impl RetentionService {
     }
 
     /// Run all cleanup tasks. Retention values of -1 skip cleanup (unlimited).
+    /// Each step runs independently — a failure in one step is logged but does not
+    /// prevent subsequent steps from running.
     pub async fn run_cleanup(&self) -> Result<()> {
         info!("Running data retention cleanup...");
+        let mut first_err: Option<anyhow::Error> = None;
 
         // Cleanup old events using per-org effective retention:
         // each org's cutoff is (event_retention_days + org.x402_extra_retention_days) days.
         if self.event_retention_days >= 0 {
-            let events_deleted =
-                EventRepository::cleanup_old_events(&self.pool, self.event_retention_days).await?;
-            if events_deleted > 0 {
-                info!(
+            match EventRepository::cleanup_old_events(&self.pool, self.event_retention_days).await {
+                Ok(n) if n > 0 => info!(
                     "Cleaned up {} old events (per-org effective retention, {} day base)",
-                    events_deleted, self.event_retention_days
-                );
+                    n, self.event_retention_days
+                ),
+                Ok(_) => {}
+                Err(e) => {
+                    error!("Failed to cleanup old events: {}", e);
+                    first_err.get_or_insert(e);
+                }
             }
         }
 
         // Cleanup old monitor checks
         if self.monitor_check_retention_days >= 0 {
-            let checks_deleted = MonitorCheckRepository::cleanup_old_checks(
+            match MonitorCheckRepository::cleanup_old_checks(
                 &self.pool,
                 self.monitor_check_retention_days,
             )
-            .await?;
-            if checks_deleted > 0 {
-                info!(
+            .await
+            {
+                Ok(n) if n > 0 => info!(
                     "Cleaned up {} old monitor checks (older than {} days)",
-                    checks_deleted, self.monitor_check_retention_days
-                );
+                    n, self.monitor_check_retention_days
+                ),
+                Ok(_) => {}
+                Err(e) => {
+                    error!("Failed to cleanup old monitor checks: {}", e);
+                    first_err.get_or_insert(e);
+                }
             }
         }
 
         // Cleanup old alert logs
         if self.alert_log_retention_days >= 0 {
-            let logs_deleted =
-                AlertLogRepository::cleanup_old_logs(&self.pool, self.alert_log_retention_days)
-                    .await?;
-            if logs_deleted > 0 {
-                info!(
+            match AlertLogRepository::cleanup_old_logs(&self.pool, self.alert_log_retention_days)
+                .await
+            {
+                Ok(n) if n > 0 => info!(
                     "Cleaned up {} old alert logs (older than {} days)",
-                    logs_deleted, self.alert_log_retention_days
-                );
+                    n, self.alert_log_retention_days
+                ),
+                Ok(_) => {}
+                Err(e) => {
+                    error!("Failed to cleanup old alert logs: {}", e);
+                    first_err.get_or_insert(e);
+                }
             }
         }
 
         // Cleanup old server metrics
         if self.server_metrics_retention_days >= 0 {
-            let metrics_deleted = ServerMetricsRepository::cleanup_old_metrics(
+            match ServerMetricsRepository::cleanup_old_metrics(
                 &self.pool,
                 self.server_metrics_retention_days,
             )
-            .await?;
-            if metrics_deleted > 0 {
-                info!(
+            .await
+            {
+                Ok(n) if n > 0 => info!(
                     "Cleaned up {} old server metrics (older than {} days)",
-                    metrics_deleted, self.server_metrics_retention_days
-                );
+                    n, self.server_metrics_retention_days
+                ),
+                Ok(_) => {}
+                Err(e) => {
+                    error!("Failed to cleanup old server metrics: {}", e);
+                    first_err.get_or_insert(e);
+                }
             }
         }
 
         // Cleanup old transactions (and their spans via cascade)
         if self.transaction_retention_days >= 0 {
-            let txns_deleted = PerformanceRepository::cleanup_old_transactions(
+            match PerformanceRepository::cleanup_old_transactions(
                 &self.pool,
                 self.transaction_retention_days,
             )
-            .await?;
-            if txns_deleted > 0 {
-                info!(
+            .await
+            {
+                Ok(n) if n > 0 => info!(
                     "Cleaned up {} old transactions (older than {} days)",
-                    txns_deleted, self.transaction_retention_days
-                );
+                    n, self.transaction_retention_days
+                ),
+                Ok(_) => {}
+                Err(e) => {
+                    error!("Failed to cleanup old transactions: {}", e);
+                    first_err.get_or_insert(e);
+                }
             }
         }
 
         // Cleanup old session recordings (and their segments via cascade)
         if self.recording_retention_days >= 0 {
-            let recordings_deleted =
-                ReplayRepository::cleanup_old_recordings(&self.pool, self.recording_retention_days)
-                    .await?;
-            if recordings_deleted > 0 {
-                info!(
+            match ReplayRepository::cleanup_old_recordings(
+                &self.pool,
+                self.recording_retention_days,
+            )
+            .await
+            {
+                Ok(n) if n > 0 => info!(
                     "Cleaned up {} old session recordings (older than {} days)",
-                    recordings_deleted, self.recording_retention_days
-                );
+                    n, self.recording_retention_days
+                ),
+                Ok(_) => {}
+                Err(e) => {
+                    error!("Failed to cleanup old session recordings: {}", e);
+                    first_err.get_or_insert(e);
+                }
             }
         }
 
         info!("Data retention cleanup completed");
-        Ok(())
+        match first_err {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
     }
 }

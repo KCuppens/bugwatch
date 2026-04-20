@@ -26,7 +26,6 @@ pub struct CreateAlertRuleRequest {
     pub channel_ids: Vec<String>,
 }
 
-
 #[derive(Debug, Deserialize)]
 pub struct UpdateAlertRuleRequest {
     pub name: Option<String>,

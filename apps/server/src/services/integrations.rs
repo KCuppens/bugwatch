@@ -278,6 +278,11 @@ impl JiraService {
             .send()
             .await?;
 
+        if !response.status().is_success() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(anyhow::anyhow!("Failed to get Jira cloud ID: {}", text));
+        }
+
         let data: Vec<serde_json::Value> = response.json().await?;
         data.first()
             .and_then(|r| r["id"].as_str())
@@ -442,6 +447,11 @@ impl LinearService {
             }))
             .send()
             .await?;
+
+        if !response.status().is_success() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(anyhow::anyhow!("Failed to get Linear user: {}", text));
+        }
 
         let data: serde_json::Value = response.json().await?;
         let viewer = &data["data"]["viewer"];

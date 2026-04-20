@@ -379,10 +379,11 @@ pub async fn ingest(
     let payload = serde_json::to_string(&event)
         .map_err(|e| AppError::Internal(format!("Failed to serialize event: {}", e)))?;
 
-    // Parse timestamp string to DateTime<Utc>
+    // Parse timestamp string to DateTime<Utc>; reject unparseable values so events
+    // are not silently recorded at server time (which corrupts frequency charts).
     let timestamp = chrono::DateTime::parse_from_rfc3339(&event.timestamp)
         .map(|dt| dt.with_timezone(&chrono::Utc))
-        .unwrap_or_else(|_| chrono::Utc::now());
+        .map_err(|_| AppError::Validation("timestamp must be a valid RFC3339 timestamp".into()))?;
 
     let inserted =
         EventRepository::create(&state.db, &issue.id, &event.event_id, timestamp, &payload).await?;

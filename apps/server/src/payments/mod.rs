@@ -224,11 +224,7 @@ pub async fn apply_capacity_grant_in_tx(
 /// Axum middleware: checks X-Payment header on every request.
 /// - FeatureAccess: verifies, applies, and SHORT-CIRCUITS (skips tier guard)
 /// - CapacityGrant: verifies, applies capacity to org, then FALLS THROUGH to handler
-pub async fn x402_payment_middleware(
-    state: AppState,
-    req: Request<Body>,
-    next: Next,
-) -> Response {
+pub async fn x402_payment_middleware(state: AppState, req: Request<Body>, next: Next) -> Response {
     // Only process if x402 is enabled and X-Payment header is present
     if state.config.x402_enabled {
         if let Some(payment_header) = req.headers().get("X-Payment") {
