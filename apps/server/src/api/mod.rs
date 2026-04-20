@@ -74,6 +74,10 @@ pub fn router() -> Router<AppState> {
         // Issues - specific routes MUST come before parameterized :issue_id route
         .route("/projects/:project_id/issues", get(issues::list))
         .route("/projects/:project_id/issues/_search", post(issues::search))
+        .route(
+            "/projects/:project_id/issues/facets",
+            get(issues::get_facets),
+        )
         // Nested issue routes with :issue_id
         .route(
             "/projects/:project_id/issues/:issue_id/events/:event_id",

@@ -17,13 +17,14 @@ use crate::config::Config;
 /// Keys must be ≤ 255 ASCII bytes; callers are responsible for ensuring this.
 /// Do NOT use this for operations that are intentionally non-idempotent
 /// (e.g. SetupIntent creation — each add-card flow needs a fresh intent).
-fn idempotency_key(prefix: &str) -> String {
-    assert!(
-        prefix.len() <= 255,
-        "idempotency key exceeds 255 bytes: {}",
-        prefix.len()
-    );
-    prefix.to_string()
+fn idempotency_key(prefix: &str) -> Result<String> {
+    if prefix.len() > 255 {
+        return Err(anyhow!(
+            "idempotency key exceeds 255 bytes: {}",
+            prefix.len()
+        ));
+    }
+    Ok(prefix.to_string())
 }
 
 /// Retry a Stripe API call on transient errors (5xx, rate limit, network).
@@ -129,7 +130,7 @@ impl StripeClient {
 
         // Stable key across retries — prevents duplicate customers if the
         // response is lost in a network partition after Stripe processes the request.
-        let ikey = idempotency_key(&format!("create_customer_{}", organization_id));
+        let ikey = idempotency_key(&format!("create_customer_{}", organization_id))?;
         let client = self
             .client
             .clone()
@@ -200,7 +201,7 @@ impl StripeClient {
         let ikey = idempotency_key(&format!(
             "checkout_{}_{}_{}_{}",
             customer_id, tier, seats, annual
-        ));
+        ))?;
         let client = self
             .client
             .clone()
@@ -292,7 +293,7 @@ impl StripeClient {
         let mut update_params = stripe::UpdateSubscriptionItem::new();
         update_params.quantity = Some(new_seats as u64);
 
-        let ikey = idempotency_key(&format!("update_seats_{}_{}", subscription_id, new_seats));
+        let ikey = idempotency_key(&format!("update_seats_{}_{}", subscription_id, new_seats))?;
         let idem_client = client
             .clone()
             .with_strategy(stripe::RequestStrategy::Idempotent(ikey));
@@ -367,7 +368,7 @@ impl StripeClient {
         let ikey = idempotency_key(&format!(
             "update_tier_{}_{}_{}_{}",
             subscription_id, new_tier, annual, seats
-        ));
+        ))?;
         let update_client = client
             .clone()
             .with_strategy(stripe::RequestStrategy::Idempotent(ikey));
@@ -682,7 +683,10 @@ impl StripeClient {
                 percent_off: coupon.percent_off,
                 amount_off: coupon.amount_off,
                 currency: coupon.currency.map(|c| c.to_string()),
-                duration: coupon.duration.map(|d| format!("{:?}", d)).unwrap_or_default(),
+                duration: coupon
+                    .duration
+                    .map(|d| format!("{:?}", d))
+                    .unwrap_or_default(),
                 duration_in_months: coupon.duration_in_months.map(|m| m as i32),
                 valid: coupon.valid.unwrap_or(false),
                 name: coupon.name.clone(),
@@ -705,7 +709,10 @@ impl StripeClient {
             percent_off: coupon.percent_off,
             amount_off: coupon.amount_off,
             currency: coupon.currency.map(|c| c.to_string()),
-            duration: coupon.duration.map(|d| format!("{:?}", d)).unwrap_or_default(),
+            duration: coupon
+                .duration
+                .map(|d| format!("{:?}", d))
+                .unwrap_or_default(),
             duration_in_months: coupon.duration_in_months.map(|m| m as i32),
             valid: coupon.valid.unwrap_or(false),
             name: coupon.name,
@@ -797,7 +804,7 @@ impl StripeClient {
         let ikey = idempotency_key(&format!(
             "checkout_coupon_{}_{}_{}_{}_{}",
             customer_id, tier, seats, annual, coupon_suffix
-        ));
+        ))?;
         let client = self
             .client
             .clone()

@@ -270,6 +270,24 @@ pub struct SearchResponse {
     pub query_time_ms: u64,
 }
 
+/// GET /api/v1/projects/:project_id/issues/facets
+pub async fn get_facets(
+    State(state): State<AppState>,
+    auth: EitherAuth,
+    Path(project_id): Path<String>,
+) -> AppResult<Json<Facets>> {
+    let project = ProjectRepository::find_by_id(&state.db, &project_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Project not found".to_string()))?;
+
+    if !auth.can_access_project(&state.db, &project).await {
+        return Err(AppError::Forbidden("Access denied".to_string()));
+    }
+
+    let facets = IssueRepository::get_facets(&state.db, &project_id).await?;
+    Ok(Json(facets))
+}
+
 /// GET /api/v1/projects/:project_id/issues/:issue_id
 pub async fn get(
     State(state): State<AppState>,

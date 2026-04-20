@@ -219,13 +219,13 @@ impl NotificationService {
             .expect("Failed to create HTTP client");
 
         // Try SMTP first (self-hosted), then AWS SES (SaaS)
-        let email_transport = Self::init_smtp_transport()
-            .map(|t| {
+        let email_transport = match Self::init_smtp_transport() {
+            Ok(t) => {
                 info!("SMTP email transport initialized");
-                EmailTransport::Smtp(t)
-            })
-            .ok()
-            .or_else(|| Self::init_ses_transport_sync());
+                Some(EmailTransport::Smtp(t))
+            }
+            Err(_) => Self::init_ses_transport().await,
+        };
 
         if email_transport.is_none() {
             warn!("No email transport configured (set SMTP_HOST or AWS credentials). Email notifications will be logged only.");
@@ -270,13 +270,10 @@ impl NotificationService {
     }
 
     /// Initialize SES transport (SaaS only)
-    fn init_ses_transport_sync() -> Option<EmailTransport> {
+    async fn init_ses_transport() -> Option<EmailTransport> {
         #[cfg(feature = "saas")]
         {
-            // Use tokio::task::block_in_place to run async SES init
-            match tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(Self::init_ses_client())
-            }) {
+            match Self::init_ses_client().await {
                 Ok(client) => {
                     info!("AWS SES email transport initialized");
                     Some(EmailTransport::Ses(client))

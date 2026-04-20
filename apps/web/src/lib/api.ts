@@ -749,9 +749,10 @@ export interface SearchResponse {
 
 // Issues API
 export const issuesApi = {
-  async list(projectId: string, params?: { page?: number; status?: string }) {
+  async list(projectId: string, params?: { page?: number; per_page?: number; status?: string }) {
     const searchParams = new URLSearchParams();
     if (params?.page) searchParams.set("page", String(params.page));
+    if (params?.per_page) searchParams.set("per_page", String(params.per_page));
     if (params?.status) searchParams.set("status", params.status);
     const query = searchParams.toString();
     return api.get<PaginatedResponse<Issue>>(`/api/v1/projects/${projectId}/issues${query ? `?${query}` : ""}`);
@@ -759,6 +760,10 @@ export const issuesApi = {
 
   async search(projectId: string, request: SearchRequest, options?: { signal?: AbortSignal }) {
     return api.post<SearchResponse>(`/api/v1/projects/${projectId}/issues/_search`, request, options);
+  },
+
+  async getFacets(projectId: string, options?: { signal?: AbortSignal }) {
+    return api.get<Facets>(`/api/v1/projects/${projectId}/issues/facets`, options);
   },
 
   async get(projectId: string, issueId: string, options?: { signal?: AbortSignal }) {

@@ -385,41 +385,28 @@ pub async fn list(
             .await
             .map_err(|e| AppError::Internal(format!("Failed to list monitors: {}", e)))?;
 
-    // Fetch stats for each monitor
+    // Batch-fetch stats and last errors (single query each instead of N+1)
+    let monitor_ids: Vec<String> = monitors.iter().map(|m| m.id.clone()).collect();
+    let down_ids: Vec<String> = monitors
+        .iter()
+        .filter(|m| m.current_status == "down")
+        .map(|m| m.id.clone())
+        .collect();
+
+    let (batch_stats, batch_errors) = tokio::join!(
+        MonitorCheckRepository::batch_uptime_stats(&state.db, &monitor_ids, 24),
+        MonitorCheckRepository::batch_last_errors(&state.db, &down_ids),
+    );
+    let batch_stats = batch_stats.unwrap_or_default();
+    let batch_errors = batch_errors.unwrap_or_default();
+
     let mut monitor_responses = Vec::with_capacity(monitors.len());
     for monitor in monitors {
-        let stats = MonitorCheckRepository::get_uptime_stats(&state.db, &monitor.id, 24).await;
-        let (uptime, avg_response) = match stats {
-            Ok((total, up, avg)) if total > 0 => {
-                let uptime = (up as f64 / total as f64) * 100.0;
-                (Some(uptime), avg)
-            }
-            Ok((total, _, _)) => {
-                // No checks in time window
-                if total == 0 {
-                    warn!("No monitor checks found for {} in last 24h", monitor.id);
-                }
-                (None, None)
-            }
-            Err(e) => {
-                warn!(
-                    "Failed to get uptime stats for monitor {}: {}",
-                    monitor.id, e
-                );
-                (None, None)
-            }
+        let (uptime, avg_response) = match batch_stats.get(&monitor.id) {
+            Some(&(total, up, avg)) if total > 0 => (Some((up as f64 / total as f64) * 100.0), avg),
+            _ => (None, None),
         };
-
-        // Get last error if monitor is down
-        let last_error = if monitor.current_status == "down" {
-            MonitorCheckRepository::get_last_error(&state.db, &monitor.id)
-                .await
-                .ok()
-                .flatten()
-        } else {
-            None
-        };
-
+        let last_error = batch_errors.get(&monitor.id).cloned();
         monitor_responses.push(MonitorResponse {
             monitor,
             uptime_24h: uptime,

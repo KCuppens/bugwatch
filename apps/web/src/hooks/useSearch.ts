@@ -147,12 +147,53 @@ export function useSearch({ projectId, initialQuery = "", debounceMs = 300 }: Us
   const queryRef = useRef(query);
   queryRef.current = query;
 
-  // Track which project facets were last loaded for — get_facets is project-wide
-  // (filter-agnostic on the backend), so facets only need to refresh on project change.
-  const facetsProjectRef = useRef<string | undefined>(undefined);
+  // Fetch facets independently from search — facets are project-wide and filter-agnostic,
+  // so they only need to refresh when the project changes, not on every search.
+  useEffect(() => {
+    if (!projectId) return;
+    const controller = new AbortController();
+    issuesApi
+      .getFacets(projectId, { signal: controller.signal })
+      .then((data) => setFacets(data))
+      .catch((err) => {
+        if (err instanceof DOMException && err.name === "AbortError") return;
+      });
+    return () => controller.abort();
+  }, [projectId]);
 
-  // Ref to cancel in-flight immediate searches when a newer one starts
-  const performSearchControllerRef = useRef<AbortController | null>(null);
+  // Single shared controller — cancels whichever search (immediate or debounced) is
+  // in-flight, preventing a stale debounced result from overwriting a newer immediate one.
+  const activeSearchControllerRef = useRef<AbortController | null>(null);
+
+  // Inner helper that runs the actual fetch + state update for a given query/signal.
+  // Both performSearch and the debounced effect delegate here.
+  const runSearch = useCallback(
+    async (searchQuery: string, signal: AbortSignal) => {
+      setIsLoading(true);
+      setError(null);
+      try {
+        const parsed = parseQuery(searchQuery);
+        const response = await issuesApi.search(
+          projectId!,
+          {
+            filters: convertFilters(parsed),
+            sort: parsed.sort ? { field: parsed.sort.field, direction: parsed.sort.direction } : undefined,
+          },
+          { signal }
+        );
+        setResults(response.data);
+      } catch (err) {
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        console.error("Search failed:", err);
+        setError("Search failed. Please try again.");
+      } finally {
+        if (!signal.aborted) {
+          setIsLoading(false);
+        }
+      }
+    },
+    [projectId, convertFilters]
+  );
 
   // Search function that can be called directly (bypasses debounce)
   const performSearch = useCallback(
@@ -162,42 +203,12 @@ export function useSearch({ projectId, initialQuery = "", debounceMs = 300 }: Us
         setFacets(null);
         return;
       }
-
-      // Cancel any in-flight immediate search
-      performSearchControllerRef.current?.abort();
+      activeSearchControllerRef.current?.abort();
       const controller = new AbortController();
-      performSearchControllerRef.current = controller;
-
-      setIsLoading(true);
-      setError(null);
-
-      try {
-        const parsed = parseQuery(searchQuery);
-        const response = await issuesApi.search(
-          projectId,
-          {
-            filters: convertFilters(parsed),
-            sort: parsed.sort ? { field: parsed.sort.field, direction: parsed.sort.direction } : undefined,
-          },
-          { signal: controller.signal }
-        );
-
-        setResults(response.data);
-        if (facetsProjectRef.current !== projectId) {
-          facetsProjectRef.current = projectId;
-          setFacets(response.facets);
-        }
-      } catch (err) {
-        if (err instanceof DOMException && err.name === "AbortError") return;
-        console.error("Search failed:", err);
-        setError("Search failed. Please try again.");
-      } finally {
-        if (!controller.signal.aborted) {
-          setIsLoading(false);
-        }
-      }
+      activeSearchControllerRef.current = controller;
+      await runSearch(searchQuery, controller.signal);
     },
-    [projectId, convertFilters]
+    [projectId, runSearch]
   );
 
   // Execute search when debounced query changes
@@ -208,46 +219,15 @@ export function useSearch({ projectId, initialQuery = "", debounceMs = 300 }: Us
       return;
     }
 
+    activeSearchControllerRef.current?.abort();
     const controller = new AbortController();
-
-    const search = async () => {
-      setIsLoading(true);
-      setError(null);
-
-      try {
-        const parsed = parseQuery(debouncedQuery);
-        const response = await issuesApi.search(
-          projectId,
-          {
-            filters: convertFilters(parsed),
-            sort: parsed.sort ? { field: parsed.sort.field, direction: parsed.sort.direction } : undefined,
-          },
-          { signal: controller.signal }
-        );
-
-        setResults(response.data);
-        if (facetsProjectRef.current !== projectId) {
-          facetsProjectRef.current = projectId;
-          setFacets(response.facets);
-        }
-      } catch (err) {
-        // Ignore AbortError - expected when effect cleanup runs
-        if (err instanceof DOMException && err.name === "AbortError") return;
-        console.error("Search failed:", err);
-        setError("Search failed. Please try again.");
-      } finally {
-        if (!controller.signal.aborted) {
-          setIsLoading(false);
-        }
-      }
-    };
-
-    search();
+    activeSearchControllerRef.current = controller;
+    runSearch(debouncedQuery, controller.signal);
 
     return () => {
       controller.abort();
     };
-  }, [projectId, debouncedQuery, convertFilters]);
+  }, [projectId, debouncedQuery, runSearch]);
 
   // Execute search (manual trigger — bypasses debounce for instant response on Enter)
   const executeSearch = useCallback(() => {

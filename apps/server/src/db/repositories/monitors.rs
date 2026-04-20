@@ -308,6 +308,67 @@ impl MonitorCheckRepository {
         Ok(stats)
     }
 
+    /// Fetch uptime stats for multiple monitors in a single query.
+    /// Returns a map from monitor_id to (total_checks, up_checks, avg_response_ms).
+    pub async fn batch_uptime_stats(
+        pool: &DbPool,
+        monitor_ids: &[String],
+        hours: i32,
+    ) -> Result<std::collections::HashMap<String, (i64, i64, Option<f64>)>> {
+        if monitor_ids.is_empty() {
+            return Ok(std::collections::HashMap::new());
+        }
+
+        let rows: Vec<(String, i64, i64, Option<f64>)> = sqlx::query_as(
+            r#"
+            SELECT
+                monitor_id,
+                COUNT(*) as total,
+                COALESCE(SUM(CASE WHEN status = 'up' THEN 1 ELSE 0 END), 0)::BIGINT as up_count,
+                AVG(response_time_ms)::double precision as avg_response
+            FROM monitor_checks
+            WHERE monitor_id = ANY($1)
+              AND checked_at >= NOW() - INTERVAL '1 hour' * $2
+            GROUP BY monitor_id
+            "#,
+        )
+        .bind(monitor_ids)
+        .bind(hours)
+        .fetch_all(pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|(id, total, up, avg)| (id, (total, up, avg)))
+            .collect())
+    }
+
+    /// Fetch the most recent error message for each "down" monitor in a single query.
+    pub async fn batch_last_errors(
+        pool: &DbPool,
+        monitor_ids: &[String],
+    ) -> Result<std::collections::HashMap<String, String>> {
+        if monitor_ids.is_empty() {
+            return Ok(std::collections::HashMap::new());
+        }
+
+        let rows: Vec<(String, String)> = sqlx::query_as(
+            r#"
+            SELECT DISTINCT ON (monitor_id) monitor_id, error_message
+            FROM monitor_checks
+            WHERE monitor_id = ANY($1)
+              AND status = 'down'
+              AND error_message IS NOT NULL
+            ORDER BY monitor_id, checked_at DESC
+            "#,
+        )
+        .bind(monitor_ids)
+        .fetch_all(pool)
+        .await?;
+
+        Ok(rows.into_iter().collect())
+    }
+
     pub async fn cleanup_old_checks(pool: &DbPool, days: i32) -> Result<u64> {
         let result = sqlx::query(
             "DELETE FROM monitor_checks WHERE checked_at < NOW() - INTERVAL '1 day' * $1",
