@@ -26,7 +26,7 @@ impl OnChainVerifier {
     }
 
     /// Verifies a USDC ERC-20 Transfer event on Base.
-    /// Checks: tx receipt exists, tx was to the USDC contract, a Transfer log
+    /// Checks: tx receipt exists, tx was confirmed within 24h, a Transfer log
     /// from any sender to `expected_to` of at least `min_amount` micro-USDC exists.
     /// Returns Ok(actual_amount) or Err(reason).
     pub async fn verify_usdc_transfer(
@@ -54,6 +54,28 @@ impl OnChainVerifier {
             .unwrap_or("0x0");
         if status != "0x1" {
             return Err("Transaction failed or reverted".to_string());
+        }
+
+        // 2b. Reject transactions confirmed more than 24h ago to prevent old-tx replay.
+        if let Some(block_number) = receipt.get("blockNumber").and_then(|v| v.as_str()) {
+            match self.eth_get_block_timestamp(block_number).await {
+                Ok(block_ts) => {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+                    if now.saturating_sub(block_ts) > 86_400 {
+                        return Err(format!(
+                            "Transaction was confirmed more than 24h ago (block timestamp: {}); \
+                             submit a recent transaction",
+                            block_ts
+                        ));
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(tx_hash = tx_hash, "Could not verify block timestamp: {}", e);
+                }
+            }
         }
 
         // 3. (receipt["to"] is not checked here — it is not reliably present on all RPC nodes.
@@ -141,6 +163,35 @@ impl OnChainVerifier {
         }
 
         Err("No valid USDC Transfer event found to expected recipient".to_string())
+    }
+
+    async fn eth_get_block_timestamp(&self, block_number: &str) -> Result<u64, String> {
+        let payload = json!({
+            "jsonrpc": "2.0",
+            "method": "eth_getBlockByNumber",
+            "params": [block_number, false],
+            "id": 2
+        });
+        let response: RpcResponse = self
+            .client
+            .post(&self.rpc_url)
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|e| format!("RPC request failed: {}", e))?
+            .json()
+            .await
+            .map_err(|e| format!("Failed to parse block response: {}", e))?;
+
+        let block = response
+            .result
+            .ok_or_else(|| "Block not found".to_string())?;
+        let ts_hex = block
+            .get("timestamp")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| "Missing block timestamp".to_string())?;
+        u64::from_str_radix(ts_hex.trim_start_matches("0x"), 16)
+            .map_err(|_| "Invalid block timestamp".to_string())
     }
 
     async fn eth_get_transaction_receipt(&self, tx_hash: &str) -> Result<Value, String> {

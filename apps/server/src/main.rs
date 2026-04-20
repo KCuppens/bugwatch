@@ -191,16 +191,18 @@ async fn main() -> Result<()> {
     // Build application
     let app = create_app(state.clone());
 
-    // Start health check worker in background — restart automatically if it exits
+    // Start health check worker in background — restart with exponential backoff (1s → 60s cap)
     let worker_db = state.db.clone();
     let worker_alerting = alerting_service.clone();
     tokio::spawn(async move {
+        let mut backoff_secs: u64 = 1;
         loop {
             let worker =
                 HealthCheckWorker::with_alerting(worker_db.clone(), worker_alerting.clone());
             worker.run().await;
-            tracing::warn!("Health check worker exited — restarting in 5s");
-            tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+            tracing::warn!(backoff_secs, "Health check worker exited — restarting");
+            tokio::time::sleep(tokio::time::Duration::from_secs(backoff_secs)).await;
+            backoff_secs = (backoff_secs * 2).min(60);
         }
     });
     info!("Health check worker started");

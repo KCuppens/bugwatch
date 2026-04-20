@@ -685,9 +685,14 @@ pub async fn list_alert_logs_across_projects(
         .into_iter()
         .collect();
 
-    let rule_map = AlertLogRepository::list_rule_names_for_ids(&state.db, &rule_ids)
-        .await
-        .unwrap_or_default();
+    // Chunk into batches of 100 to avoid oversized IN (...) clauses on large rule sets.
+    let mut rule_map = std::collections::HashMap::new();
+    for chunk in rule_ids.chunks(100) {
+        let batch = AlertLogRepository::list_rule_names_for_ids(&state.db, chunk)
+            .await
+            .unwrap_or_default();
+        rule_map.extend(batch);
+    }
 
     // Enrich each log with project and rule info
     let data: Vec<AlertLogWithProjectInfo> = logs

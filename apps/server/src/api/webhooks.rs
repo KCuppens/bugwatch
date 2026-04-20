@@ -83,27 +83,34 @@ pub async fn stripe_webhook(
         return Ok(StatusCode::OK);
     }
 
-    // Handle different event types
-    match event_type {
-        "checkout.session.completed" => {
-            handle_checkout_completed(&state, &payload).await?;
+    // Offload heavy DB processing to a background task so we return 200 immediately.
+    // Stripe retries on 5xx or timeout — an immediate 200 prevents spurious retries.
+    // Idempotency is guaranteed by the duplicate-event check above (event_id dedup).
+    let event_type_owned = event_type.to_string();
+    let event_id_owned = event_id.to_string();
+    tokio::spawn(async move {
+        let result = match event_type_owned.as_str() {
+            "checkout.session.completed" => handle_checkout_completed(&state, &payload).await,
+            "invoice.paid" => handle_invoice_paid(&state, &payload, &event_id_owned).await,
+            "invoice.payment_failed" => {
+                handle_invoice_payment_failed(&state, &payload, &event_id_owned).await
+            }
+            "customer.subscription.updated" => handle_subscription_updated(&state, &payload).await,
+            "customer.subscription.deleted" => handle_subscription_deleted(&state, &payload).await,
+            _ => {
+                warn!("Unhandled webhook event type: {}", event_type_owned);
+                Ok(())
+            }
+        };
+        if let Err((status, msg)) = result {
+            tracing::error!(
+                event_type = %event_type_owned,
+                event_id = %event_id_owned,
+                status = %status,
+                "Stripe webhook processing failed: {}", msg
+            );
         }
-        "invoice.paid" => {
-            handle_invoice_paid(&state, &payload, event_id).await?;
-        }
-        "invoice.payment_failed" => {
-            handle_invoice_payment_failed(&state, &payload, event_id).await?;
-        }
-        "customer.subscription.updated" => {
-            handle_subscription_updated(&state, &payload).await?;
-        }
-        "customer.subscription.deleted" => {
-            handle_subscription_deleted(&state, &payload).await?;
-        }
-        _ => {
-            warn!("Unhandled webhook event type: {}", event_type);
-        }
-    }
+    });
 
     Ok(StatusCode::OK)
 }

@@ -203,7 +203,7 @@ impl Config {
             database_url: env::var("DATABASE_URL")
                 .unwrap_or_else(|_| "sqlite:./data/bugwatch.db?mode=rwc".to_string()),
             jwt_secret: env::var("JWT_SECRET")
-                .expect("FATAL: JWT_SECRET environment variable is required. Set it in .env for local development."),
+                .map_err(|_| anyhow::anyhow!("FATAL: JWT_SECRET environment variable is required. Set it in .env for local development."))?,
             jwt_access_expiration: env::var("JWT_ACCESS_EXPIRATION")
                 .ok()
                 .and_then(|v| v.parse().ok())

@@ -41,10 +41,14 @@ pub async fn verify_and_apply_payment(
         })?;
 
     if payment.organization_id != org_id {
-        // Roll back to pending so the agent can retry with the correct org credentials.
-        if let Err(e) = state.payment_store.unclaim(&payment.nonce).await {
-            tracing::error!(nonce = %payment.nonce, error = %e, "Failed to unclaim nonce after org mismatch");
-        }
+        // Do NOT unclaim on org mismatch — restoring the nonce to pending would allow
+        // a different org to claim the same nonce (cross-org replay attack).
+        tracing::warn!(
+            nonce = %payment.nonce,
+            expected_org = %payment.organization_id,
+            actual_org = %org_id,
+            "Payment nonce org mismatch — nonce invalidated"
+        );
         return Err(AppError::Unauthorized(
             "Payment nonce belongs to different organization".to_string(),
         ));
@@ -52,10 +56,13 @@ pub async fn verify_and_apply_payment(
 
     // Check that the payment nonce was issued for this resource
     if !payment.resource.is_empty() && payment.resource != request_path {
-        // Roll back to pending so the agent can retry against the correct endpoint.
-        if let Err(e) = state.payment_store.unclaim(&payment.nonce).await {
-            tracing::error!(nonce = %payment.nonce, error = %e, "Failed to unclaim nonce after resource mismatch");
-        }
+        // Do NOT unclaim on resource mismatch for the same cross-org replay reason.
+        tracing::warn!(
+            nonce = %payment.nonce,
+            expected_resource = %payment.resource,
+            actual_resource = %request_path,
+            "Payment nonce resource mismatch — nonce invalidated"
+        );
         return Err(AppError::Unauthorized(
             "Payment challenge was issued for a different resource".to_string(),
         ));
@@ -74,13 +81,13 @@ pub async fn verify_and_apply_payment(
         .await
     {
         tracing::warn!(
-            "x402 on-chain verification failed for nonce {}: {}",
-            payment.nonce,
-            e
+            nonce = %payment.nonce,
+            tx_hash = %proof.tx_hash,
+            "x402 on-chain verification failed: {}", e
         );
         // Roll back to pending: the tx may not be confirmed yet and the agent can retry.
         if let Err(ue) = state.payment_store.unclaim(&payment.nonce).await {
-            tracing::error!(nonce = %payment.nonce, error = %ue, "Failed to unclaim nonce after on-chain verification failure");
+            tracing::error!(nonce = %payment.nonce, tx_hash = %proof.tx_hash, error = %ue, "Failed to unclaim nonce after on-chain verification failure");
         }
         return Err(AppError::PaymentRequired(
             "Payment verification failed. Ensure the transaction is confirmed on Base mainnet."

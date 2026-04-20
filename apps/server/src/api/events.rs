@@ -459,8 +459,24 @@ pub async fn ingest(
                 tracing::warn!(
                     issue_id = %issue.id,
                     project_id = %project.id,
-                    "Alert semaphore full — skipping alert evaluation"
+                    "Alert semaphore full — scheduling delayed retry in 5s"
                 );
+                // Retry once after 5s rather than silently dropping the trigger.
+                let alerting_retry = state.alerting_service.clone();
+                let project_id_retry = project.id.clone();
+                let issue_retry = issue.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                    if let Err(e) = alerting_retry
+                        .on_new_issue(&project_id_retry, &issue_retry)
+                        .await
+                    {
+                        tracing::error!(
+                            issue_id = %issue_retry.id,
+                            "Alert retry after semaphore backpressure failed: {}", e
+                        );
+                    }
+                });
             }
         }
     } else {

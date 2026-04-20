@@ -81,12 +81,13 @@ impl RetentionService {
         if self.event_retention_days >= 0 {
             match EventRepository::cleanup_old_events(&self.pool, self.event_retention_days).await {
                 Ok(n) if n > 0 => info!(
+                    run_id = %run_id,
                     "Cleaned up {} old events (per-org effective retention, {} day base)",
                     n, self.event_retention_days
                 ),
                 Ok(_) => {}
                 Err(e) => {
-                    error!("Failed to cleanup old events: {}", e);
+                    error!(run_id = %run_id, "Failed to cleanup old events: {}", e);
                     first_err.get_or_insert(e);
                 }
             }
@@ -101,12 +102,13 @@ impl RetentionService {
             .await
             {
                 Ok(n) if n > 0 => info!(
+                    run_id = %run_id,
                     "Cleaned up {} old monitor checks (older than {} days)",
                     n, self.monitor_check_retention_days
                 ),
                 Ok(_) => {}
                 Err(e) => {
-                    error!("Failed to cleanup old monitor checks: {}", e);
+                    error!(run_id = %run_id, "Failed to cleanup old monitor checks: {}", e);
                     first_err.get_or_insert(e);
                 }
             }
@@ -118,12 +120,13 @@ impl RetentionService {
                 .await
             {
                 Ok(n) if n > 0 => info!(
+                    run_id = %run_id,
                     "Cleaned up {} old alert logs (older than {} days)",
                     n, self.alert_log_retention_days
                 ),
                 Ok(_) => {}
                 Err(e) => {
-                    error!("Failed to cleanup old alert logs: {}", e);
+                    error!(run_id = %run_id, "Failed to cleanup old alert logs: {}", e);
                     first_err.get_or_insert(e);
                 }
             }
@@ -138,12 +141,13 @@ impl RetentionService {
             .await
             {
                 Ok(n) if n > 0 => info!(
+                    run_id = %run_id,
                     "Cleaned up {} old server metrics (older than {} days)",
                     n, self.server_metrics_retention_days
                 ),
                 Ok(_) => {}
                 Err(e) => {
-                    error!("Failed to cleanup old server metrics: {}", e);
+                    error!(run_id = %run_id, "Failed to cleanup old server metrics: {}", e);
                     first_err.get_or_insert(e);
                 }
             }
@@ -158,12 +162,13 @@ impl RetentionService {
             .await
             {
                 Ok(n) if n > 0 => info!(
+                    run_id = %run_id,
                     "Cleaned up {} old transactions (older than {} days)",
                     n, self.transaction_retention_days
                 ),
                 Ok(_) => {}
                 Err(e) => {
-                    error!("Failed to cleanup old transactions: {}", e);
+                    error!(run_id = %run_id, "Failed to cleanup old transactions: {}", e);
                     first_err.get_or_insert(e);
                 }
             }
@@ -178,18 +183,19 @@ impl RetentionService {
             .await
             {
                 Ok(n) if n > 0 => info!(
+                    run_id = %run_id,
                     "Cleaned up {} old session recordings (older than {} days)",
                     n, self.recording_retention_days
                 ),
                 Ok(_) => {}
                 Err(e) => {
-                    error!("Failed to cleanup old session recordings: {}", e);
+                    error!(run_id = %run_id, "Failed to cleanup old session recordings: {}", e);
                     first_err.get_or_insert(e);
                 }
             }
         }
 
-        info!("Data retention cleanup completed");
+        info!(run_id = %run_id, "Data retention cleanup completed");
         match first_err {
             Some(e) => Err(e),
             None => Ok(()),
