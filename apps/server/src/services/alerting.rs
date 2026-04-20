@@ -20,6 +20,8 @@ pub struct AlertingService {
     pool: DbPool,
     notification_service: Arc<NotificationService>,
     app_url: String,
+    /// Shared semaphore caps concurrent notification sends across all concurrent alert evaluations.
+    semaphore: Arc<Semaphore>,
 }
 
 // ─── Shared helpers ──────────────────────────────────────────────────────────
@@ -172,10 +174,14 @@ impl AlertingService {
         // Phase 1: collect matches (CPU-only, no I/O)
         let total_rules = rules.len();
         let mut matches: Vec<(AlertRule, AlertPayload)> = Vec::new();
+        let mut parse_failures: usize = 0;
         for rule in rules {
             let condition = match parse_alert_condition(&rule) {
                 Some(c) => c,
-                None => continue,
+                None => {
+                    parse_failures += 1;
+                    continue;
+                }
             };
             if let Some(payload) = matcher(&condition) {
                 matches.push((rule, payload));
@@ -194,7 +200,7 @@ impl AlertingService {
         let pool = self.pool.clone();
         let notification_service = Arc::clone(&self.notification_service);
         let app_url = self.app_url.clone();
-        let semaphore = Arc::new(Semaphore::new(10));
+        let semaphore = Arc::clone(&self.semaphore);
         let mut join_set: tokio::task::JoinSet<(String, Result<()>)> = tokio::task::JoinSet::new();
 
         for (rule, payload) in matches {
@@ -211,6 +217,7 @@ impl AlertingService {
                         pool,
                         notification_service,
                         app_url,
+                        semaphore: Arc::new(Semaphore::new(1)),
                     };
                     let rule_id = rule.id.clone();
                     let result = svc.send_alert(&rule, &payload, cooldown_minutes).await;
@@ -239,6 +246,7 @@ impl AlertingService {
         }
         tracing::info!(
             rules_evaluated = total_rules,
+            rules_parse_failed = parse_failures,
             rules_matched = matches_count,
             sends_succeeded = ok_count,
             sends_failed = err_count,
@@ -253,6 +261,7 @@ impl AlertingService {
             pool,
             notification_service: Arc::new(NotificationService::new().await),
             app_url,
+            semaphore: Arc::new(Semaphore::new(10)),
         }
     }
 

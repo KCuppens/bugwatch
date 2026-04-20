@@ -605,6 +605,10 @@ pub async fn list_alert_logs(
         return Err(AppError::Forbidden("Access denied".to_string()));
     }
 
+    if query.limit == 0 {
+        return Err(AppError::BadRequest("limit must be at least 1".to_string()));
+    }
+
     let logs = AlertLogRepository::list_by_project(&state.db, &project_id, query.limit.min(100))
         .await
         .map_err(|e| AppError::Internal(format!("Failed to list logs: {}", e)))?;
@@ -698,8 +702,13 @@ pub async fn list_alert_logs_across_projects(
     let data: Vec<AlertLogWithProjectInfo> = logs
         .into_iter()
         .filter_map(|log| {
-            let (rule_name, project_id) = rule_map.get(&log.alert_rule_id)?;
-            let project = project_map.get(project_id)?;
+            let Some((rule_name, project_id)) = rule_map.get(&log.alert_rule_id) else {
+                tracing::debug!(alert_rule_id = %log.alert_rule_id, "Skipping log for deleted/unknown rule");
+                return None;
+            };
+            let Some(project) = project_map.get(project_id) else {
+                return None;
+            };
             Some(AlertLogWithProjectInfo {
                 id: log.id,
                 alert_rule_id: log.alert_rule_id,
@@ -757,6 +766,11 @@ pub async fn mute_alert_rule(
     if request.duration_minutes <= 0 {
         return Err(AppError::BadRequest(
             "duration_minutes must be positive".to_string(),
+        ));
+    }
+    if request.duration_minutes > 10_080 {
+        return Err(AppError::BadRequest(
+            "duration_minutes cannot exceed 10080 (7 days)".to_string(),
         ));
     }
 
@@ -841,18 +855,24 @@ pub async fn test_alert_rule(
 
     let notification_service = crate::services::notifications::NotificationService::new().await;
 
+    // Batch-fetch all channels to avoid N+1 queries
+    let channels: std::collections::HashMap<String, _> =
+        NotificationChannelRepository::find_by_ids(&state.db, &channel_ids)
+            .await
+            .map_err(|e| AppError::Internal(format!("Failed to fetch channels: {}", e)))?
+            .into_iter()
+            .filter(|c| c.is_active)
+            .map(|c| (c.id.clone(), c))
+            .collect();
+
     let mut sent_count = 0;
     let mut errors = Vec::new();
 
     for channel_id in &channel_ids {
-        let channel = match NotificationChannelRepository::find_by_id(&state.db, channel_id).await {
-            Ok(Some(c)) if c.is_active => c,
-            Ok(Some(_)) => continue,
-            Ok(None) => continue,
-            Err(_) => continue,
+        let Some(channel) = channels.get(channel_id) else {
+            continue;
         };
-
-        match notification_service.send_test(&channel).await {
+        match notification_service.send_test(channel).await {
             Ok(_) => sent_count += 1,
             Err(e) => errors.push(format!("{}: {}", channel.name, e)),
         }

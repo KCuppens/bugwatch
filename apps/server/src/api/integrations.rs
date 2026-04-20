@@ -240,8 +240,8 @@ pub async fn oauth_callback(
         state.config.app_url
     );
 
-    // Parse and verify HMAC-signed state parameter
-    let parts: Vec<&str> = state_str.split(':').collect();
+    // Parse and verify HMAC-signed state parameter (splitn(3) caps at 3 parts, safe against colons in user_id)
+    let parts: Vec<&str> = state_str.splitn(3, ':').collect();
     if parts.len() != 3 {
         return Err(AppError::BadRequest("Invalid OAuth state".to_string()));
     }
@@ -380,26 +380,42 @@ pub async fn oauth_callback(
     match result {
         Ok((access_token, refresh_token, ext_user_id, ext_username, config)) => {
             // Look up user's organization
-            if let Ok(Some(org)) = OrganizationRepository::find_by_user(&state.db, user_id).await {
-                if let Err(e) = IntegrationRepository::create(
-                    &state.db,
-                    &org.id,
-                    &provider,
-                    &access_token,
-                    refresh_token.as_deref(),
-                    None,
-                    ext_user_id.as_deref(),
-                    ext_username.as_deref(),
-                    &config,
-                    user_id,
-                )
-                .await
-                {
-                    error!("Failed to save integration: {}", e);
-                    let redirect = format!("{}?error=save_failed", redirect_url);
-                    return Ok(axum::response::Redirect::temporary(&redirect));
+            match OrganizationRepository::find_by_user(&state.db, user_id).await {
+                Ok(Some(org)) => {
+                    if let Err(e) = IntegrationRepository::create(
+                        &state.db,
+                        &org.id,
+                        &provider,
+                        &access_token,
+                        refresh_token.as_deref(),
+                        None,
+                        ext_user_id.as_deref(),
+                        ext_username.as_deref(),
+                        &config,
+                        user_id,
+                    )
+                    .await
+                    {
+                        error!("Failed to save integration: {}", e);
+                        let redirect = format!("{}?error=save_failed", redirect_url);
+                        return Ok(axum::response::Redirect::temporary(&redirect));
+                    }
+                    info!("Integration {} connected for org {}", provider, org.id);
                 }
-                info!("Integration {} connected for org {}", provider, org.id);
+                Ok(None) => {
+                    error!(user_id, "No organization found for user during OAuth callback");
+                    return Ok(axum::response::Redirect::temporary(&format!(
+                        "{}/dashboard/settings?tab=integrations&error=no_org",
+                        state.config.app_url
+                    )));
+                }
+                Err(e) => {
+                    error!(user_id, "DB error looking up org during OAuth callback: {}", e);
+                    return Ok(axum::response::Redirect::temporary(&format!(
+                        "{}/dashboard/settings?tab=integrations&error=server_error",
+                        state.config.app_url
+                    )));
+                }
             }
             Ok(axum::response::Redirect::temporary(&format!(
                 "{}/dashboard/settings?tab=integrations&connected={}",

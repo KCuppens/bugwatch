@@ -9,6 +9,23 @@ import { FileText, Download, ExternalLink, ChevronDown, ChevronUp, AlertTriangle
 import { billingApi, type Invoice, type InvoiceDetail } from "@/lib/api";
 import { toast } from "sonner";
 
+function formatCurrency(amount: number | null, currency: string | null) {
+  if (amount === null || currency === null) return "$0.00";
+  return new Intl.NumberFormat(undefined, {
+    style: "currency",
+    currency: currency.toUpperCase(),
+  }).format(amount / 100);
+}
+
+function formatDate(dateStr: string | null) {
+  if (!dateStr) return "N/A";
+  return new Date(dateStr).toLocaleDateString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
+}
+
 export function Invoices() {
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [loading, setLoading] = useState(true);
@@ -54,23 +71,6 @@ export function Invoices() {
         setLoadingDetails(null);
       }
     }
-  };
-
-  const formatCurrency = (amount: number | null, currency: string | null) => {
-    if (amount === null || currency === null) return "$0.00";
-    return new Intl.NumberFormat(undefined, {
-      style: "currency",
-      currency: currency.toUpperCase(),
-    }).format(amount / 100);
-  };
-
-  const formatDate = (dateStr: string | null) => {
-    if (!dateStr) return "N/A";
-    return new Date(dateStr).toLocaleDateString(undefined, {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-    });
   };
 
   const getStatusBadge = (status: string | null) => {
@@ -135,7 +135,7 @@ export function Invoices() {
   if (error) {
     return (
       <Card>
-        <CardContent className="flex items-center gap-3 p-6">
+        <CardContent role="alert" className="flex items-center gap-3 p-6">
           <AlertTriangle className="h-5 w-5 text-amber-500 shrink-0" />
           <div className="flex-1">
             <p className="text-sm font-medium">Failed to load invoices</p>
@@ -165,20 +165,13 @@ export function Invoices() {
           <div className="space-y-2">
             {invoices.map((invoice) => (
               <div key={invoice.id} className="border rounded-lg">
-                <div
-                  role="button"
-                  tabIndex={0}
+                <button
+                  type="button"
                   aria-expanded={expandedInvoice === invoice.id}
                   aria-controls={`invoice-details-${invoice.id}`}
                   aria-label={`Toggle details for invoice ${invoice.number || invoice.id.slice(-8)}, ${formatDate(invoice.created)}, ${formatCurrency(invoice.amount_due, invoice.currency)}, status: ${invoice.status ?? "unknown"}`}
-                  className="flex items-center justify-between p-4 cursor-pointer hover:bg-muted/50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring rounded-t-lg"
+                  className="w-full flex items-center justify-between p-4 cursor-pointer hover:bg-muted/50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring rounded-t-lg text-left"
                   onClick={() => handleToggleExpand(invoice.id)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === " ") {
-                      e.preventDefault();
-                      handleToggleExpand(invoice.id);
-                    }
-                  }}
                 >
                   <div className="flex items-center gap-4">
                     <div>
@@ -195,7 +188,7 @@ export function Invoices() {
                       <ChevronDown className="h-4 w-4 text-muted-foreground" />
                     )}
                   </div>
-                </div>
+                </button>
 
                 {expandedInvoice === invoice.id && (
                   <div id={`invoice-details-${invoice.id}`} className="border-t p-4 bg-muted/30">
@@ -271,7 +264,13 @@ export function Invoices() {
                         );
                       })()
                     ) : (
-                      <p className="text-sm text-muted-foreground">Failed to load invoice details</p>
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-sm text-muted-foreground">Failed to load invoice details</p>
+                        <Button variant="outline" size="sm" onClick={() => {
+                          setInvoiceDetails((prev) => { const next = { ...prev }; delete next[invoice.id]; return next; });
+                          handleToggleExpand(invoice.id);
+                        }}>Retry</Button>
+                      </div>
                     )}
                   </div>
                 )}

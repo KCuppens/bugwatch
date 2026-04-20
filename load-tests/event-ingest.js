@@ -22,22 +22,22 @@ const API_KEY = __ENV.API_KEY || "bw_test_key";
 
 export default function () {
   const payload = JSON.stringify({
+    event_id: `load-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    timestamp: new Date().toISOString(),
     message: "TypeError: Cannot read properties of undefined",
     level: "error",
     platform: "javascript",
     exception: {
       type: "TypeError",
       value: "Cannot read properties of undefined (reading 'id')",
-      stacktrace: {
-        frames: [
-          { filename: "app.js", lineno: 42, colno: 10, function: "handleClick" },
-          { filename: "react-dom.js", lineno: 1234, function: "dispatchEvent" },
-        ],
-      },
+      stacktrace: [
+        { filename: "app.js", lineno: 42, colno: 10, function: "handleClick" },
+        { filename: "react-dom.js", lineno: 1234, function: "dispatchEvent" },
+      ],
     },
   });
 
-  const res = http.post(`${BASE_URL}/api/events`, payload, {
+  const res = http.post(`${BASE_URL}/api/v1/events`, payload, {
     headers: {
       "Content-Type": "application/json",
       "x-api-key": API_KEY,

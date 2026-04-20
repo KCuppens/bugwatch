@@ -7,6 +7,24 @@ import { DollarSign, Users, Calendar, AlertCircle } from "lucide-react";
 import { billingApi, type BillingDashboard as BillingDashboardType } from "@/lib/api";
 import { toast } from "sonner";
 
+// Dashboard API returns amounts in USD; currency code is not included in the response.
+// Pass currencyCode explicitly if the API ever supports multi-currency responses.
+function formatCurrency(amountCents: number, currencyCode = "USD") {
+  return new Intl.NumberFormat(undefined, {
+    style: "currency",
+    currency: currencyCode,
+  }).format(amountCents / 100);
+}
+
+function formatDate(dateStr: string | null) {
+  if (!dateStr) return "N/A";
+  return new Date(dateStr).toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
 export function BillingDashboard() {
   const [dashboard, setDashboard] = useState<BillingDashboardType | null>(null);
   const [loading, setLoading] = useState(true);
@@ -26,24 +44,6 @@ export function BillingDashboard() {
 
     fetchDashboard();
   }, []);
-
-  // Dashboard API returns amounts in USD; currency code is not included in the response.
-  // Pass currencyCode explicitly if the API ever supports multi-currency responses.
-  const formatCurrency = (amountCents: number, currencyCode = "USD") => {
-    return new Intl.NumberFormat(undefined, {
-      style: "currency",
-      currency: currencyCode,
-    }).format(amountCents / 100);
-  };
-
-  const formatDate = (dateStr: string | null) => {
-    if (!dateStr) return "N/A";
-    return new Date(dateStr).toLocaleDateString(undefined, {
-      month: "short",
-      day: "numeric",
-      year: "numeric",
-    });
-  };
 
   if (loading) {
     return (

@@ -223,7 +223,7 @@ pub async fn ingest(
                 ));
             }
             // Reject control characters (except tab/newline) and null bytes in tag values.
-            if v.contains('\0') || v.chars().any(|c| c.is_control() && c != '\t' && c != '\n') {
+            if v.as_bytes().iter().any(|&b| b == 0 || (b < 0x20 && b != b'\t' && b != b'\n')) {
                 return Err(AppError::Validation(
                     "Tag values cannot contain null bytes or control characters".to_string(),
                 ));

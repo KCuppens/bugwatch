@@ -280,25 +280,31 @@ async fn handle_invoice_paid(
     }
 
     // Find organization
-    if let Ok(Some(org)) =
-        OrganizationRepository::find_by_stripe_customer(&state.db, customer_id).await
-    {
-        // Record billing event
-        if let Err(e) = BillingEventRepository::create(
-            &state.db,
-            &org.id,
-            "invoice.paid",
-            Some(event_id),
-            Some(amount_paid),
-            Some("usd"),
-            None,
-        )
-        .await
-        {
-            tracing::error!(org_id = %org.id, event_id = %event_id, "Failed to record billing event: {}", e);
+    match OrganizationRepository::find_by_stripe_customer(&state.db, customer_id).await {
+        Err(e) => {
+            tracing::error!(event_id, customer_id, "DB error looking up org for invoice.paid: {}", e);
         }
+        Ok(None) => {
+            tracing::warn!(customer_id, "No org found for Stripe customer on invoice.paid");
+        }
+        Ok(Some(org)) => {
+            // Record billing event
+            if let Err(e) = BillingEventRepository::create(
+                &state.db,
+                &org.id,
+                "invoice.paid",
+                Some(event_id),
+                Some(amount_paid),
+                Some("usd"),
+                None,
+            )
+            .await
+            {
+                tracing::error!(org_id = %org.id, event_id = %event_id, "Failed to record billing event: {}", e);
+            }
 
-        info!("Invoice paid for org {}: {} cents", org.id, amount_paid);
+            info!("Invoice paid for org {}: {} cents", org.id, amount_paid);
+        }
     }
 
     Ok(())
@@ -323,25 +329,31 @@ async fn handle_invoice_payment_failed(
         return Ok(());
     }
 
-    if let Ok(Some(org)) =
-        OrganizationRepository::find_by_stripe_customer(&state.db, customer_id).await
-    {
-        // Record billing event
-        if let Err(e) = BillingEventRepository::create(
-            &state.db,
-            &org.id,
-            "invoice.payment_failed",
-            Some(event_id),
-            None,
-            None,
-            None,
-        )
-        .await
-        {
-            tracing::error!(org_id = %org.id, event_id = %event_id, "Failed to record billing event: {}", e);
+    match OrganizationRepository::find_by_stripe_customer(&state.db, customer_id).await {
+        Err(e) => {
+            tracing::error!(event_id, customer_id, "DB error looking up org for invoice.payment_failed: {}", e);
         }
+        Ok(None) => {
+            tracing::warn!(customer_id, "No org found for Stripe customer on invoice.payment_failed");
+        }
+        Ok(Some(org)) => {
+            // Record billing event
+            if let Err(e) = BillingEventRepository::create(
+                &state.db,
+                &org.id,
+                "invoice.payment_failed",
+                Some(event_id),
+                None,
+                None,
+                None,
+            )
+            .await
+            {
+                tracing::error!(org_id = %org.id, event_id = %event_id, "Failed to record billing event: {}", e);
+            }
 
-        warn!("Payment failed for org {}", org.id);
+            warn!("Payment failed for org {}", org.id);
+        }
     }
 
     Ok(())

@@ -87,7 +87,7 @@ pub async fn ingest_transaction(
     headers: HeaderMap,
     Json(payload): Json<IngestTransactionPayload>,
 ) -> AppResult<(StatusCode, Json<IngestResponse>)> {
-    tracing::info!("Transaction ingest request received");
+    tracing::debug!("Transaction ingest request received");
 
     // 1. Extract API key
     let api_key = extract_api_key(&headers)?;
@@ -167,7 +167,7 @@ pub async fn ingest_transaction(
         ));
     }
 
-    // 5. Parse timestamps
+    // 6. Parse timestamps
     let started_at = chrono::DateTime::parse_from_rfc3339(&payload.started_at)
         .map(|dt| dt.with_timezone(&chrono::Utc))
         .map_err(|e| {
@@ -184,17 +184,17 @@ pub async fn ingest_transaction(
     // Validate tags/data size to prevent unbounded payload storage
     const MAX_FIELD_SIZE: usize = 65_536; // 64 KB
     if let Some(ref t) = payload.tags {
-        if t.to_string().len() > MAX_FIELD_SIZE {
+        if serde_json::to_vec(t).map(|v| v.len()).unwrap_or(0) > MAX_FIELD_SIZE {
             return Err(AppError::Validation("tags exceeds 64 KB limit".into()));
         }
     }
     if let Some(ref d) = payload.data {
-        if d.to_string().len() > MAX_FIELD_SIZE {
+        if serde_json::to_vec(d).map(|v| v.len()).unwrap_or(0) > MAX_FIELD_SIZE {
             return Err(AppError::Validation("data exceeds 64 KB limit".into()));
         }
     }
 
-    // 6. Create transaction
+    // 7. Create transaction
     let txn_id = uuid::Uuid::new_v4().to_string();
     let transaction = Transaction {
         id: txn_id.clone(),
@@ -219,7 +219,7 @@ pub async fn ingest_transaction(
 
     PerformanceRepository::create_transaction(&state.db, &transaction).await?;
 
-    // 6. Create spans if provided (cap at 100 to prevent unbounded DB inserts)
+    // 8. Create spans if provided (cap at 100 to prevent unbounded DB inserts)
     if let Some(spans) = payload.spans {
         if spans.len() > 100 {
             return Err(AppError::Validation(
@@ -231,7 +231,7 @@ pub async fn ingest_transaction(
         }
     }
 
-    tracing::info!("Transaction {} ingested for project {}", txn_id, project.id);
+    tracing::debug!("Transaction {} ingested for project {}", txn_id, project.id);
 
     Ok((
         StatusCode::ACCEPTED,
