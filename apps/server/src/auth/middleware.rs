@@ -6,7 +6,10 @@ use axum::{
 
 use crate::{
     auth::jwt::validate_access_token,
-    db::{models::User, repositories::UserRepository},
+    db::{
+        models::User,
+        repositories::{SessionRepository, UserRepository},
+    },
     AppError, AppState,
 };
 
@@ -58,6 +61,20 @@ impl FromRequestParts<AppState> for AuthUser {
 
         // Validate token
         let claims = validate_access_token(token, &app_state.config.jwt_secret)?;
+
+        // If the access token carries a session ID (jti), verify the session still exists.
+        // This ensures revoked sessions (logout, password change) cannot continue authenticating.
+        if let Some(ref session_id) = claims.jti {
+            let session_alive = SessionRepository::find_by_id(&app_state.db, session_id)
+                .await
+                .map(|s| s.is_some())
+                .unwrap_or(false);
+            if !session_alive {
+                return Err(AppError::Unauthorized(
+                    "Session has been revoked".to_string(),
+                ));
+            }
+        }
 
         // Fetch user from database
         let user = UserRepository::find_by_id(&app_state.db, &claims.sub)

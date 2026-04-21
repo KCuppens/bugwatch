@@ -178,6 +178,15 @@ pub async fn search(
     };
 
     let sort_field = req.sort.as_ref().map(|s| s.field.as_str());
+    if let Some(field) = sort_field {
+        const ALLOWED_SORT: &[&str] = &["count", "users", "first_seen", "last_seen"];
+        if !ALLOWED_SORT.contains(&field) {
+            return Err(AppError::BadRequest(format!(
+                "Invalid sort field '{}'. Allowed: count, users, first_seen, last_seen",
+                field
+            )));
+        }
+    }
     let sort_direction = req
         .sort
         .as_ref()

@@ -28,6 +28,8 @@ pub fn router() -> Router<AppState> {
         .route("/auth/refresh", post(auth::refresh))
         .route("/auth/me", get(auth::me).patch(auth::update_profile))
         .route("/auth/change-password", post(auth::change_password))
+        .route("/auth/forgot-password", post(auth::forgot_password))
+        .route("/auth/reset-password", post(auth::reset_password))
         // Agent API Keys (JWT auth required to manage)
         .route(
             "/agent-keys",

@@ -17,6 +17,59 @@ use crate::{
     AppError, AppResult, AppState,
 };
 
+// ============ Helpers ============
+
+fn is_valid_email(s: &str) -> bool {
+    let mut parts = s.splitn(2, '@');
+    let local = parts.next().unwrap_or("");
+    let domain = parts.next().unwrap_or("");
+    !local.is_empty() && domain.contains('.') && !domain.starts_with('.') && !domain.ends_with('.')
+}
+
+fn validate_channel_url(url: &str) -> AppResult<()> {
+    if !url.starts_with("https://") && !url.starts_with("http://") {
+        return Err(AppError::BadRequest(
+            "Webhook URL must use http:// or https://".to_string(),
+        ));
+    }
+    let host_part = url
+        .trim_start_matches("https://")
+        .trim_start_matches("http://");
+    let host = host_part
+        .split('/')
+        .next()
+        .unwrap_or("")
+        .split(':')
+        .next()
+        .unwrap_or("");
+    if host == "localhost" || host.ends_with(".local") || host.ends_with(".internal") {
+        return Err(AppError::BadRequest(
+            "Webhook URL must not target internal hostnames".to_string(),
+        ));
+    }
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        let blocked = match ip {
+            std::net::IpAddr::V4(v4) => {
+                v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_unspecified()
+            }
+            std::net::IpAddr::V6(v6) => {
+                v6.is_loopback()
+                    || v6.is_unspecified()
+                    || v6
+                        .to_ipv4_mapped()
+                        .map(|v4| v4.is_loopback() || v4.is_private())
+                        .unwrap_or(false)
+            }
+        };
+        if blocked {
+            return Err(AppError::BadRequest(
+                "Webhook URL must not target private or loopback addresses".to_string(),
+            ));
+        }
+    }
+    Ok(())
+}
+
 // ============ Alert Rules ============
 
 #[derive(Debug, Deserialize)]
@@ -117,8 +170,67 @@ pub async fn create_alert_rule(
         }
     }
 
+    // B1: cap alert rule name length
+    if request.name.len() > 200 {
+        return Err(AppError::BadRequest(
+            "Alert rule name too long (max 200 characters)".to_string(),
+        ));
+    }
+
+    // H7: validate condition thresholds
+    match &request.condition {
+        AlertCondition::IssueFrequency {
+            threshold,
+            window_minutes,
+        } => {
+            if *threshold == 0 {
+                return Err(AppError::BadRequest(
+                    "threshold must be greater than 0".to_string(),
+                ));
+            }
+            if *window_minutes == 0 {
+                return Err(AppError::BadRequest(
+                    "window_minutes must be greater than 0".to_string(),
+                ));
+            }
+        }
+        AlertCondition::ServerCpuHigh {
+            threshold_percent, ..
+        }
+        | AlertCondition::ServerMemoryHigh {
+            threshold_percent, ..
+        }
+        | AlertCondition::ServerDiskHigh {
+            threshold_percent, ..
+        } => {
+            if *threshold_percent <= 0.0 || *threshold_percent > 100.0 {
+                return Err(AppError::BadRequest(
+                    "threshold_percent must be between 0 and 100".to_string(),
+                ));
+            }
+        }
+        AlertCondition::ServerOffline {
+            missing_minutes, ..
+        } => {
+            if *missing_minutes == 0 {
+                return Err(AppError::BadRequest(
+                    "missing_minutes must be greater than 0".to_string(),
+                ));
+            }
+        }
+        _ => {}
+    }
+
     let condition_json = serde_json::to_string(&request.condition)
         .map_err(|e| AppError::BadRequest(format!("Invalid condition: {}", e)))?;
+
+    // B3: cap condition JSON size to prevent oversized payloads
+    if condition_json.len() > 65_536 {
+        return Err(AppError::BadRequest(
+            "Alert condition too complex (max 64KB)".to_string(),
+        ));
+    }
+
     let actions_json = serde_json::to_string(&request.channel_ids)
         .map_err(|e| AppError::BadRequest(format!("Invalid channel IDs: {}", e)))?;
 
@@ -467,6 +579,37 @@ pub async fn create_channel(
         }
     }
 
+    // B2: cap channel name length
+    if request.name.len() > 200 {
+        return Err(AppError::BadRequest(
+            "Channel name too long (max 200 characters)".to_string(),
+        ));
+    }
+
+    // B4: validate email recipient format
+    if let ChannelConfig::Email { ref recipients } = request.config {
+        for r in recipients {
+            if !is_valid_email(r) {
+                return Err(AppError::BadRequest(format!(
+                    "Invalid email address: {}",
+                    r
+                )));
+            }
+        }
+    }
+
+    // H3: validate webhook/Slack URLs against SSRF
+    let url_to_check: Option<&str> = match &request.config {
+        ChannelConfig::Webhook { ref url, .. } => Some(url.as_str()),
+        ChannelConfig::Slack {
+            ref webhook_url, ..
+        } => Some(webhook_url.as_str()),
+        _ => None,
+    };
+    if let Some(url) = url_to_check {
+        validate_channel_url(url)?;
+    }
+
     let config_json = serde_json::to_string(&request.config)
         .map_err(|e| AppError::BadRequest(format!("Invalid config: {}", e)))?;
 
@@ -533,6 +676,20 @@ pub async fn update_channel(
 
     if channel.project_id != project_id {
         return Err(AppError::Forbidden("Access denied".to_string()));
+    }
+
+    // H3: validate webhook/Slack URLs on update
+    if let Some(ref cfg) = request.config {
+        let url_to_check: Option<&str> = match cfg {
+            ChannelConfig::Webhook { ref url, .. } => Some(url.as_str()),
+            ChannelConfig::Slack {
+                ref webhook_url, ..
+            } => Some(webhook_url.as_str()),
+            _ => None,
+        };
+        if let Some(url) = url_to_check {
+            validate_channel_url(url)?;
+        }
     }
 
     let config_json = request

@@ -30,6 +30,14 @@ pub async fn require_tier(
             "No organization found. Please set up your account.".to_string(),
         ))?;
 
+    // Block access for canceled/unpaid subscriptions regardless of tier.
+    if matches!(org.subscription_status.as_str(), "canceled" | "unpaid") {
+        return Err((
+            StatusCode::PAYMENT_REQUIRED,
+            "Your subscription has ended. Please renew to continue using this feature.".to_string(),
+        ));
+    }
+
     if !tier_includes(&org.tier, required_tier) {
         return Err((
             StatusCode::PAYMENT_REQUIRED,
@@ -63,6 +71,14 @@ pub async fn require_feature(
             StatusCode::FORBIDDEN,
             "No organization found. Please set up your account.".to_string(),
         ))?;
+
+    // Block access for canceled/unpaid subscriptions regardless of tier.
+    if matches!(org.subscription_status.as_str(), "canceled" | "unpaid") {
+        return Err((
+            StatusCode::PAYMENT_REQUIRED,
+            "Your subscription has ended. Please renew to continue using this feature.".to_string(),
+        ));
+    }
 
     if !can_access_feature(&org.tier, feature) {
         return Err((

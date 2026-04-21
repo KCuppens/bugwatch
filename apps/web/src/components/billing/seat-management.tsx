@@ -77,7 +77,9 @@ export function SeatManagement({ organization, currentSeats, usedSeats, isOwner,
     return `${sign}$${(Math.abs(amount) / 100).toFixed(2)}`;
   };
 
-  if (!isOwner || tier === "free") {
+  const isSubscriptionActive =
+    organization?.subscription_status === "active" || organization?.subscription_status === "trialing";
+  if (!isOwner || tier === "free" || !isSubscriptionActive) {
     return null;
   }
 

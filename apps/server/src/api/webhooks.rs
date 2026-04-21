@@ -170,7 +170,24 @@ fn verify_stripe_signature(payload: &[u8], signature_header: &str, secret: &str)
         return false;
     }
 
-    // Reject replayed webhooks older than 5 minutes
+    // Verify HMAC signature first (constant-time), then check timestamp.
+    // This order prevents timing oracles: an attacker cannot distinguish
+    // "bad signature" from "valid signature but stale timestamp".
+    let signed_payload = format!("{}.{}", timestamp, String::from_utf8_lossy(payload));
+
+    let mut mac =
+        Hmac::<Sha256>::new_from_slice(secret.as_bytes()).expect("HMAC can take key of any size");
+    mac.update(signed_payload.as_bytes());
+
+    let sig_valid = match hex::decode(signature) {
+        Ok(sig_bytes) => mac.verify_slice(&sig_bytes).is_ok(),
+        Err(_) => return false,
+    };
+    if !sig_valid {
+        return false;
+    }
+
+    // Only after confirming a valid signature, enforce the 5-minute replay window.
     if let Ok(ts) = timestamp.parse::<i64>() {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -184,19 +201,7 @@ fn verify_stripe_signature(payload: &[u8], signature_header: &str, secret: &str)
         return false;
     }
 
-    // Build the signed payload
-    let signed_payload = format!("{}.{}", timestamp, String::from_utf8_lossy(payload));
-
-    // Compute expected signature
-    let mut mac =
-        Hmac::<Sha256>::new_from_slice(secret.as_bytes()).expect("HMAC can take key of any size");
-    mac.update(signed_payload.as_bytes());
-
-    // Use hmac's built-in constant-time verification via subtle crate
-    match hex::decode(signature) {
-        Ok(sig_bytes) => mac.verify_slice(&sig_bytes).is_ok(),
-        Err(_) => false,
-    }
+    true
 }
 
 /// Handle checkout.session.completed - New subscription created
@@ -582,7 +587,7 @@ async fn handle_subscription_deleted(
                 &state.db,
                 &org.id,
                 "free",
-                1,
+                org.seats.max(1),
                 None::<&str>,
                 "canceled",
                 None,

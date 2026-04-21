@@ -65,7 +65,7 @@ impl AgentKeyRepository {
         organization_id: &str,
     ) -> Result<Vec<AgentKey>> {
         sqlx::query_as::<_, AgentKey>(
-            "SELECT * FROM agent_keys WHERE organization_id = $1 ORDER BY created_at DESC",
+            "SELECT * FROM agent_keys WHERE organization_id = $1 ORDER BY created_at DESC LIMIT 10000",
         )
         .bind(organization_id)
         .fetch_all(pool)

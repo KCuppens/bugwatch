@@ -322,6 +322,11 @@ pub async fn login(
     // Reset failed attempts on successful login
     UserRepository::reset_failed_attempts(&state.db, &user.id).await?;
 
+    // Revoke prior sessions to enforce single active session per user.
+    if let Err(e) = SessionRepository::delete_by_user(&state.db, &user.id).await {
+        tracing::warn!(user_id = %user.id, "Failed to clear prior sessions on login: {}", e);
+    }
+
     // Create session, generate tokens, set cookies
     let session_expires = Utc::now() + Duration::seconds(state.config.jwt_refresh_expiration);
     let client_ip = extract_client_ip(&headers, state.config.trust_proxy, Some(peer_addr));

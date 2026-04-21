@@ -535,13 +535,12 @@ impl NotificationService {
 
         // Build HTML email body
         let html_body = self.build_email_html(payload);
+        // Strip CRLF to prevent email header injection via user-controlled fields.
+        let title_safe = payload.title.replace('\r', "").replace('\n', " ");
+        let message_safe = payload.message.replace('\r', "").replace('\n', " ");
         let text_body = format!(
             "{}\n\n{}\n\nProject: {}\nSeverity: {}\nTime: {}",
-            payload.title,
-            payload.message,
-            payload.project_name,
-            payload.severity,
-            payload.timestamp
+            title_safe, message_safe, payload.project_name, payload.severity, payload.timestamp
         );
 
         let email_content = EmailContent::builder()
@@ -693,7 +692,14 @@ impl NotificationService {
         let response_body = match req.send().await {
             Ok(resp) => {
                 let status = resp.status();
-                let body = resp.text().await.unwrap_or_default();
+                // Cap at 64KB to prevent memory exhaustion from hostile endpoints.
+                let raw = resp.bytes().await.unwrap_or_default();
+                let body = String::from_utf8_lossy(if raw.len() > 65_536 {
+                    &raw[..65_536]
+                } else {
+                    &raw
+                })
+                .into_owned();
                 if !status.is_success() {
                     return Err(anyhow!("Webhook failed: {} - {}", status, body));
                 }
@@ -998,8 +1004,11 @@ impl NotificationService {
 
         let status = response.status();
         if !status.is_success() {
-            let body = response.text().await.unwrap_or_default();
-            return Err(anyhow!("PagerDuty failed: {} - {}", status, body));
+            tracing::warn!(status = %status, "PagerDuty notification failed");
+            return Err(anyhow!(
+                "PagerDuty notification failed with status {}",
+                status
+            ));
         }
 
         info!("PagerDuty notification sent");
@@ -1068,8 +1077,11 @@ impl NotificationService {
 
         let status = response.status();
         if !status.is_success() {
-            let body = response.text().await.unwrap_or_default();
-            return Err(anyhow!("OpsGenie failed: {} - {}", status, body));
+            tracing::warn!(status = %status, "OpsGenie notification failed");
+            return Err(anyhow!(
+                "OpsGenie notification failed with status {}",
+                status
+            ));
         }
 
         info!("OpsGenie notification sent");

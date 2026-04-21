@@ -331,11 +331,28 @@ pub async fn create(
     // Validate URL (scheme + SSRF protection)
     validate_monitor_url(&request.url)?;
 
-    // Validate interval (minimum 30 seconds)
+    // Validate interval (minimum 30 seconds, maximum 1 day)
     if request.interval_seconds < 30 {
         return Err(AppError::BadRequest(
             "Interval must be at least 30 seconds".to_string(),
         ));
+    }
+    if request.interval_seconds > 86_400 {
+        return Err(AppError::BadRequest(
+            "Interval must be at most 86400 seconds (1 day)".to_string(),
+        ));
+    }
+    if request.timeout_ms < 1_000 || request.timeout_ms > 300_000 {
+        return Err(AppError::BadRequest(
+            "Timeout must be between 1000 and 300000 milliseconds".to_string(),
+        ));
+    }
+    if let Some(ref body) = request.body {
+        if body.len() > 10_000 {
+            return Err(AppError::BadRequest(
+                "Monitor request body too large (max 10000 bytes)".to_string(),
+            ));
+        }
     }
 
     let headers_str = serde_json::to_string(&request.headers)

@@ -55,7 +55,7 @@ pub fn generate_tokens(
         exp: (now + Duration::seconds(access_expiration)).timestamp(),
         iat: now.timestamp(),
         token_type: "access".to_string(),
-        jti: None,
+        jti: Some(session_id.to_string()),
         iss: Some(JWT_ISSUER.to_string()),
         aud: Some(JWT_AUDIENCE.to_string()),
     };

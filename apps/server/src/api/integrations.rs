@@ -155,6 +155,16 @@ pub async fn oauth_authorize(
         }
     }
 
+    // Rate-limit to prevent OAuth state token enumeration (5 req/min per user)
+    let rl_check = state
+        .rate_limiter
+        .check(&format!("oauth_authorize:{}", auth_user.id), 5);
+    if !rl_check.allowed {
+        return Err(AppError::BadRequest(
+            "Too many requests. Please try again later.".to_string(),
+        ));
+    }
+
     let redirect_uri = format!(
         "{}/api/v1/integrations/oauth/{}/callback",
         state.config.app_url, provider

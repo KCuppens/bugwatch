@@ -1176,6 +1176,30 @@ mod saas_billing {
             "No active subscription to modify".to_string(),
         ))?;
 
+        // Serialize concurrent plan changes for this org via a Postgres advisory lock.
+        // pg_try_advisory_lock returns false if another session holds the same key.
+        let lock_id: i64 = {
+            let b = org.id.as_bytes();
+            b.iter()
+                .take(8)
+                .enumerate()
+                .fold(0i64, |acc, (i, &byte)| acc | ((byte as i64) << (i * 8)))
+        };
+        let mut advisory_conn = state.db.acquire().await.map_err(db_err)?;
+        let acquired: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock($1)")
+            .bind(lock_id)
+            .fetch_one(&mut *advisory_conn)
+            .await
+            .unwrap_or(false);
+        if !acquired {
+            return Err((
+                StatusCode::CONFLICT,
+                "A plan change is already in progress for your account. Please try again shortly."
+                    .to_string(),
+            ));
+        }
+        // advisory_conn stays in scope until the function returns, releasing the lock automatically.
+
         let seats = req.seats.unwrap_or(org.seats).min(10_000) as i64;
         let annual = req
             .annual

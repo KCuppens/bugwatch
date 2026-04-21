@@ -218,7 +218,7 @@ impl IssueLinkRepository {
     /// List all links for an issue
     pub async fn list_by_issue(pool: &DbPool, issue_id: &str) -> Result<Vec<IssueLink>> {
         sqlx::query_as::<_, IssueLink>(
-            "SELECT * FROM issue_links WHERE issue_id = $1 ORDER BY created_at DESC",
+            "SELECT * FROM issue_links WHERE issue_id = $1 ORDER BY created_at DESC LIMIT 1000",
         )
         .bind(issue_id)
         .fetch_all(pool)
