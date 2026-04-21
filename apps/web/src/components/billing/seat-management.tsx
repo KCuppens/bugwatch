@@ -1,12 +1,12 @@
-'use client';
+"use client";
 
-import { useState } from 'react';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
-import { Loader2, Users, AlertCircle, Plus, Minus } from 'lucide-react';
-import { billingApi, type ProrationPreview, type Organization } from '@/lib/api';
-import { getTierPrice, type Tier } from '@/hooks/use-feature';
+import { useState } from "react";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Loader2, Users, AlertCircle, Plus, Minus } from "lucide-react";
+import { billingApi, type ProrationPreview, type Organization } from "@/lib/api";
+import { getTierPrice, type Tier } from "@/hooks/use-feature";
 
 interface SeatManagementProps {
   organization: Organization | null;
@@ -16,20 +16,16 @@ interface SeatManagementProps {
   onUpdate: () => void;
 }
 
-export function SeatManagement({
-  organization,
-  currentSeats,
-  usedSeats,
-  isOwner,
-  onUpdate,
-}: SeatManagementProps) {
+export function SeatManagement({ organization, currentSeats, usedSeats, isOwner, onUpdate }: SeatManagementProps) {
   const [seats, setSeats] = useState(currentSeats);
   const [preview, setPreview] = useState<ProrationPreview | null>(null);
   const [loadingPreview, setLoadingPreview] = useState(false);
   const [updating, setUpdating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const tier = (organization?.tier || 'free') as Tier;
+  const VALID_TIERS: readonly Tier[] = ["free", "pro", "team", "enterprise"];
+  const rawTier = organization?.tier;
+  const tier: Tier = rawTier && (VALID_TIERS as readonly string[]).includes(rawTier) ? (rawTier as Tier) : "free";
   const pricePerSeat = getTierPrice(tier);
   const minSeats = Math.max(usedSeats, 1);
   const maxSeats = 100;
@@ -50,11 +46,11 @@ export function SeatManagement({
       const previewData = await billingApi.previewPlanChange(
         tier,
         newSeats,
-        organization?.subscription_status === 'annual'
+        organization?.subscription_status === "annual"
       );
       setPreview(previewData);
     } catch (err) {
-      console.error('Failed to get preview:', err);
+      console.error("Failed to get preview:", err);
     } finally {
       setLoadingPreview(false);
     }
@@ -69,19 +65,19 @@ export function SeatManagement({
       await billingApi.updateSeats(seats);
       onUpdate();
     } catch (err) {
-      setError('Failed to update seats. Please try again.');
-      console.error('Failed to update seats:', err);
+      setError("Failed to update seats. Please try again.");
+      console.error("Failed to update seats:", err);
     } finally {
       setUpdating(false);
     }
   };
 
   const formatCurrency = (amount: number) => {
-    const sign = amount < 0 ? '-' : '';
+    const sign = amount < 0 ? "-" : "";
     return `${sign}$${(Math.abs(amount) / 100).toFixed(2)}`;
   };
 
-  if (!isOwner || tier === 'free') {
+  if (!isOwner || tier === "free") {
     return null;
   }
 
@@ -92,9 +88,7 @@ export function SeatManagement({
           <Users className="h-5 w-5" />
           Seat Management
         </CardTitle>
-        <CardDescription>
-          Adjust the number of seats in your subscription
-        </CardDescription>
+        <CardDescription>Adjust the number of seats in your subscription</CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">
         {/* Current Usage */}
@@ -107,9 +101,7 @@ export function SeatManagement({
           </div>
           <div className="text-right">
             <p className="font-medium">${pricePerSeat}/seat/mo</p>
-            <p className="text-sm text-muted-foreground">
-              ${pricePerSeat * currentSeats}/mo total
-            </p>
+            <p className="text-sm text-muted-foreground">${pricePerSeat * currentSeats}/mo total</p>
           </div>
         </div>
 
@@ -179,14 +171,12 @@ export function SeatManagement({
               </div>
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Proration adjustment</span>
-                <span className={preview.proration_amount_cents < 0 ? 'text-green-600' : ''}>
+                <span className={preview.proration_amount_cents < 0 ? "text-green-600" : ""}>
                   {formatCurrency(preview.proration_amount_cents)}
                 </span>
               </div>
               <div className="flex justify-between font-medium pt-2 border-t">
-                <span>
-                  {preview.immediate_charge ? 'Charge due now' : 'Applied at next billing'}
-                </span>
+                <span>{preview.immediate_charge ? "Charge due now" : "Applied at next billing"}</span>
               </div>
             </div>
           </div>
@@ -219,10 +209,10 @@ export function SeatManagement({
         >
           {updating && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
           {seats === currentSeats
-            ? 'No changes'
+            ? "No changes"
             : seats > currentSeats
-            ? `Add ${seats - currentSeats} seat${seats - currentSeats > 1 ? 's' : ''}`
-            : `Remove ${currentSeats - seats} seat${currentSeats - seats > 1 ? 's' : ''}`}
+              ? `Add ${seats - currentSeats} seat${seats - currentSeats > 1 ? "s" : ""}`
+              : `Remove ${currentSeats - seats} seat${currentSeats - seats > 1 ? "s" : ""}`}
         </Button>
       </CardContent>
     </Card>

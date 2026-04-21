@@ -404,8 +404,8 @@ impl Config {
                 panic!("FATAL: STRIPE_SECRET_KEY must be set in production SaaS mode");
             }
             if self.deployment_mode.is_saas() && self.stripe_webhook_secret.is_none() {
-                tracing::warn!(
-                    "STRIPE_WEBHOOK_SECRET is not set — webhook signature verification will fail at runtime"
+                tracing::error!(
+                    "STRIPE_WEBHOOK_SECRET is not set — all incoming Stripe webhooks will be rejected at runtime"
                 );
             }
             if self.encryption_key.is_none() {

@@ -32,6 +32,8 @@ export function FrameworkCard({ framework, selected, onClick }: FrameworkCardPro
     <button
       type="button"
       onClick={onClick}
+      aria-label={`Select ${framework.name} framework`}
+      aria-pressed={selected}
       className={cn(
         "group relative flex flex-col items-start rounded-xl border-2 p-5 text-left transition-all duration-200 hover:scale-[1.02]",
         selected

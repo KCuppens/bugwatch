@@ -680,8 +680,8 @@ impl NotificationService {
                         break;
                     }
                     last_err = anyhow!("Webhook failed: {} - {}", status, body);
-                    if status.as_u16() < 500 {
-                        return Err(last_err); // don't retry 4xx
+                    if status.as_u16() < 500 && status.as_u16() != 429 {
+                        return Err(last_err); // don't retry non-transient 4xx
                     }
                 }
                 Err(e) => {
@@ -885,6 +885,7 @@ impl NotificationService {
             .client
             .post(&config.webhook_url)
             .json(&slack_payload)
+            .timeout(std::time::Duration::from_secs(10))
             .send()
             .await?;
 
@@ -947,6 +948,7 @@ impl NotificationService {
             .client
             .post("https://events.pagerduty.com/v2/enqueue")
             .json(&pd_payload)
+            .timeout(std::time::Duration::from_secs(10))
             .send()
             .await?;
 
@@ -1016,6 +1018,7 @@ impl NotificationService {
             .post("https://api.opsgenie.com/v2/alerts")
             .header("Authorization", format!("GenieKey {}", config.api_key))
             .json(&og_payload)
+            .timeout(std::time::Duration::from_secs(10))
             .send()
             .await?;
 
@@ -1088,4 +1091,3 @@ pub(crate) fn compute_hmac_signature(payload: &str, secret: &str) -> String {
     // Return as hex string
     hex::encode(bytes)
 }
-

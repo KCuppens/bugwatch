@@ -27,6 +27,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { MoreVertical, UserPlus, Loader2, Trash2, Shield, AlertTriangle } from "lucide-react";
 import { billingApi, type OrganizationMember } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import { toast } from "sonner";
 
 interface TeamMembersProps {
@@ -43,6 +44,7 @@ export function TeamMembers({ isOwner }: TeamMembersProps) {
   const [inviteRole, setInviteRole] = useState("member");
   const [inviting, setInviting] = useState(false);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [memberToRemove, setMemberToRemove] = useState<string | null>(null);
 
   const fetchMembers = async () => {
     setLoading(true);
@@ -84,7 +86,6 @@ export function TeamMembers({ isOwner }: TeamMembersProps) {
   };
 
   const handleRemove = async (userId: string) => {
-    if (!window.confirm("Remove this team member?")) return;
     setActionLoading(userId);
     try {
       await billingApi.removeMember(userId);
@@ -95,6 +96,7 @@ export function TeamMembers({ isOwner }: TeamMembersProps) {
       toast.error("Failed to remove member");
     } finally {
       setActionLoading(null);
+      setMemberToRemove(null);
     }
   };
 
@@ -177,139 +179,161 @@ export function TeamMembers({ isOwner }: TeamMembersProps) {
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <div className="flex items-center justify-between">
-          <div>
-            <CardTitle>Team Members</CardTitle>
-            <CardDescription>
-              {members.length} member{members.length !== 1 ? "s" : ""} in your organization
-            </CardDescription>
+    <>
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle>Team Members</CardTitle>
+              <CardDescription>
+                {members.length} member{members.length !== 1 ? "s" : ""} in your organization
+              </CardDescription>
+            </div>
+            {isOwner && (
+              <Dialog open={inviteOpen} onOpenChange={setInviteOpen}>
+                <DialogTrigger asChild>
+                  <Button size="sm">
+                    <UserPlus className="h-4 w-4 mr-2" />
+                    Invite Member
+                  </Button>
+                </DialogTrigger>
+                <DialogContent>
+                  <form onSubmit={handleInvite}>
+                    <DialogHeader>
+                      <DialogTitle>Invite Team Member</DialogTitle>
+                      <DialogDescription>Send an invitation to join your organization</DialogDescription>
+                    </DialogHeader>
+                    <div className="grid gap-4 py-4">
+                      <p className="text-xs text-muted-foreground">
+                        Adding a team member may increase your subscription cost.
+                      </p>
+                      <div className="grid gap-2">
+                        <Label htmlFor="email">Email address</Label>
+                        <Input
+                          id="email"
+                          type="email"
+                          placeholder="colleague@company.com"
+                          value={inviteEmail}
+                          onChange={(e) => setInviteEmail(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" && inviteEmail.trim()) {
+                              handleInvite(e);
+                            }
+                          }}
+                          required
+                        />
+                      </div>
+                      <div className="grid gap-2">
+                        <Label htmlFor="role">Role</Label>
+                        <Select value={inviteRole} onValueChange={setInviteRole}>
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="member">Member</SelectItem>
+                            <SelectItem value="admin">Admin</SelectItem>
+                          </SelectContent>
+                        </Select>
+                        <p className="text-xs text-muted-foreground">Admins can manage projects and team members</p>
+                      </div>
+                    </div>
+                    <DialogFooter>
+                      <Button type="button" variant="outline" onClick={() => setInviteOpen(false)}>
+                        Cancel
+                      </Button>
+                      <Button type="submit" disabled={inviting}>
+                        {inviting && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                        Send Invite
+                      </Button>
+                    </DialogFooter>
+                  </form>
+                </DialogContent>
+              </Dialog>
+            )}
           </div>
-          {isOwner && (
-            <Dialog open={inviteOpen} onOpenChange={setInviteOpen}>
-              <DialogTrigger asChild>
-                <Button size="sm">
-                  <UserPlus className="h-4 w-4 mr-2" />
-                  Invite Member
-                </Button>
-              </DialogTrigger>
-              <DialogContent>
-                <form onSubmit={handleInvite}>
-                  <DialogHeader>
-                    <DialogTitle>Invite Team Member</DialogTitle>
-                    <DialogDescription>Send an invitation to join your organization</DialogDescription>
-                  </DialogHeader>
-                  <div className="grid gap-4 py-4">
-                    <p className="text-xs text-muted-foreground">
-                      Adding a team member may increase your subscription cost.
-                    </p>
-                    <div className="grid gap-2">
-                      <Label htmlFor="email">Email address</Label>
-                      <Input
-                        id="email"
-                        type="email"
-                        placeholder="colleague@company.com"
-                        value={inviteEmail}
-                        onChange={(e) => setInviteEmail(e.target.value)}
-                        onKeyDown={(e) => { if (e.key === "Enter" && inviteEmail.trim()) { handleInvite(e); } }}
-                        required
-                      />
-                    </div>
-                    <div className="grid gap-2">
-                      <Label htmlFor="role">Role</Label>
-                      <Select value={inviteRole} onValueChange={setInviteRole}>
-                        <SelectTrigger>
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="member">Member</SelectItem>
-                          <SelectItem value="admin">Admin</SelectItem>
-                        </SelectContent>
-                      </Select>
-                      <p className="text-xs text-muted-foreground">Admins can manage projects and team members</p>
-                    </div>
-                  </div>
-                  <DialogFooter>
-                    <Button type="button" variant="outline" onClick={() => setInviteOpen(false)}>
-                      Cancel
-                    </Button>
-                    <Button type="submit" disabled={inviting}>
-                      {inviting && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-                      Send Invite
-                    </Button>
-                  </DialogFooter>
-                </form>
-              </DialogContent>
-            </Dialog>
-          )}
-        </div>
-      </CardHeader>
-      <CardContent>
-        <div className="space-y-4">
-          {members.map((member) => {
-            const isCurrentUser = member.member.user_id === user?.id;
-            const isOwnerMember = member.member.role === "owner";
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-4">
+            {members.map((member) => {
+              const isCurrentUser = member.member.user_id === user?.id;
+              const isOwnerMember = member.member.role === "owner";
 
-            return (
-              <div key={member.member.id} className="flex items-center justify-between py-2">
-                <div className="flex items-center gap-3">
-                  <Avatar>
-                    <AvatarFallback>{getInitials(member.user_name, member.user_email)}</AvatarFallback>
-                  </Avatar>
-                  <div>
-                    <p className="text-sm font-medium">
-                      {member.user_name || member.user_email.split("@")[0]}
-                      {isCurrentUser && <span className="text-muted-foreground ml-1">(you)</span>}
-                    </p>
-                    <p className="text-xs text-muted-foreground">{member.user_email}</p>
+              return (
+                <div key={member.member.id} className="flex items-center justify-between py-2">
+                  <div className="flex items-center gap-3">
+                    <Avatar>
+                      <AvatarFallback>{getInitials(member.user_name, member.user_email)}</AvatarFallback>
+                    </Avatar>
+                    <div>
+                      <p className="text-sm font-medium">
+                        {member.user_name || member.user_email.split("@")[0]}
+                        {isCurrentUser && <span className="text-muted-foreground ml-1">(you)</span>}
+                      </p>
+                      <p className="text-xs text-muted-foreground">{member.user_email}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Badge variant={getRoleBadgeVariant(member.member.role)}>
+                      {member.member.role === "owner" && <Shield className="h-3 w-3 mr-1" />}
+                      {member.member.role.charAt(0).toUpperCase() + member.member.role.slice(1)}
+                    </Badge>
+                    {isOwner && !isOwnerMember && !isCurrentUser && (
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            aria-label={`Options for ${member.user_name || member.user_email.split("@")[0]}`}
+                            disabled={actionLoading === member.member.user_id}
+                          >
+                            {actionLoading === member.member.user_id ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <MoreVertical className="h-4 w-4" />
+                            )}
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem
+                            onClick={() =>
+                              handleRoleChange(
+                                member.member.user_id,
+                                member.member.role === "admin" ? "member" : "admin"
+                              )
+                            }
+                          >
+                            Make {member.member.role === "admin" ? "Member" : "Admin"}
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            className="text-destructive"
+                            onClick={() => setMemberToRemove(member.member.user_id)}
+                          >
+                            <Trash2 className="h-4 w-4 mr-2" />
+                            Remove
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    )}
                   </div>
                 </div>
-                <div className="flex items-center gap-2">
-                  <Badge variant={getRoleBadgeVariant(member.member.role)}>
-                    {member.member.role === "owner" && <Shield className="h-3 w-3 mr-1" />}
-                    {member.member.role.charAt(0).toUpperCase() + member.member.role.slice(1)}
-                  </Badge>
-                  {isOwner && !isOwnerMember && !isCurrentUser && (
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          aria-label={`Options for ${member.user_name || member.user_email.split("@")[0]}`}
-                          disabled={actionLoading === member.member.user_id}
-                        >
-                          {actionLoading === member.member.user_id ? (
-                            <Loader2 className="h-4 w-4 animate-spin" />
-                          ) : (
-                            <MoreVertical className="h-4 w-4" />
-                          )}
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuItem
-                          onClick={() =>
-                            handleRoleChange(member.member.user_id, member.member.role === "admin" ? "member" : "admin")
-                          }
-                        >
-                          Make {member.member.role === "admin" ? "Member" : "Admin"}
-                        </DropdownMenuItem>
-                        <DropdownMenuItem
-                          className="text-destructive"
-                          onClick={() => handleRemove(member.member.user_id)}
-                        >
-                          <Trash2 className="h-4 w-4 mr-2" />
-                          Remove
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </CardContent>
-    </Card>
+              );
+            })}
+          </div>
+        </CardContent>
+      </Card>
+      <ConfirmDialog
+        open={memberToRemove !== null}
+        onOpenChange={(open) => {
+          if (!open) setMemberToRemove(null);
+        }}
+        title="Remove team member"
+        description="This member will lose access to all projects. This cannot be undone."
+        confirmLabel="Remove"
+        onConfirm={() => {
+          if (memberToRemove) handleRemove(memberToRemove);
+        }}
+        variant="destructive"
+      />
+    </>
   );
 }

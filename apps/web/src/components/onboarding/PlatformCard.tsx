@@ -54,6 +54,8 @@ export function PlatformCard({ platform, selected, onClick }: PlatformCardProps)
     <button
       type="button"
       onClick={onClick}
+      aria-label={`Select ${platform.name} platform`}
+      aria-pressed={selected}
       className={cn(
         "group relative flex flex-col items-center justify-center rounded-xl border-2 p-6 transition-all duration-200 hover:scale-[1.02]",
         selected

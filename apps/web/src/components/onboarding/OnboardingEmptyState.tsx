@@ -42,7 +42,7 @@ export function OnboardingEmptyState({ project }: OnboardingEmptyStateProps) {
 
         {/* Column 2 — Radar animation */}
         <div className="flex flex-col items-center justify-center gap-4">
-          <div className="relative flex items-center justify-center h-24 w-24">
+          <div className="relative flex items-center justify-center h-24 w-24" aria-hidden="true">
             <div
               className="absolute inset-0 rounded-full border-2 border-[hsl(var(--accent))]/30 animate-ping"
               style={{ animationDuration: "2s" }}

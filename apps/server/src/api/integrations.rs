@@ -4,8 +4,8 @@ use axum::{
     http::HeaderMap,
     Json,
 };
-use std::net::SocketAddr;
 use serde::{Deserialize, Serialize};
+use std::net::SocketAddr;
 use tracing::{error, info};
 
 use super::ApiResponse;
@@ -235,7 +235,11 @@ pub async fn oauth_callback(
 ) -> AppResult<axum::response::Redirect> {
     // Rate-limit OAuth callbacks to prevent code enumeration (10 req/min per IP).
     {
-        let ip = crate::api::auth::extract_client_ip(&headers, state.config.trust_proxy, Some(peer_addr));
+        let ip = crate::api::auth::extract_client_ip(
+            &headers,
+            state.config.trust_proxy,
+            Some(peer_addr),
+        );
         let key = format!("oauth:{}", ip);
         let result = state.rate_limiter.check(&key, 10);
         if !result.allowed {
@@ -433,14 +437,20 @@ pub async fn oauth_callback(
                     info!("Integration {} connected for org {}", provider, org.id);
                 }
                 Ok(None) => {
-                    error!(user_id, "No organization found for user during OAuth callback");
+                    error!(
+                        user_id,
+                        "No organization found for user during OAuth callback"
+                    );
                     return Ok(axum::response::Redirect::temporary(&format!(
                         "{}/dashboard/settings?tab=integrations&error=no_org",
                         state.config.app_url
                     )));
                 }
                 Err(e) => {
-                    error!(user_id, "DB error looking up org during OAuth callback: {}", e);
+                    error!(
+                        user_id,
+                        "DB error looking up org during OAuth callback: {}", e
+                    );
                     return Ok(axum::response::Redirect::temporary(&format!(
                         "{}/dashboard/settings?tab=integrations&error=server_error",
                         state.config.app_url
@@ -621,11 +631,33 @@ pub async fn create_issue_link(
                 .get("repo")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| AppError::Validation("repo is required for GitHub".to_string()))?;
-            if !owner.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.') || owner.is_empty() {
-                return Err(AppError::Validation("owner contains invalid characters".to_string()));
+            if owner.is_empty()
+                || !owner
+                    .chars()
+                    .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.')
+            {
+                return Err(AppError::Validation(
+                    "owner contains invalid characters".to_string(),
+                ));
             }
-            if !repo.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.') || repo.is_empty() {
-                return Err(AppError::Validation("repo contains invalid characters".to_string()));
+            if owner.len() > 39 {
+                return Err(AppError::Validation(
+                    "owner must be 39 characters or fewer".to_string(),
+                ));
+            }
+            if repo.is_empty()
+                || !repo
+                    .chars()
+                    .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.')
+            {
+                return Err(AppError::Validation(
+                    "repo contains invalid characters".to_string(),
+                ));
+            }
+            if repo.len() > 100 {
+                return Err(AppError::Validation(
+                    "repo must be 100 characters or fewer".to_string(),
+                ));
             }
             GitHubService::create_issue(&integration.access_token, owner, repo, title, &body)
                 .await
@@ -650,6 +682,21 @@ pub async fn create_issue_link(
                 .ok_or_else(|| {
                     AppError::Validation("project_key is required for Jira".to_string())
                 })?;
+            if project_key.len() < 2
+                || project_key.len() > 10
+                || !project_key
+                    .chars()
+                    .next()
+                    .map_or(false, |c| c.is_ascii_uppercase())
+                || !project_key
+                    .chars()
+                    .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
+            {
+                return Err(AppError::Validation(
+                    "project_key must be 2–10 uppercase letters/digits starting with a letter"
+                        .to_string(),
+                ));
+            }
             JiraService::create_issue(
                 &integration.access_token,
                 cloud_id,
@@ -868,7 +915,14 @@ pub async fn github_webhook(
     let issue = &payload["issue"];
 
     if action == "closed" || action == "reopened" {
-        let issue_id = issue["id"].as_i64().unwrap_or(0).to_string();
+        let raw_id = match issue["id"].as_i64() {
+            Some(id) if id > 0 => id,
+            _ => {
+                tracing::warn!("GitHub webhook missing or invalid issue id, ignoring");
+                return Ok(Json(serde_json::json!({ "ok": true })));
+            }
+        };
+        let issue_id = raw_id.to_string();
         let status = if action == "closed" { "closed" } else { "open" };
 
         let updated =

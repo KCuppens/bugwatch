@@ -175,7 +175,14 @@ export function PaymentMethods({ isOwner }: PaymentMethodsProps) {
                         variant="outline"
                         size="sm"
                         onClick={() => handleSetDefault(pm.id)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            handleSetDefault(pm.id);
+                          }
+                        }}
                         disabled={actionLoading === pm.id}
+                        aria-label="Set as default payment method"
                       >
                         {actionLoading === pm.id ? (
                           <Loader2 className="h-4 w-4 animate-spin" />
