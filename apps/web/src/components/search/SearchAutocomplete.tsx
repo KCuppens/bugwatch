@@ -43,13 +43,7 @@ const iconMap: Record<string, React.ComponentType<{ className?: string }>> = {
   "chevron-left": ChevronLeft,
 };
 
-export function SearchAutocomplete({
-  suggestions,
-  selectedIndex,
-  onSelect,
-  onHover,
-  query,
-}: SearchAutocompleteProps) {
+export function SearchAutocomplete({ suggestions, selectedIndex, onSelect, onHover, query }: SearchAutocompleteProps) {
   const listRef = useRef<HTMLDivElement>(null);
   const selectedRef = useRef<HTMLDivElement>(null);
 
@@ -68,20 +62,26 @@ export function SearchAutocomplete({
   }
 
   // Group suggestions by category
-  const groupedSuggestions = suggestions.reduce((acc, suggestion) => {
-    const category = suggestion.category || "Suggestions";
-    if (!acc[category]) {
-      acc[category] = [];
-    }
-    acc[category].push(suggestion);
-    return acc;
-  }, {} as Record<string, Suggestion[]>);
+  const groupedSuggestions = suggestions.reduce(
+    (acc, suggestion) => {
+      const category = suggestion.category || "Suggestions";
+      if (!acc[category]) {
+        acc[category] = [];
+      }
+      acc[category].push(suggestion);
+      return acc;
+    },
+    {} as Record<string, Suggestion[]>
+  );
 
   let globalIndex = 0;
 
   return (
     <div
       ref={listRef}
+      role="listbox"
+      aria-label="Search suggestions"
+      aria-live="polite"
       className="absolute top-full left-0 right-0 mt-2 max-h-80 overflow-y-auto rounded-lg border bg-popover shadow-lg z-50 animate-in fade-in slide-in-from-top-2"
     >
       {Object.entries(groupedSuggestions).map(([category, items]) => (
@@ -92,14 +92,14 @@ export function SearchAutocomplete({
           {items.map((suggestion) => {
             const currentIndex = globalIndex++;
             const isSelected = currentIndex === selectedIndex;
-            const Icon = suggestion.icon
-              ? iconMap[suggestion.icon] || Search
-              : Search;
+            const Icon = suggestion.icon ? iconMap[suggestion.icon] || Search : Search;
 
             return (
               <div
                 key={`${suggestion.type}-${suggestion.value}-${currentIndex}`}
                 ref={isSelected ? selectedRef : null}
+                role="option"
+                aria-selected={isSelected}
                 className={cn(
                   "flex items-center gap-3 px-3 py-2 cursor-pointer transition-colors",
                   isSelected ? "bg-accent" : "hover:bg-muted"
@@ -116,25 +116,19 @@ export function SearchAutocomplete({
                     suggestion.type === "history"
                       ? "text-muted-foreground"
                       : suggestion.type === "saved"
-                      ? "text-primary"
-                      : "text-muted-foreground"
+                        ? "text-primary"
+                        : "text-muted-foreground"
                   )}
                 />
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
-                    <span className="text-sm truncate">
-                      {renderHighlightedLabel(suggestion.label, query)}
-                    </span>
+                    <span className="text-sm truncate">{renderHighlightedLabel(suggestion.label, query)}</span>
                     {suggestion.count !== undefined && (
-                      <span className="text-xs text-muted-foreground">
-                        ({suggestion.count})
-                      </span>
+                      <span className="text-xs text-muted-foreground">({suggestion.count})</span>
                     )}
                   </div>
                   {suggestion.description && (
-                    <p className="text-xs text-muted-foreground truncate">
-                      {suggestion.description}
-                    </p>
+                    <p className="text-xs text-muted-foreground truncate">{suggestion.description}</p>
                   )}
                 </div>
                 {isSelected && (

@@ -462,6 +462,16 @@ export default function IssueDetailPage() {
     el.style.height = Math.min(el.scrollHeight, 120) + "px";
   }, []);
 
+  // Memoised before early returns (hooks must not be called conditionally).
+  // Depends on issue?.exception?.stacktrace (not a derived `|| []` local) to keep the reference stable.
+  const displayFrames = useMemo(() => {
+    const frames = issue?.exception?.stacktrace ?? [];
+    if (showAppOnly) {
+      return frames.map((f, i) => ({ frame: f, originalIndex: i })).filter(({ frame }) => frame.in_app);
+    }
+    return frames.map((f, i) => ({ frame: f, originalIndex: i }));
+  }, [issue?.exception?.stacktrace, showAppOnly]);
+
   if (isLoading) return <IssueDetailSkeleton />;
 
   if (error || !issue) {
@@ -822,10 +832,7 @@ export default function IssueDetailPage() {
               {stacktrace.length === 0 ? (
                 <p className="text-center text-muted-foreground py-8">No stack trace available</p>
               ) : (
-                (showAppOnly
-                  ? stacktrace.map((f, i) => ({ frame: f, originalIndex: i })).filter(({ frame }) => frame.in_app)
-                  : stacktrace.map((f, i) => ({ frame: f, originalIndex: i }))
-                ).map(({ frame, originalIndex }) => (
+                displayFrames.map(({ frame, originalIndex }) => (
                   <StackFrame
                     key={originalIndex}
                     frame={frame}

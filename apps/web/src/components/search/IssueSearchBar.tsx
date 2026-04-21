@@ -170,7 +170,7 @@ export function IssueSearchBar({
                     }}
                     className="hover:text-foreground"
                   >
-                    <X className="h-3 w-3" />
+                    <X className="h-3 w-3" aria-hidden="true" />
                   </button>
                 </span>
               );

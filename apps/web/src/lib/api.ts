@@ -128,10 +128,10 @@ async function handleResponse<T>(response: Response): Promise<T> {
 
     throw new ApiError(
       response.status,
-      errorData?.error?.code || "unknown_error",
+      errorData?.error?.code ?? "unknown_error",
       response.status === 429 && retryAfterSeconds
         ? `Rate limit exceeded. Try again in ${retryAfterSeconds} seconds.`
-        : errorData?.error?.message || `Request failed with status ${response.status}`,
+        : (errorData?.error?.message ?? `Request failed with status ${response.status}`),
       retryAfterSeconds
     );
   }

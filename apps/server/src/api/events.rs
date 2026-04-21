@@ -223,7 +223,10 @@ pub async fn ingest(
                 ));
             }
             // Reject control characters (except tab/newline) and null bytes in tag values.
-            if v.as_bytes().iter().any(|&b| b == 0 || (b < 0x20 && b != b'\t' && b != b'\n')) {
+            if v.as_bytes()
+                .iter()
+                .any(|&b| b == 0 || (b < 0x20 && b != b'\t' && b != b'\n'))
+            {
                 return Err(AppError::Validation(
                     "Tag values cannot contain null bytes or control characters".to_string(),
                 ));
@@ -405,8 +408,7 @@ pub async fn ingest(
         ));
     }
 
-    // None was handled by the early return above — unwrap is safe here
-    let created_event = inserted.unwrap();
+    let created_event = inserted.expect("None was handled by the early return above");
 
     // Link event to session recording if session_id is present
     let session_id_value = event.session_id.as_deref().or_else(|| {

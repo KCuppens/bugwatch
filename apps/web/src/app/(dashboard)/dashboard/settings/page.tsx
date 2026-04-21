@@ -322,13 +322,23 @@ export default function SettingsPage() {
 
       {/* Success/Canceled Messages */}
       {!isSelfHosted() && success === "true" && verifying && (
-        <div className="flex items-center gap-2 p-4 rounded-lg bg-blue-50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-800 text-blue-800 dark:text-blue-200">
-          <div className="h-5 w-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+        <div
+          role="alert"
+          aria-busy="true"
+          className="flex items-center gap-2 p-4 rounded-lg bg-blue-50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-800 text-blue-800 dark:text-blue-200"
+        >
+          <div
+            className="h-5 w-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"
+            aria-hidden="true"
+          />
           <span>Verifying your subscription...</span>
         </div>
       )}
       {!isSelfHosted() && success === "true" && !verifying && !verificationError && (
-        <div className="flex items-center gap-2 p-4 rounded-lg bg-green-50 dark:bg-green-950/20 border border-green-200 dark:border-green-800 text-green-800 dark:text-green-200">
+        <div
+          role="alert"
+          className="flex items-center gap-2 p-4 rounded-lg bg-green-50 dark:bg-green-950/20 border border-green-200 dark:border-green-800 text-green-800 dark:text-green-200"
+        >
           <CheckCircle className="h-5 w-5" />
           <span>
             {verificationResult?.already_processed
@@ -338,13 +348,19 @@ export default function SettingsPage() {
         </div>
       )}
       {!isSelfHosted() && verificationError && (
-        <div className="flex items-center gap-2 p-4 rounded-lg bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-200">
+        <div
+          role="alert"
+          className="flex items-center gap-2 p-4 rounded-lg bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-200"
+        >
           <XCircle className="h-5 w-5" />
           <span>{verificationError}</span>
         </div>
       )}
       {!isSelfHosted() && canceled === "true" && (
-        <div className="flex items-center gap-2 p-4 rounded-lg bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-200">
+        <div
+          role="alert"
+          className="flex items-center gap-2 p-4 rounded-lg bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-200"
+        >
           <XCircle className="h-5 w-5" />
           <span>Checkout was canceled. No changes were made.</span>
         </div>

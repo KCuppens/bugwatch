@@ -83,7 +83,8 @@ export function useIssueData({
         const response = await issuesApi.get(projectId, issueId, { signal: controller.signal });
         setIssue(response.data);
       } catch (err) {
-        if ((err as Error).name === "AbortError") return;
+        if (err instanceof Error && err.name === "AbortError") return;
+        console.error("[issues] fetchIssue failed:", err);
         toast.error("Failed to load issue details");
         setError("Failed to load issue details. Please try again.");
       } finally {
@@ -104,7 +105,7 @@ export function useIssueData({
         const response = await integrationsApi.listIssueLinks(projectId, issueId);
         setLinkedIssues(response.data);
       } catch (err) {
-        if ((err as Error).name === "AbortError") return;
+        if (err instanceof Error && err.name === "AbortError") return;
         console.debug("[issues] fetchLinkedIssues failed (non-critical):", err);
       }
     }
@@ -121,7 +122,7 @@ export function useIssueData({
         const response = await issuesApi.getFrequency(projectId, issueId, frequencyPeriod);
         setFrequencyData(response.data);
       } catch (err) {
-        if ((err as Error).name === "AbortError") return;
+        if (err instanceof Error && err.name === "AbortError") return;
         console.warn("[issues] fetchFrequency failed:", err);
         setFrequencyData(null);
       } finally {
@@ -141,7 +142,7 @@ export function useIssueData({
         const response = await issuesApi.getImpact(projectId, issueId);
         setImpactData(response.data);
       } catch (err) {
-        if ((err as Error).name === "AbortError") return;
+        if (err instanceof Error && err.name === "AbortError") return;
         console.warn("[issues] fetchImpact failed:", err);
         setImpactData(null);
       } finally {
@@ -161,7 +162,7 @@ export function useIssueData({
         const response = await issuesApi.listComments(projectId, issueId);
         setComments(response.data);
       } catch (err) {
-        if ((err as Error).name === "AbortError") return;
+        if (err instanceof Error && err.name === "AbortError") return;
         console.warn("[issues] fetchComments failed:", err);
         setComments([]);
       } finally {
@@ -180,7 +181,8 @@ export function useIssueData({
         const response = await replayApi.getIssueReplay(projectId, issueId);
         setIssueReplay(response.data ?? null);
       } catch (err) {
-        if ((err as Error).name === "AbortError") return;
+        if (err instanceof Error && err.name === "AbortError") return;
+        console.warn("[issues] fetchReplay failed:", err);
         setIssueReplay(null);
       }
     }

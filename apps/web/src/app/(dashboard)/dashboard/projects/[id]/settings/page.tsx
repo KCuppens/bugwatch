@@ -4,13 +4,7 @@ import { useState, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -25,12 +19,7 @@ import {
   ExternalLink,
 } from "lucide-react";
 import { projectsApi, type Project, type Platform, type Framework } from "@/lib/api";
-import {
-  getSDKContent,
-  interpolateApiKey,
-  getPlatformConfig,
-  getFrameworkConfig,
-} from "@/lib/sdk-config";
+import { getSDKContent, interpolateApiKey, getPlatformConfig, getFrameworkConfig } from "@/lib/sdk-config";
 import { CodeBlock, InstallCommand } from "@/components/onboarding/CodeBlock";
 import { toast } from "sonner";
 
@@ -90,6 +79,7 @@ export default function ProjectSettingsPage() {
       setProject(response.data);
       toast.success("API key rotated");
     } catch (err) {
+      console.error("[project-settings] rotate key failed:", err);
       toast.error("Failed to rotate API key");
     } finally {
       setIsRotating(false);
@@ -105,6 +95,7 @@ export default function ProjectSettingsPage() {
       setProject(response.data);
       toast.success("Project updated");
     } catch (err) {
+      console.error("[project-settings] save failed:", err);
       toast.error("Failed to update project");
     } finally {
       setIsSaving(false);
@@ -120,6 +111,7 @@ export default function ProjectSettingsPage() {
       toast.success("Project deleted");
       router.push("/dashboard/projects");
     } catch (err) {
+      console.error("[project-settings] delete failed:", err);
       toast.error("Failed to delete project");
       setIsDeleting(false);
     }
@@ -165,32 +157,21 @@ export default function ProjectSettingsPage() {
       <Card>
         <CardHeader>
           <CardTitle>General</CardTitle>
-          <CardDescription>
-            Update your project name and basic settings
-          </CardDescription>
+          <CardDescription>Update your project name and basic settings</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="space-y-2">
             <Label htmlFor="name">Project Name</Label>
-            <Input
-              id="name"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-            />
+            <Input id="name" value={name} onChange={(e) => setName(e.target.value)} />
           </div>
           <div className="space-y-2">
             <Label>Project Slug</Label>
             <Input value={project.slug} disabled />
-            <p className="text-xs text-muted-foreground">
-              The slug is auto-generated and cannot be changed
-            </p>
+            <p className="text-xs text-muted-foreground">The slug is auto-generated and cannot be changed</p>
           </div>
           <div className="space-y-2">
             <Label>Created</Label>
-            <Input
-              value={new Date(project.created_at).toLocaleDateString()}
-              disabled
-            />
+            <Input value={new Date(project.created_at).toLocaleDateString()} disabled />
           </div>
           <Button onClick={handleSave} disabled={isSaving || name === project.name}>
             {isSaving ? (
@@ -209,54 +190,41 @@ export default function ProjectSettingsPage() {
       <Card>
         <CardHeader>
           <CardTitle>API Key</CardTitle>
-          <CardDescription>
-            Use this key to authenticate your SDK with Bugwatch
-          </CardDescription>
+          <CardDescription>Use this key to authenticate your SDK with Bugwatch</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="space-y-2">
             <Label>Your API Key</Label>
             <div className="flex items-center gap-2">
               <div className="flex-1 rounded-md border bg-muted px-3 py-2">
-                <code className="text-sm font-mono break-all">
-                  {project.api_key}
-                </code>
+                <code className="text-sm font-mono break-all">{project.api_key}</code>
               </div>
               <Button
                 variant="outline"
                 size="icon"
                 onClick={copyApiKey}
+                aria-label={copied ? "API key copied to clipboard" : "Copy API key"}
               >
                 {copied ? (
-                  <Check className="h-4 w-4 text-green-500" />
+                  <Check className="h-4 w-4 text-green-500" aria-hidden="true" />
                 ) : (
-                  <Copy className="h-4 w-4" />
+                  <Copy className="h-4 w-4" aria-hidden="true" />
                 )}
               </Button>
             </div>
-            <p className="text-xs text-muted-foreground">
-              Keep this key secret. Do not expose it in client-side code.
-            </p>
+            <p className="text-xs text-muted-foreground">Keep this key secret. Do not expose it in client-side code.</p>
           </div>
 
           <div className="rounded-md border border-yellow-200 bg-yellow-50 p-4 dark:border-yellow-900 dark:bg-yellow-950">
             <div className="flex items-start gap-3">
               <AlertTriangle className="h-5 w-5 text-yellow-600" />
               <div>
-                <h4 className="font-medium text-yellow-800 dark:text-yellow-200">
-                  Rotate API Key
-                </h4>
+                <h4 className="font-medium text-yellow-800 dark:text-yellow-200">Rotate API Key</h4>
                 <p className="mt-1 text-sm text-yellow-700 dark:text-yellow-300">
-                  If you believe your API key has been compromised, rotate it immediately.
-                  The old key will stop working as soon as you rotate.
+                  If you believe your API key has been compromised, rotate it immediately. The old key will stop working
+                  as soon as you rotate.
                 </p>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="mt-3"
-                  onClick={handleRotateKey}
-                  disabled={isRotating}
-                >
+                <Button variant="outline" size="sm" className="mt-3" onClick={handleRotateKey} disabled={isRotating}>
                   {isRotating ? (
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                   ) : (
@@ -278,12 +246,8 @@ export default function ProjectSettingsPage() {
               <div>
                 <CardTitle>SDK Configuration</CardTitle>
                 <CardDescription>
-                  Your project is configured for{" "}
-                  {getPlatformConfig(project.platform as Platform)?.name} /{" "}
-                  {getFrameworkConfig(
-                    project.platform as Platform,
-                    project.framework as Framework
-                  )?.name}
+                  Your project is configured for {getPlatformConfig(project.platform as Platform)?.name} /{" "}
+                  {getFrameworkConfig(project.platform as Platform, project.framework as Framework)?.name}
                 </CardDescription>
               </div>
               <div className="flex items-center gap-2">
@@ -291,20 +255,14 @@ export default function ProjectSettingsPage() {
                   {getPlatformConfig(project.platform as Platform)?.name}
                 </span>
                 <span className="inline-flex items-center rounded-full bg-muted px-2.5 py-0.5 text-xs font-medium text-muted-foreground">
-                  {getFrameworkConfig(
-                    project.platform as Platform,
-                    project.framework as Framework
-                  )?.name}
+                  {getFrameworkConfig(project.platform as Platform, project.framework as Framework)?.name}
                 </span>
               </div>
             </div>
           </CardHeader>
           <CardContent className="space-y-6">
             {(() => {
-              const sdkContent = getSDKContent(
-                project.platform as Platform,
-                project.framework as Framework
-              );
+              const sdkContent = getSDKContent(project.platform as Platform, project.framework as Framework);
               if (!sdkContent) return null;
 
               return (
@@ -329,11 +287,7 @@ export default function ProjectSettingsPage() {
                         </div>
                         <div>
                           <h3 className="font-semibold">{step.title}</h3>
-                          {step.description && (
-                            <p className="text-sm text-muted-foreground">
-                              {step.description}
-                            </p>
-                          )}
+                          {step.description && <p className="text-sm text-muted-foreground">{step.description}</p>}
                         </div>
                       </div>
                       <CodeBlock
@@ -368,15 +322,11 @@ export default function ProjectSettingsPage() {
         <Card>
           <CardHeader>
             <CardTitle>SDK Integration</CardTitle>
-            <CardDescription>
-              Configure your SDK to get personalized installation instructions
-            </CardDescription>
+            <CardDescription>Configure your SDK to get personalized installation instructions</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="rounded-lg border border-dashed p-6 text-center">
-              <p className="text-muted-foreground">
-                No SDK configuration set for this project.
-              </p>
+              <p className="text-muted-foreground">No SDK configuration set for this project.</p>
               <Link href="/dashboard/projects/new">
                 <Button variant="outline" className="mt-4">
                   Configure SDK
@@ -391,16 +341,11 @@ export default function ProjectSettingsPage() {
       <Card className="border-red-200 dark:border-red-900">
         <CardHeader>
           <CardTitle className="text-red-600">Danger Zone</CardTitle>
-          <CardDescription>
-            Irreversible actions that will permanently affect your project
-          </CardDescription>
+          <CardDescription>Irreversible actions that will permanently affect your project</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           {!showDeleteConfirm ? (
-            <Button
-              variant="destructive"
-              onClick={() => setShowDeleteConfirm(true)}
-            >
+            <Button variant="destructive" onClick={() => setShowDeleteConfirm(true)}>
               <Trash2 className="mr-2 h-4 w-4" />
               Delete Project
             </Button>
