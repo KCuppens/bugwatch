@@ -51,25 +51,27 @@ export function Invoices() {
     fetchInvoices();
   }, []);
 
+  const fetchDetails = async (invoiceId: string) => {
+    setLoadingDetails(invoiceId);
+    try {
+      const details = await billingApi.getInvoice(invoiceId);
+      setInvoiceDetails((prev) => ({ ...prev, [invoiceId]: details }));
+    } catch (err) {
+      console.error("Failed to load invoice details:", err);
+      toast.error("Failed to load invoice details");
+    } finally {
+      setLoadingDetails(null);
+    }
+  };
+
   const handleToggleExpand = async (invoiceId: string) => {
     if (expandedInvoice === invoiceId) {
       setExpandedInvoice(null);
       return;
     }
-
     setExpandedInvoice(invoiceId);
-
     if (!invoiceDetails[invoiceId]) {
-      setLoadingDetails(invoiceId);
-      try {
-        const details = await billingApi.getInvoice(invoiceId);
-        setInvoiceDetails((prev) => ({ ...prev, [invoiceId]: details }));
-      } catch (err) {
-        console.error("Failed to load invoice details:", err);
-        toast.error("Failed to load invoice details");
-      } finally {
-        setLoadingDetails(null);
-      }
+      await fetchDetails(invoiceId);
     }
   };
 
@@ -264,11 +266,11 @@ export function Invoices() {
                         );
                       })()
                     ) : (
-                      <div className="flex items-center justify-between gap-2">
+                      <div role="alert" className="flex items-center justify-between gap-2">
                         <p className="text-sm text-muted-foreground">Failed to load invoice details</p>
                         <Button variant="outline" size="sm" onClick={() => {
                           setInvoiceDetails((prev) => { const next = { ...prev }; delete next[invoice.id]; return next; });
-                          handleToggleExpand(invoice.id);
+                          fetchDetails(invoice.id);
                         }}>Retry</Button>
                       </div>
                     )}

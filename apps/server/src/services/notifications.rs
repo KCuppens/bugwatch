@@ -1044,9 +1044,3 @@ pub(crate) fn compute_hmac_signature(payload: &str, secret: &str) -> String {
     hex::encode(bytes)
 }
 
-impl Default for NotificationService {
-    fn default() -> Self {
-        // Use blocking runtime for default initialization
-        tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(Self::new()))
-    }
-}

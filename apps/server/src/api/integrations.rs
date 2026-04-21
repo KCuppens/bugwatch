@@ -602,6 +602,12 @@ pub async fn create_issue_link(
                 .get("repo")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| AppError::Validation("repo is required for GitHub".to_string()))?;
+            if !owner.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.') || owner.is_empty() {
+                return Err(AppError::Validation("owner contains invalid characters".to_string()));
+            }
+            if !repo.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.') || repo.is_empty() {
+                return Err(AppError::Validation("repo contains invalid characters".to_string()));
+            }
             GitHubService::create_issue(&integration.access_token, owner, repo, title, &body)
                 .await
                 .map_err(|e| AppError::Internal(format!("Failed to create GitHub issue: {}", e)))?

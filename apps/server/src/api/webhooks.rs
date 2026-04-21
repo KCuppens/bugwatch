@@ -403,9 +403,14 @@ async fn handle_subscription_updated(
         return Ok(());
     }
 
-    if let Ok(Some(org)) =
-        OrganizationRepository::find_by_stripe_customer(&state.db, customer_id).await
-    {
+    match OrganizationRepository::find_by_stripe_customer(&state.db, customer_id).await {
+        Err(e) => {
+            tracing::error!(customer_id, "DB error looking up org for customer.subscription.updated: {}", e);
+        }
+        Ok(None) => {
+            tracing::warn!(customer_id, "No org found for Stripe customer on subscription.updated");
+        }
+        Ok(Some(org)) => {
         // Get quantity (seats) from subscription items
         let seats = subscription["items"]["data"][0]["quantity"]
             .as_i64()
@@ -448,6 +453,7 @@ async fn handle_subscription_updated(
             "Subscription updated for org {}: status={}, seats={}, cancel_at_period_end={}",
             org.id, status, seats, cancel_at_period_end
         );
+        }
     }
 
     Ok(())
@@ -471,29 +477,35 @@ async fn handle_subscription_deleted(
         return Ok(());
     }
 
-    if let Ok(Some(org)) =
-        OrganizationRepository::find_by_stripe_customer(&state.db, customer_id).await
-    {
-        // Downgrade to free tier
-        OrganizationRepository::update_subscription(
-            &state.db,
-            &org.id,
-            "free",
-            1,
-            None::<&str>,
-            "canceled",
-            None,
-            None,
-            None,
-            false,
-        )
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    match OrganizationRepository::find_by_stripe_customer(&state.db, customer_id).await {
+        Err(e) => {
+            tracing::error!(customer_id, "DB error looking up org for customer.subscription.deleted: {}", e);
+        }
+        Ok(None) => {
+            tracing::warn!(customer_id, "No org found for Stripe customer on subscription.deleted");
+        }
+        Ok(Some(org)) => {
+            // Downgrade to free tier
+            OrganizationRepository::update_subscription(
+                &state.db,
+                &org.id,
+                "free",
+                1,
+                None::<&str>,
+                "canceled",
+                None,
+                None,
+                None,
+                false,
+            )
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-        info!(
-            "Subscription canceled for org {}, downgraded to free",
-            org.id
-        );
+            info!(
+                "Subscription canceled for org {}, downgraded to free",
+                org.id
+            );
+        }
     }
 
     Ok(())
