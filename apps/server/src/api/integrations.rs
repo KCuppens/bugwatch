@@ -359,6 +359,7 @@ pub async fn oauth_callback(
 
             let (ext_user_id, ext_username) = JiraService::get_user(&access_token)
                 .await
+                .inspect_err(|e| tracing::warn!("Failed to fetch Jira user info: {}", e))
                 .unwrap_or(("unknown".to_string(), "Jira User".to_string()));
 
             // Store cloud_id in config JSON for later API calls
@@ -389,6 +390,7 @@ pub async fn oauth_callback(
 
             let (ext_user_id, ext_username) = LinearService::get_user(&access_token)
                 .await
+                .inspect_err(|e| tracing::warn!("Failed to fetch Linear user info: {}", e))
                 .unwrap_or(("unknown".to_string(), "Linear User".to_string()));
 
             Ok((

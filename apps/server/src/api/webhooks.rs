@@ -235,7 +235,7 @@ async fn handle_checkout_completed(
                 .items
                 .data
                 .first()
-                .map(|item| item.quantity.unwrap_or(1) as i32)
+                .and_then(|item| item.quantity.and_then(|q| i32::try_from(q).ok()))
                 .unwrap_or(1);
 
             // Get billing interval
@@ -294,7 +294,7 @@ async fn handle_invoice_paid(
         ));
     }
     let customer_id = invoice["customer"].as_str().unwrap_or("");
-    let amount_paid = invoice["amount_paid"].as_i64().unwrap_or(0) as i32;
+    let amount_paid = invoice["amount_paid"].as_i64().and_then(|v| i32::try_from(v).ok()).unwrap_or(0);
 
     if customer_id.is_empty() {
         return Ok(());
@@ -306,7 +306,7 @@ async fn handle_invoice_paid(
             tracing::error!(event_id, customer_id, "DB error looking up org for invoice.paid: {}", e);
         }
         Ok(None) => {
-            tracing::warn!(customer_id, "No org found for Stripe customer on invoice.paid");
+            tracing::warn!(event_id, customer_id, "No org found for Stripe customer on invoice.paid");
         }
         Ok(Some(org)) => {
             // Record billing event
@@ -355,7 +355,7 @@ async fn handle_invoice_payment_failed(
             tracing::error!(event_id, customer_id, "DB error looking up org for invoice.payment_failed: {}", e);
         }
         Ok(None) => {
-            tracing::warn!(customer_id, "No org found for Stripe customer on invoice.payment_failed");
+            tracing::warn!(event_id, customer_id, "No org found for Stripe customer on invoice.payment_failed");
         }
         Ok(Some(org)) => {
             // Record billing event
@@ -408,13 +408,14 @@ async fn handle_subscription_updated(
             tracing::error!(customer_id, "DB error looking up org for customer.subscription.updated: {}", e);
         }
         Ok(None) => {
-            tracing::warn!(customer_id, "No org found for Stripe customer on subscription.updated");
+            tracing::warn!(customer_id, "No org found for Stripe customer on subscription.updated — skipping");
         }
         Ok(Some(org)) => {
         // Get quantity (seats) from subscription items
         let seats = subscription["items"]["data"][0]["quantity"]
             .as_i64()
-            .unwrap_or(1) as i32;
+            .and_then(|q| i32::try_from(q).ok())
+            .unwrap_or(1);
 
         // Get period dates
         let period_start = subscription["current_period_start"]

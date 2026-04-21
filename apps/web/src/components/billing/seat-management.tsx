@@ -132,6 +132,7 @@ export function SeatManagement({
               <Input
                 type="number"
                 value={seats}
+                aria-label="Number of seats"
                 onChange={(e) => {
                   const val = parseInt(e.target.value, 10);
                   if (!isNaN(val)) handleSeatsChange(val);

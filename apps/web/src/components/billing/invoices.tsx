@@ -9,6 +9,77 @@ import { FileText, Download, ExternalLink, ChevronDown, ChevronUp, AlertTriangle
 import { billingApi, type Invoice, type InvoiceDetail } from "@/lib/api";
 import { toast } from "sonner";
 
+function InvoiceDetails({
+  details,
+  invoice,
+}: {
+  details: InvoiceDetail;
+  invoice: Invoice;
+}) {
+  return (
+    <div className="space-y-4">
+      <div className="space-y-2">
+        <p className="text-sm font-medium">Line Items</p>
+        {details.line_items.map((item) => (
+          <div key={item.id} className="flex justify-between text-sm">
+            <span className="text-muted-foreground">
+              {item.description || "Subscription"}
+              {item.quantity && item.quantity > 1 && ` x${item.quantity}`}
+            </span>
+            <span>{formatCurrency(item.amount, item.currency)}</span>
+          </div>
+        ))}
+      </div>
+      <div className="border-t pt-2 space-y-1">
+        <div className="flex justify-between text-sm">
+          <span className="text-muted-foreground">Subtotal</span>
+          <span>{formatCurrency(details.subtotal, invoice.currency)}</span>
+        </div>
+        {details.tax && (
+          <div className="flex justify-between text-sm">
+            <span className="text-muted-foreground">Tax</span>
+            <span>{formatCurrency(details.tax, invoice.currency)}</span>
+          </div>
+        )}
+        <div className="flex justify-between font-medium">
+          <span>Total</span>
+          <span>{formatCurrency(details.total, invoice.currency)}</span>
+        </div>
+      </div>
+      <div className="flex gap-2 pt-2">
+        {invoice.invoice_pdf && /^https?:\/\//.test(invoice.invoice_pdf) && (
+          <Button
+            variant="outline"
+            size="sm"
+            aria-label="Download PDF (opens in new tab)"
+            onClick={(e) => {
+              e.stopPropagation();
+              window.open(invoice.invoice_pdf!, "_blank", "noopener,noreferrer");
+            }}
+          >
+            <Download className="h-4 w-4 mr-2" aria-hidden="true" />
+            Download PDF
+          </Button>
+        )}
+        {invoice.hosted_invoice_url && /^https?:\/\//.test(invoice.hosted_invoice_url) && (
+          <Button
+            variant="outline"
+            size="sm"
+            aria-label="View invoice online (opens in new tab)"
+            onClick={(e) => {
+              e.stopPropagation();
+              window.open(invoice.hosted_invoice_url!, "_blank", "noopener,noreferrer");
+            }}
+          >
+            <ExternalLink className="h-4 w-4 mr-2" aria-hidden="true" />
+            View Online
+          </Button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function formatCurrency(amount: number | null, currency: string | null) {
   if (amount === null || currency === null) return "$0.00";
   return new Intl.NumberFormat(undefined, {
@@ -200,71 +271,7 @@ export function Invoices() {
                         <Skeleton className="h-4 w-3/4" />
                       </div>
                     ) : invoiceDetails[invoice.id] ? (
-                      (() => {
-                        const details = invoiceDetails[invoice.id]!;
-                        return (
-                          <div className="space-y-4">
-                            <div className="space-y-2">
-                              <p className="text-sm font-medium">Line Items</p>
-                              {details.line_items.map((item) => (
-                                <div key={item.id} className="flex justify-between text-sm">
-                                  <span className="text-muted-foreground">
-                                    {item.description || "Subscription"}
-                                    {item.quantity && item.quantity > 1 && ` x${item.quantity}`}
-                                  </span>
-                                  <span>{formatCurrency(item.amount, item.currency)}</span>
-                                </div>
-                              ))}
-                            </div>
-                            <div className="border-t pt-2 space-y-1">
-                              <div className="flex justify-between text-sm">
-                                <span className="text-muted-foreground">Subtotal</span>
-                                <span>{formatCurrency(details.subtotal, invoice.currency)}</span>
-                              </div>
-                              {details.tax && (
-                                <div className="flex justify-between text-sm">
-                                  <span className="text-muted-foreground">Tax</span>
-                                  <span>{formatCurrency(details.tax, invoice.currency)}</span>
-                                </div>
-                              )}
-                              <div className="flex justify-between font-medium">
-                                <span>Total</span>
-                                <span>{formatCurrency(details.total, invoice.currency)}</span>
-                              </div>
-                            </div>
-                            <div className="flex gap-2 pt-2">
-                              {invoice.invoice_pdf && /^https?:\/\//.test(invoice.invoice_pdf) && (
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  aria-label="Download PDF (opens in new tab)"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    window.open(invoice.invoice_pdf!, "_blank", "noopener,noreferrer");
-                                  }}
-                                >
-                                  <Download className="h-4 w-4 mr-2" aria-hidden="true" />
-                                  Download PDF
-                                </Button>
-                              )}
-                              {invoice.hosted_invoice_url && /^https?:\/\//.test(invoice.hosted_invoice_url) && (
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  aria-label="View invoice online (opens in new tab)"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    window.open(invoice.hosted_invoice_url!, "_blank", "noopener,noreferrer");
-                                  }}
-                                >
-                                  <ExternalLink className="h-4 w-4 mr-2" aria-hidden="true" />
-                                  View Online
-                                </Button>
-                              )}
-                            </div>
-                          </div>
-                        );
-                      })()
+                      <InvoiceDetails details={invoiceDetails[invoice.id]!} invoice={invoice} />
                     ) : (
                       <div role="alert" className="flex items-center justify-between gap-2">
                         <p className="text-sm text-muted-foreground">Failed to load invoice details</p>

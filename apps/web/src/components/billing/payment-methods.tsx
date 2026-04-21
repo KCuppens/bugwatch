@@ -45,6 +45,7 @@ export function PaymentMethods({ isOwner }: PaymentMethodsProps) {
     try {
       await billingApi.setDefaultPaymentMethod(paymentMethodId);
       await fetchPaymentMethods();
+      toast.success("Default payment method updated");
     } catch (error) {
       console.error("Failed to set default payment method:", error);
       toast.error("Failed to set default payment method");
@@ -84,6 +85,7 @@ export function PaymentMethods({ isOwner }: PaymentMethodsProps) {
       window.location.href = portalResponse.portal_url;
     } catch (error) {
       console.error("Failed to add payment method:", error);
+      toast.error("Failed to add payment method");
     } finally {
       setActionLoading(null);
     }

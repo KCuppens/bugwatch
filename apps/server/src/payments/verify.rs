@@ -104,6 +104,7 @@ impl OnChainVerifier {
             .and_then(|v| v.as_array())
             .ok_or("No logs in receipt")?;
 
+        let usdc_address_lower = usdc_address.to_lowercase();
         for log in logs {
             let topics = log.get("topics").and_then(|v| v.as_array());
             let Some(topics) = topics else { continue };
@@ -118,7 +119,7 @@ impl OnChainVerifier {
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_lowercase();
-            if log_address != usdc_address.to_lowercase() {
+            if log_address != usdc_address_lower {
                 continue;
             }
 

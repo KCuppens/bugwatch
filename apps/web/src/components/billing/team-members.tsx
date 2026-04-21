@@ -103,6 +103,7 @@ export function TeamMembers({ isOwner }: TeamMembersProps) {
     try {
       await billingApi.updateMemberRole(userId, newRole);
       fetchMembers();
+      toast.success("Role updated");
     } catch (err) {
       console.error("Failed to update role:", err);
       toast.error("Failed to update role. Please try again.");
@@ -211,6 +212,7 @@ export function TeamMembers({ isOwner }: TeamMembersProps) {
                         placeholder="colleague@company.com"
                         value={inviteEmail}
                         onChange={(e) => setInviteEmail(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === "Enter" && inviteEmail.trim()) { handleInvite(e); } }}
                         required
                       />
                     </div>
