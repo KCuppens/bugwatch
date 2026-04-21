@@ -105,7 +105,9 @@ pub async fn stripe_webhook(
             // Stripe retries on 5xx or timeout — an immediate 200 prevents spurious retries.
             let event_type_owned = event_type.to_string();
             let event_id_owned = event_id.to_string();
-            tokio::spawn(async move {
+            let event_type_for_panic = event_type_owned.clone();
+            let event_id_for_panic = event_id_owned.clone();
+            let handle = tokio::spawn(async move {
                 let result = match event_type_owned.as_str() {
                     "checkout.session.completed" => {
                         handle_checkout_completed(&state, &payload).await
@@ -128,6 +130,18 @@ pub async fn stripe_webhook(
                         status = %status,
                         "Stripe webhook processing failed: {}", msg
                     );
+                }
+            });
+            // Catch panics in the spawned task — a panic produces JoinError::is_panic().
+            tokio::spawn(async move {
+                if let Err(e) = handle.await {
+                    if e.is_panic() {
+                        tracing::error!(
+                            event_type = %event_type_for_panic,
+                            event_id = %event_id_for_panic,
+                            "Stripe webhook task panicked — review handler logic"
+                        );
+                    }
                 }
             });
         }
@@ -294,7 +308,10 @@ async fn handle_invoice_paid(
         ));
     }
     let customer_id = invoice["customer"].as_str().unwrap_or("");
-    let amount_paid = invoice["amount_paid"].as_i64().and_then(|v| i32::try_from(v).ok()).unwrap_or(0);
+    let amount_paid = invoice["amount_paid"]
+        .as_i64()
+        .and_then(|v| i32::try_from(v).ok())
+        .unwrap_or(0);
 
     if customer_id.is_empty() {
         return Ok(());
@@ -303,10 +320,19 @@ async fn handle_invoice_paid(
     // Find organization
     match OrganizationRepository::find_by_stripe_customer(&state.db, customer_id).await {
         Err(e) => {
-            tracing::error!(event_id, customer_id, "DB error looking up org for invoice.paid: {}", e);
+            tracing::error!(
+                event_id,
+                customer_id,
+                "DB error looking up org for invoice.paid: {}",
+                e
+            );
         }
         Ok(None) => {
-            tracing::warn!(event_id, customer_id, "No org found for Stripe customer on invoice.paid");
+            tracing::warn!(
+                event_id,
+                customer_id,
+                "No org found for Stripe customer on invoice.paid"
+            );
         }
         Ok(Some(org)) => {
             // Record billing event
@@ -352,10 +378,19 @@ async fn handle_invoice_payment_failed(
 
     match OrganizationRepository::find_by_stripe_customer(&state.db, customer_id).await {
         Err(e) => {
-            tracing::error!(event_id, customer_id, "DB error looking up org for invoice.payment_failed: {}", e);
+            tracing::error!(
+                event_id,
+                customer_id,
+                "DB error looking up org for invoice.payment_failed: {}",
+                e
+            );
         }
         Ok(None) => {
-            tracing::warn!(event_id, customer_id, "No org found for Stripe customer on invoice.payment_failed");
+            tracing::warn!(
+                event_id,
+                customer_id,
+                "No org found for Stripe customer on invoice.payment_failed"
+            );
         }
         Ok(Some(org)) => {
             // Record billing event
@@ -405,55 +440,62 @@ async fn handle_subscription_updated(
 
     match OrganizationRepository::find_by_stripe_customer(&state.db, customer_id).await {
         Err(e) => {
-            tracing::error!(customer_id, "DB error looking up org for customer.subscription.updated: {}", e);
+            tracing::error!(
+                customer_id,
+                "DB error looking up org for customer.subscription.updated: {}",
+                e
+            );
         }
         Ok(None) => {
-            tracing::warn!(customer_id, "No org found for Stripe customer on subscription.updated — skipping");
+            tracing::warn!(
+                customer_id,
+                "No org found for Stripe customer on subscription.updated — skipping"
+            );
         }
         Ok(Some(org)) => {
-        // Get quantity (seats) from subscription items
-        let seats = subscription["items"]["data"][0]["quantity"]
-            .as_i64()
-            .and_then(|q| i32::try_from(q).ok())
-            .unwrap_or(1);
+            // Get quantity (seats) from subscription items
+            let seats = subscription["items"]["data"][0]["quantity"]
+                .as_i64()
+                .and_then(|q| i32::try_from(q).ok())
+                .unwrap_or(1);
 
-        // Get period dates
-        let period_start = subscription["current_period_start"]
-            .as_i64()
-            .and_then(|t| chrono::DateTime::from_timestamp(t, 0))
-            .map(|dt| dt.with_timezone(&chrono::Utc));
-        let period_end = subscription["current_period_end"]
-            .as_i64()
-            .and_then(|t| chrono::DateTime::from_timestamp(t, 0))
-            .map(|dt| dt.with_timezone(&chrono::Utc));
+            // Get period dates
+            let period_start = subscription["current_period_start"]
+                .as_i64()
+                .and_then(|t| chrono::DateTime::from_timestamp(t, 0))
+                .map(|dt| dt.with_timezone(&chrono::Utc));
+            let period_end = subscription["current_period_end"]
+                .as_i64()
+                .and_then(|t| chrono::DateTime::from_timestamp(t, 0))
+                .map(|dt| dt.with_timezone(&chrono::Utc));
 
-        // Determine tier
-        let tier = determine_tier_from_price_id(
-            &state.config,
-            subscription["items"]["data"][0]["price"]["id"]
-                .as_str()
-                .unwrap_or(""),
-        );
+            // Determine tier
+            let tier = determine_tier_from_price_id(
+                &state.config,
+                subscription["items"]["data"][0]["price"]["id"]
+                    .as_str()
+                    .unwrap_or(""),
+            );
 
-        OrganizationRepository::update_subscription(
-            &state.db,
-            &org.id,
-            &tier,
-            seats,
-            Some(subscription_id),
-            status,
-            None,
-            period_start,
-            period_end,
-            cancel_at_period_end,
-        )
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            OrganizationRepository::update_subscription(
+                &state.db,
+                &org.id,
+                &tier,
+                seats,
+                Some(subscription_id),
+                status,
+                None,
+                period_start,
+                period_end,
+                cancel_at_period_end,
+            )
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-        info!(
-            "Subscription updated for org {}: status={}, seats={}, cancel_at_period_end={}",
-            org.id, status, seats, cancel_at_period_end
-        );
+            info!(
+                "Subscription updated for org {}: status={}, seats={}, cancel_at_period_end={}",
+                org.id, status, seats, cancel_at_period_end
+            );
         }
     }
 
@@ -480,10 +522,17 @@ async fn handle_subscription_deleted(
 
     match OrganizationRepository::find_by_stripe_customer(&state.db, customer_id).await {
         Err(e) => {
-            tracing::error!(customer_id, "DB error looking up org for customer.subscription.deleted: {}", e);
+            tracing::error!(
+                customer_id,
+                "DB error looking up org for customer.subscription.deleted: {}",
+                e
+            );
         }
         Ok(None) => {
-            tracing::warn!(customer_id, "No org found for Stripe customer on subscription.deleted");
+            tracing::warn!(
+                customer_id,
+                "No org found for Stripe customer on subscription.deleted"
+            );
         }
         Ok(Some(org)) => {
             // Downgrade to free tier

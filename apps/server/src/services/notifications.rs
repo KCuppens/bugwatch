@@ -635,28 +635,40 @@ impl NotificationService {
         let config: WebhookConfig = serde_json::from_str(&channel.config)?;
 
         // SSRF guard: resolve the webhook hostname and reject private/internal addresses.
-        {
-            let parsed = url::Url::parse(&config.url)
-                .map_err(|_| anyhow::anyhow!("Webhook URL is invalid"))?;
-            if !matches!(parsed.scheme(), "http" | "https") {
-                return Err(anyhow::anyhow!("Webhook URL must use http or https"));
-            }
-            let host = parsed
-                .host_str()
-                .ok_or_else(|| anyhow::anyhow!("Webhook URL has no host"))?;
-            let port = parsed.port_or_known_default().unwrap_or(80);
-            let lookup = format!("{}:{}", host, port);
-            let addrs = tokio::net::lookup_host(lookup)
-                .await
-                .map_err(|e| anyhow::anyhow!("Failed to resolve webhook host: {}", e))?;
-            for addr in addrs {
-                if is_ssrf_risk(addr.ip()) {
-                    return Err(anyhow::anyhow!(
-                        "Webhook URL resolves to a private or internal address"
-                    ));
-                }
+        // Collect all resolved IPs and pin them in a throw-away client to prevent
+        // DNS rebinding (TOCTOU: reqwest would otherwise re-resolve the hostname on send).
+        let parsed =
+            url::Url::parse(&config.url).map_err(|_| anyhow::anyhow!("Webhook URL is invalid"))?;
+        if !matches!(parsed.scheme(), "http" | "https") {
+            return Err(anyhow::anyhow!("Webhook URL must use http or https"));
+        }
+        let host = parsed
+            .host_str()
+            .ok_or_else(|| anyhow::anyhow!("Webhook URL has no host"))?
+            .to_string();
+        let port = parsed.port_or_known_default().unwrap_or(80);
+        let lookup = format!("{}:{}", host, port);
+        let addrs: Vec<std::net::SocketAddr> = tokio::net::lookup_host(&lookup)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to resolve webhook host: {}", e))?
+            .collect();
+        if addrs.is_empty() {
+            return Err(anyhow::anyhow!(
+                "Webhook URL host did not resolve to any address"
+            ));
+        }
+        for addr in &addrs {
+            if is_ssrf_risk(addr.ip()) {
+                return Err(anyhow::anyhow!(
+                    "Webhook URL resolves to a private or internal address"
+                ));
             }
         }
+        let pinned_client = Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .resolve(&host, addrs[0])
+            .build()
+            .map_err(|e| anyhow::anyhow!("Failed to build pinned webhook client: {}", e))?;
 
         // Compute signature once; rebuild request each attempt since send() consumes the builder.
         let signature = config.secret.as_ref().map(|secret| {
@@ -667,7 +679,7 @@ impl NotificationService {
         let mut last_err = anyhow::anyhow!("Webhook failed after retries");
         let mut response_body = String::new();
         for attempt in 0u32..3 {
-            let mut req = self.client.post(&config.url).json(payload);
+            let mut req = pinned_client.post(&config.url).json(payload);
             if let Some(ref sig) = signature {
                 req = req.header("X-Bugwatch-Signature", sig.as_str());
             }
