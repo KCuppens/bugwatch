@@ -331,9 +331,12 @@ impl From<NotificationChannel> for ChannelResponse {
 
         // Never return raw credentials to clients
         if let Some(obj) = config.as_object_mut() {
-            for key in &["api_key", "routing_key"] {
+            for key in &["api_key", "routing_key", "secret", "webhook_url"] {
                 if obj.contains_key(*key) {
-                    obj.insert((*key).to_string(), serde_json::Value::String("***".to_string()));
+                    obj.insert(
+                        (*key).to_string(),
+                        serde_json::Value::String("***".to_string()),
+                    );
                 }
             }
         }
@@ -859,8 +862,10 @@ pub async fn test_alert_rule(
         return Err(AppError::NotFound("Alert rule not found".to_string()));
     }
 
-    let channel_ids: Vec<String> = serde_json::from_str(&rule.actions)
-        .map_err(|e| AppError::Internal(format!("Failed to parse channel IDs: {}", e)))?;
+    let channel_ids: Vec<String> = serde_json::from_str(&rule.actions).map_err(|e| {
+        tracing::error!(error = %e, "Failed to parse channel IDs from alert rule actions");
+        AppError::Internal("Invalid configuration".to_string())
+    })?;
 
     let notification_service = &state.notification_service;
 

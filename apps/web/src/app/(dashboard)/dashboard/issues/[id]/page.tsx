@@ -701,10 +701,10 @@ export default function IssueDetailPage() {
                   size="sm"
                   className="h-7 text-xs"
                   onClick={() => {
-                    navigator.clipboard.writeText(
-                      stacktrace.map((f) => `  at ${f.function} (${f.filename}:${f.lineno})`).join("\n")
-                    );
-                    toast.success("Stack trace copied");
+                    navigator.clipboard
+                      .writeText(stacktrace.map((f) => `  at ${f.function} (${f.filename}:${f.lineno})`).join("\n"))
+                      .then(() => toast.success("Stack trace copied"))
+                      .catch(() => toast.error("Failed to copy stack trace"));
                   }}
                 >
                   <Copy className="mr-1.5 h-3 w-3" />
@@ -717,6 +717,7 @@ export default function IssueDetailPage() {
                 <button
                   onClick={() => setShowAppOnly(!showAppOnly)}
                   aria-pressed={showAppOnly}
+                  aria-label={showAppOnly ? "Show all frames" : "Show app frames only"}
                   className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
                     showAppOnly
                       ? "bg-accent-2 text-accent-2-foreground"
@@ -1407,7 +1408,9 @@ export default function IssueDetailPage() {
                   )}
                 </Button>
               </div>
-              <p className="text-[10px] text-muted-foreground mb-2">{isMac ? "⌘" : "Ctrl"}+Enter to submit</p>
+              <p className="text-[10px] text-muted-foreground mb-2">
+                <kbd className="font-mono">{isMac ? "⌘" : "Ctrl"}</kbd>+<kbd className="font-mono">Enter</kbd> to submit
+              </p>
 
               {commentsLoading ? (
                 <div className="flex items-center justify-center py-4">

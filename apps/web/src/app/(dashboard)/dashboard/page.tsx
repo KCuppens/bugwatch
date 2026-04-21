@@ -879,7 +879,7 @@ export default function DashboardPage() {
         <span className="text-xs text-[hsl(var(--muted-foreground))] font-mono">{stats.unresolved} unresolved</span>
         <div className="flex-1" />
         {selectedIssues.size > 0 && (
-          <div className="flex items-center gap-2">
+          <div role="region" aria-live="polite" aria-label="Bulk actions" className="flex items-center gap-2">
             <span className="text-xs text-[hsl(var(--muted-foreground))] font-mono">
               {selectedIssues.size} selected
             </span>

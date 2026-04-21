@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Check, Copy } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { toast } from "sonner";
 
 interface CodeBlockProps {
   code: string;
@@ -17,9 +18,13 @@ export function CodeBlock({ code, language = "text", filename, showCopy = true, 
   const [copied, setCopied] = useState(false);
 
   const handleCopy = async () => {
-    await navigator.clipboard.writeText(code);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    try {
+      await navigator.clipboard.writeText(code);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      toast.error("Failed to copy to clipboard");
+    }
   };
 
   return (
@@ -80,9 +85,13 @@ export function InstallCommand({ commands }: InstallCommandProps) {
   const currentCommand = commands[activeManager as keyof typeof commands] || "";
 
   const handleCopy = async () => {
-    await navigator.clipboard.writeText(currentCommand);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    try {
+      await navigator.clipboard.writeText(currentCommand);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      toast.error("Failed to copy to clipboard");
+    }
   };
 
   return (
