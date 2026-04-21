@@ -1,9 +1,10 @@
 use axum::{
     body::Bytes,
-    extract::{Path, Query, State},
+    extract::{ConnectInfo, Path, Query, State},
     http::HeaderMap,
     Json,
 };
+use std::net::SocketAddr;
 use serde::{Deserialize, Serialize};
 use tracing::{error, info};
 
@@ -227,9 +228,25 @@ pub async fn oauth_authorize(
 /// GET /api/v1/integrations/oauth/:provider/callback
 pub async fn oauth_callback(
     State(state): State<AppState>,
+    ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Path(provider): Path<String>,
     Query(params): Query<OAuthCallbackParams>,
 ) -> AppResult<axum::response::Redirect> {
+    // Rate-limit OAuth callbacks to prevent code enumeration (10 req/min per IP).
+    {
+        let ip = crate::api::auth::extract_client_ip(&headers, state.config.trust_proxy, Some(peer_addr));
+        let key = format!("oauth:{}", ip);
+        let result = state.rate_limiter.check(&key, 10);
+        if !result.allowed {
+            return Err(AppError::RateLimitExceeded {
+                retry_after_secs: result.retry_after_secs.unwrap_or(60),
+                limit: result.limit,
+                remaining: result.remaining,
+            });
+        }
+    }
+
     let state_str = params.state.as_deref().unwrap_or("");
     let redirect_uri = format!(
         "{}/api/v1/integrations/oauth/{}/callback",

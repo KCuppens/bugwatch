@@ -69,7 +69,7 @@ fn build_clear_cookies(secure: bool) -> Vec<HeaderValue> {
 /// When `trust_proxy` is true, X-Forwarded-For / X-Real-IP are trusted (server is behind a
 /// reverse proxy). When false, the TCP peer address is used so no header spoofing is possible
 /// and each connection gets its own rate-limit bucket instead of sharing "unknown".
-fn extract_client_ip(
+pub(crate) fn extract_client_ip(
     headers: &HeaderMap,
     trust_proxy: bool,
     peer_addr: Option<SocketAddr>,

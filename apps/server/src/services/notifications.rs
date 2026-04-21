@@ -21,6 +21,27 @@ enum EmailTransport {
     Ses(SesClient),
 }
 
+/// Returns true for IP addresses that should never be webhook targets:
+/// loopback, RFC-1918 private, and link-local ranges.
+fn is_ssrf_risk(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => {
+            v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_unspecified()
+        }
+        std::net::IpAddr::V6(v6) => {
+            if v6.is_loopback() || v6.is_unspecified() {
+                return true;
+            }
+            let o = v6.octets();
+            // fe80::/10 link-local
+            let is_link_local = o[0] == 0xfe && (o[1] & 0xc0) == 0x80;
+            // fc00::/7 unique local (fc00:: and fd00::)
+            let is_unique_local = o[0] & 0xfe == 0xfc;
+            is_link_local || is_unique_local
+        }
+    }
+}
+
 /// Notification service for sending alerts via various channels
 pub struct NotificationService {
     client: Client,
@@ -612,6 +633,30 @@ impl NotificationService {
         payload: &AlertPayload,
     ) -> Result<Option<String>> {
         let config: WebhookConfig = serde_json::from_str(&channel.config)?;
+
+        // SSRF guard: resolve the webhook hostname and reject private/internal addresses.
+        {
+            let parsed = url::Url::parse(&config.url)
+                .map_err(|_| anyhow::anyhow!("Webhook URL is invalid"))?;
+            if !matches!(parsed.scheme(), "http" | "https") {
+                return Err(anyhow::anyhow!("Webhook URL must use http or https"));
+            }
+            let host = parsed
+                .host_str()
+                .ok_or_else(|| anyhow::anyhow!("Webhook URL has no host"))?;
+            let port = parsed.port_or_known_default().unwrap_or(80);
+            let lookup = format!("{}:{}", host, port);
+            let addrs = tokio::net::lookup_host(lookup)
+                .await
+                .map_err(|e| anyhow::anyhow!("Failed to resolve webhook host: {}", e))?;
+            for addr in addrs {
+                if is_ssrf_risk(addr.ip()) {
+                    return Err(anyhow::anyhow!(
+                        "Webhook URL resolves to a private or internal address"
+                    ));
+                }
+            }
+        }
 
         // Compute signature once; rebuild request each attempt since send() consumes the builder.
         let signature = config.secret.as_ref().map(|secret| {
