@@ -406,11 +406,18 @@ async fn main() -> Result<()> {
     let listener = TcpListener::bind(&config.server_addr).await?;
     info!("Listening on {}", config.server_addr);
 
+    let grace_secs = config.shutdown_grace_secs;
     axum::serve(
         listener,
         app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )
-    .with_graceful_shutdown(shutdown_signal())
+    .with_graceful_shutdown(async move {
+        shutdown_signal().await;
+        // Allow in-flight requests (e.g. payment verifications with RPC retries) to
+        // finish before the process exits. Configurable via SHUTDOWN_GRACE_SECS.
+        info!("Graceful shutdown: waiting up to {}s for in-flight requests", grace_secs);
+        tokio::time::sleep(std::time::Duration::from_secs(grace_secs)).await;
+    })
     .await?;
 
     Ok(())

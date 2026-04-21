@@ -211,8 +211,13 @@ impl AlertingService {
             let task_span = tracing::info_span!("alert_send", rule_id = %rule.id);
             join_set.spawn(
                 async move {
-                    let _semaphore_permit =
-                        sem.acquire_owned().await.expect("alert semaphore closed"); // held for task duration to cap concurrency
+                    let _semaphore_permit = match sem.acquire_owned().await {
+                        Ok(p) => p,
+                        Err(e) => {
+                            tracing::error!(rule_id = %rule.id, "Alert semaphore closed unexpectedly, dropping task: {}", e);
+                            return (rule.id.clone(), Ok(()));
+                        }
+                    };
                     let svc = AlertingService {
                         pool,
                         notification_service,

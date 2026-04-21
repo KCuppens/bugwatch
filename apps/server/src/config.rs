@@ -178,6 +178,11 @@ pub struct Config {
     /// Maximum database connections (default: 50)
     pub database_max_connections: u32,
 
+    /// Seconds to wait for in-flight requests to complete after shutdown signal before
+    /// hard-killing the process. Allows long-running payment verifications (up to 90 s)
+    /// to finish cleanly rather than leaving nonces in a partially-consumed state.
+    pub shutdown_grace_secs: u64,
+
     // =========================================================================
     // x402 Micropayment Configuration (SaaS only)
     // =========================================================================
@@ -291,6 +296,10 @@ impl Config {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(50),
+            shutdown_grace_secs: env::var("SHUTDOWN_GRACE_SECS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(120),
             // x402 micropayment config (SaaS only)
             x402_enabled: env::var("X402_ENABLED")
                 .map(|v| v == "true" || v == "1")
