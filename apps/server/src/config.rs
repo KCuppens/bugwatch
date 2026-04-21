@@ -278,15 +278,25 @@ impl Config {
             encryption_key: env::var("BUGWATCH_ENCRYPTION_KEY").ok(),
             password_reset_secret: env::var("PASSWORD_RESET_SECRET")
                 .unwrap_or_else(|_| {
+                    let fallback = env::var("JWT_SECRET")
+                        .expect("FATAL: JWT_SECRET environment variable is required.");
+                    let env_name = env::var("RUST_ENV").unwrap_or_default();
+                    if env_name == "production" {
+                        panic!("FATAL: PASSWORD_RESET_SECRET must be set independently in production — sharing JWT_SECRET is a security risk.");
+                    }
                     tracing::warn!("PASSWORD_RESET_SECRET not set — falling back to JWT_SECRET. Set a dedicated PASSWORD_RESET_SECRET in production.");
-                    env::var("JWT_SECRET")
-                        .expect("FATAL: JWT_SECRET environment variable is required.")
+                    fallback
                 }),
             oauth_state_secret: env::var("OAUTH_STATE_SECRET")
                 .unwrap_or_else(|_| {
+                    let fallback = env::var("JWT_SECRET")
+                        .expect("FATAL: JWT_SECRET environment variable is required.");
+                    let env_name = env::var("RUST_ENV").unwrap_or_default();
+                    if env_name == "production" {
+                        panic!("FATAL: OAUTH_STATE_SECRET must be set independently in production — sharing JWT_SECRET is a security risk.");
+                    }
                     tracing::warn!("OAUTH_STATE_SECRET not set — falling back to JWT_SECRET. Set a dedicated OAUTH_STATE_SECRET in production.");
-                    env::var("JWT_SECRET")
-                        .expect("FATAL: JWT_SECRET environment variable is required.")
+                    fallback
                 }),
             github_webhook_secret: env::var("GITHUB_WEBHOOK_SECRET").ok(),
             jira_webhook_secret: env::var("JIRA_WEBHOOK_SECRET").ok(),

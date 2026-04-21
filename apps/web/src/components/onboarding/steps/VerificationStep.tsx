@@ -21,7 +21,7 @@ interface VerificationStepProps {
   backDisabled?: boolean;
 }
 
-type VerificationStatus = "idle" | "checking" | "success" | "timeout";
+type VerificationStatus = "idle" | "checking" | "success" | "timeout" | "error";
 
 export function VerificationStep({
   projectId,
@@ -42,18 +42,18 @@ export function VerificationStep({
 
   const sdkContent = getSDKContent(platform, framework);
 
-  const checkForEvents = useCallback(async () => {
+  const checkForEvents = useCallback(async (): Promise<"found" | "pending" | "error"> => {
     try {
       const response = await projectsApi.verifyEvents(projectId);
       if (response.data.status === "success" && response.data.event_count > 0) {
         setEventCount(response.data.event_count);
         setStatus("success");
-        return true;
+        return "found";
       }
-      return false;
+      return "pending";
     } catch (error) {
       console.error("Error checking for events:", error);
-      return false;
+      return "error";
     }
   }, [projectId]);
 
@@ -67,7 +67,11 @@ export function VerificationStep({
     setPollCount(0);
 
     const immediate = await checkForEvents();
-    if (immediate) return;
+    if (immediate === "found") return;
+    if (immediate === "error") {
+      if (mountedRef.current) setStatus("error");
+      return;
+    }
 
     let attempts = 0;
     const maxAttempts = 60;
@@ -77,14 +81,15 @@ export function VerificationStep({
       if (!mountedRef.current) return;
       setPollCount(attempts);
 
-      const found = await checkForEvents();
-      if (!mountedRef.current) return; // component unmounted during await
-      if (found || attempts >= maxAttempts) {
+      const result = await checkForEvents();
+      if (!mountedRef.current) return;
+      if (result !== "pending" || attempts >= maxAttempts) {
         if (pollIntervalRef.current) {
           clearInterval(pollIntervalRef.current);
           pollIntervalRef.current = null;
         }
-        if (!found) setStatus("timeout");
+        if (result === "error") setStatus("error");
+        else if (result !== "found") setStatus("timeout");
       }
     }, 2000);
   }, [checkForEvents]);
@@ -220,6 +225,20 @@ export function VerificationStep({
                 <p className="font-medium">No events received yet</p>
                 <p className="text-sm text-[hsl(var(--muted-foreground))]">
                   Make sure you&apos;ve sent a test error from your application
+                </p>
+              </div>
+              <Button variant="outline" onClick={() => startVerification()}>
+                Try Again
+              </Button>
+            </>
+          )}
+          {status === "error" && (
+            <>
+              <AlertCircle className="h-12 w-12 text-destructive" />
+              <div className="text-center">
+                <p className="font-medium">Verification check failed</p>
+                <p className="text-sm text-[hsl(var(--muted-foreground))]">
+                  Could not reach the server. Check your connection and try again.
                 </p>
               </div>
               <Button variant="outline" onClick={() => startVerification()}>

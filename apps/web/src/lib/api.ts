@@ -137,9 +137,8 @@ async function handleResponse<T>(response: Response): Promise<T> {
   }
 
   // Handle empty successful responses (e.g. 204 No Content, DELETE/logout endpoints).
-  // Callers for no-body endpoints must not access the return value — it is undefined at runtime.
   if (!text) {
-    return undefined as unknown as T;
+    return undefined as T;
   }
 
   try {
@@ -246,12 +245,12 @@ export const api = {
     return handleResponse<T>(response);
   },
 
-  async delete<T>(endpoint: string, options?: { signal?: AbortSignal }): Promise<T> {
+  async delete(endpoint: string, options?: { signal?: AbortSignal }): Promise<void> {
     const response = await fetchWithAuth(`${API_BASE_URL}${endpoint}`, {
       method: "DELETE",
       signal: options?.signal,
     });
-    return handleResponse<T>(response);
+    await handleResponse<void>(response);
   },
 };
 
@@ -683,7 +682,7 @@ export const projectsApi = {
   },
 
   async delete(id: string) {
-    return api.delete<{ data: { message: string } }>(`/api/v1/projects/${id}`);
+    return api.delete(`/api/v1/projects/${id}`);
   },
 
   async rotateApiKey(id: string) {
@@ -775,7 +774,7 @@ export const issuesApi = {
   },
 
   async delete(projectId: string, issueId: string) {
-    return api.delete<{ data: { message: string } }>(`/api/v1/projects/${projectId}/issues/${issueId}`);
+    return api.delete(`/api/v1/projects/${projectId}/issues/${issueId}`);
   },
 
   async getEvent(projectId: string, issueId: string, eventId: string) {
@@ -807,9 +806,7 @@ export const issuesApi = {
   },
 
   async deleteComment(projectId: string, issueId: string, commentId: string) {
-    return api.delete<{ data: { message: string } }>(
-      `/api/v1/projects/${projectId}/issues/${issueId}/comments/${commentId}`
-    );
+    return api.delete(`/api/v1/projects/${projectId}/issues/${issueId}/comments/${commentId}`);
   },
 };
 
@@ -1074,7 +1071,7 @@ export const alertsApi = {
   },
 
   async deleteRule(projectId: string, ruleId: string) {
-    return api.delete<{ message: string }>(`/api/v1/projects/${projectId}/alerts/${ruleId}`);
+    return api.delete(`/api/v1/projects/${projectId}/alerts/${ruleId}`);
   },
 
   async listChannels(projectId: string) {
@@ -1094,7 +1091,7 @@ export const alertsApi = {
   },
 
   async deleteChannel(projectId: string, channelId: string) {
-    return api.delete<{ message: string }>(`/api/v1/projects/${projectId}/channels/${channelId}`);
+    return api.delete(`/api/v1/projects/${projectId}/channels/${channelId}`);
   },
 
   async testChannel(projectId: string, channelId: string) {
@@ -1141,7 +1138,7 @@ export const monitorsApi = {
   },
 
   async delete(projectId: string, monitorId: string) {
-    return api.delete<{ message: string }>(`/api/v1/projects/${projectId}/monitors/${monitorId}`);
+    return api.delete(`/api/v1/projects/${projectId}/monitors/${monitorId}`);
   },
 
   async listChecks(projectId: string, monitorId: string, limit = 100) {
@@ -1175,7 +1172,7 @@ export const billingApi = {
   },
 
   async removeMember(userId: string) {
-    return api.delete<{ message: string }>(`/api/v1/organization/members/${userId}`);
+    return api.delete(`/api/v1/organization/members/${userId}`);
   },
 
   async updateMemberRole(userId: string, role: string) {
@@ -1267,7 +1264,7 @@ export const billingApi = {
   },
 
   async deletePaymentMethod(paymentMethodId: string) {
-    return api.delete<{ success: boolean }>(`/api/v1/billing/payment-methods/${paymentMethodId}`);
+    return api.delete(`/api/v1/billing/payment-methods/${paymentMethodId}`);
   },
 
   // Coupons
@@ -1481,7 +1478,7 @@ export const integrationsApi = {
     return api.get<{ data: { url: string } }>(`/api/v1/integrations/oauth/${provider}/authorize`);
   },
   async disconnect(integrationId: string) {
-    return api.delete<{ data: { message: string } }>(`/api/v1/integrations/${integrationId}`);
+    return api.delete(`/api/v1/integrations/${integrationId}`);
   },
   async listIssueLinks(projectId: string, issueId: string) {
     return api.get<{ data: IssueLinkInfo[] }>(`/api/v1/projects/${projectId}/issues/${issueId}/links`);
@@ -1494,7 +1491,7 @@ export const integrationsApi = {
     return api.post<{ data: IssueLinkInfo }>(`/api/v1/projects/${projectId}/issues/${issueId}/links`, data);
   },
   async deleteIssueLink(projectId: string, issueId: string, linkId: string) {
-    return api.delete<{ data: { message: string } }>(`/api/v1/projects/${projectId}/issues/${issueId}/links/${linkId}`);
+    return api.delete(`/api/v1/projects/${projectId}/issues/${issueId}/links/${linkId}`);
   },
 };
 

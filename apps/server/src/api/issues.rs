@@ -303,10 +303,7 @@ pub async fn get(
 
     // Verify issue belongs to project
     if issue.project_id != project_id {
-        return Err(AppError::NotFound(format!(
-            "Issue {} not found in project",
-            issue_id
-        )));
+        return Err(AppError::Forbidden("Access denied".to_string()));
     }
 
     // Get recent events
@@ -391,10 +388,7 @@ pub async fn update(
 
     // Verify issue belongs to project
     if issue.project_id != project_id {
-        return Err(AppError::NotFound(format!(
-            "Issue {} not found in project",
-            issue_id
-        )));
+        return Err(AppError::Forbidden("Access denied".to_string()));
     }
 
     // Update status if provided; use RETURNING to avoid a second round-trip
@@ -437,10 +431,7 @@ pub async fn delete(
 
     // Verify issue belongs to project
     if issue.project_id != project_id {
-        return Err(AppError::NotFound(format!(
-            "Issue {} not found in project",
-            issue_id
-        )));
+        return Err(AppError::Forbidden("Access denied".to_string()));
     }
 
     IssueRepository::delete(&state.db, &issue_id).await?;
@@ -464,10 +455,7 @@ pub async fn get_event(
         .ok_or_else(|| AppError::NotFound(format!("Issue {} not found", issue_id)))?;
 
     if issue.project_id != project_id {
-        return Err(AppError::NotFound(format!(
-            "Issue {} not found in project",
-            issue_id
-        )));
+        return Err(AppError::Forbidden("Access denied".to_string()));
     }
 
     // Get the event
@@ -538,10 +526,7 @@ pub async fn get_frequency(
         .ok_or_else(|| AppError::NotFound(format!("Issue {} not found", issue_id)))?;
 
     if issue.project_id != project_id {
-        return Err(AppError::NotFound(format!(
-            "Issue {} not found in project",
-            issue_id
-        )));
+        return Err(AppError::Forbidden("Access denied".to_string()));
     }
 
     let period = params.period.as_deref().unwrap_or("24h");
@@ -975,10 +960,7 @@ pub async fn get_impact(
         .ok_or_else(|| AppError::NotFound(format!("Issue {} not found", issue_id)))?;
 
     if issue.project_id != project_id {
-        return Err(AppError::NotFound(format!(
-            "Issue {} not found in project",
-            issue_id
-        )));
+        return Err(AppError::Forbidden("Access denied".to_string()));
     }
 
     let now = chrono::Utc::now();

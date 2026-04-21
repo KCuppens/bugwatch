@@ -132,6 +132,7 @@ export default function IssueDetailPage() {
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [eventDetail, setEventDetail] = useState<EventDetail | null>(null);
   const [eventLoading, setEventLoading] = useState(false);
+  const eventControllerRef = useRef<AbortController | null>(null);
 
   // Breadcrumb filter
   const [breadcrumbFilter, setBreadcrumbFilter] = useState<string>("all");
@@ -388,16 +389,22 @@ export default function IssueDetailPage() {
 
   async function handleEventClick(eventId: string) {
     if (!projectId) return;
+    eventControllerRef.current?.abort();
+    const controller = new AbortController();
+    eventControllerRef.current = controller;
     setSelectedEventId(eventId);
     setEventLoading(true);
     setEventDetail(null);
     try {
       const response = await issuesApi.getEvent(projectId, issueId, eventId);
+      if (controller.signal.aborted) return;
       setEventDetail(response.data);
-    } catch {
+    } catch (err) {
+      if (err instanceof Error && err.name === "AbortError") return;
+      if (controller.signal.aborted) return;
       toast.error("Failed to load event details");
     } finally {
-      setEventLoading(false);
+      if (!controller.signal.aborted) setEventLoading(false);
     }
   }
 

@@ -140,9 +140,23 @@ impl AlertingService {
                 let jitter_ms = rand::thread_rng().gen_range(0u64..=100);
                 tokio::time::sleep(std::time::Duration::from_millis(base_ms + jitter_ms)).await;
             }
-            match notification_service.send(channel, payload).await {
-                Ok(action) => return Ok(action),
-                Err(e) => {
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(30),
+                notification_service.send(channel, payload),
+            )
+            .await
+            {
+                Err(_) => {
+                    tracing::warn!(
+                        attempt = attempt + 1,
+                        rule_id = %rule_id,
+                        channel_id = %channel.id,
+                        "Alert send attempt timed out after 30s"
+                    );
+                    last_err = anyhow::anyhow!("send timed out after 30s");
+                }
+                Ok(Ok(action)) => return Ok(action),
+                Ok(Err(e)) => {
                     tracing::warn!(
                         attempt = attempt + 1,
                         rule_id = %rule_id,

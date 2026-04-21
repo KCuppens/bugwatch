@@ -191,7 +191,7 @@ pub async fn update_alert_rule(
         .ok_or_else(|| AppError::NotFound("Alert rule not found".to_string()))?;
 
     if rule.project_id != project_id {
-        return Err(AppError::NotFound("Alert rule not found".to_string()));
+        return Err(AppError::Forbidden("Access denied".to_string()));
     }
 
     let condition_json = request
@@ -249,7 +249,7 @@ pub async fn delete_alert_rule(
         .ok_or_else(|| AppError::NotFound("Alert rule not found".to_string()))?;
 
     if rule.project_id != project_id {
-        return Err(AppError::NotFound("Alert rule not found".to_string()));
+        return Err(AppError::Forbidden("Access denied".to_string()));
     }
 
     AlertRuleRepository::delete(&state.db, &alert_id)
@@ -532,7 +532,7 @@ pub async fn update_channel(
         .ok_or_else(|| AppError::NotFound("Channel not found".to_string()))?;
 
     if channel.project_id != project_id {
-        return Err(AppError::NotFound("Channel not found".to_string()));
+        return Err(AppError::Forbidden("Access denied".to_string()));
     }
 
     let config_json = request
@@ -579,7 +579,7 @@ pub async fn delete_channel(
         .ok_or_else(|| AppError::NotFound("Channel not found".to_string()))?;
 
     if channel.project_id != project_id {
-        return Err(AppError::NotFound("Channel not found".to_string()));
+        return Err(AppError::Forbidden("Access denied".to_string()));
     }
 
     NotificationChannelRepository::delete(&state.db, &channel_id)
@@ -772,7 +772,7 @@ pub async fn mute_alert_rule(
         .ok_or_else(|| AppError::NotFound("Alert rule not found".to_string()))?;
 
     if rule.project_id != project_id {
-        return Err(AppError::NotFound("Alert rule not found".to_string()));
+        return Err(AppError::Forbidden("Access denied".to_string()));
     }
 
     if request.duration_minutes <= 0 {
@@ -823,7 +823,7 @@ pub async fn unmute_alert_rule(
         .ok_or_else(|| AppError::NotFound("Alert rule not found".to_string()))?;
 
     if rule.project_id != project_id {
-        return Err(AppError::NotFound("Alert rule not found".to_string()));
+        return Err(AppError::Forbidden("Access denied".to_string()));
     }
 
     let updated = AlertRuleRepository::unmute(&state.db, &alert_id)
@@ -859,7 +859,7 @@ pub async fn test_alert_rule(
         .ok_or_else(|| AppError::NotFound("Alert rule not found".to_string()))?;
 
     if rule.project_id != project_id {
-        return Err(AppError::NotFound("Alert rule not found".to_string()));
+        return Err(AppError::Forbidden("Access denied".to_string()));
     }
 
     let channel_ids: Vec<String> = serde_json::from_str(&rule.actions).map_err(|e| {
@@ -928,7 +928,7 @@ pub async fn test_channel(
         .ok_or_else(|| AppError::NotFound("Channel not found".to_string()))?;
 
     if channel.project_id != project_id {
-        return Err(AppError::NotFound("Channel not found".to_string()));
+        return Err(AppError::Forbidden("Access denied".to_string()));
     }
 
     // Send test notification
