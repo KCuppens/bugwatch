@@ -279,7 +279,7 @@ pub enum ChannelType {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-#[serde(untagged)]
+#[serde(tag = "type", rename_all = "lowercase")]
 pub enum ChannelConfig {
     Email {
         recipients: Vec<String>,
@@ -323,11 +323,20 @@ pub struct ChannelResponse {
 
 impl From<NotificationChannel> for ChannelResponse {
     fn from(channel: NotificationChannel) -> Self {
-        let config: serde_json::Value = serde_json::from_str(&channel.config)
+        let mut config: serde_json::Value = serde_json::from_str(&channel.config)
             .inspect_err(|e| {
                 tracing::warn!(channel_id = %channel.id, error = %e, "Failed to parse channel config JSON");
             })
             .unwrap_or(serde_json::Value::Null);
+
+        // Never return raw credentials to clients
+        if let Some(obj) = config.as_object_mut() {
+            for key in &["api_key", "routing_key"] {
+                if obj.contains_key(*key) {
+                    obj.insert((*key).to_string(), serde_json::Value::String("***".to_string()));
+                }
+            }
+        }
 
         Self {
             id: channel.id,
@@ -853,7 +862,7 @@ pub async fn test_alert_rule(
     let channel_ids: Vec<String> = serde_json::from_str(&rule.actions)
         .map_err(|e| AppError::Internal(format!("Failed to parse channel IDs: {}", e)))?;
 
-    let notification_service = crate::services::notifications::NotificationService::new().await;
+    let notification_service = &state.notification_service;
 
     // Batch-fetch all channels to avoid N+1 queries
     let channels: std::collections::HashMap<String, _> =
@@ -918,7 +927,7 @@ pub async fn test_channel(
     }
 
     // Send test notification
-    let notification_service = crate::services::notifications::NotificationService::new().await;
+    let notification_service = &state.notification_service;
 
     notification_service
         .send_test(&channel)

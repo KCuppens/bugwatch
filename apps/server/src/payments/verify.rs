@@ -73,7 +73,10 @@ impl OnChainVerifier {
                     }
                 }
                 Err(e) => {
-                    tracing::warn!(tx_hash = tx_hash, "Could not verify block timestamp: {}", e);
+                    return Err(format!(
+                        "Could not verify block timestamp (replay guard unavailable): {}",
+                        e
+                    ));
                 }
             }
         }

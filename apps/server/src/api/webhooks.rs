@@ -83,34 +83,55 @@ pub async fn stripe_webhook(
         return Ok(StatusCode::OK);
     }
 
-    // Offload heavy DB processing to a background task so we return 200 immediately.
-    // Stripe retries on 5xx or timeout — an immediate 200 prevents spurious retries.
-    // Idempotency is guaranteed by the duplicate-event check above (event_id dedup).
-    let event_type_owned = event_type.to_string();
-    let event_id_owned = event_id.to_string();
-    tokio::spawn(async move {
-        let result = match event_type_owned.as_str() {
-            "checkout.session.completed" => handle_checkout_completed(&state, &payload).await,
-            "invoice.paid" => handle_invoice_paid(&state, &payload, &event_id_owned).await,
-            "invoice.payment_failed" => {
-                handle_invoice_payment_failed(&state, &payload, &event_id_owned).await
+    // invoice.paid and invoice.payment_failed are fast (single DB lookup + INSERT) and must be
+    // crash-safe: running them synchronously ensures the billing_events row is persisted before
+    // we return 200, so a server crash before the spawn completes cannot cause Stripe to re-fire
+    // an event whose duplicate check would pass again (nothing written yet).
+    match event_type {
+        "invoice.paid" => {
+            if let Err((status, msg)) = handle_invoice_paid(&state, &payload, event_id).await {
+                tracing::error!(event_id, status = %status, "invoice.paid processing failed: {}", msg);
             }
-            "customer.subscription.updated" => handle_subscription_updated(&state, &payload).await,
-            "customer.subscription.deleted" => handle_subscription_deleted(&state, &payload).await,
-            _ => {
-                warn!("Unhandled webhook event type: {}", event_type_owned);
-                Ok(())
-            }
-        };
-        if let Err((status, msg)) = result {
-            tracing::error!(
-                event_type = %event_type_owned,
-                event_id = %event_id_owned,
-                status = %status,
-                "Stripe webhook processing failed: {}", msg
-            );
         }
-    });
+        "invoice.payment_failed" => {
+            if let Err((status, msg)) =
+                handle_invoice_payment_failed(&state, &payload, event_id).await
+            {
+                tracing::error!(event_id, status = %status, "invoice.payment_failed processing failed: {}", msg);
+            }
+        }
+        _ => {
+            // Offload heavy operations (Stripe API calls, subscription updates) to background.
+            // Stripe retries on 5xx or timeout — an immediate 200 prevents spurious retries.
+            let event_type_owned = event_type.to_string();
+            let event_id_owned = event_id.to_string();
+            tokio::spawn(async move {
+                let result = match event_type_owned.as_str() {
+                    "checkout.session.completed" => {
+                        handle_checkout_completed(&state, &payload).await
+                    }
+                    "customer.subscription.updated" => {
+                        handle_subscription_updated(&state, &payload).await
+                    }
+                    "customer.subscription.deleted" => {
+                        handle_subscription_deleted(&state, &payload).await
+                    }
+                    _ => {
+                        warn!("Unhandled webhook event type: {}", event_type_owned);
+                        Ok(())
+                    }
+                };
+                if let Err((status, msg)) = result {
+                    tracing::error!(
+                        event_type = %event_type_owned,
+                        event_id = %event_id_owned,
+                        status = %status,
+                        "Stripe webhook processing failed: {}", msg
+                    );
+                }
+            });
+        }
+    }
 
     Ok(StatusCode::OK)
 }

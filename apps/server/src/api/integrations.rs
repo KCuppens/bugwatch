@@ -275,6 +275,17 @@ pub async fn oauth_callback(
         return Err(AppError::BadRequest("OAuth state expired".to_string()));
     }
 
+    // Verify the user from the HMAC-signed state still exists (may have been deleted since flow started)
+    let user_exists = crate::db::repositories::UserRepository::find_by_id(&state.db, user_id)
+        .await
+        .map_err(|e| AppError::Internal(format!("DB error checking user: {}", e)))?
+        .is_some();
+    if !user_exists {
+        return Err(AppError::BadRequest(
+            "OAuth state invalid: user not found".to_string(),
+        ));
+    }
+
     let result: Result<
         (
             String,

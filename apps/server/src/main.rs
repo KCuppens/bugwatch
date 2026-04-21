@@ -31,7 +31,7 @@ pub mod utils;
 
 pub use error::{AppError, AppResult};
 pub use rate_limit::RateLimiter;
-pub use services::{AlertingService, HealthCheckWorker, RetentionService};
+pub use services::{AlertingService, HealthCheckWorker, NotificationService, RetentionService};
 
 // BugWatch self-monitoring
 use bugwatch::{init as bugwatch_init, install_panic_hook, BugwatchClient, BugwatchOptions};
@@ -55,6 +55,7 @@ pub struct AppState {
     #[cfg(feature = "saas")]
     pub stripe: Option<billing::StripeClient>,
     pub alerting_service: Arc<AlertingService>,
+    pub notification_service: Arc<NotificationService>,
     pub bugwatch: Option<Arc<BugwatchClient>>,
     pub alert_semaphore: Arc<tokio::sync::Semaphore>,
     pub payment_store: Arc<crate::payments::store::PaymentStore>,
@@ -142,6 +143,10 @@ async fn main() -> Result<()> {
     let alerting_service = Arc::new(AlertingService::new(db.clone(), config.app_url.clone()).await);
     info!("Alerting service initialized");
 
+    // Initialize notification service (shared to avoid per-request SMTP/SES reconnection)
+    let notification_service = Arc::new(NotificationService::new().await);
+    info!("Notification service initialized");
+
     // Initialize BugWatch self-monitoring (dogfooding)
     // Uses bugwatch::init to set the global client for capture_message in error.rs
     let bugwatch = if config.is_bugwatch_enabled() {
@@ -180,6 +185,7 @@ async fn main() -> Result<()> {
         #[cfg(feature = "saas")]
         stripe,
         alerting_service: alerting_service.clone(),
+        notification_service,
         bugwatch,
         alert_semaphore: Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_ALERTS)),
         payment_store: Arc::new(crate::payments::store::PaymentStore::new(db.clone())),

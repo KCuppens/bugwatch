@@ -23,13 +23,14 @@ pub fn decode_payment_proof(header_value: &str) -> Result<PaymentProof, String> 
 }
 
 /// Verifies an X-Payment proof and, for capacity grants, increments org quota atomically.
-/// Returns the payment_type string ("feature_access" | "capacity_grant") on success.
+/// Returns the payment_type and, for capacity grants, the grant details.
+/// The grant details can be passed through Axum extensions to avoid a stale DB re-read.
 pub async fn verify_and_apply_payment(
     state: &AppState,
     proof: &PaymentProof,
     org_id: &str,
     request_path: &str,
-) -> Result<String, AppError> {
+) -> Result<(String, Option<X402CapacityGrantApplied>), AppError> {
     // 1. Atomically claim the pending nonce (sets status = 'verified', checks expiry in SQL)
     let payment = state
         .payment_store
@@ -95,7 +96,20 @@ pub async fn verify_and_apply_payment(
         ));
     }
 
-    // 3. Begin DB transaction: capacity grant + mark_consumed are atomic.
+    // 3a. Record tx_hash now (outside the transaction) so a crash between on-chain
+    // verification and the commit below leaves a 'verified' row with a non-null tx_hash —
+    // enough for operators to manually recover the grant. expire_old() will eventually
+    // clean up any stuck 'verified' rows.
+    sqlx::query(
+        "UPDATE agent_payments SET tx_hash = $1 WHERE nonce = $2 AND status = 'verified'",
+    )
+    .bind(&proof.tx_hash)
+    .bind(&payment.nonce)
+    .execute(&state.db)
+    .await
+    .map_err(|e| AppError::Internal(format!("Failed to record tx_hash: {}", e)))?;
+
+    // 3b. Begin DB transaction: capacity grant + mark_consumed are atomic.
     // If mark_consumed fails (e.g. tx_hash unique constraint), the grant rolls back too.
     let mut db_tx = state
         .db
@@ -151,7 +165,19 @@ pub async fn verify_and_apply_payment(
         ));
     }
 
-    Ok(payment.payment_type)
+    // Build grant info for the extension (lets handlers skip a DB re-read for limit checks).
+    let grant_info = if payment.payment_type == "capacity_grant" {
+        payment.grant_type.as_ref().zip(payment.grant_quantity).map(
+            |(grant_type, quantity)| X402CapacityGrantApplied {
+                grant_type: grant_type.clone(),
+                quantity,
+            },
+        )
+    } else {
+        None
+    };
+
+    Ok((payment.payment_type, grant_info))
 }
 
 /// Atomically increments org's x402 capacity column inside an existing sqlx transaction.
@@ -245,18 +271,22 @@ pub async fn x402_payment_middleware(state: AppState, req: Request<Body>, next: 
                     if let Some(org_id) = org_id {
                         match verify_and_apply_payment(&state, &proof, &org_id, &request_path).await
                         {
-                            Ok(payment_type) if payment_type == "feature_access" => {
+                            Ok((ref pt, _)) if pt == "feature_access" => {
                                 // Feature payment verified: bypass tier checks
-                                // Add a flag to request extensions so tier_guard can detect bypass
                                 let mut req = req;
                                 req.extensions_mut().insert(X402PaymentVerified);
                                 return next.run(req).await;
                             }
-                            Ok(ref pt) if pt == "capacity_grant" => {
-                                // Capacity grant applied: fall through to handler normally
-                                // (the limit check will now pass)
+                            Ok((ref pt, grant_info)) if pt == "capacity_grant" => {
+                                // Capacity grant applied: attach grant info so the handler can
+                                // skip a stale DB re-read for limit checks (H29-B).
+                                let mut req = req;
+                                if let Some(info) = grant_info {
+                                    req.extensions_mut().insert(info);
+                                }
+                                return next.run(req).await;
                             }
-                            Ok(ref pt) => {
+                            Ok((ref pt, _)) => {
                                 tracing::warn!(
                                     payment_type = %pt,
                                     "x402 payment verified with unrecognized payment_type; falling through to handler"
@@ -278,6 +308,14 @@ pub async fn x402_payment_middleware(state: AppState, req: Request<Body>, next: 
 /// Marker type inserted into request extensions when a valid feature_access payment was verified
 #[derive(Clone)]
 pub struct X402PaymentVerified;
+
+/// Inserted into request extensions when a capacity_grant payment was verified and applied.
+/// Handlers can read this to avoid a second DB round-trip to check the newly-granted capacity.
+#[derive(Clone)]
+pub struct X402CapacityGrantApplied {
+    pub grant_type: String,
+    pub quantity: i64,
+}
 
 /// Builds a 402 response body enriched with an x402 payment challenge.
 /// Used by API handlers when returning feature-gated 402 errors.
