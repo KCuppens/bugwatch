@@ -241,6 +241,33 @@ pub async fn ingest(
                 "Too many stack frames (max 200)".to_string(),
             ));
         }
+        if exc.exception_type.len() > 256 {
+            return Err(AppError::Validation(
+                "exception type too long (max 256 bytes)".to_string(),
+            ));
+        }
+        if exc.value.len() > 8192 {
+            return Err(AppError::Validation(
+                "exception value too long (max 8192 bytes)".to_string(),
+            ));
+        }
+        for frame in &exc.stacktrace {
+            if frame.filename.len() > 512 || frame.function.len() > 512 {
+                return Err(AppError::Validation(
+                    "Stack frame filename/function too long (max 512 bytes)".to_string(),
+                ));
+            }
+            if frame.abs_path.as_deref().map(|s| s.len()).unwrap_or(0) > 1024 {
+                return Err(AppError::Validation(
+                    "Stack frame abs_path too long (max 1024 bytes)".to_string(),
+                ));
+            }
+            if frame.context_line.as_deref().map(|s| s.len()).unwrap_or(0) > 1024 {
+                return Err(AppError::Validation(
+                    "Stack frame context_line too long (max 1024 bytes)".to_string(),
+                ));
+            }
+        }
     }
     if let Some(ref breadcrumbs) = event.breadcrumbs {
         if breadcrumbs.len() > 100 {
@@ -279,6 +306,19 @@ pub async fn ingest(
         if extra_size > 65_536 {
             return Err(AppError::Validation(
                 "extra field too large (max 64 KB)".to_string(),
+            ));
+        }
+    }
+
+    // Validate user context field lengths.
+    if let Some(ref u) = event.user {
+        if u.id.as_deref().map(|s| s.len()).unwrap_or(0) > 256
+            || u.email.as_deref().map(|s| s.len()).unwrap_or(0) > 256
+            || u.username.as_deref().map(|s| s.len()).unwrap_or(0) > 256
+            || u.ip_address.as_deref().map(|s| s.len()).unwrap_or(0) > 64
+        {
+            return Err(AppError::Validation(
+                "user context fields too long".to_string(),
             ));
         }
     }
@@ -502,10 +542,14 @@ pub fn extract_api_key(headers: &HeaderMap) -> AppResult<String> {
     // Support X-API-Key header (used by @bugwatch/core SDK)
     // Note: HeaderMap normalizes header names to lowercase
     if let Some(api_key) = headers.get("x-api-key") {
-        return api_key
+        let key = api_key
             .to_str()
             .map(|s| s.to_string())
-            .map_err(|_| AppError::Unauthorized("Invalid X-API-Key header".to_string()));
+            .map_err(|_| AppError::Unauthorized("Invalid X-API-Key header".to_string()))?;
+        if key.len() > 512 {
+            return Err(AppError::Unauthorized("API key too long".to_string()));
+        }
+        return Ok(key);
     }
 
     // Fall back to Authorization: Bearer <key>
@@ -521,7 +565,11 @@ pub fn extract_api_key(headers: &HeaderMap) -> AppResult<String> {
         ));
     }
 
-    Ok(auth_header.trim_start_matches("Bearer ").to_string())
+    let key = auth_header.trim_start_matches("Bearer ").to_string();
+    if key.len() > 512 {
+        return Err(AppError::Unauthorized("API key too long".to_string()));
+    }
+    Ok(key)
 }
 
 /// SHA-256 fingerprint (16 hex chars) for non-exception events.

@@ -340,6 +340,7 @@ export interface Organization {
   tier: "free" | "pro" | "team" | "enterprise";
   seats: number;
   subscription_status: string;
+  billing_interval: string | null;
   current_period_end: string | null;
   cancel_at_period_end: boolean;
 }

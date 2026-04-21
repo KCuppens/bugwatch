@@ -154,11 +154,15 @@ async fn run_migrations(pool: &PgPool) -> Result<()> {
                 .unwrap_or(false);
 
         if !already_applied {
-            sqlx::raw_sql(sql).execute(pool).await?;
+            // Atomic: SQL + migration record in one transaction so a crash between
+            // the two steps cannot cause the migration to re-run on the next start.
+            let mut tx = pool.begin().await?;
+            sqlx::raw_sql(sql).execute(&mut *tx).await?;
             sqlx::query("INSERT INTO _migrations (name) VALUES ($1)")
                 .bind(name)
-                .execute(pool)
+                .execute(&mut *tx)
                 .await?;
+            tx.commit().await?;
             info!("Migration {} completed", name);
         } else {
             info!("Migration {} skipped (already applied)", name);

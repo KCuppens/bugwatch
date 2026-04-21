@@ -32,6 +32,13 @@ fn is_ssrf_risk(ip: std::net::IpAddr) -> bool {
             if v6.is_loopback() || v6.is_unspecified() {
                 return true;
             }
+            // IPv4-mapped IPv6 (::ffff:x.x.x.x) — check embedded IPv4 address
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                if v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_unspecified()
+                {
+                    return true;
+                }
+            }
             let o = v6.octets();
             // fe80::/10 link-local
             let is_link_local = o[0] == 0xfe && (o[1] & 0xc0) == 0x80;
@@ -676,36 +683,24 @@ impl NotificationService {
             compute_hmac_signature(&payload_json, secret)
         });
 
-        let mut last_err = anyhow::anyhow!("Webhook failed after retries");
-        let mut response_body = String::new();
-        for attempt in 0u32..3 {
-            let mut req = pinned_client.post(&config.url).json(payload);
-            if let Some(ref sig) = signature {
-                req = req.header("X-Bugwatch-Signature", sig.as_str());
-            }
-            match req.send().await {
-                Ok(resp) => {
-                    let status = resp.status();
-                    let body = resp.text().await.unwrap_or_default();
-                    if status.is_success() {
-                        response_body = body;
-                        break;
-                    }
-                    last_err = anyhow!("Webhook failed: {} - {}", status, body);
-                    if status.as_u16() < 500 && status.as_u16() != 429 {
-                        return Err(last_err); // don't retry non-transient 4xx
-                    }
-                }
-                Err(e) => {
-                    last_err = anyhow::Error::from(e);
-                }
-            }
-            if attempt < 2 {
-                tokio::time::sleep(std::time::Duration::from_millis(500 * 2u64.pow(attempt))).await;
-            } else {
-                return Err(last_err);
-            }
+        // Single attempt — outer send_with_retry in alerting.rs handles up to 3
+        // retries with jitter. An inner retry loop here would produce up to 9
+        // total requests per alert to an already-failing endpoint.
+        let mut req = pinned_client.post(&config.url).json(payload);
+        if let Some(ref sig) = signature {
+            req = req.header("X-Bugwatch-Signature", sig.as_str());
         }
+        let response_body = match req.send().await {
+            Ok(resp) => {
+                let status = resp.status();
+                let body = resp.text().await.unwrap_or_default();
+                if !status.is_success() {
+                    return Err(anyhow!("Webhook failed: {} - {}", status, body));
+                }
+                body
+            }
+            Err(e) => return Err(anyhow::Error::from(e)),
+        };
 
         info!("Webhook sent to {}", config.url);
 
@@ -739,9 +734,37 @@ impl NotificationService {
             anyhow!("Invalid Slack config: {}", e)
         })?;
 
+        // SSRF guard — validate Slack webhook URL resolves to a safe address.
+        // Incoming webhook URLs are typically hooks.slack.com, but we validate
+        // all resolutions to catch misconfigured or crafted URLs.
+        {
+            let parsed = url::Url::parse(&config.webhook_url)
+                .map_err(|_| anyhow!("Slack webhook URL is invalid"))?;
+            if !matches!(parsed.scheme(), "http" | "https") {
+                return Err(anyhow!("Slack webhook URL must use http or https"));
+            }
+            let host = parsed
+                .host_str()
+                .ok_or_else(|| anyhow!("Slack webhook URL has no host"))?
+                .to_string();
+            let port = parsed.port_or_known_default().unwrap_or(443);
+            let addrs: Vec<std::net::SocketAddr> =
+                tokio::net::lookup_host(format!("{}:{}", host, port))
+                    .await
+                    .map_err(|e| anyhow!("Failed to resolve Slack webhook host: {}", e))?
+                    .collect();
+            for addr in &addrs {
+                if is_ssrf_risk(addr.ip()) {
+                    return Err(anyhow!(
+                        "Slack webhook URL resolves to a private or internal address"
+                    ));
+                }
+            }
+        }
+
         info!(
-            "Slack webhook URL configured: {}...",
-            &config.webhook_url.chars().take(50).collect::<String>()
+            "Slack webhook URL host: {}",
+            config.webhook_url.split('/').nth(2).unwrap_or("unknown")
         );
 
         // Get template (use default if not configured)
@@ -833,17 +856,26 @@ impl NotificationService {
                 match action_config.action_type {
                     SlackActionType::ViewIssue => {
                         if let Some(url) = &payload.url {
-                            links.push(format!("<{}|{}>", url, action_config.label));
+                            let safe_url = url.replace('>', "%3E").replace('|', "%7C");
+                            links.push(format!("<{}|{}>", safe_url, action_config.label));
                         }
                     }
                     SlackActionType::Resolve => {
                         if let Some(url) = &payload.url {
-                            links.push(format!("<{}?action=resolve|{}>", url, action_config.label));
+                            let safe_url = url.replace('>', "%3E").replace('|', "%7C");
+                            links.push(format!(
+                                "<{}?action=resolve|{}>",
+                                safe_url, action_config.label
+                            ));
                         }
                     }
                     SlackActionType::Mute => {
                         if let Some(url) = &payload.url {
-                            links.push(format!("<{}?action=mute|{}>", url, action_config.label));
+                            let safe_url = url.replace('>', "%3E").replace('|', "%7C");
+                            links.push(format!(
+                                "<{}?action=mute|{}>",
+                                safe_url, action_config.label
+                            ));
                         }
                     }
                 }

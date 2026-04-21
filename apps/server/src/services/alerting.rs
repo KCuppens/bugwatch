@@ -551,6 +551,20 @@ impl AlertingService {
     ) -> Result<()> {
         let rule_id = &rule.id;
 
+        // Check mute status before claiming the cooldown slot so muted alerts
+        // do not consume the cooldown window.
+        if let Some(muted_until) = rule.muted_until {
+            if muted_until > chrono::Utc::now() {
+                info!(
+                    rule_id = %rule_id,
+                    "Alert rule '{}' is muted until {}, skipping",
+                    rule.name,
+                    muted_until
+                );
+                return Ok(());
+            }
+        }
+
         // Atomic cooldown gate — must run before any per-channel work.
         if let Some(minutes) = cooldown_minutes {
             match AlertLogRepository::try_claim_cooldown(
@@ -581,19 +595,6 @@ impl AlertingService {
                     );
                     return Ok(());
                 }
-            }
-        }
-
-        // Check mute status using the already-loaded rule — no extra DB query.
-        if let Some(muted_until) = rule.muted_until {
-            if muted_until > chrono::Utc::now() {
-                info!(
-                    rule_id = %rule_id,
-                    "Alert rule '{}' is muted until {}, skipping",
-                    rule.name,
-                    muted_until
-                );
-                return Ok(());
             }
         }
 

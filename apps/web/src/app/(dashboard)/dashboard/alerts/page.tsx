@@ -307,7 +307,12 @@ export default function AlertsPage() {
   function buildChannelConfig() {
     switch (channelForm.type) {
       case "email":
-        return { recipients: channelForm.emails.split(",").map((e) => e.trim()) };
+        return {
+          recipients: channelForm.emails
+            .split(",")
+            .map((e) => e.trim())
+            .filter(Boolean),
+        };
       case "webhook":
         return { url: channelForm.webhookUrl };
       case "slack":
@@ -315,6 +320,8 @@ export default function AlertsPage() {
           webhook_url: channelForm.slackUrl,
           message_template: slackTemplate,
         };
+      default:
+        throw new Error(`Unknown channel type: ${channelForm.type}`);
     }
   }
 

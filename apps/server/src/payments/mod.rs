@@ -100,14 +100,12 @@ pub async fn verify_and_apply_payment(
     // verification and the commit below leaves a 'verified' row with a non-null tx_hash —
     // enough for operators to manually recover the grant. expire_old() will eventually
     // clean up any stuck 'verified' rows.
-    sqlx::query(
-        "UPDATE agent_payments SET tx_hash = $1 WHERE nonce = $2 AND status = 'verified'",
-    )
-    .bind(&proof.tx_hash)
-    .bind(&payment.nonce)
-    .execute(&state.db)
-    .await
-    .map_err(|e| AppError::Internal(format!("Failed to record tx_hash: {}", e)))?;
+    sqlx::query("UPDATE agent_payments SET tx_hash = $1 WHERE nonce = $2 AND status = 'verified'")
+        .bind(&proof.tx_hash)
+        .bind(&payment.nonce)
+        .execute(&state.db)
+        .await
+        .map_err(|e| AppError::Internal(format!("Failed to record tx_hash: {}", e)))?;
 
     // 3b. Begin DB transaction: capacity grant + mark_consumed are atomic.
     // If mark_consumed fails (e.g. tx_hash unique constraint), the grant rolls back too.
@@ -167,12 +165,14 @@ pub async fn verify_and_apply_payment(
 
     // Build grant info for the extension (lets handlers skip a DB re-read for limit checks).
     let grant_info = if payment.payment_type == "capacity_grant" {
-        payment.grant_type.as_ref().zip(payment.grant_quantity).map(
-            |(grant_type, quantity)| X402CapacityGrantApplied {
+        payment
+            .grant_type
+            .as_ref()
+            .zip(payment.grant_quantity)
+            .map(|(grant_type, quantity)| X402CapacityGrantApplied {
                 grant_type: grant_type.clone(),
                 quantity,
-            },
-        )
+            })
     } else {
         None
     };

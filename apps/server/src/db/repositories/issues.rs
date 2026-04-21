@@ -311,6 +311,14 @@ fn build_filter_clauses(
         ("level", &filters.level),
         ("environment", &filters.environment),
     ] {
+        // Allowlist column name — prevents accidental SQL injection if the loop is
+        // ever refactored to use caller-supplied field names.
+        let safe_col = match field {
+            "status" => "status",
+            "level" => "level",
+            "environment" => "environment",
+            _ => continue,
+        };
         if let Some(vals) = values {
             if !vals.is_empty() {
                 let placeholders: Vec<String> = vals
@@ -318,7 +326,11 @@ fn build_filter_clauses(
                     .enumerate()
                     .map(|(i, _)| format!("${}", *param_idx + i))
                     .collect();
-                query.push_str(&format!(" AND {} IN ({})", field, placeholders.join(",")));
+                query.push_str(&format!(
+                    " AND {} IN ({})",
+                    safe_col,
+                    placeholders.join(",")
+                ));
                 params.extend(vals.clone());
                 *param_idx += vals.len();
             }

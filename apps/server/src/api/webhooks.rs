@@ -110,13 +110,13 @@ pub async fn stripe_webhook(
             let handle = tokio::spawn(async move {
                 let result = match event_type_owned.as_str() {
                     "checkout.session.completed" => {
-                        handle_checkout_completed(&state, &payload).await
+                        handle_checkout_completed(&state, &payload, &event_id_owned).await
                     }
                     "customer.subscription.updated" => {
-                        handle_subscription_updated(&state, &payload).await
+                        handle_subscription_updated(&state, &payload, &event_id_owned).await
                     }
                     "customer.subscription.deleted" => {
-                        handle_subscription_deleted(&state, &payload).await
+                        handle_subscription_deleted(&state, &payload, &event_id_owned).await
                     }
                     _ => {
                         warn!("Unhandled webhook event type: {}", event_type_owned);
@@ -203,6 +203,7 @@ fn verify_stripe_signature(payload: &[u8], signature_header: &str, secret: &str)
 async fn handle_checkout_completed(
     state: &AppState,
     payload: &serde_json::Value,
+    event_id: &str,
 ) -> Result<(), (StatusCode, String)> {
     let session = &payload["data"]["object"];
     if session.is_null() {
@@ -230,8 +231,12 @@ async fn handle_checkout_completed(
     if let Some(sub_id) = subscription_id {
         // Fetch subscription details from Stripe to get tier and seats
         if let Some(_stripe) = &state.stripe {
+            let stripe_key = state.config.stripe_secret_key.as_ref().ok_or((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Stripe secret key not configured".to_string(),
+            ))?;
             let subscription = stripe::Subscription::retrieve(
-                &stripe::Client::new(state.config.stripe_secret_key.clone().unwrap_or_default()),
+                &stripe::Client::new(stripe_key.clone()),
                 &sub_id.parse().map_err(|e| {
                     (
                         StatusCode::INTERNAL_SERVER_ERROR,
@@ -288,6 +293,21 @@ async fn handle_checkout_completed(
                 "Subscription created for org {}: tier={}, seats={}",
                 org.id, tier, seats
             );
+
+            // Record idempotency so Stripe retries are deduplicated.
+            if let Err(e) = BillingEventRepository::create(
+                &state.db,
+                &org.id,
+                "checkout.session.completed",
+                Some(event_id),
+                None,
+                None,
+                None,
+            )
+            .await
+            {
+                tracing::error!(org_id = %org.id, event_id = %event_id, "Failed to record billing event: {}", e);
+            }
         }
     }
 
@@ -419,6 +439,7 @@ async fn handle_invoice_payment_failed(
 async fn handle_subscription_updated(
     state: &AppState,
     payload: &serde_json::Value,
+    event_id: &str,
 ) -> Result<(), (StatusCode, String)> {
     let subscription = &payload["data"]["object"];
     if subscription.is_null() {
@@ -477,6 +498,11 @@ async fn handle_subscription_updated(
                     .unwrap_or(""),
             );
 
+            // Extract billing interval from the subscription payload
+            let interval = subscription["items"]["data"][0]["price"]["recurring"]["interval"]
+                .as_str()
+                .map(|s| if s == "year" { "annual" } else { "monthly" }.to_string());
+
             OrganizationRepository::update_subscription(
                 &state.db,
                 &org.id,
@@ -484,13 +510,28 @@ async fn handle_subscription_updated(
                 seats,
                 Some(subscription_id),
                 status,
-                None,
+                interval.as_deref(),
                 period_start,
                 period_end,
                 cancel_at_period_end,
             )
             .await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+            // Record idempotency so Stripe retries are deduplicated.
+            if let Err(e) = BillingEventRepository::create(
+                &state.db,
+                &org.id,
+                "customer.subscription.updated",
+                Some(event_id),
+                None,
+                None,
+                None,
+            )
+            .await
+            {
+                tracing::error!(org_id = %org.id, event_id = %event_id, "Failed to record billing event: {}", e);
+            }
 
             info!(
                 "Subscription updated for org {}: status={}, seats={}, cancel_at_period_end={}",
@@ -506,6 +547,7 @@ async fn handle_subscription_updated(
 async fn handle_subscription_deleted(
     state: &AppState,
     payload: &serde_json::Value,
+    event_id: &str,
 ) -> Result<(), (StatusCode, String)> {
     let subscription = &payload["data"]["object"];
     if subscription.is_null() {
@@ -550,6 +592,21 @@ async fn handle_subscription_deleted(
             )
             .await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+            // Record idempotency so Stripe retries are deduplicated.
+            if let Err(e) = BillingEventRepository::create(
+                &state.db,
+                &org.id,
+                "customer.subscription.deleted",
+                Some(event_id),
+                None,
+                None,
+                None,
+            )
+            .await
+            {
+                tracing::error!(org_id = %org.id, event_id = %event_id, "Failed to record billing event: {}", e);
+            }
 
             info!(
                 "Subscription canceled for org {}, downgraded to free",

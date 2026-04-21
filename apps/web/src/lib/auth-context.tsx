@@ -87,21 +87,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, [fetchCurrentUser]);
 
+  // Stable boolean — dep array uses this instead of `!!user` inline to satisfy
+  // exhaustive-deps while preventing the interval from resetting on every
+  // refreshUser() call that returns a new object reference.
+  const isAuthenticated = !!user;
+
   // Set up token refresh interval.
   // If refresh fails, refreshAccessToken calls setUser(null), which triggers the
   // effect cleanup (clearInterval) — so the interval self-cancels on first failure.
   // No explicit backoff needed: a failed refresh means the session is gone.
   useEffect(() => {
-    if (!user) return;
+    if (!isAuthenticated) return;
 
     const interval = setInterval(() => {
       void refreshAccessToken().catch((e) => console.debug("[Auth] Token refresh failed:", e));
     }, TOKEN_REFRESH_INTERVAL);
 
     return () => clearInterval(interval);
-    // Depend on !!user (boolean) not the full user object — prevents resetting the
-    // interval timer when refreshUser() returns a new object reference with the same data.
-  }, [!!user, refreshAccessToken]);
+  }, [isAuthenticated, refreshAccessToken]);
 
   // When fetchWithAuth gets a persistent 401 (refresh failed — session fully
   // expired), it dispatches this event so the auth context can clear local state

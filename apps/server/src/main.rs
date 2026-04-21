@@ -415,7 +415,10 @@ async fn main() -> Result<()> {
         shutdown_signal().await;
         // Allow in-flight requests (e.g. payment verifications with RPC retries) to
         // finish before the process exits. Configurable via SHUTDOWN_GRACE_SECS.
-        info!("Graceful shutdown: waiting up to {}s for in-flight requests", grace_secs);
+        info!(
+            "Graceful shutdown: waiting up to {}s for in-flight requests",
+            grace_secs
+        );
         tokio::time::sleep(std::time::Duration::from_secs(grace_secs)).await;
     })
     .await?;
@@ -598,8 +601,26 @@ async fn request_id_middleware(
     response
 }
 
-async fn health_check(State(state): State<AppState>) -> axum::response::Response {
+async fn health_check(
+    State(state): State<AppState>,
+    axum::extract::ConnectInfo(peer_addr): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    axum::extract::RawQuery(query): axum::extract::RawQuery,
+    headers: axum::http::HeaderMap,
+) -> axum::response::Response {
     use axum::response::IntoResponse;
+    let _ = query; // unused — needed to keep the extractor list uniform
+
+    // Rate limit /health to prevent it from being used as a free DB-query DoS vector.
+    let ip = headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.split(',').next())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|| peer_addr.ip().to_string());
+    let check = state.rate_limiter.check(&format!("health:{}", ip), 60);
+    if !check.allowed {
+        return (StatusCode::TOO_MANY_REQUESTS, "Rate limit exceeded").into_response();
+    }
 
     let db_ok = sqlx::query("SELECT 1").execute(&state.db).await.is_ok();
     let status = if db_ok { "healthy" } else { "unhealthy" };

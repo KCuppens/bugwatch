@@ -54,8 +54,8 @@ export function MuteScheduler({ ruleId, projectId, isMuted, mutedUntil, onMuteCh
 
   const handleCustomMute = () => {
     const mins = parseInt(customMinutes, 10);
-    if (isNaN(mins) || mins <= 0) {
-      toast.error("Enter a valid number of minutes");
+    if (isNaN(mins) || mins <= 0 || mins > 10080) {
+      toast.error("Enter a value between 1 and 10080 minutes (7 days)");
       return;
     }
     handleMute(mins);

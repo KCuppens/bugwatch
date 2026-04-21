@@ -362,6 +362,20 @@ pub async fn update(
 
     // Update platform/framework if provided
     if req.platform.is_some() || req.framework.is_some() {
+        if let Some(ref p) = req.platform {
+            if p.chars().count() > 50 {
+                return Err(AppError::Validation(
+                    "Platform too long (max 50 characters)".to_string(),
+                ));
+            }
+        }
+        if let Some(ref f) = req.framework {
+            if f.chars().count() > 50 {
+                return Err(AppError::Validation(
+                    "Framework too long (max 50 characters)".to_string(),
+                ));
+            }
+        }
         let platform = req.platform.as_deref().or(project.platform.as_deref());
         let framework = req.framework.as_deref().or(project.framework.as_deref());
         ProjectRepository::update_sdk(&state.db, &id, platform, framework).await?;

@@ -23,6 +23,20 @@ use crate::{
 };
 
 // ============================================================================
+// Helpers
+// ============================================================================
+
+/// Map any internal/DB error to a sanitized HTTP 500 response, logging the raw
+/// detail server-side so it never leaks to the caller.
+fn db_err(e: impl std::fmt::Display) -> (StatusCode, String) {
+    tracing::error!("Billing internal error: {}", e);
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "A server error occurred".to_string(),
+    )
+}
+
+// ============================================================================
 // Response Types
 // ============================================================================
 
@@ -131,12 +145,12 @@ pub async fn get_organization(
 ) -> Result<Json<OrganizationResponse>, (StatusCode, String)> {
     let org = OrganizationRepository::find_by_user(&state.db, &user.id)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(db_err)?
         .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
 
     let members_count = OrganizationMemberRepository::count(&state.db, &org.id)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(db_err)?;
 
     Ok(Json(OrganizationResponse {
         is_owner: org.owner_id == user.id,
@@ -173,7 +187,7 @@ pub async fn create_organization(
     // Atomic create: INSERT WHERE NOT EXISTS prevents TOCTOU if two requests race
     let org = OrganizationRepository::create_if_owner_not_exists(&state.db, &user.id, &name, &slug)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(db_err)?
         .ok_or((
             StatusCode::CONFLICT,
             "User already has an organization".to_string(),
@@ -196,7 +210,7 @@ pub async fn update_organization(
 ) -> Result<Json<OrganizationResponse>, (StatusCode, String)> {
     let org = OrganizationRepository::find_by_user(&state.db, &user.id)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(db_err)?
         .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
 
     // Only owner can update
@@ -217,11 +231,11 @@ pub async fn update_organization(
 
     let updated = OrganizationRepository::update_name(&state.db, &org.id, &name)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(db_err)?;
 
     let members_count = OrganizationMemberRepository::count(&state.db, &org.id)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(db_err)?;
 
     Ok(Json(OrganizationResponse {
         is_owner: true,
@@ -241,17 +255,17 @@ pub async fn list_members(
 ) -> Result<Json<Vec<MemberResponse>>, (StatusCode, String)> {
     let org = OrganizationRepository::find_by_user(&state.db, &user.id)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(db_err)?
         .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
 
     let members = OrganizationMemberRepository::list(&state.db, &org.id)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(db_err)?;
 
     let user_ids: Vec<String> = members.iter().map(|m| m.user_id.clone()).collect();
     let users = UserRepository::find_by_ids(&state.db, &user_ids)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(db_err)?;
 
     let user_map: std::collections::HashMap<&str, &crate::db::models::User> =
         users.iter().map(|u| (u.id.as_str(), u)).collect();
@@ -282,14 +296,14 @@ pub async fn add_member(
 ) -> Result<Json<MemberResponse>, (StatusCode, String)> {
     let org = OrganizationRepository::find_by_user(&state.db, &user.id)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(db_err)?
         .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
 
     // Only owner/admin can add members
     let user_member =
         OrganizationMemberRepository::find_by_user_in_org(&state.db, &org.id, &user.id)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            .map_err(db_err)?;
 
     let can_manage =
         org.owner_id == user.id || user_member.map(|m| m.role == "admin").unwrap_or(false);
@@ -304,13 +318,13 @@ pub async fn add_member(
     // Find user by email
     let target_user = UserRepository::find_by_email(&state.db, &req.email)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(db_err)?
         .ok_or((StatusCode::NOT_FOUND, "User not found".to_string()))?;
 
     // Check if already a member
     let is_member = OrganizationMemberRepository::is_member(&state.db, &org.id, &target_user.id)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(db_err)?;
 
     if is_member {
         return Err((StatusCode::CONFLICT, "User is already a member".to_string()));
@@ -334,7 +348,7 @@ pub async fn add_member(
         org.seats,
     )
     .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(db_err)?
     .ok_or((
         StatusCode::PAYMENT_REQUIRED,
         "Seat limit reached. Please upgrade your subscription.".to_string(),
@@ -363,7 +377,7 @@ pub async fn remove_member(
 ) -> Result<StatusCode, (StatusCode, String)> {
     let org = OrganizationRepository::find_by_user(&state.db, &user.id)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(db_err)?
         .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
 
     // Cannot remove owner
@@ -378,7 +392,7 @@ pub async fn remove_member(
     let caller_member =
         OrganizationMemberRepository::find_by_user_in_org(&state.db, &org.id, &user.id)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            .map_err(db_err)?;
     let can_manage =
         org.owner_id == user.id || caller_member.map(|m| m.role == "admin").unwrap_or(false);
 
@@ -391,7 +405,7 @@ pub async fn remove_member(
 
     OrganizationMemberRepository::remove(&state.db, &org.id, &member_user_id)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(db_err)?;
 
     tracing::info!(
         org_id = %org.id,
@@ -412,7 +426,7 @@ pub async fn update_member_role(
 ) -> Result<Json<MemberResponse>, (StatusCode, String)> {
     let org = OrganizationRepository::find_by_user(&state.db, &user.id)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(db_err)?
         .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
 
     // Only owner can change roles
@@ -440,18 +454,18 @@ pub async fn update_member_role(
 
     OrganizationMemberRepository::update_role(&state.db, &org.id, &member_user_id, &req.role)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(db_err)?;
 
     // Fetch the updated member row via point-lookup (avoids full list scan)
     let member =
         OrganizationMemberRepository::find_by_user_in_org(&state.db, &org.id, &member_user_id)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .map_err(db_err)?
             .ok_or((StatusCode::NOT_FOUND, "Member not found".to_string()))?;
 
     let target_user = UserRepository::find_by_id(&state.db, &member_user_id)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(db_err)?
         .ok_or((StatusCode::NOT_FOUND, "User not found".to_string()))?;
 
     tracing::info!(
@@ -483,7 +497,7 @@ mod saas_billing {
     ) -> Result<Json<SubscriptionResponse>, (StatusCode, String)> {
         let org = OrganizationRepository::find_by_user(&state.db, &user.id)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .map_err(db_err)?
             .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
 
         Ok(Json(SubscriptionResponse {
@@ -504,10 +518,10 @@ mod saas_billing {
         State(state): State<AppState>,
         Json(req): Json<CreateCheckoutRequest>,
     ) -> Result<Json<CheckoutResponse>, (StatusCode, String)> {
-        if !matches!(req.tier.as_str(), "pro" | "team") {
+        if !matches!(req.tier.as_str(), "pro" | "team" | "enterprise") {
             return Err((
                 StatusCode::BAD_REQUEST,
-                "Invalid tier. Must be 'pro' or 'team'.".to_string(),
+                "Invalid tier. Must be 'pro', 'team', or 'enterprise'.".to_string(),
             ));
         }
 
@@ -523,7 +537,7 @@ mod saas_billing {
                 // Auto-create organization for user
                 let u = UserRepository::find_by_id(&state.db, &user.id)
                     .await
-                    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+                    .map_err(db_err)?
                     .ok_or((StatusCode::NOT_FOUND, "User not found".to_string()))?;
 
                 let org_name = u
@@ -541,7 +555,7 @@ mod saas_billing {
                     &slug,
                 )
                 .await
-                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+                .map_err(db_err)?
                 .ok_or_else(|| {
                     // Race: another concurrent request already created the org; re-fetch it
                     // The outer match will hit Ok(Some(org)) on retry; return a retriable error.
@@ -553,7 +567,7 @@ mod saas_billing {
 
                 OrganizationMemberRepository::add(&state.db, &new_org.id, &user.id, "owner")
                     .await
-                    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+                    .map_err(db_err)?;
 
                 new_org
             }
@@ -567,13 +581,13 @@ mod saas_billing {
                 // Get user email
                 let u = UserRepository::find_by_id(&state.db, &user.id)
                     .await
-                    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+                    .map_err(db_err)?
                     .ok_or((StatusCode::NOT_FOUND, "User not found".to_string()))?;
 
                 let customer = stripe
                     .create_customer(&org.id, &u.email, &org.name)
                     .await
-                    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+                    .map_err(db_err)?;
 
                 // Save customer ID — if this DB write fails the Stripe customer is orphaned;
                 // log the ID prominently so it can be manually reconciled.
@@ -597,7 +611,7 @@ mod saas_billing {
             }
         };
 
-        let seats = req.seats.unwrap_or(1).max(1) as i64;
+        let seats = req.seats.unwrap_or(1).min(10_000).max(1) as i64;
         let annual = req.annual.unwrap_or(false);
 
         // Validate redirect URLs — require exact origin prefix with trailing slash to prevent
@@ -673,7 +687,7 @@ mod saas_billing {
         // Get user's organization
         let org = OrganizationRepository::find_by_user(&state.db, &user.id)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .map_err(db_err)?
             .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
 
         // Retrieve the checkout session from Stripe
@@ -927,7 +941,7 @@ mod saas_billing {
 
         let org = OrganizationRepository::find_by_user(&state.db, &user.id)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .map_err(db_err)?
             .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
 
         let customer_id = org.stripe_customer_id.ok_or((
@@ -970,7 +984,7 @@ mod saas_billing {
 
         let org = OrganizationRepository::find_by_user(&state.db, &user.id)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .map_err(db_err)?
             .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
 
         // Only owner can cancel
@@ -1004,6 +1018,34 @@ mod saas_billing {
                 )
             })?;
 
+        // Update local DB immediately so the dashboard reflects cancellation before
+        // the Stripe webhook fires. The webhook is still the authoritative safety net.
+        let (new_status, cancel_flag) = if immediately {
+            ("canceled", false)
+        } else {
+            ("active", true) // active but scheduled to cancel at period end
+        };
+        if let Err(e) = OrganizationRepository::update_subscription(
+            &state.db,
+            &org.id,
+            &org.tier,
+            org.seats,
+            Some(&subscription_id),
+            new_status,
+            org.billing_interval.as_deref(),
+            org.current_period_start,
+            org.current_period_end,
+            cancel_flag,
+        )
+        .await
+        {
+            tracing::error!(
+                org_id = %org.id,
+                "cancel_subscription: Stripe succeeded but local DB update failed — webhook will correct: {}",
+                e
+            );
+        }
+
         tracing::info!(
             org_id = %org.id,
             subscription_id = %subscription_id,
@@ -1025,7 +1067,7 @@ mod saas_billing {
     ) -> Result<Json<UsageResponse>, (StatusCode, String)> {
         let org = OrganizationRepository::find_by_user(&state.db, &user.id)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .map_err(db_err)?
             .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
 
         // Determine current period (from org or default to current month)
@@ -1061,7 +1103,7 @@ mod saas_billing {
 
         let usage = UsageRepository::list_current(&state.db, &org.id, period_start)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            .map_err(db_err)?;
 
         Ok(Json(UsageResponse {
             usage,
@@ -1103,10 +1145,10 @@ mod saas_billing {
         State(state): State<AppState>,
         Json(req): Json<ChangePlanRequest>,
     ) -> Result<Json<ChangePlanResponse>, (StatusCode, String)> {
-        if !matches!(req.tier.as_str(), "pro" | "team") {
+        if !matches!(req.tier.as_str(), "pro" | "team" | "enterprise") {
             return Err((
                 StatusCode::BAD_REQUEST,
-                "Invalid tier. Must be 'pro' or 'team'.".to_string(),
+                "Invalid tier. Must be 'pro', 'team', or 'enterprise'.".to_string(),
             ));
         }
 
@@ -1117,7 +1159,7 @@ mod saas_billing {
 
         let org = OrganizationRepository::find_by_user(&state.db, &user.id)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .map_err(db_err)?
             .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
 
         // Check if user is owner
@@ -1134,7 +1176,7 @@ mod saas_billing {
             "No active subscription to modify".to_string(),
         ))?;
 
-        let seats = req.seats.unwrap_or(org.seats) as i64;
+        let seats = req.seats.unwrap_or(org.seats).min(10_000) as i64;
         let annual = req
             .annual
             .unwrap_or(org.billing_interval.as_deref() == Some("annual"));
@@ -1202,10 +1244,10 @@ mod saas_billing {
         State(state): State<AppState>,
         Json(req): Json<ChangePlanRequest>,
     ) -> Result<Json<ProrationPreviewResponse>, (StatusCode, String)> {
-        if !matches!(req.tier.as_str(), "pro" | "team") {
+        if !matches!(req.tier.as_str(), "pro" | "team" | "enterprise") {
             return Err((
                 StatusCode::BAD_REQUEST,
-                "Invalid tier. Must be 'pro' or 'team'.".to_string(),
+                "Invalid tier. Must be 'pro', 'team', or 'enterprise'.".to_string(),
             ));
         }
 
@@ -1216,7 +1258,7 @@ mod saas_billing {
 
         let org = OrganizationRepository::find_by_user(&state.db, &user.id)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .map_err(db_err)?
             .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
 
         if org.owner_id != user.id {
@@ -1231,7 +1273,7 @@ mod saas_billing {
             "No active subscription".to_string(),
         ))?;
 
-        let seats = req.seats.unwrap_or(org.seats) as i64;
+        let seats = req.seats.unwrap_or(org.seats).min(10_000) as i64;
         // Mirror change_plan: inherit the current billing interval rather than defaulting to monthly
         let annual = req
             .annual
@@ -1274,7 +1316,7 @@ mod saas_billing {
 
         let org = OrganizationRepository::find_by_user(&state.db, &user.id)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .map_err(db_err)?
             .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
 
         if org.owner_id != user.id {
@@ -1295,11 +1337,17 @@ mod saas_billing {
                 "Seats must be at least 1".to_string(),
             ));
         }
+        if req.seats > 10_000 {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "Seats cannot exceed 10,000".to_string(),
+            ));
+        }
 
         // Guard: cannot reduce seats below occupied count
         let current_count = OrganizationMemberRepository::count(&state.db, &org.id)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            .map_err(db_err)?;
         if req.seats < current_count {
             return Err((
                 StatusCode::BAD_REQUEST,
@@ -1339,7 +1387,7 @@ mod saas_billing {
             })?;
         Ok(Json(ChangePlanResponse {
             success: true,
-            tier: org.tier,
+            tier: updated_org.tier,
             seats: req.seats,
             message: "Seats updated successfully".to_string(),
         }))
@@ -1368,7 +1416,7 @@ mod saas_billing {
 
         let org = OrganizationRepository::find_by_user(&state.db, &user.id)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .map_err(db_err)?
             .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
 
         let customer_id = org
@@ -1403,7 +1451,7 @@ mod saas_billing {
 
         let org = OrganizationRepository::find_by_user(&state.db, &user.id)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .map_err(db_err)?
             .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
 
         let customer_id = org
@@ -1461,7 +1509,7 @@ mod saas_billing {
 
         let org = OrganizationRepository::find_by_user(&state.db, &user.id)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .map_err(db_err)?
             .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
 
         let customer_id = org
@@ -1512,7 +1560,7 @@ mod saas_billing {
 
         let org = OrganizationRepository::find_by_user(&state.db, &user.id)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .map_err(db_err)?
             .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
 
         let customer_id = org
@@ -1549,7 +1597,7 @@ mod saas_billing {
 
         let org = OrganizationRepository::find_by_user(&state.db, &user.id)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .map_err(db_err)?
             .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
 
         if org.owner_id != user.id {
@@ -1607,7 +1655,7 @@ mod saas_billing {
 
         let org = OrganizationRepository::find_by_user(&state.db, &user.id)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .map_err(db_err)?
             .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
 
         if org.owner_id != user.id {
@@ -1718,7 +1766,7 @@ mod saas_billing {
 
         let org = OrganizationRepository::find_by_user(&state.db, &user.id)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .map_err(db_err)?
             .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
 
         let customer_id = org
@@ -1750,7 +1798,7 @@ mod saas_billing {
 
         let org = OrganizationRepository::find_by_user(&state.db, &user.id)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .map_err(db_err)?
             .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
 
         if org.owner_id != user.id {
@@ -1797,19 +1845,21 @@ mod saas_billing {
     ) -> Result<Json<BillingDashboardResponse>, (StatusCode, String)> {
         let org = OrganizationRepository::find_by_user(&state.db, &user.id)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .map_err(db_err)?
             .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
 
         let members_count = OrganizationMemberRepository::count(&state.db, &org.id)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            .map_err(db_err)?;
 
-        // WARNING: these unit prices must stay in sync with the Stripe price objects.
-        // Annual prices reflect the effective monthly cost (annual total / 12).
-        const PRICE_PRO_MONTHLY_CENTS: i64 = 1200; // $12/seat/month
-        const PRICE_PRO_ANNUAL_MONTHLY_CENTS: i64 = 1000; // $120/seat/year ÷ 12
-        const PRICE_TEAM_MONTHLY_CENTS: i64 = 2100; // $21/seat/month
-        const PRICE_TEAM_ANNUAL_MONTHLY_CENTS: i64 = 1750; // $210/seat/year ÷ 12
+        // WARNING: these unit prices must stay in sync with the Stripe price objects
+        // AND with billing/tiers.rs get_price_per_seat().
+        // Annual prices reflect the effective monthly cost (annual total / 12),
+        // applying the 30% annual discount: monthly * 0.7 / 1 = monthly * 0.7.
+        const PRICE_PRO_MONTHLY_CENTS: i64 = 1200; // $12/seat/month (tiers.rs: Pro => 1200)
+        const PRICE_PRO_ANNUAL_MONTHLY_CENTS: i64 = 840; // $12 * 0.7 = $8.40/seat/month
+        const PRICE_TEAM_MONTHLY_CENTS: i64 = 2500; // $25/seat/month (tiers.rs: Team => 2500)
+        const PRICE_TEAM_ANNUAL_MONTHLY_CENTS: i64 = 1750; // $25 * 0.7 = $17.50/seat/month
         let annual = org.billing_interval.as_deref() == Some("annual");
         let monthly_cost_cents = match org.tier.as_str() {
             "pro" => {
@@ -1853,12 +1903,12 @@ mod saas_billing {
     ) -> Result<Json<UsageHistoryResponse>, (StatusCode, String)> {
         let org = OrganizationRepository::find_by_user(&state.db, &user.id)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .map_err(db_err)?
             .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
 
         let history = UsageRepository::list_all(&state.db, &org.id)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            .map_err(db_err)?;
 
         Ok(Json(UsageHistoryResponse { history }))
     }

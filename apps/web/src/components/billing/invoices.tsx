@@ -9,19 +9,13 @@ import { FileText, Download, ExternalLink, ChevronDown, ChevronUp, AlertTriangle
 import { billingApi, type Invoice, type InvoiceDetail } from "@/lib/api";
 import { toast } from "sonner";
 
-function InvoiceDetails({
-  details,
-  invoice,
-}: {
-  details: InvoiceDetail;
-  invoice: Invoice;
-}) {
+function InvoiceDetails({ details, invoice }: { details: InvoiceDetail; invoice: Invoice }) {
   return (
     <div className="space-y-4">
       <div className="space-y-2">
         <p className="text-sm font-medium">Line Items</p>
-        {details.line_items.map((item) => (
-          <div key={item.id} className="flex justify-between text-sm">
+        {details.line_items.map((item, i) => (
+          <div key={`${item.description ?? "line"}-${item.amount}-${i}`} className="flex justify-between text-sm">
             <span className="text-muted-foreground">
               {item.description || "Subscription"}
               {item.quantity && item.quantity > 1 && ` x${item.quantity}`}
@@ -275,10 +269,20 @@ export function Invoices() {
                     ) : (
                       <div role="alert" className="flex items-center justify-between gap-2">
                         <p className="text-sm text-muted-foreground">Failed to load invoice details</p>
-                        <Button variant="outline" size="sm" onClick={() => {
-                          setInvoiceDetails((prev) => { const next = { ...prev }; delete next[invoice.id]; return next; });
-                          fetchDetails(invoice.id);
-                        }}>Retry</Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            setInvoiceDetails((prev) => {
+                              const next = { ...prev };
+                              delete next[invoice.id];
+                              return next;
+                            });
+                            fetchDetails(invoice.id);
+                          }}
+                        >
+                          Retry
+                        </Button>
                       </div>
                     )}
                   </div>

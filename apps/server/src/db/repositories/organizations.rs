@@ -8,7 +8,10 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
-const ORG_USER_CACHE_TTL: Duration = Duration::from_secs(300);
+// 30s TTL: short enough that subscription downgrades propagate quickly across
+// replicas (each has its own in-process cache), long enough to absorb burst
+// DB load from tier_guard middleware. Full fix: shared Redis cache.
+const ORG_USER_CACHE_TTL: Duration = Duration::from_secs(30);
 
 fn org_user_cache() -> &'static DashMap<String, (Option<Organization>, Instant)> {
     static CACHE: OnceLock<DashMap<String, (Option<Organization>, Instant)>> = OnceLock::new();

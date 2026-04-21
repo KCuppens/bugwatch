@@ -224,24 +224,13 @@ impl NotificationChannelRepository {
         if ids.is_empty() {
             return Ok(vec![]);
         }
-
-        let placeholders: Vec<String> = ids
-            .iter()
-            .enumerate()
-            .map(|(i, _)| format!("${}", i + 1))
-            .collect();
-
-        let query = format!(
-            "SELECT * FROM notification_channels WHERE id IN ({})",
-            placeholders.join(",")
-        );
-
-        let mut q = sqlx::query_as::<_, NotificationChannel>(&query);
-        for id in ids {
-            q = q.bind(id);
-        }
-
-        q.fetch_all(pool).await.map_err(Into::into)
+        sqlx::query_as::<_, NotificationChannel>(
+            "SELECT * FROM notification_channels WHERE id = ANY($1)",
+        )
+        .bind(ids)
+        .fetch_all(pool)
+        .await
+        .map_err(Into::into)
     }
 }
 

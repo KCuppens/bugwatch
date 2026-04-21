@@ -342,7 +342,7 @@ fn default_per_page() -> u32 {
 
 fn cap_per_page<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
     let v = u32::deserialize(d)?;
-    Ok(v.clamp(1, 200))
+    Ok(v.clamp(1, 100))
 }
 
 /// Paginated response wrapper

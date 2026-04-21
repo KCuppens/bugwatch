@@ -648,7 +648,7 @@ pub async fn list_checks(
         return Err(AppError::NotFound("Monitor not found".to_string()));
     }
 
-    let limit = params.limit.unwrap_or(100).min(500);
+    let limit = params.limit.unwrap_or(100).min(100);
     let checks = MonitorCheckRepository::list_by_monitor(&state.db, &monitor_id, limit)
         .await
         .map_err(|e| AppError::Internal(format!("Failed to list checks: {}", e)))?;

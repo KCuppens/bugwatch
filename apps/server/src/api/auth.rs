@@ -96,15 +96,19 @@ pub(crate) fn extract_client_ip(
         .unwrap_or_else(|| "unknown".to_string())
 }
 
-/// Check auth rate limit (10 attempts/minute per IP)
+/// Check auth rate limit per endpoint per IP.
+/// Each endpoint gets its own bucket so refresh (called automatically) cannot
+/// exhaust the login budget and vice-versa.
 fn check_auth_rate_limit(
     state: &AppState,
     headers: &HeaderMap,
     peer_addr: Option<SocketAddr>,
+    endpoint: &str,
+    limit: u32,
 ) -> AppResult<()> {
     let ip = extract_client_ip(headers, state.config.trust_proxy, peer_addr);
-    let key = format!("auth:{}", ip);
-    let result = state.rate_limiter.check(&key, 10);
+    let key = format!("auth:{}:{}", endpoint, ip);
+    let result = state.rate_limiter.check(&key, limit);
     if !result.allowed {
         return Err(AppError::RateLimitExceeded {
             retry_after_secs: result.retry_after_secs.unwrap_or(60),
@@ -216,14 +220,18 @@ pub async fn signup(
     headers: HeaderMap,
     Json(req): Json<SignupRequest>,
 ) -> AppResult<(HeaderMap, Json<AuthResponse>)> {
-    // Rate limit per IP
-    check_auth_rate_limit(&state, &headers, Some(peer_addr))?;
+    // Rate limit per IP (tight budget — signup is rarely called legitimately at high frequency)
+    check_auth_rate_limit(&state, &headers, Some(peer_addr), "signup", 5)?;
 
     // Validate email
     validate_email(&req.email)?;
 
     // Validate password
     validate_password(&req.password)?;
+
+    // Hash password before the uniqueness check so both code paths take the same
+    // amount of time, preventing email enumeration via response-time oracle.
+    let password_hash = hash_password(&req.password)?;
 
     // Check if email already exists
     if UserRepository::find_by_email(&state.db, &req.email)
@@ -232,9 +240,6 @@ pub async fn signup(
     {
         return Err(AppError::Conflict("Email already registered".to_string()));
     }
-
-    // Hash password
-    let password_hash = hash_password(&req.password)?;
 
     // Create user
     let user = UserRepository::create(&state.db, &req.email, &password_hash, req.name.as_deref())
@@ -280,7 +285,7 @@ pub async fn login(
     Json(req): Json<LoginRequest>,
 ) -> AppResult<(HeaderMap, Json<AuthResponse>)> {
     // Rate limit per IP
-    check_auth_rate_limit(&state, &headers, Some(peer_addr))?;
+    check_auth_rate_limit(&state, &headers, Some(peer_addr), "login", 5)?;
 
     // Find user by email
     let user = UserRepository::find_by_email(&state.db, &req.email)
@@ -377,7 +382,8 @@ pub async fn logout(
     if let Some(sid) = session_id {
         SessionRepository::delete(&state.db, &sid).await?;
     } else {
-        // No valid refresh cookie — delete all sessions for this user.
+        // No valid refresh cookie — clear all sessions as a safe fallback.
+        tracing::warn!(user_id = %user.id, "logout: refresh cookie absent or invalid — clearing all sessions for user");
         SessionRepository::delete_by_user(&state.db, &user.id).await?;
     }
 
@@ -404,8 +410,9 @@ pub async fn refresh(
     ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
 ) -> AppResult<(HeaderMap, Json<RefreshResponse>)> {
-    // Rate limit per IP
-    check_auth_rate_limit(&state, &headers, Some(peer_addr))?;
+    // Rate limit per IP — refresh is called automatically every ~13 minutes by the
+    // frontend, so a higher limit is needed to avoid locking out legitimate users.
+    check_auth_rate_limit(&state, &headers, Some(peer_addr), "refresh", 30)?;
 
     // Read refresh token exclusively from httpOnly cookie — never from the body.
     let refresh_token = headers
@@ -588,7 +595,14 @@ pub async fn change_password(
     Json(req): Json<ChangePasswordRequest>,
 ) -> AppResult<Json<serde_json::Value>> {
     // Rate limit per IP
-    check_auth_rate_limit(&state, &headers, Some(peer_addr))?;
+    check_auth_rate_limit(&state, &headers, Some(peer_addr), "change_password", 10)?;
+
+    // Reject oversized inputs before bcrypt to prevent hash-cost amplification
+    if req.current_password.len() > 1024 || req.new_password.len() > 1024 {
+        return Err(AppError::Validation(
+            "Password too long (max 1024 bytes)".to_string(),
+        ));
+    }
 
     // Get user with password hash
     let db_user = UserRepository::find_by_id(&state.db, &user.id)
@@ -611,6 +625,10 @@ pub async fn change_password(
     UserRepository::update_password(&state.db, &user.id, &new_hash)
         .await
         .map_err(|e| AppError::Internal(format!("Failed to update password: {}", e)))?;
+
+    // Invalidate all sessions so hijacked sessions cannot survive a password change.
+    // The current request's session is already authenticated — the user must re-login.
+    SessionRepository::delete_by_user(&state.db, &user.id).await?;
 
     tracing::info!(user_id = %user.id, outcome = "password_changed", "User password changed");
 
@@ -645,8 +663,8 @@ pub async fn forgot_password(
     headers: HeaderMap,
     Json(req): Json<ForgotPasswordRequest>,
 ) -> AppResult<Json<serde_json::Value>> {
-    // Rate limit per IP (same bucket as other auth endpoints)
-    check_auth_rate_limit(&state, &headers, Some(peer_addr))?;
+    // Rate limit per IP
+    check_auth_rate_limit(&state, &headers, Some(peer_addr), "forgot_password", 5)?;
 
     // Per-email rate limit: max 3 reset requests per hour per address.
     // Keyed on a hash of the email to avoid storing PII in the rate-limit store.
@@ -745,7 +763,12 @@ pub async fn reset_password(
     headers: HeaderMap,
     Json(req): Json<ResetPasswordRequest>,
 ) -> AppResult<Json<serde_json::Value>> {
-    check_auth_rate_limit(&state, &headers, Some(peer_addr))?;
+    check_auth_rate_limit(&state, &headers, Some(peer_addr), "reset_password", 5)?;
+
+    // Reject oversized inputs before HMAC/bcrypt
+    if req.token.len() > 1024 || req.new_password.len() > 1024 {
+        return Err(AppError::Validation("Input too long".to_string()));
+    }
 
     let token_hash = hash_reset_token(&req.token, state.config.password_reset_secret.as_bytes());
 

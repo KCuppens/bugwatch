@@ -195,22 +195,37 @@ impl EventRepository {
     /// Cleanup old events to prevent database bloat.
     /// Each organization's effective retention is `base_days + o.x402_extra_retention_days`,
     /// so orgs that paid for extended retention via x402 micropayments keep their events longer.
+    ///
+    /// Deletes in batches of 5000 to avoid holding an exclusive lock for the full
+    /// duration of a large delete, which would cause replication lag on replicas.
+    /// Returns the total number of rows deleted across all batches.
     pub async fn cleanup_old_events(pool: &DbPool, base_days: i32) -> Result<u64> {
-        // DELETE USING avoids a correlated subquery and lets the planner use join optimisations
-        let result = sqlx::query(
-            r#"
-            DELETE FROM events e
-            USING issues i, projects p, organizations o
-            WHERE e.issue_id = i.id
-              AND i.project_id = p.id
-              AND p.organization_id = o.id
-              AND e.timestamp < NOW() - make_interval(days => $1 + o.x402_extra_retention_days)
-            "#,
-        )
-        .bind(base_days)
-        .execute(pool)
-        .await?;
+        let mut total_deleted: u64 = 0;
+        loop {
+            let result = sqlx::query(
+                r#"
+                DELETE FROM events
+                WHERE id IN (
+                    SELECT e.id
+                    FROM events e
+                    JOIN issues i ON e.issue_id = i.id
+                    JOIN projects p ON i.project_id = p.id
+                    JOIN organizations o ON p.organization_id = o.id
+                    WHERE e.timestamp < NOW() - make_interval(days => $1 + o.x402_extra_retention_days)
+                    LIMIT 5000
+                )
+                "#,
+            )
+            .bind(base_days)
+            .execute(pool)
+            .await?;
 
-        Ok(result.rows_affected())
+            let deleted = result.rows_affected();
+            total_deleted += deleted;
+            if deleted == 0 {
+                break;
+            }
+        }
+        Ok(total_deleted)
     }
 }

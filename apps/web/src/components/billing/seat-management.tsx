@@ -46,7 +46,7 @@ export function SeatManagement({ organization, currentSeats, usedSeats, isOwner,
       const previewData = await billingApi.previewPlanChange(
         tier,
         newSeats,
-        organization?.subscription_status === "annual"
+        organization?.billing_interval === "annual"
       );
       setPreview(previewData);
     } catch (err) {
