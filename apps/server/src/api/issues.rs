@@ -1,12 +1,15 @@
 use axum::{
-    extract::{Path, Query, State},
+    extract::{ConnectInfo, Path, Query, State},
+    http::HeaderMap,
     Json,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::net::SocketAddr;
 
 use super::{ApiResponse, PaginatedResponse, PaginationMeta, PaginationParams};
 use crate::{
+    api::auth::extract_client_ip,
     auth::{AuthIdentity, EitherAuth},
     billing::tiers::can_access_feature,
     db::{
@@ -127,21 +130,24 @@ pub async fn list(
 /// Advanced search with filters, sorting, and facets
 pub async fn search(
     State(state): State<AppState>,
+    ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     auth: EitherAuth,
     Path(project_id): Path<String>,
     Json(req): Json<SearchRequest>,
 ) -> AppResult<Json<SearchResponse>> {
     let start = std::time::Instant::now();
 
-    // Rate limit: 60 search requests per identity per project
-    let auth_key = auth
-        .user_id()
-        .map(|id| id.to_string())
-        .or_else(|| auth.agent_org_id().map(|id| format!("agent:{}", id)))
-        .unwrap_or_else(|| "anonymous".to_string());
-    let rl = state
-        .rate_limiter
-        .check(&format!("search:{}:{}", auth_key, project_id), 60);
+    // Rate limit: authenticated identities get 60/min; anonymous IPs get 20/min
+    let (rl_key, rl_limit) = if let Some(id) = auth.user_id() {
+        (format!("search:{}:{}", id, project_id), 60)
+    } else if let Some(org_id) = auth.agent_org_id() {
+        (format!("search:agent:{}:{}", org_id, project_id), 60)
+    } else {
+        let ip = extract_client_ip(&headers, state.config.trust_proxy, Some(peer_addr));
+        (format!("search:anon_search:{}:{}", ip, project_id), 20)
+    };
+    let rl = state.rate_limiter.check(&rl_key, rl_limit);
     if !rl.allowed {
         return Err(AppError::BadRequest(
             "Too many requests. Please try again later.".to_string(),
@@ -162,6 +168,23 @@ pub async fn search(
                     "Search text too long (max 200 characters)".to_string(),
                 ));
             }
+        }
+    }
+
+    // B2: cap numeric filter values to prevent absurdly large DB parameters
+    const MAX_FILTER_VALUE: i64 = 1_000_000_000;
+    if let Some(ref filters) = req.filters {
+        if filters.count_gt.unwrap_or(0) > MAX_FILTER_VALUE {
+            return Err(AppError::BadRequest("count_gt too large".to_string()));
+        }
+        if filters.count_lt.unwrap_or(0) > MAX_FILTER_VALUE {
+            return Err(AppError::BadRequest("count_lt too large".to_string()));
+        }
+        if filters.users_gt.unwrap_or(0) > MAX_FILTER_VALUE {
+            return Err(AppError::BadRequest("users_gt too large".to_string()));
+        }
+        if filters.users_lt.unwrap_or(0) > MAX_FILTER_VALUE {
+            return Err(AppError::BadRequest("users_lt too large".to_string()));
         }
     }
 
@@ -591,10 +614,16 @@ pub async fn get_frequency(
     let mut total_in_period: u32 = 0;
     for (idx, cnt) in bucket_counts {
         let i = idx as usize;
-        if i < buckets.len() {
-            buckets[i].count = cnt as u32;
-            total_in_period += cnt as u32;
+        if i >= buckets.len() {
+            tracing::warn!(
+                index = i,
+                len = buckets.len(),
+                "Bucket index out of range, skipping"
+            );
+            continue;
         }
+        buckets[i].count = cnt as u32;
+        total_in_period += cnt as u32;
     }
 
     Ok(Json(ApiResponse {

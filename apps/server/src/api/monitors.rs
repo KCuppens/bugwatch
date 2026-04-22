@@ -224,8 +224,8 @@ pub async fn create(
 
     // Rate limit: 20 create_monitor requests per identity per minute
     let rl_key = match &*auth {
-        AuthIdentity::User(user) => user.id.clone(),
-        AuthIdentity::Agent(agent) => agent.organization_id.clone(),
+        AuthIdentity::User(u) => u.id.clone(),
+        AuthIdentity::Agent(a) => format!("{}:{}", a.organization_id, a.agent_key.id),
     };
     let rl = state
         .rate_limiter
@@ -258,13 +258,21 @@ pub async fn create(
     let tier = Tier::from_str(&tier_str);
     let limits = get_tier_limits(tier);
     if limits.monitor_limit >= 0 {
-        let owner_id = match &*auth {
-            AuthIdentity::User(user) => user.id.clone(),
-            AuthIdentity::Agent(_) => project.owner_id.clone(),
+        // H2: Use the correct scoping depending on auth identity.
+        // - User auth: count by user (owner_id) across their projects.
+        // - Agent auth: count by organization so the limit applies to the whole
+        //   org rather than only the project-owner's projects (which could be a
+        //   subset of the org's projects and would allow bypassing the limit).
+        let current_count = match &*auth {
+            AuthIdentity::User(user) => MonitorRepository::count_by_owner(&state.db, &user.id)
+                .await
+                .map_err(|e| AppError::Internal(format!("Failed to count monitors: {}", e)))?,
+            AuthIdentity::Agent(agent) => {
+                MonitorRepository::count_by_organization(&state.db, &agent.organization_id)
+                    .await
+                    .map_err(|e| AppError::Internal(format!("Failed to count monitors: {}", e)))?
+            }
         };
-        let current_count = MonitorRepository::count_by_owner(&state.db, &owner_id)
-            .await
-            .map_err(|e| AppError::Internal(format!("Failed to count monitors: {}", e)))?;
         let x402_extra_monitors = monitor_org
             .as_ref()
             .map(|o| o.x402_extra_monitors as i64)
@@ -431,8 +439,8 @@ pub async fn list(
 ) -> AppResult<Json<PaginatedResponse<MonitorResponse>>> {
     // Rate limit: 60 list_monitors requests per identity per minute
     let rl_key = match &*auth {
-        AuthIdentity::User(user) => user.id.clone(),
-        AuthIdentity::Agent(agent) => agent.organization_id.clone(),
+        AuthIdentity::User(u) => u.id.clone(),
+        AuthIdentity::Agent(a) => format!("{}:{}", a.organization_id, a.agent_key.id),
     };
     let rl = state
         .rate_limiter
@@ -510,8 +518,8 @@ pub async fn get(
 ) -> AppResult<Json<MonitorDetailResponse>> {
     // Rate limit: 60 get_monitor requests per identity per minute
     let rl_key = match &*auth {
-        AuthIdentity::User(user) => user.id.clone(),
-        AuthIdentity::Agent(agent) => agent.organization_id.clone(),
+        AuthIdentity::User(u) => u.id.clone(),
+        AuthIdentity::Agent(a) => format!("{}:{}", a.organization_id, a.agent_key.id),
     };
     let rl = state
         .rate_limiter
@@ -583,8 +591,8 @@ pub async fn update(
 
     // Rate limit: 30 update_monitor requests per identity per minute
     let rl_key = match &*auth {
-        AuthIdentity::User(user) => user.id.clone(),
-        AuthIdentity::Agent(agent) => agent.organization_id.clone(),
+        AuthIdentity::User(u) => u.id.clone(),
+        AuthIdentity::Agent(a) => format!("{}:{}", a.organization_id, a.agent_key.id),
     };
     let rl = state
         .rate_limiter
@@ -761,8 +769,8 @@ pub async fn delete(
 
     // Rate limit: 10 delete_monitor requests per identity per minute
     let rl_key = match &*auth {
-        AuthIdentity::User(user) => user.id.clone(),
-        AuthIdentity::Agent(agent) => agent.organization_id.clone(),
+        AuthIdentity::User(u) => u.id.clone(),
+        AuthIdentity::Agent(a) => format!("{}:{}", a.organization_id, a.agent_key.id),
     };
     let rl = state
         .rate_limiter
@@ -808,6 +816,22 @@ pub async fn list_checks(
     Path((project_id, monitor_id)): Path<(String, String)>,
     Query(params): Query<ChecksParams>,
 ) -> AppResult<Json<Vec<MonitorCheck>>> {
+    // B7: Rate limit: 60 list_checks requests per identity per monitor per minute
+    let rl_key = match &*auth {
+        AuthIdentity::User(user) => user.id.clone(),
+        AuthIdentity::Agent(agent) => agent.organization_id.clone(),
+    };
+    let rl = state
+        .rate_limiter
+        .check(&format!("list_checks:{}:{}", rl_key, monitor_id), 60);
+    if !rl.allowed {
+        return Err(AppError::RateLimitExceeded {
+            retry_after_secs: rl.retry_after_secs.unwrap_or(60),
+            limit: rl.limit,
+            remaining: rl.remaining,
+        });
+    }
+
     // Verify project exists and user has access
     let project = ProjectRepository::find_by_id(&state.db, &project_id)
         .await?

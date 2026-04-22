@@ -118,13 +118,10 @@ export default function SettingsPage() {
   const hasIntegrations = useFeature("github");
 
   const setActiveTab = (tab: Tab) => {
-    const params = new URLSearchParams(searchParams.toString());
-    params.set("tab", tab);
-    // Clear success/canceled/session_id params when switching tabs
-    params.delete("success");
-    params.delete("canceled");
-    params.delete("session_id");
-    router.push(`/dashboard/settings?${params.toString()}`);
+    // Explicit allowlist — only preserve known-safe params
+    const safeParams = new URLSearchParams();
+    safeParams.set("tab", tab);
+    router.push(`/dashboard/settings?${safeParams.toString()}`);
   };
 
   // Fetch billing data when on billing tab (SaaS only)

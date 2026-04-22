@@ -141,6 +141,11 @@ async function handleResponse<T>(response: Response): Promise<T> {
     return undefined as T;
   }
 
+  const contentType = response.headers.get('content-type');
+  if (!contentType?.includes('application/json')) {
+    throw new Error('Unexpected response format from server');
+  }
+
   try {
     return JSON.parse(text) as T;
   } catch {

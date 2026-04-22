@@ -315,7 +315,7 @@ async fn handle_checkout_completed(
                     stripe::RecurringInterval::Year => "annual",
                     stripe::RecurringInterval::Month => "monthly",
                     _ => {
-                        tracing::warn!(interval = ?r.interval, "Unknown billing interval in checkout.session.completed");
+                        tracing::error!(interval = ?r.interval, "Unknown billing interval in checkout.session.completed — defaulting to monthly");
                         "monthly"
                     }
                 }.to_string());
@@ -610,7 +610,7 @@ async fn handle_subscription_updated(
                 "year" => "annual",
                 "month" => "monthly",
                 other => {
-                    tracing::warn!(interval = %other, "Unknown billing interval in subscription update");
+                    tracing::error!(interval = %other, "Unknown billing interval in subscription update — defaulting to monthly");
                     "monthly" // safe default
                 }
             };

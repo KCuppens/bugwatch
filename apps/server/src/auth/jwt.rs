@@ -61,7 +61,7 @@ pub fn generate_tokens(
     };
 
     let access_token = encode(
-        &Header::default(),
+        &Header::new(jsonwebtoken::Algorithm::HS256),
         &access_claims,
         &EncodingKey::from_secret(secret.as_bytes()),
     )
@@ -79,7 +79,7 @@ pub fn generate_tokens(
     };
 
     let refresh_token = encode(
-        &Header::default(),
+        &Header::new(jsonwebtoken::Algorithm::HS256),
         &refresh_claims,
         &EncodingKey::from_secret(secret.as_bytes()),
     )
@@ -116,7 +116,22 @@ pub fn validate_token(token: &str, secret: &str) -> AppResult<Claims> {
         _ => AppError::Unauthorized(format!("Token validation failed: {}", e)),
     })?;
 
-    Ok(token_data.claims)
+    let claims = token_data.claims;
+
+    // Reject tokens with an iat set in the future — guards against clock-skew
+    // abuse and forged tokens with inflated iat values.
+    if claims.iat > chrono::Utc::now().timestamp() {
+        return Err(AppError::Unauthorized(
+            "Token issued in the future".to_string(),
+        ));
+    }
+
+    // "type" is a custom claim not enforced by set_required_spec_claims; check manually.
+    if claims.token_type.is_empty() {
+        return Err(AppError::Unauthorized("Missing token type".to_string()));
+    }
+
+    Ok(claims)
 }
 
 /// Validate that a token is an access token

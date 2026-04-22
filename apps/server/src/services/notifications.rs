@@ -688,12 +688,20 @@ impl NotificationService {
         let signature = config
             .secret
             .as_ref()
-            .map(|secret| -> anyhow::Result<String> {
+            .map(|secret| -> anyhow::Result<Option<String>> {
+                if secret.len() < 16 {
+                    tracing::warn!(
+                        url = %config.url,
+                        "Webhook secret is too short (< 16 chars); skipping HMAC signature"
+                    );
+                    return Ok(None);
+                }
                 let payload_json = serde_json::to_string(payload)
                     .map_err(|e| anyhow::anyhow!("Failed to serialize webhook payload: {}", e))?;
-                Ok(compute_hmac_signature(&payload_json, secret))
+                Ok(Some(compute_hmac_signature(&payload_json, secret)))
             })
-            .transpose()?;
+            .transpose()?
+            .flatten();
 
         // Single attempt — outer send_with_retry in alerting.rs handles up to 3
         // retries with jitter. An inner retry loop here would produce up to 9
@@ -707,6 +715,9 @@ impl NotificationService {
                 let status = resp.status();
                 // Cap at 64KB to prevent memory exhaustion from hostile endpoints.
                 let raw = resp.bytes().await.unwrap_or_default();
+                if raw.len() >= 65_536 {
+                    tracing::warn!(url = %config.url, "Webhook response body truncated at 65KB");
+                }
                 let body = String::from_utf8_lossy(if raw.len() > 65_536 {
                     &raw[..65_536]
                 } else {
@@ -756,7 +767,7 @@ impl NotificationService {
         // SSRF guard — validate Slack webhook URL resolves to a safe address.
         // Incoming webhook URLs are typically hooks.slack.com, but we validate
         // all resolutions to catch misconfigured or crafted URLs.
-        {
+        let slack_webhook_host = {
             let parsed = url::Url::parse(&config.webhook_url)
                 .map_err(|_| anyhow!("Slack webhook URL is invalid"))?;
             if !matches!(parsed.scheme(), "http" | "https") {
@@ -782,12 +793,10 @@ impl NotificationService {
                     ));
                 }
             }
-        }
+            host
+        };
 
-        info!(
-            "Slack webhook URL host: {}",
-            config.webhook_url.split('/').nth(2).unwrap_or("unknown")
-        );
+        info!("Slack webhook URL host: {}", slack_webhook_host);
 
         // Get template (use default if not configured)
         let template = config.message_template.unwrap_or_default();

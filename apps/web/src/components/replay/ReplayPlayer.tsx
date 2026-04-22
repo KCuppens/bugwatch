@@ -27,6 +27,11 @@ export function ReplayPlayer({ recordingId, projectId }: ReplayPlayerProps) {
   const replayerRef = useRef<unknown>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // Reviver that blocks prototype-pollution keys
+  const FORBIDDEN_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
+  const safeReviver = (key: string, value: unknown) =>
+    FORBIDDEN_KEYS.has(key) ? undefined : value
+
   // Fetch recording metadata and segments
   useEffect(() => {
     async function fetchData() {
@@ -46,7 +51,7 @@ export function ReplayPlayer({ recordingId, projectId }: ReplayPlayerProps) {
         for (const seg of segResponse) {
           try {
             const decoded = atob(seg.data);
-            const parsed = JSON.parse(decoded) as Array<{
+            const parsed = JSON.parse(decoded, safeReviver) as Array<{
               timestamp?: number;
               type?: number;
             }>;
@@ -84,7 +89,7 @@ export function ReplayPlayer({ recordingId, projectId }: ReplayPlayerProps) {
     for (const seg of segments) {
       try {
         const decoded = atob(seg.data);
-        const parsed = JSON.parse(decoded);
+        const parsed = JSON.parse(decoded, safeReviver);
         if (Array.isArray(parsed)) {
           allRrwebEvents.push(...parsed);
         }

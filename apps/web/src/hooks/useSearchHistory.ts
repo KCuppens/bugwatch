@@ -18,9 +18,11 @@ export function useSearchHistory() {
       const stored = localStorage.getItem(HISTORY_KEY);
       if (stored) {
         const parsed = JSON.parse(stored);
-        if (Array.isArray(parsed)) {
-          setHistory(parsed);
+        if (!Array.isArray(parsed) || !parsed.every((item: unknown) => typeof item === 'string')) {
+          localStorage.removeItem(HISTORY_KEY);
+          return;
         }
+        setHistory(parsed as string[]);
       }
     } catch {
       // Invalid JSON, clear it

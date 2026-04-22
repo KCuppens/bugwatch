@@ -456,7 +456,11 @@ impl OrganizationMemberRepository {
 
     /// Atomically add a member only if the current seat count is below the seat limit.
     /// Returns Ok(Some(member)) on success, Ok(None) if the seat limit is already reached.
-    /// Prevents TOCTOU races where concurrent add_member calls both pass the seat check.
+    ///
+    /// H4: Uses a PostgreSQL advisory transaction lock keyed on the organization ID to
+    /// fully serialize concurrent add_member calls for the same org.  The lock is acquired
+    /// inside an explicit transaction and is automatically released when the transaction ends,
+    /// eliminating the TOCTOU window that existed when relying solely on the WHERE subquery.
     pub async fn add_if_seat_available(
         pool: &DbPool,
         organization_id: &str,
@@ -466,6 +470,26 @@ impl OrganizationMemberRepository {
     ) -> Result<Option<OrganizationMember>> {
         let id = Uuid::new_v4().to_string();
         let now = chrono::Utc::now();
+
+        // Derive a stable i64 lock key from the organization_id bytes.
+        // Same derivation used in billing.rs change_plan / update_seats.
+        let lock_key: i64 = {
+            let b = organization_id.as_bytes();
+            b.iter()
+                .take(8)
+                .enumerate()
+                .fold(0i64, |acc, (i, &byte)| acc | ((byte as i64) << (i * 8)))
+        };
+
+        let mut tx = pool.begin().await.map_err(|e| anyhow::anyhow!(e))?;
+
+        // Acquire an advisory transaction lock — blocks until the lock is free,
+        // ensuring only one concurrent add_member for this org runs at a time.
+        sqlx::query("SELECT pg_advisory_xact_lock($1)")
+            .bind(lock_key)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| anyhow::anyhow!(e))?;
 
         let result = sqlx::query_as::<_, OrganizationMember>(
             r#"
@@ -481,9 +505,11 @@ impl OrganizationMemberRepository {
         .bind(role)
         .bind(&now)
         .bind(seat_limit as i64)
-        .fetch_optional(pool)
+        .fetch_optional(&mut *tx)
         .await
         .map_err(|e| anyhow::anyhow!(e))?;
+
+        tx.commit().await.map_err(|e| anyhow::anyhow!(e))?;
 
         Ok(result)
     }
@@ -578,6 +604,9 @@ impl UsageRepository {
         period_end: chrono::DateTime<chrono::Utc>,
         amount: i32,
     ) -> Result<UsageRecord> {
+        if amount <= 0 {
+            return Err(anyhow::anyhow!("amount must be positive"));
+        }
         let id = Uuid::new_v4().to_string();
         let now = chrono::Utc::now();
 
@@ -732,6 +761,7 @@ impl BillingEventRepository {
         organization_id: &str,
         limit: i32,
     ) -> Result<Vec<BillingEvent>> {
+        let limit = limit.max(1).min(10_000);
         sqlx::query_as::<_, BillingEvent>(
             "SELECT * FROM billing_events WHERE organization_id = $1 ORDER BY created_at DESC LIMIT $2",
         )

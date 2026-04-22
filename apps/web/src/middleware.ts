@@ -57,7 +57,8 @@ export async function middleware(req: NextRequest) {
     if (valid) {
       const { searchParams } = req.nextUrl;
       const next = searchParams.get("next") ?? "/dashboard";
-      const safeNext = next.startsWith("/") && !next.startsWith("//") ? next : "/dashboard";
+      const SAFE_PATH_RE = /^\/[a-zA-Z0-9_\-./]*$/
+      const safeNext = next && SAFE_PATH_RE.test(next) ? next : '/dashboard';
       return NextResponse.redirect(new URL(safeNext, req.url));
     }
   }

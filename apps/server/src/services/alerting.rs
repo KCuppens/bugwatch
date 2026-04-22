@@ -133,8 +133,17 @@ impl AlertingService {
         rule_id: &str,
     ) -> Result<Option<String>> {
         use rand::Rng;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
         let mut last_err = anyhow::anyhow!("no attempts made");
         for attempt in 0u32..3 {
+            if std::time::Instant::now() >= deadline {
+                tracing::warn!(
+                    rule_id = %rule_id,
+                    channel_id = %channel.id,
+                    "Alert send exceeded 60s total deadline, giving up"
+                );
+                break;
+            }
             if attempt > 0 {
                 let base_ms = 500u64 * (1 << (attempt - 1));
                 let jitter_ms = rand::thread_rng().gen_range(0u64..=100);

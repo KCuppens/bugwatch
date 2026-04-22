@@ -544,6 +544,7 @@ impl From<NotificationChannel> for ChannelResponse {
 
         // Never return raw credentials to clients
         if let Some(obj) = config.as_object_mut() {
+            // Exact-match keys kept from before
             for key in &["api_key", "routing_key", "secret", "webhook_url"] {
                 if obj.contains_key(*key) {
                     obj.insert(
@@ -551,6 +552,19 @@ impl From<NotificationChannel> for ChannelResponse {
                         serde_json::Value::String("***".to_string()),
                     );
                 }
+            }
+            // B6: also redact any key whose name contains sensitive substrings
+            let sensitive_substrings = ["access_token", "bearer_token", "auth_token", "password"];
+            let keys_to_redact: Vec<String> = obj
+                .keys()
+                .filter(|k| {
+                    let kl = k.to_lowercase();
+                    sensitive_substrings.iter().any(|s| kl.contains(s))
+                })
+                .cloned()
+                .collect();
+            for k in keys_to_redact {
+                obj.insert(k, serde_json::Value::String("***".to_string()));
             }
         }
 
@@ -939,6 +953,7 @@ pub async fn list_alert_logs(
 pub struct AcrossProjectsAlertLogsQuery {
     #[serde(default = "default_across_limit")]
     pub limit: u32,
+    pub offset: Option<i64>,
 }
 
 fn default_across_limit() -> u32 {
@@ -992,6 +1007,8 @@ pub async fn list_alert_logs_across_projects(
         projects.iter().map(|p| (p.id.clone(), p)).collect();
 
     let limit = query.limit.min(100) as i64;
+    // B3: clamp offset to prevent absurdly large OFFSET values if used in future pagination
+    let _offset = query.offset.unwrap_or(0).max(0).min(10_000_000i64);
 
     // Fetch alert logs across all projects
     let logs = AlertLogRepository::list_across_projects(&state.db, &project_ids, limit)

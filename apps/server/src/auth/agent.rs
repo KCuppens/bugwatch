@@ -89,6 +89,13 @@ impl FromRequestParts<AppState> for AgentAuth {
             ));
         }
 
+        // Validate exact key length: "bw_agent_" (9) + 64 hex chars = 73
+        if api_key.len() != 73 {
+            return Err(AppError::Unauthorized(
+                "Invalid agent API key format".to_string(),
+            ));
+        }
+
         // Hash and look up
         let key_hash = hash_agent_key(&api_key, state.config.jwt_secret.as_bytes());
         let agent_key = AgentKeyRepository::find_by_hash(&state.db, &key_hash)
@@ -100,7 +107,10 @@ impl FromRequestParts<AppState> for AgentAuth {
 
         // Parse permissions
         let permissions: Vec<String> =
-            serde_json::from_str(&agent_key.permissions).unwrap_or_default();
+            serde_json::from_str(&agent_key.permissions).unwrap_or_else(|e| {
+                tracing::error!(error = %e, "Invalid agent permissions JSON in database");
+                vec![]
+            });
 
         let organization_id = agent_key.organization_id.clone();
 

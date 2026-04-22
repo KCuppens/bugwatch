@@ -80,13 +80,15 @@ pub(crate) fn extract_client_ip(
             .and_then(|v| v.to_str().ok())
             .and_then(|s| s.split(',').next())
             .map(|s| s.trim().to_string())
+            .filter(|s| s.parse::<std::net::IpAddr>().is_ok())
         {
             return ip;
         }
         if let Some(ip) = headers
             .get("x-real-ip")
             .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_string())
+            .map(|s| s.trim().to_string())
+            .filter(|s| s.parse::<std::net::IpAddr>().is_ok())
         {
             return ip;
         }
@@ -350,7 +352,7 @@ pub async fn login(
 
     // Revoke prior sessions to enforce single active session per user.
     if let Err(e) = SessionRepository::delete_by_user(&state.db, &user.id).await {
-        tracing::warn!(user_id = %user.id, "Failed to clear prior sessions on login: {}", e);
+        tracing::warn!(user_id = %user.id, error = %e, "Failed to clear prior sessions on login");
     }
 
     // Create session, generate tokens, set cookies
@@ -400,7 +402,13 @@ pub async fn logout(
     // session that AuthUser verified. The access token is read from the cookie (or
     // Authorization header fallback) and re-validated cheaply — the signature was
     // already checked by AuthUser, so this is just claim extraction.
-    let session_id = headers
+    // H1: Read the access token exclusively from the httpOnly cookie.
+    // We deliberately do NOT fall back to the Authorization Bearer header —
+    // a logout triggered by a raw Bearer token could be forged by an XSS
+    // payload that reads the header from a JS-reachable context.  The
+    // httpOnly cookie is never accessible to JS, so it is the only
+    // trustworthy source for this sensitive operation.
+    let cookie_token = headers
         .get(axum::http::header::COOKIE)
         .and_then(|v| v.to_str().ok())
         .and_then(|cookies| {
@@ -408,28 +416,22 @@ pub async fn logout(
                 .split(';')
                 .find_map(|c| c.trim().strip_prefix("access_token="))
                 .map(|s| s.to_string())
-        })
-        .or_else(|| {
-            // Fall back to Authorization header so Bearer-token clients also get
-            // single-session logout rather than wiping all sessions.
-            headers
-                .get(axum::http::header::AUTHORIZATION)
-                .and_then(|v| v.to_str().ok())
-                .and_then(|h| h.strip_prefix("Bearer "))
-                .map(|s| s.to_string())
-        })
-        .and_then(|token| {
-            crate::auth::jwt::validate_access_token(&token, &state.config.jwt_secret)
-                .ok()
-                .and_then(|claims| claims.jti)
         });
+
+    let cookie_token = cookie_token.ok_or_else(|| {
+        AppError::Unauthorized("Logout requires an active session cookie".to_string())
+    })?;
+
+    let session_id =
+        crate::auth::jwt::validate_access_token(&cookie_token, &state.config.jwt_secret)
+            .ok()
+            .and_then(|claims| claims.jti);
 
     if let Some(sid) = session_id {
         SessionRepository::delete(&state.db, &sid).await?;
     } else {
-        // Could not extract session ID from access token — clear all sessions as
-        // a safe fallback (should not happen in normal flow given AuthUser succeeded).
-        tracing::warn!(user_id = %user.id, "logout: could not extract jti from access token — clearing all sessions for user");
+        // Cookie present but jti missing — clear all sessions as a safe fallback.
+        tracing::warn!(user_id = %user.id, "logout: could not extract jti from cookie access token — clearing all sessions for user");
         SessionRepository::delete_by_user(&state.db, &user.id).await?;
     }
 
@@ -650,6 +652,18 @@ pub async fn change_password(
         ));
     }
 
+    // Per-user rate limit: 5 attempts per minute (bcrypt is expensive)
+    let rl = state
+        .rate_limiter
+        .check(&format!("change_password_user:{}", user.id), 5);
+    if !rl.allowed {
+        return Err(AppError::RateLimitExceeded {
+            retry_after_secs: rl.retry_after_secs.unwrap_or(60),
+            limit: rl.limit,
+            remaining: rl.remaining,
+        });
+    }
+
     // Get user with password hash
     let db_user = UserRepository::find_by_id(&state.db, &user.id)
         .await?
@@ -788,6 +802,8 @@ pub async fn forgot_password(
             .trim_end_matches('/')
             .trim_end_matches("/api")
             .trim_end_matches('/');
+        // plain_token is hex-encoded (only [0-9a-f] characters) so it is already
+        // URL-safe and does not require percent-encoding.
         let reset_url = format!("{}/reset-password?token={}", web_base, plain_token);
         if let Err(e) = send_reset_email(&state.config, &user.email, &reset_url).await {
             tracing::warn!(user_id = %user.id, outcome = "smtp_failed", "Failed to send password reset email: {}", e);
@@ -820,6 +836,13 @@ pub async fn reset_password(
     // Reject oversized inputs before HMAC/bcrypt
     if req.token.len() > 1024 || req.new_password.len() > 1024 {
         return Err(AppError::Validation("Input too long".to_string()));
+    }
+
+    // Validate exact token length: generate_reset_token produces 32 bytes → 64 hex chars
+    if req.token.len() != 64 {
+        return Err(AppError::BadRequest(
+            "Invalid reset token format".to_string(),
+        ));
     }
 
     let token_hash = hash_reset_token(&req.token, state.config.password_reset_secret.as_bytes());

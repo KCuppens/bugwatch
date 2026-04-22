@@ -289,7 +289,7 @@ impl PerformanceRepository {
             "1h" => "1 hour",
             "6h" => "6 hours",
             "1d" => "1 day",
-            _ => "1 hour",
+            _ => return Err(anyhow::anyhow!("Unknown interval: {}", interval)),
         };
 
         let rows = sqlx::query_as::<

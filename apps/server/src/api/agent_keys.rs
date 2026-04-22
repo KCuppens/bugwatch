@@ -92,8 +92,15 @@ pub async fn create(
             "Too many permissions (max 10)".to_string(),
         ));
     }
+    // B4: deduplicate permissions before validation and storage
+    let mut seen = std::collections::HashSet::new();
+    let permissions: Vec<String> = req
+        .permissions
+        .into_iter()
+        .filter(|p| seen.insert(p.clone()))
+        .collect();
     let valid_permissions = ["read", "write", "admin"];
-    for perm in &req.permissions {
+    for perm in &permissions {
         if !valid_permissions.contains(&perm.as_str()) {
             return Err(AppError::Validation(format!(
                 "Invalid permission '{}'. Valid: read, write, admin",
@@ -122,7 +129,7 @@ pub async fn create(
     let raw_key = generate_agent_key();
     let hash = hash_agent_key(&raw_key, state.config.jwt_secret.as_bytes());
     let prefix = key_prefix(&raw_key);
-    let permissions_json = serde_json::to_string(&req.permissions)
+    let permissions_json = serde_json::to_string(&permissions)
         .map_err(|_| AppError::Internal("Failed to serialize permissions".to_string()))?;
 
     let agent_key = AgentKeyRepository::create(
@@ -143,7 +150,7 @@ pub async fn create(
         "agent_key.created",
         Some("agent_key"),
         Some(&agent_key.id),
-        Some(&serde_json::json!({"name": req.name, "permissions": req.permissions}).to_string()),
+        Some(&serde_json::json!({"name": req.name, "permissions": permissions}).to_string()),
         None,
     )
     .await;
@@ -154,7 +161,7 @@ pub async fn create(
             name: agent_key.name,
             key: raw_key, // Only returned once!
             key_prefix: agent_key.key_prefix,
-            permissions: req.permissions,
+            permissions,
             created_at: agent_key.created_at.to_rfc3339(),
         },
     }))

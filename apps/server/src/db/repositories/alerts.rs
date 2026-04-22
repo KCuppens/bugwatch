@@ -48,7 +48,7 @@ impl AlertRuleRepository {
 
     pub async fn list_by_project(pool: &DbPool, project_id: &str) -> Result<Vec<AlertRule>> {
         sqlx::query_as::<_, AlertRule>(
-            "SELECT * FROM alert_rules WHERE project_id = $1 ORDER BY created_at DESC",
+            "SELECT * FROM alert_rules WHERE project_id = $1 ORDER BY created_at DESC LIMIT 1000",
         )
         .bind(project_id)
         .fetch_all(pool)
@@ -58,7 +58,7 @@ impl AlertRuleRepository {
 
     pub async fn list_active_by_project(pool: &DbPool, project_id: &str) -> Result<Vec<AlertRule>> {
         sqlx::query_as::<_, AlertRule>(
-            "SELECT * FROM alert_rules WHERE project_id = $1 AND is_active = TRUE ORDER BY created_at DESC",
+            "SELECT * FROM alert_rules WHERE project_id = $1 AND is_active = TRUE ORDER BY created_at DESC LIMIT 1000",
         )
         .bind(project_id)
         .fetch_all(pool)
@@ -350,6 +350,9 @@ impl AlertLogRepository {
         message: &str,
         cooldown_minutes: i32,
     ) -> Result<Option<AlertLog>> {
+        if cooldown_minutes < 0 {
+            return Err(anyhow::anyhow!("cooldown_minutes must be non-negative"));
+        }
         // Derive a stable i64 from rule_id + trigger_id for the advisory lock.
         // DefaultHasher is explicitly unstable across Rust versions — a binary upgrade
         // would silently change every lock key, breaking cooldown enforcement.
@@ -596,7 +599,7 @@ impl EmailRateLimitRepository {
                 "DELETE FROM email_rate_limits WHERE id IN (
                     SELECT id FROM email_rate_limits
                     WHERE last_sent_at < NOW() - INTERVAL '24 hours'
-                    ORDER BY last_sent_at LIMIT 1000
+                    LIMIT 1000
                 )",
             )
             .execute(pool)

@@ -58,6 +58,31 @@ impl UserRepository {
     }
 
     pub async fn increment_failed_attempts(pool: &DbPool, id: &str) -> Result<()> {
+        // H5: Acquire a PostgreSQL advisory transaction lock on the user ID before
+        // the UPDATE to serialize concurrent increment_failed_attempts calls for the
+        // same user.  Without this lock, two simultaneous failed login attempts could
+        // both read `failed_login_attempts = 4` and both fail to trigger the lockout
+        // (or both double-count).  The lock is released automatically when the
+        // transaction commits or rolls back.
+        //
+        // Lock key: first 8 bytes of the user ID string, folded into an i64.
+        // Collisions are extremely unlikely (UUIDs are high-entropy) and harmless
+        // (they only cause two unrelated users to briefly serialize on lock acquire).
+        let lock_key: i64 = {
+            let b = id.as_bytes();
+            b.iter()
+                .take(8)
+                .enumerate()
+                .fold(0i64, |acc, (i, &byte)| acc | ((byte as i64) << (i * 8)))
+        };
+
+        let mut tx = pool.begin().await?;
+
+        sqlx::query("SELECT pg_advisory_xact_lock($1)")
+            .bind(lock_key)
+            .execute(&mut *tx)
+            .await?;
+
         sqlx::query(
             r#"
             -- threshold 5: see handle_login in api/auth.rs
@@ -73,8 +98,10 @@ impl UserRepository {
             "#,
         )
         .bind(id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
+
+        tx.commit().await?;
         Ok(())
     }
 

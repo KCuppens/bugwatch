@@ -78,6 +78,23 @@ impl MonitorRepository {
         Ok(row.0)
     }
 
+    /// Count total monitors across all projects belonging to an organization.
+    /// Used for agent-auth limit enforcement so the count is scoped to the org
+    /// rather than to a single user's projects.
+    pub async fn count_by_organization(pool: &DbPool, organization_id: &str) -> Result<i64> {
+        let row: (i64,) = sqlx::query_as(
+            r#"
+            SELECT COUNT(*) FROM monitors m
+            JOIN projects p ON m.project_id = p.id
+            WHERE p.organization_id = $1
+            "#,
+        )
+        .bind(organization_id)
+        .fetch_one(pool)
+        .await?;
+        Ok(row.0)
+    }
+
     pub async fn list_by_project(
         pool: &DbPool,
         project_id: &str,

@@ -852,6 +852,27 @@ mod saas_billing {
                     chrono::DateTime::from_timestamp(stripe_subscription.current_period_end, 0)
                         .map(|dt| dt.with_timezone(&chrono::Utc));
 
+                // G1: Enforce member-count floor — cannot activate a subscription whose
+                // seat count is below the current member count.
+                let current_members = OrganizationMemberRepository::count(&state.db, &org.id)
+                    .await
+                    .map_err(|e| {
+                        tracing::error!(org_id = %org.id, "Failed to count members for seat check: {}", e);
+                        (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "Failed to verify seat count".to_string(),
+                        )
+                    })?;
+                if seats < current_members {
+                    return Err((
+                        StatusCode::BAD_REQUEST,
+                        format!(
+                            "Seat count ({}) is less than current member count ({})",
+                            seats, current_members
+                        ),
+                    ));
+                }
+
                 // Atomically activate only if not already recorded — prevents concurrent
                 // verify_checkout calls from double-processing the same session.
                 let updated = OrganizationRepository::activate_subscription_if_new(
@@ -1249,6 +1270,14 @@ mod saas_billing {
             StatusCode::BAD_REQUEST,
             "No active subscription to modify".to_string(),
         ))?;
+
+        // G2: Explicit seats >= 1 guard before the member-count check.
+        if req.seats.unwrap_or(1) < 1 {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "Seat count must be at least 1".to_string(),
+            ));
+        }
 
         // G3: Enforce member-count floor — cannot reduce seats below current member count.
         let new_seats_requested = req.seats.unwrap_or(org.seats);
@@ -1722,6 +1751,17 @@ mod saas_billing {
         user: AuthUser,
         State(state): State<AppState>,
     ) -> Result<Json<SetupIntentResponse>, (StatusCode, String)> {
+        // Rate limit: 10 create_setup_intent requests per user per minute
+        let rl = state
+            .rate_limiter
+            .check(&format!("setup_intent:{}", user.id), 10);
+        if !rl.allowed {
+            return Err((
+                StatusCode::TOO_MANY_REQUESTS,
+                "Too many requests".to_string(),
+            ));
+        }
+
         let stripe = state.stripe.as_ref().ok_or((
             StatusCode::SERVICE_UNAVAILABLE,
             "Stripe not configured".to_string(),
@@ -1759,6 +1799,17 @@ mod saas_billing {
         State(state): State<AppState>,
         Json(req): Json<SetDefaultPaymentMethodRequest>,
     ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+        // Rate limit: 10 set_default_payment_method requests per user per minute
+        let rl = state
+            .rate_limiter
+            .check(&format!("set_default_pm:{}", user.id), 10);
+        if !rl.allowed {
+            return Err((
+                StatusCode::TOO_MANY_REQUESTS,
+                "Too many requests".to_string(),
+            ));
+        }
+
         let stripe = state.stripe.as_ref().ok_or((
             StatusCode::SERVICE_UNAVAILABLE,
             "Stripe not configured".to_string(),
@@ -1817,6 +1868,17 @@ mod saas_billing {
         State(state): State<AppState>,
         Path(payment_method_id): Path<String>,
     ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+        // Rate limit: 10 delete_payment_method requests per user per minute
+        let rl = state
+            .rate_limiter
+            .check(&format!("delete_pm:{}", user.id), 10);
+        if !rl.allowed {
+            return Err((
+                StatusCode::TOO_MANY_REQUESTS,
+                "Too many requests".to_string(),
+            ));
+        }
+
         let stripe = state.stripe.as_ref().ok_or((
             StatusCode::SERVICE_UNAVAILABLE,
             "Stripe not configured".to_string(),
@@ -2026,6 +2088,17 @@ mod saas_billing {
         user: AuthUser,
         State(state): State<AppState>,
     ) -> Result<Json<BillingDashboardResponse>, (StatusCode, String)> {
+        // Rate limit: 30 get_billing_dashboard requests per user per minute
+        let rl = state
+            .rate_limiter
+            .check(&format!("billing_dashboard:{}", user.id), 30);
+        if !rl.allowed {
+            return Err((
+                StatusCode::TOO_MANY_REQUESTS,
+                "Too many requests".to_string(),
+            ));
+        }
+
         let org = OrganizationRepository::find_by_user(&state.db, &user.id)
             .await
             .map_err(db_err)?
@@ -2084,6 +2157,17 @@ mod saas_billing {
         user: AuthUser,
         State(state): State<AppState>,
     ) -> Result<Json<UsageHistoryResponse>, (StatusCode, String)> {
+        // Rate limit: 20 get_usage_history requests per user per minute
+        let rl = state
+            .rate_limiter
+            .check(&format!("usage_history:{}", user.id), 20);
+        if !rl.allowed {
+            return Err((
+                StatusCode::TOO_MANY_REQUESTS,
+                "Too many requests".to_string(),
+            ));
+        }
+
         let org = OrganizationRepository::find_by_user(&state.db, &user.id)
             .await
             .map_err(db_err)?
