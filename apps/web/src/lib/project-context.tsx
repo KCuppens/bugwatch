@@ -75,6 +75,9 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
       const response = await projectsApi.list(1, 100);
       if (signal?.aborted) return;
       const fetchedProjects = response.data;
+      if (response.pagination.total > 100) {
+        console.warn(`[project-context] Large project count: ${response.pagination.total}`);
+      }
       setProjects(fetchedProjects);
 
       // Get stored project ID and validate

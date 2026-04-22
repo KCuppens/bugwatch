@@ -3,7 +3,6 @@ use axum::{
     Json,
 };
 use serde::{Deserialize, Serialize};
-use tracing::warn;
 
 use crate::{
     api::{PaginatedResponse, PaginationMeta, PaginationParams},
@@ -223,6 +222,22 @@ pub async fn create(
         return Err(AppError::Forbidden("write permission required".to_string()));
     }
 
+    // Rate limit: 20 create_monitor requests per identity per minute
+    let rl_key = match &*auth {
+        AuthIdentity::User(user) => user.id.clone(),
+        AuthIdentity::Agent(agent) => agent.organization_id.clone(),
+    };
+    let rl = state
+        .rate_limiter
+        .check(&format!("create_monitor:{}", rl_key), 20);
+    if !rl.allowed {
+        return Err(AppError::RateLimitExceeded {
+            retry_after_secs: rl.retry_after_secs.unwrap_or(60),
+            limit: rl.limit,
+            remaining: rl.remaining,
+        });
+    }
+
     // Verify project exists and user has access
     let project = ProjectRepository::find_by_id(&state.db, &project_id)
         .await?
@@ -355,8 +370,34 @@ pub async fn create(
         }
     }
 
+    // B4: name must not be blank
+    if request.name.trim().is_empty() {
+        return Err(AppError::BadRequest("name cannot be empty".to_string()));
+    }
+
+    // B2: HTTP method allowlist
+    const ALLOWED_METHODS: &[&str] = &["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
+    if !ALLOWED_METHODS.contains(&request.method.to_uppercase().as_str()) {
+        return Err(AppError::BadRequest("Invalid HTTP method".into()));
+    }
+
+    // B3: expected_status range
+    if let Some(status) = request.expected_status {
+        if !(100..=599).contains(&status) {
+            return Err(AppError::BadRequest(
+                "expected_status must be between 100 and 599".to_string(),
+            ));
+        }
+    }
+
+    // B9: headers size cap
     let headers_str = serde_json::to_string(&request.headers)
         .map_err(|_| AppError::BadRequest("Invalid headers format".to_string()))?;
+    if headers_str.len() > 16_384 {
+        return Err(AppError::BadRequest(
+            "Headers too large (max 16KB)".to_string(),
+        ));
+    }
 
     let monitor = MonitorRepository::create(
         &state.db,
@@ -388,6 +429,22 @@ pub async fn list(
     Path(project_id): Path<String>,
     Query(params): Query<PaginationParams>,
 ) -> AppResult<Json<PaginatedResponse<MonitorResponse>>> {
+    // Rate limit: 60 list_monitors requests per identity per minute
+    let rl_key = match &*auth {
+        AuthIdentity::User(user) => user.id.clone(),
+        AuthIdentity::Agent(agent) => agent.organization_id.clone(),
+    };
+    let rl = state
+        .rate_limiter
+        .check(&format!("list_monitors:{}", rl_key), 60);
+    if !rl.allowed {
+        return Err(AppError::RateLimitExceeded {
+            retry_after_secs: rl.retry_after_secs.unwrap_or(60),
+            limit: rl.limit,
+            remaining: rl.remaining,
+        });
+    }
+
     // Verify project exists and user has access
     let project = ProjectRepository::find_by_id(&state.db, &project_id)
         .await?
@@ -451,6 +508,22 @@ pub async fn get(
     auth: EitherAuth,
     Path((project_id, monitor_id)): Path<(String, String)>,
 ) -> AppResult<Json<MonitorDetailResponse>> {
+    // Rate limit: 60 get_monitor requests per identity per minute
+    let rl_key = match &*auth {
+        AuthIdentity::User(user) => user.id.clone(),
+        AuthIdentity::Agent(agent) => agent.organization_id.clone(),
+    };
+    let rl = state
+        .rate_limiter
+        .check(&format!("get_monitor:{}", rl_key), 60);
+    if !rl.allowed {
+        return Err(AppError::RateLimitExceeded {
+            retry_after_secs: rl.retry_after_secs.unwrap_or(60),
+            limit: rl.limit,
+            remaining: rl.remaining,
+        });
+    }
+
     // Verify project exists and user has access
     let project = ProjectRepository::find_by_id(&state.db, &project_id)
         .await?
@@ -506,6 +579,22 @@ pub async fn update(
 ) -> AppResult<Json<MonitorResponse>> {
     if !auth.has_permission("write") {
         return Err(AppError::Forbidden("write permission required".to_string()));
+    }
+
+    // Rate limit: 30 update_monitor requests per identity per minute
+    let rl_key = match &*auth {
+        AuthIdentity::User(user) => user.id.clone(),
+        AuthIdentity::Agent(agent) => agent.organization_id.clone(),
+    };
+    let rl = state
+        .rate_limiter
+        .check(&format!("update_monitor:{}", rl_key), 30);
+    if !rl.allowed {
+        return Err(AppError::RateLimitExceeded {
+            retry_after_secs: rl.retry_after_secs.unwrap_or(60),
+            limit: rl.limit,
+            remaining: rl.remaining,
+        });
     }
 
     // Verify project exists and user has access
@@ -578,12 +667,44 @@ pub async fn update(
         }
     }
 
+    // B4: name must not be blank
+    if let Some(ref name) = request.name {
+        if name.trim().is_empty() {
+            return Err(AppError::BadRequest("name cannot be empty".to_string()));
+        }
+    }
+
+    // B2: HTTP method allowlist
+    const ALLOWED_METHODS: &[&str] = &["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
+    if let Some(ref method) = request.method {
+        if !ALLOWED_METHODS.contains(&method.to_uppercase().as_str()) {
+            return Err(AppError::BadRequest("Invalid HTTP method".into()));
+        }
+    }
+
+    // B3: expected_status range
+    if let Some(status) = request.expected_status {
+        if !(100..=599).contains(&status) {
+            return Err(AppError::BadRequest(
+                "expected_status must be between 100 and 599".to_string(),
+            ));
+        }
+    }
+
+    // B9: headers size cap
     let headers_str = request
         .headers
         .as_ref()
         .map(|h| serde_json::to_string(h))
         .transpose()
         .map_err(|_| AppError::BadRequest("Invalid headers format".to_string()))?;
+    if let Some(ref hs) = headers_str {
+        if hs.len() > 16_384 {
+            return Err(AppError::BadRequest(
+                "Headers too large (max 16KB)".to_string(),
+            ));
+        }
+    }
 
     let updated = MonitorRepository::update(
         &state.db,
@@ -636,6 +757,22 @@ pub async fn delete(
 ) -> AppResult<Json<serde_json::Value>> {
     if !auth.has_permission("write") {
         return Err(AppError::Forbidden("write permission required".to_string()));
+    }
+
+    // Rate limit: 10 delete_monitor requests per identity per minute
+    let rl_key = match &*auth {
+        AuthIdentity::User(user) => user.id.clone(),
+        AuthIdentity::Agent(agent) => agent.organization_id.clone(),
+    };
+    let rl = state
+        .rate_limiter
+        .check(&format!("delete_monitor:{}", rl_key), 10);
+    if !rl.allowed {
+        return Err(AppError::RateLimitExceeded {
+            retry_after_secs: rl.retry_after_secs.unwrap_or(60),
+            limit: rl.limit,
+            remaining: rl.remaining,
+        });
     }
 
     // Verify project exists and user has access

@@ -1185,6 +1185,12 @@ pub async fn list_across_projects(
     let limit = params.limit.min(100).max(1);
     let offset = ((page - 1) * limit) as i64;
 
+    // B5: status allowlist
+    const ALLOWED_STATUSES: &[&str] = &["unresolved", "resolved", "ignored", "all"];
+    if !ALLOWED_STATUSES.contains(&params.status.as_str()) {
+        return Err(AppError::BadRequest("Invalid status filter".to_string()));
+    }
+
     let status_filter = if params.status == "all" {
         None
     } else {

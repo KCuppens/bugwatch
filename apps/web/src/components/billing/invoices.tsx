@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { FileText, Download, ExternalLink, ChevronDown, ChevronUp, AlertTriangle } from "lucide-react";
 import { billingApi, type Invoice, type InvoiceDetail } from "@/lib/api";
+import { isValidHttpUrl } from "@/lib/url-utils";
 import { toast } from "sonner";
 
 function InvoiceDetails({ details, invoice }: { details: InvoiceDetail; invoice: Invoice }) {
@@ -41,7 +42,7 @@ function InvoiceDetails({ details, invoice }: { details: InvoiceDetail; invoice:
         </div>
       </div>
       <div className="flex gap-2 pt-2">
-        {invoice.invoice_pdf && /^https?:\/\//.test(invoice.invoice_pdf) && (
+        {invoice.invoice_pdf && isValidHttpUrl(invoice.invoice_pdf) && (
           <Button
             variant="outline"
             size="sm"
@@ -55,7 +56,7 @@ function InvoiceDetails({ details, invoice }: { details: InvoiceDetail; invoice:
             Download PDF
           </Button>
         )}
-        {invoice.hosted_invoice_url && /^https?:\/\//.test(invoice.hosted_invoice_url) && (
+        {invoice.hosted_invoice_url && isValidHttpUrl(invoice.hosted_invoice_url) && (
           <Button
             variant="outline"
             size="sm"

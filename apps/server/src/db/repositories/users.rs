@@ -60,6 +60,7 @@ impl UserRepository {
     pub async fn increment_failed_attempts(pool: &DbPool, id: &str) -> Result<()> {
         sqlx::query(
             r#"
+            -- threshold 5: see handle_login in api/auth.rs
             UPDATE users
             SET failed_login_attempts = failed_login_attempts + 1,
                 locked_until = CASE

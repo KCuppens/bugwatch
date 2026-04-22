@@ -386,26 +386,40 @@ pub async fn login(
 
 /// POST /api/v1/auth/logout
 ///
-/// Deletes only the current session (identified via the refresh token cookie's
-/// jti claim) so the user stays logged in on other devices. Falls back to
-/// deleting all sessions if the cookie is absent or invalid.
+/// Deletes only the current session (identified via the jti claim already
+/// validated in the access token) so the user stays logged in on other devices.
+/// Using the access token's jti avoids re-parsing and re-validating the refresh
+/// cookie, and is always available because AuthUser requires a valid jti.
 pub async fn logout(
     State(state): State<AppState>,
     headers: HeaderMap,
     user: AuthUser,
 ) -> AppResult<(HeaderMap, Json<serde_json::Value>)> {
-    // Attempt single-session logout: extract session ID from the refresh token.
+    // Use the jti from the already-validated access token to identify the session.
+    // This avoids re-parsing the refresh cookie and is always consistent with the
+    // session that AuthUser verified. The access token is read from the cookie (or
+    // Authorization header fallback) and re-validated cheaply — the signature was
+    // already checked by AuthUser, so this is just claim extraction.
     let session_id = headers
         .get(axum::http::header::COOKIE)
         .and_then(|v| v.to_str().ok())
         .and_then(|cookies| {
             cookies
                 .split(';')
-                .find_map(|c| c.trim().strip_prefix("refresh_token="))
+                .find_map(|c| c.trim().strip_prefix("access_token="))
+                .map(|s| s.to_string())
+        })
+        .or_else(|| {
+            // Fall back to Authorization header so Bearer-token clients also get
+            // single-session logout rather than wiping all sessions.
+            headers
+                .get(axum::http::header::AUTHORIZATION)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|h| h.strip_prefix("Bearer "))
                 .map(|s| s.to_string())
         })
         .and_then(|token| {
-            crate::auth::jwt::validate_refresh_token(&token, &state.config.jwt_secret)
+            crate::auth::jwt::validate_access_token(&token, &state.config.jwt_secret)
                 .ok()
                 .and_then(|claims| claims.jti)
         });
@@ -413,8 +427,9 @@ pub async fn logout(
     if let Some(sid) = session_id {
         SessionRepository::delete(&state.db, &sid).await?;
     } else {
-        // No valid refresh cookie — clear all sessions as a safe fallback.
-        tracing::warn!(user_id = %user.id, "logout: refresh cookie absent or invalid — clearing all sessions for user");
+        // Could not extract session ID from access token — clear all sessions as
+        // a safe fallback (should not happen in normal flow given AuthUser succeeded).
+        tracing::warn!(user_id = %user.id, "logout: could not extract jti from access token — clearing all sessions for user");
         SessionRepository::delete_by_user(&state.db, &user.id).await?;
     }
 
@@ -643,6 +658,9 @@ pub async fn change_password(
     // Verify current password
     let is_valid = verify_password(&req.current_password, &db_user.password_hash)?;
     if !is_valid {
+        // Mirror login behaviour: increment failed attempts so brute-force of the
+        // current password via change_password also triggers account lockout.
+        UserRepository::increment_failed_attempts(&state.db, &user.id).await?;
         return Err(AppError::Unauthorized(
             "Current password is incorrect".to_string(),
         ));

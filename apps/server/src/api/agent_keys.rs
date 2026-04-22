@@ -87,6 +87,11 @@ pub async fn create(
     }
 
     // Validate permissions
+    if req.permissions.len() > 10 {
+        return Err(AppError::BadRequest(
+            "Too many permissions (max 10)".to_string(),
+        ));
+    }
     let valid_permissions = ["read", "write", "admin"];
     for perm in &req.permissions {
         if !valid_permissions.contains(&perm.as_str()) {

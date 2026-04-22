@@ -55,7 +55,10 @@ export async function middleware(req: NextRequest) {
   if (GUEST_PREFIXES.some((p) => pathname.startsWith(p))) {
     const valid = await hasValidSession(req);
     if (valid) {
-      return NextResponse.redirect(new URL("/dashboard", req.url));
+      const { searchParams } = req.nextUrl;
+      const next = searchParams.get("next") ?? "/dashboard";
+      const safeNext = next.startsWith("/") && !next.startsWith("//") ? next : "/dashboard";
+      return NextResponse.redirect(new URL(safeNext, req.url));
     }
   }
 

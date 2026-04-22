@@ -243,6 +243,7 @@ impl NotificationService {
     pub async fn new() -> Self {
         let client = Client::builder()
             .timeout(std::time::Duration::from_secs(30))
+            .min_tls_version(reqwest::tls::Version::TLS_1_2)
             .build()
             .expect("Failed to create HTTP client");
 
@@ -656,10 +657,14 @@ impl NotificationService {
             .to_string();
         let port = parsed.port_or_known_default().unwrap_or(80);
         let lookup = format!("{}:{}", host, port);
-        let addrs: Vec<std::net::SocketAddr> = tokio::net::lookup_host(&lookup)
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to resolve webhook host: {}", e))?
-            .collect();
+        let addrs: Vec<std::net::SocketAddr> = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            tokio::net::lookup_host(&lookup),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("DNS lookup timed out for webhook host"))?
+        .map_err(|e| anyhow::anyhow!("Failed to resolve webhook host: {}", e))?
+        .collect();
         if addrs.is_empty() {
             return Err(anyhow::anyhow!(
                 "Webhook URL host did not resolve to any address"
@@ -673,16 +678,22 @@ impl NotificationService {
             }
         }
         let pinned_client = Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
+            .timeout(std::time::Duration::from_secs(15))
+            .min_tls_version(reqwest::tls::Version::TLS_1_2)
             .resolve(&host, addrs[0])
             .build()
             .map_err(|e| anyhow::anyhow!("Failed to build pinned webhook client: {}", e))?;
 
         // Compute signature once; rebuild request each attempt since send() consumes the builder.
-        let signature = config.secret.as_ref().map(|secret| {
-            let payload_json = serde_json::to_string(payload).unwrap_or_default();
-            compute_hmac_signature(&payload_json, secret)
-        });
+        let signature = config
+            .secret
+            .as_ref()
+            .map(|secret| -> anyhow::Result<String> {
+                let payload_json = serde_json::to_string(payload)
+                    .map_err(|e| anyhow::anyhow!("Failed to serialize webhook payload: {}", e))?;
+                Ok(compute_hmac_signature(&payload_json, secret))
+            })
+            .transpose()?;
 
         // Single attempt — outer send_with_retry in alerting.rs handles up to 3
         // retries with jitter. An inner retry loop here would produce up to 9
@@ -756,11 +767,14 @@ impl NotificationService {
                 .ok_or_else(|| anyhow!("Slack webhook URL has no host"))?
                 .to_string();
             let port = parsed.port_or_known_default().unwrap_or(443);
-            let addrs: Vec<std::net::SocketAddr> =
-                tokio::net::lookup_host(format!("{}:{}", host, port))
-                    .await
-                    .map_err(|e| anyhow!("Failed to resolve Slack webhook host: {}", e))?
-                    .collect();
+            let addrs: Vec<std::net::SocketAddr> = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                tokio::net::lookup_host(format!("{}:{}", host, port)),
+            )
+            .await
+            .map_err(|_| anyhow!("DNS lookup timed out for Slack webhook host"))?
+            .map_err(|e| anyhow!("Failed to resolve Slack webhook host: {}", e))?
+            .collect();
             for addr in &addrs {
                 if is_ssrf_risk(addr.ip()) {
                     return Err(anyhow!(

@@ -17,6 +17,8 @@ import {
   AlertCircle,
   Loader2,
   ExternalLink,
+  Eye,
+  EyeOff,
 } from "lucide-react";
 import { projectsApi, ApiError, type Project, type Platform, type Framework } from "@/lib/api";
 import { getSDKContent, interpolateApiKey, getPlatformConfig, getFrameworkConfig } from "@/lib/sdk-config";
@@ -34,6 +36,7 @@ export default function ProjectSettingsPage() {
 
   const [name, setName] = useState("");
   const [copied, setCopied] = useState(false);
+  const [keyRevealed, setKeyRevealed] = useState(false);
   const [isRotating, setIsRotating] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState("");
@@ -60,11 +63,15 @@ export default function ProjectSettingsPage() {
     fetchProject();
   }, [projectId]);
 
-  function copyApiKey() {
+  async function copyApiKey() {
     if (!project) return;
-    navigator.clipboard.writeText(project.api_key);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    try {
+      await navigator.clipboard.writeText(project.api_key);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      toast.error("Failed to copy API key to clipboard");
+    }
   }
 
   async function handleRotateKey() {
@@ -197,8 +204,20 @@ export default function ProjectSettingsPage() {
             <Label>Your API Key</Label>
             <div className="flex items-center gap-2">
               <div className="flex-1 rounded-md border bg-muted px-3 py-2">
-                <code className="text-sm font-mono break-all">{project.api_key}</code>
+                <code className="text-sm font-mono break-all">{keyRevealed ? project.api_key : "•".repeat(32)}</code>
               </div>
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={() => setKeyRevealed((v) => !v)}
+                aria-label={keyRevealed ? "Hide API key" : "Reveal API key"}
+              >
+                {keyRevealed ? (
+                  <EyeOff className="h-4 w-4" aria-hidden="true" />
+                ) : (
+                  <Eye className="h-4 w-4" aria-hidden="true" />
+                )}
+              </Button>
               <Button
                 variant="outline"
                 size="icon"

@@ -334,16 +334,16 @@ export default function SettingsPage() {
           <span>Verifying your subscription...</span>
         </div>
       )}
-      {!isSelfHosted() && success === "true" && !verifying && !verificationError && (
+      {!isSelfHosted() && success === "true" && !verifying && !verificationError && verificationResult !== null && (
         <div
           role="alert"
           className="flex items-center gap-2 p-4 rounded-lg bg-green-50 dark:bg-green-950/20 border border-green-200 dark:border-green-800 text-green-800 dark:text-green-200"
         >
           <CheckCircle className="h-5 w-5" />
           <span>
-            {verificationResult?.already_processed
+            {verificationResult.already_processed
               ? "Your subscription is already active!"
-              : verificationResult?.message || "Your subscription has been updated successfully!"}
+              : verificationResult.message || "Your subscription has been updated successfully!"}
           </span>
         </div>
       )}

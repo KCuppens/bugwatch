@@ -41,11 +41,10 @@ pub fn hash_agent_key(key: &str, secret: &[u8]) -> String {
 
 /// Generate a new agent API key
 pub fn generate_agent_key() -> String {
-    use uuid::Uuid;
-    let random =
-        Uuid::new_v4().to_string().replace('-', "") + &Uuid::new_v4().to_string().replace('-', "");
-    // Take first 40 chars of the random string
-    format!("bw_agent_{}", &random[..40])
+    use rand::RngCore;
+    let mut bytes = [0u8; 32];
+    rand::rngs::OsRng.fill_bytes(&mut bytes);
+    format!("bw_agent_{}", hex::encode(bytes))
 }
 
 /// Extract the key prefix for display (first 12 chars)
@@ -138,8 +137,8 @@ mod tests {
         let key = generate_agent_key();
         assert_eq!(
             key.len(),
-            49,
-            "Key should be 49 chars (9 prefix + 40 random), got: {}",
+            73,
+            "Key should be 73 chars (9 prefix + 64 hex-encoded random bytes), got: {}",
             key.len()
         );
     }

@@ -362,7 +362,7 @@ pub async fn get_server_metrics(
         "6h" => Duration::hours(6),
         "24h" => Duration::hours(24),
         "7d" => Duration::days(7),
-        _ => Duration::hours(1),
+        _ => return Err(AppError::BadRequest("Invalid period".to_string())),
     };
 
     let now = Utc::now();

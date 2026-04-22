@@ -96,7 +96,7 @@ pub fn generate_tokens(
 /// Validate and decode a JWT token
 pub fn validate_token(token: &str, secret: &str) -> AppResult<Claims> {
     let mut validation = Validation::new(jsonwebtoken::Algorithm::HS256);
-    validation.set_required_spec_claims(&["exp", "iat", "sub"]);
+    validation.set_required_spec_claims(&["exp", "iat", "sub", "iss", "aud"]);
     // Validate audience and issuer to prevent cross-deployment token reuse
     validation.set_audience(&[JWT_AUDIENCE]);
     validation.set_issuer(&[JWT_ISSUER]);

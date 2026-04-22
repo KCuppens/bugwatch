@@ -108,14 +108,17 @@ impl OrganizationRepository {
             }
         }
 
-        // Single query: find org where user is owner OR member.
-        // ORDER BY (owner_id = $1) DESC ensures owned orgs sort first (TRUE > FALSE).
+        // UNION ALL: owned orgs first, then member orgs. Avoids OR + subquery
+        // which can't use separate indexes efficiently. LIMIT 1 applied after union.
         let result = sqlx::query_as::<_, Organization>(
             r#"
-            SELECT * FROM organizations
-            WHERE owner_id = $1
-               OR id IN (SELECT organization_id FROM organization_members WHERE user_id = $1)
-            ORDER BY (owner_id = $1) DESC
+            SELECT * FROM (
+                SELECT o.* FROM organizations o WHERE o.owner_id = $1
+                UNION ALL
+                SELECT o.* FROM organizations o
+                JOIN organization_members om ON om.organization_id = o.id
+                WHERE om.user_id = $1
+            ) combined
             LIMIT 1
             "#,
         )
@@ -425,7 +428,7 @@ pub struct OrganizationMemberRepository;
 
 impl OrganizationMemberRepository {
     /// Add a member to an organization
-    pub async fn add(
+    pub(crate) async fn add(
         pool: &DbPool,
         organization_id: &str,
         user_id: &str,

@@ -53,12 +53,22 @@ fn validate_channel_url(url: &str) -> AppResult<()> {
                 v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_unspecified()
             }
             std::net::IpAddr::V6(v6) => {
-                v6.is_loopback()
-                    || v6.is_unspecified()
-                    || v6
-                        .to_ipv4_mapped()
-                        .map(|v4| v4.is_loopback() || v4.is_private())
-                        .unwrap_or(false)
+                if v6.is_loopback() || v6.is_unspecified() {
+                    true
+                } else if v6
+                    .to_ipv4_mapped()
+                    .map(|v4| v4.is_loopback() || v4.is_private() || v4.is_link_local())
+                    .unwrap_or(false)
+                {
+                    true
+                } else {
+                    // IPv6 link-local: fe80::/10
+                    // IPv6 unique-local: fc00::/7 (fc:: and fd::)
+                    let o = v6.octets();
+                    let is_link_local = o[0] == 0xfe && (o[1] & 0xc0) == 0x80;
+                    let is_unique_local = o[0] & 0xfe == 0xfc;
+                    is_link_local || is_unique_local
+                }
             }
         };
         if blocked {
@@ -357,6 +367,21 @@ pub async fn update_alert_rule(
                 if *window_minutes == 0 {
                     return Err(AppError::BadRequest(
                         "window_minutes must be greater than 0".to_string(),
+                    ));
+                }
+            }
+            AlertCondition::ServerCpuHigh {
+                threshold_percent, ..
+            }
+            | AlertCondition::ServerMemoryHigh {
+                threshold_percent, ..
+            }
+            | AlertCondition::ServerDiskHigh {
+                threshold_percent, ..
+            } => {
+                if *threshold_percent <= 0.0 || *threshold_percent > 100.0 {
+                    return Err(AppError::BadRequest(
+                        "threshold_percent must be between 0 and 100".to_string(),
                     ));
                 }
             }
@@ -1170,7 +1195,7 @@ pub async fn test_alert_rule(
     let notification_service = &state.notification_service;
 
     // Batch-fetch all channels to avoid N+1 queries
-    let channels: std::collections::HashMap<String, _> =
+    let mut channels: std::collections::HashMap<String, NotificationChannel> =
         NotificationChannelRepository::find_by_ids(&state.db, &channel_ids)
             .await
             .map_err(|e| AppError::Internal(format!("Failed to fetch channels: {}", e)))?
@@ -1179,16 +1204,35 @@ pub async fn test_alert_rule(
             .map(|c| (c.id.clone(), c))
             .collect();
 
-    let mut sent_count = 0;
-    let mut errors = Vec::new();
+    // Collect the ordered active channels into owned values so they can be
+    // moved into spawned tasks (the HashMap cannot be shared across task boundaries).
+    let active_channels: Vec<NotificationChannel> = channel_ids
+        .iter()
+        .filter_map(|id| channels.remove(id))
+        .collect();
 
-    for channel_id in &channel_ids {
-        let Some(channel) = channels.get(channel_id) else {
-            continue;
-        };
-        match notification_service.send_test(channel).await {
-            Ok(_) => sent_count += 1,
-            Err(e) => errors.push(format!("{}: {}", channel.name, e)),
+    // Fan out test sends concurrently — each channel is independent.
+    type TestOutcome = Result<String, String>; // Ok(channel_name) | Err(error_msg)
+    let mut join_set: tokio::task::JoinSet<TestOutcome> = tokio::task::JoinSet::new();
+
+    for channel in active_channels {
+        let svc = std::sync::Arc::clone(notification_service);
+        join_set.spawn(async move {
+            match svc.send_test(&channel).await {
+                Ok(_) => Ok(channel.name),
+                Err(e) => Err(format!("{}: {}", channel.name, e)),
+            }
+        });
+    }
+
+    let mut sent_count = 0usize;
+    let mut errors: Vec<String> = Vec::new();
+
+    while let Some(join_result) = join_set.join_next().await {
+        match join_result {
+            Ok(Ok(_channel_name)) => sent_count += 1,
+            Ok(Err(msg)) => errors.push(msg),
+            Err(e) => errors.push(format!("Task panicked: {}", e)),
         }
     }
 

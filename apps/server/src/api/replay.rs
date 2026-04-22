@@ -403,7 +403,7 @@ pub async fn list_recordings(
     }
 
     let limit = params.limit.min(100);
-    let offset = params.offset.max(0);
+    let offset = params.offset.max(0).min(1_000_000);
 
     let recordings =
         ReplayRepository::list_recordings(&state.db, &project_id, limit, offset).await?;

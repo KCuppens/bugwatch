@@ -62,18 +62,23 @@ impl FromRequestParts<AppState> for AuthUser {
         // Validate token
         let claims = validate_access_token(token, &app_state.config.jwt_secret)?;
 
-        // If the access token carries a session ID (jti), verify the session still exists.
+        // Every access token must carry a session ID (jti). Hard-reject tokens
+        // without one — they cannot be validated against the session store and
+        // would bypass session revocation checks entirely.
+        let session_id = claims.jti.as_deref().ok_or_else(|| {
+            AppError::Unauthorized("Token missing session identifier".to_string())
+        })?;
+
+        // Verify the session still exists in the DB.
         // This ensures revoked sessions (logout, password change) cannot continue authenticating.
-        if let Some(ref session_id) = claims.jti {
-            let session_alive = SessionRepository::find_by_id(&app_state.db, session_id)
-                .await
-                .map(|s| s.is_some())
-                .unwrap_or(false);
-            if !session_alive {
-                return Err(AppError::Unauthorized(
-                    "Session has been revoked".to_string(),
-                ));
-            }
+        let session_alive = SessionRepository::find_by_id(&app_state.db, session_id)
+            .await
+            .map(|s| s.is_some())
+            .unwrap_or(false);
+        if !session_alive {
+            return Err(AppError::Unauthorized(
+                "Session has been revoked".to_string(),
+            ));
         }
 
         // Fetch user from database

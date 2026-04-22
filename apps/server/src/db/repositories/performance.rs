@@ -349,7 +349,7 @@ impl PerformanceRepository {
             let result = sqlx::query(
                 "DELETE FROM transactions WHERE id IN (
                     SELECT id FROM transactions
-                    WHERE created_at < NOW() - INTERVAL '1 day' * $1
+                    WHERE started_at < NOW() - INTERVAL '1 day' * $1
                     LIMIT 5000
                 )",
             )

@@ -157,6 +157,23 @@ impl AlertingService {
                 }
                 Ok(Ok(action)) => return Ok(action),
                 Ok(Err(e)) => {
+                    // Check if the error text indicates a permanent 4xx (non-429) client error.
+                    // send_webhook surfaces status codes as "Webhook failed: 4xx - …" strings.
+                    // For 4xx errors (except 429 Too Many Requests) retrying will never help.
+                    let err_str = e.to_string();
+                    let is_permanent_client_error = (400..500u16).any(|code| {
+                        code != 429 && err_str.contains(&format!("Webhook failed: {}", code))
+                    });
+                    if is_permanent_client_error {
+                        tracing::warn!(
+                            attempt = attempt + 1,
+                            rule_id = %rule_id,
+                            channel_id = %channel.id,
+                            "Alert send failed with permanent client error (no retry): {}",
+                            e
+                        );
+                        return Err(e);
+                    }
                     tracing::warn!(
                         attempt = attempt + 1,
                         rule_id = %rule_id,
@@ -668,6 +685,8 @@ impl AlertingService {
 
         // Phase 2: fan out notification sends concurrently — each channel is
         // independent, so serialising them just adds latency for no benefit.
+        // The shared semaphore caps concurrent HTTP+DB activity across all
+        // in-flight alert evaluations to protect the connection pool.
         type SendOutcome = (NotificationChannel, String, Result<Option<String>>);
         let mut join_set: tokio::task::JoinSet<SendOutcome> = tokio::task::JoinSet::new();
 
@@ -675,7 +694,19 @@ impl AlertingService {
             let svc = Arc::clone(&self.notification_service);
             let payload_clone = payload.clone();
             let rule_id_str = rule_id.to_string();
+            let sem = Arc::clone(&self.semaphore);
             join_set.spawn(async move {
+                let _permit = match sem.acquire_owned().await {
+                    Ok(p) => p,
+                    Err(e) => {
+                        tracing::error!(
+                            channel_id = %channel.id,
+                            "Alert semaphore closed unexpectedly, dropping channel task: {}",
+                            e
+                        );
+                        return (channel, log_id, Ok(None));
+                    }
+                };
                 let result =
                     AlertingService::send_with_retry(svc, &channel, &payload_clone, &rule_id_str)
                         .await;

@@ -174,6 +174,17 @@ pub async fn create_organization(
     State(state): State<AppState>,
     Json(req): Json<CreateOrganizationRequest>,
 ) -> Result<Json<OrganizationResponse>, (StatusCode, String)> {
+    // Rate limit: 5 create_organization requests per user per minute
+    let rl = state
+        .rate_limiter
+        .check(&format!("create_org:{}", user.id), 5);
+    if !rl.allowed {
+        return Err((
+            StatusCode::TOO_MANY_REQUESTS,
+            "Too many requests".to_string(),
+        ));
+    }
+
     let name = req.name.trim().to_string();
     if name.is_empty() || name.len() > 255 {
         return Err((
@@ -536,6 +547,17 @@ mod saas_billing {
         State(state): State<AppState>,
         Json(req): Json<CreateCheckoutRequest>,
     ) -> Result<Json<CheckoutResponse>, (StatusCode, String)> {
+        // Rate limit: 5 checkout requests per user per minute
+        let rl = state
+            .rate_limiter
+            .check(&format!("checkout:{}", user.id), 5);
+        if !rl.allowed {
+            return Err((
+                StatusCode::TOO_MANY_REQUESTS,
+                "Too many requests".to_string(),
+            ));
+        }
+
         if !matches!(req.tier.as_str(), "pro" | "team" | "enterprise") {
             return Err((
                 StatusCode::BAD_REQUEST,
@@ -933,12 +955,24 @@ mod saas_billing {
         }
     }
 
-    /// Extract tier from checkout session based on price ID or metadata
+    /// Extract tier from checkout session based on price ID or metadata.
+    /// G7: Only returns the tier if it is in the allowed set to prevent spoofed metadata
+    /// from injecting arbitrary tier strings into the database.
     fn extract_tier_from_session(session: &stripe::CheckoutSession) -> Option<String> {
+        const ALLOWED_TIERS: &[&str] = &["pro", "team", "enterprise"];
+
         // Try to get from metadata first
         if let Some(metadata) = &session.metadata {
             if let Some(tier) = metadata.get("tier") {
-                return Some(tier.clone());
+                if ALLOWED_TIERS.contains(&tier.as_str()) {
+                    return Some(tier.clone());
+                } else {
+                    tracing::error!(
+                        tier = %tier,
+                        "Invalid tier in Stripe session metadata — ignoring"
+                    );
+                    return None;
+                }
             }
         }
 
@@ -995,6 +1029,17 @@ mod saas_billing {
         State(state): State<AppState>,
         Json(req): Json<CancelSubscriptionRequest>,
     ) -> Result<StatusCode, (StatusCode, String)> {
+        // Rate limit: 5 cancel_subscription requests per user per minute
+        let rl = state
+            .rate_limiter
+            .check(&format!("cancel_sub:{}", user.id), 5);
+        if !rl.allowed {
+            return Err((
+                StatusCode::TOO_MANY_REQUESTS,
+                "Too many requests".to_string(),
+            ));
+        }
+
         let stripe = state.stripe.as_ref().ok_or((
             StatusCode::SERVICE_UNAVAILABLE,
             "Stripe not configured".to_string(),
@@ -1163,6 +1208,17 @@ mod saas_billing {
         State(state): State<AppState>,
         Json(req): Json<ChangePlanRequest>,
     ) -> Result<Json<ChangePlanResponse>, (StatusCode, String)> {
+        // Rate limit: 5 change_plan requests per user per minute
+        let rl = state
+            .rate_limiter
+            .check(&format!("change_plan:{}", user.id), 5);
+        if !rl.allowed {
+            return Err((
+                StatusCode::TOO_MANY_REQUESTS,
+                "Too many requests".to_string(),
+            ));
+        }
+
         if !matches!(req.tier.as_str(), "pro" | "team" | "enterprise") {
             return Err((
                 StatusCode::BAD_REQUEST,
@@ -1194,6 +1250,21 @@ mod saas_billing {
             "No active subscription to modify".to_string(),
         ))?;
 
+        // G3: Enforce member-count floor — cannot reduce seats below current member count.
+        let new_seats_requested = req.seats.unwrap_or(org.seats);
+        let current_members = OrganizationMemberRepository::count(&state.db, &org.id)
+            .await
+            .map_err(db_err)?;
+        if new_seats_requested < current_members {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "Cannot reduce seats below current member count ({})",
+                    current_members
+                ),
+            ));
+        }
+
         // Serialize concurrent plan changes for this org via a Postgres advisory lock.
         // pg_try_advisory_lock returns false if another session holds the same key.
         let lock_id: i64 = {
@@ -1218,7 +1289,8 @@ mod saas_billing {
         }
         // advisory_conn stays in scope until the function returns, releasing the lock automatically.
 
-        let seats = req.seats.unwrap_or(org.seats).min(10_000) as i64;
+        // G6: Clamp seats: floor at 1, ceiling at 10,000.
+        let seats = new_seats_requested.max(1).min(10_000) as i64;
         let annual = req
             .annual
             .unwrap_or(org.billing_interval.as_deref() == Some("annual"));
@@ -1286,6 +1358,17 @@ mod saas_billing {
         State(state): State<AppState>,
         Json(req): Json<ChangePlanRequest>,
     ) -> Result<Json<ProrationPreviewResponse>, (StatusCode, String)> {
+        // Rate limit: 20 preview_plan_change requests per user per minute
+        let rl = state
+            .rate_limiter
+            .check(&format!("preview_plan:{}", user.id), 20);
+        if !rl.allowed {
+            return Err((
+                StatusCode::TOO_MANY_REQUESTS,
+                "Too many requests".to_string(),
+            ));
+        }
+
         if !matches!(req.tier.as_str(), "pro" | "team" | "enterprise") {
             return Err((
                 StatusCode::BAD_REQUEST,
@@ -1315,7 +1398,8 @@ mod saas_billing {
             "No active subscription".to_string(),
         ))?;
 
-        let seats = req.seats.unwrap_or(org.seats).min(10_000) as i64;
+        // G6: Clamp seats: floor at 1, ceiling at 10,000.
+        let seats = req.seats.unwrap_or(org.seats).max(1).min(10_000) as i64;
         // Mirror change_plan: inherit the current billing interval rather than defaulting to monthly
         let annual = req
             .annual
@@ -1351,6 +1435,17 @@ mod saas_billing {
         State(state): State<AppState>,
         Json(req): Json<UpdateSeatsRequest>,
     ) -> Result<Json<ChangePlanResponse>, (StatusCode, String)> {
+        // Rate limit: 10 update_seats requests per user per minute
+        let rl = state
+            .rate_limiter
+            .check(&format!("update_seats:{}", user.id), 10);
+        if !rl.allowed {
+            return Err((
+                StatusCode::TOO_MANY_REQUESTS,
+                "Too many requests".to_string(),
+            ));
+        }
+
         let stripe = state.stripe.as_ref().ok_or((
             StatusCode::SERVICE_UNAVAILABLE,
             "Stripe not configured".to_string(),
@@ -1386,7 +1481,25 @@ mod saas_billing {
             ));
         }
 
-        // Guard: cannot reduce seats below occupied count
+        // G5: Acquire a PostgreSQL advisory transaction lock to serialize concurrent seat
+        // updates for the same org. pg_advisory_xact_lock blocks until acquired and is
+        // automatically released when the transaction ends — no explicit unlock needed.
+        // We derive the lock key from the org ID bytes (same derivation as change_plan).
+        let lock_key: i64 = {
+            let b = org.id.as_bytes();
+            b.iter()
+                .take(8)
+                .enumerate()
+                .fold(0i64, |acc, (i, &byte)| acc | ((byte as i64) << (i * 8)))
+        };
+        let mut tx = state.db.begin().await.map_err(db_err)?;
+        sqlx::query("SELECT pg_advisory_xact_lock($1)")
+            .bind(lock_key)
+            .execute(&mut *tx)
+            .await
+            .map_err(db_err)?;
+
+        // Guard: cannot reduce seats below occupied count (re-checked inside the lock).
         let current_count = OrganizationMemberRepository::count(&state.db, &org.id)
             .await
             .map_err(db_err)?;
@@ -1400,7 +1513,7 @@ mod saas_billing {
             ));
         }
 
-        // Update in Stripe
+        // Update in Stripe (outside the transaction — Stripe is an external system).
         stripe
             .update_subscription_seats(subscription_id, req.seats as i64)
             .await
@@ -1427,6 +1540,9 @@ mod saas_billing {
                 tracing::warn!(org_id = %org.id, new_seats = req.seats, "Seat update rejected: member count exceeds new seat value (concurrent add_member race)");
                 (StatusCode::CONFLICT, "Cannot reduce seats below current member count.".to_string())
             })?;
+
+        // Commit the advisory-lock transaction (lock is released here).
+        tx.commit().await.map_err(db_err)?;
         Ok(Json(ChangePlanResponse {
             success: true,
             tier: updated_org.tier,
@@ -1451,6 +1567,17 @@ mod saas_billing {
         user: AuthUser,
         State(state): State<AppState>,
     ) -> Result<Json<InvoicesResponse>, (StatusCode, String)> {
+        // Rate limit: 20 list_invoices requests per user per minute
+        let rl = state
+            .rate_limiter
+            .check(&format!("list_invoices:{}", user.id), 20);
+        if !rl.allowed {
+            return Err((
+                StatusCode::TOO_MANY_REQUESTS,
+                "Too many requests".to_string(),
+            ));
+        }
+
         let stripe = state.stripe.as_ref().ok_or((
             StatusCode::SERVICE_UNAVAILABLE,
             "Stripe not configured".to_string(),

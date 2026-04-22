@@ -31,3 +31,16 @@ export function isStripeBillingUrl(url: string): boolean {
     return false;
   }
 }
+
+/**
+ * Returns true only for https URLs on checkout.stripe.com.
+ * Prevents open-redirect if the checkout API ever returns an unexpected URL.
+ */
+export function isStripeCheckoutUrl(url: string): boolean {
+  try {
+    const u = new URL(url);
+    return u.hostname === "checkout.stripe.com" && u.protocol === "https:";
+  } catch {
+    return false;
+  }
+}

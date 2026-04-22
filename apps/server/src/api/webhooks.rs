@@ -303,14 +303,22 @@ async fn handle_checkout_completed(
                 .and_then(|item| item.quantity.and_then(|q| i32::try_from(q).ok()))
                 .unwrap_or(1);
 
-            // Get billing interval
+            // Get billing interval — use a typed match to avoid Debug-repr producing
+            // "month"/"year" instead of the canonical "monthly"/"annual" strings we store.
             let interval = subscription
                 .items
                 .data
                 .first()
                 .and_then(|item| item.price.as_ref())
                 .and_then(|price| price.recurring.as_ref())
-                .map(|r| format!("{:?}", r.interval).to_lowercase());
+                .map(|r| match r.interval {
+                    stripe::RecurringInterval::Year => "annual",
+                    stripe::RecurringInterval::Month => "monthly",
+                    _ => {
+                        tracing::warn!(interval = ?r.interval, "Unknown billing interval in checkout.session.completed");
+                        "monthly"
+                    }
+                }.to_string());
 
             // Get period dates
             let period_start =
@@ -380,6 +388,30 @@ async fn handle_invoice_paid(
         .unwrap_or(0);
 
     if customer_id.is_empty() {
+        return Ok(());
+    }
+
+    // G1: Atomically claim this event ID before any processing.
+    // Uses ON CONFLICT DO NOTHING so concurrent retries from Stripe are deduplicated.
+    let claimed =
+        BillingEventRepository::create_idempotent(&state.db, "pending", "invoice.paid", event_id)
+            .await
+            .map_err(|e| {
+                tracing::error!(
+                    event_id,
+                    "Failed to claim billing event slot for invoice.paid: {}",
+                    e
+                );
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Database error".to_string(),
+                )
+            })?;
+    if !claimed {
+        info!(
+            "Duplicate invoice.paid event (idempotency guard), skipping: {}",
+            event_id
+        );
         return Ok(());
     }
 
