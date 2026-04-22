@@ -172,6 +172,12 @@ pub async fn list(
     State(state): State<AppState>,
     auth_user: AuthUser,
 ) -> AppResult<Json<ApiResponse<Vec<AgentKeyResponse>>>> {
+    crate::api::enforce_rate_limit(
+        &state,
+        &format!("agent_keys_list:user:{}", auth_user.id),
+        30,
+    )?;
+
     let org = OrganizationRepository::find_by_user(&state.db, &auth_user.id)
         .await?
         .ok_or_else(|| AppError::BadRequest("No organization found".to_string()))?;
@@ -205,6 +211,12 @@ pub async fn revoke(
     auth_user: AuthUser,
     Path(key_id): Path<String>,
 ) -> AppResult<Json<ApiResponse<serde_json::Value>>> {
+    crate::api::enforce_rate_limit(
+        &state,
+        &format!("agent_keys_revoke:user:{}", auth_user.id),
+        10,
+    )?;
+
     let org = OrganizationRepository::find_by_user(&state.db, &auth_user.id)
         .await?
         .ok_or_else(|| AppError::BadRequest("No organization found".to_string()))?;
@@ -250,6 +262,12 @@ pub async fn audit_log(
     auth_user: AuthUser,
     Path(key_id): Path<String>,
 ) -> AppResult<Json<ApiResponse<Vec<AuditLogResponse>>>> {
+    crate::api::enforce_rate_limit(
+        &state,
+        &format!("agent_keys_audit:user:{}", auth_user.id),
+        30,
+    )?;
+
     let org = OrganizationRepository::find_by_user(&state.db, &auth_user.id)
         .await?
         .ok_or_else(|| AppError::BadRequest("No organization found".to_string()))?;

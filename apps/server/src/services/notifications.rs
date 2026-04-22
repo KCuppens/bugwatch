@@ -244,6 +244,7 @@ impl NotificationService {
         let client = Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .min_tls_version(reqwest::tls::Version::TLS_1_2)
+            .user_agent("Bugwatch/1.0")
             .build()
             .expect("Failed to create HTTP client");
 
@@ -698,7 +699,7 @@ impl NotificationService {
                 }
                 let payload_json = serde_json::to_string(payload)
                     .map_err(|e| anyhow::anyhow!("Failed to serialize webhook payload: {}", e))?;
-                Ok(Some(compute_hmac_signature(&payload_json, secret)))
+                Ok(Some(compute_hmac_signature(&payload_json, secret)?))
             })
             .transpose()?
             .flatten();
@@ -725,7 +726,8 @@ impl NotificationService {
                 })
                 .into_owned();
                 if !status.is_success() {
-                    return Err(anyhow!("Webhook failed: {} - {}", status, body));
+                    let truncated_body: String = body.chars().take(512).collect();
+                    return Err(anyhow!("Webhook failed: {} - {}", status, truncated_body));
                 }
                 body
             }
@@ -767,7 +769,7 @@ impl NotificationService {
         // SSRF guard — validate Slack webhook URL resolves to a safe address.
         // Incoming webhook URLs are typically hooks.slack.com, but we validate
         // all resolutions to catch misconfigured or crafted URLs.
-        let slack_webhook_host = {
+        let (slack_webhook_host, pinned_addr) = {
             let parsed = url::Url::parse(&config.webhook_url)
                 .map_err(|_| anyhow!("Slack webhook URL is invalid"))?;
             if !matches!(parsed.scheme(), "http" | "https") {
@@ -786,6 +788,9 @@ impl NotificationService {
             .map_err(|_| anyhow!("DNS lookup timed out for Slack webhook host"))?
             .map_err(|e| anyhow!("Failed to resolve Slack webhook host: {}", e))?
             .collect();
+            if addrs.is_empty() {
+                return Err(anyhow!("Slack webhook host did not resolve to any address"));
+            }
             for addr in &addrs {
                 if is_ssrf_risk(addr.ip()) {
                     return Err(anyhow!(
@@ -793,10 +798,21 @@ impl NotificationService {
                     ));
                 }
             }
-            host
+            (host, addrs[0])
         };
 
         info!("Slack webhook URL host: {}", slack_webhook_host);
+
+        // Build a pinned reqwest client that resolves the host to the exact
+        // SocketAddr we just validated. This closes the DNS-rebinding window
+        // between SSRF check and connect.
+        let pinned_slack_client = Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .min_tls_version(reqwest::tls::Version::TLS_1_2)
+            .user_agent("Bugwatch/1.0")
+            .resolve(&slack_webhook_host, pinned_addr)
+            .build()
+            .map_err(|e| anyhow!("Failed to build pinned Slack client: {}", e))?;
 
         // Get template (use default if not configured)
         let template = config.message_template.unwrap_or_default();
@@ -966,8 +982,7 @@ impl NotificationService {
             slack_payload["channel"] = serde_json::json!(channel);
         }
 
-        let response = self
-            .client
+        let response = pinned_slack_client
             .post(&config.webhook_url)
             .json(&slack_payload)
             .timeout(std::time::Duration::from_secs(10))
@@ -1175,19 +1190,19 @@ fn html_escape(s: &str) -> String {
 }
 
 /// Compute HMAC-SHA256 signature for webhook payloads
-pub(crate) fn compute_hmac_signature(payload: &str, secret: &str) -> String {
+pub(crate) fn compute_hmac_signature(payload: &str, secret: &str) -> Result<String> {
     use hmac::{Hmac, Mac};
     use sha2::Sha256;
 
     type HmacSha256 = Hmac<Sha256>;
 
-    let mut mac =
-        HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC can take key of any size");
+    let mut mac = HmacSha256::new_from_slice(secret.as_bytes())
+        .map_err(|e| anyhow!("Failed to initialize HMAC: {}", e))?;
     mac.update(payload.as_bytes());
 
     let result = mac.finalize();
     let bytes = result.into_bytes();
 
     // Return as hex string
-    hex::encode(bytes)
+    Ok(hex::encode(bytes))
 }

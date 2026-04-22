@@ -317,6 +317,12 @@ pub async fn update_alert_rule(
     Path((project_id, alert_id)): Path<(String, String)>,
     Json(request): Json<UpdateAlertRuleRequest>,
 ) -> AppResult<Json<AlertRuleResponse>> {
+    crate::api::enforce_rate_limit(
+        &state,
+        &crate::api::rate_limit_key_for_auth("alerts_update", &auth),
+        20,
+    )?;
+
     if !auth.has_permission("write") {
         return Err(AppError::Forbidden("write permission required".to_string()));
     }
@@ -444,6 +450,12 @@ pub async fn delete_alert_rule(
     auth: EitherAuth,
     Path((project_id, alert_id)): Path<(String, String)>,
 ) -> AppResult<Json<serde_json::Value>> {
+    crate::api::enforce_rate_limit(
+        &state,
+        &crate::api::rate_limit_key_for_auth("alerts_delete", &auth),
+        10,
+    )?;
+
     if !auth.has_permission("write") {
         return Err(AppError::Forbidden("write permission required".to_string()));
     }
@@ -792,6 +804,12 @@ pub async fn update_channel(
     Path((project_id, channel_id)): Path<(String, String)>,
     Json(request): Json<UpdateChannelRequest>,
 ) -> AppResult<Json<ChannelResponse>> {
+    crate::api::enforce_rate_limit(
+        &state,
+        &crate::api::rate_limit_key_for_auth("channels_update", &auth),
+        20,
+    )?;
+
     if !auth.has_permission("write") {
         return Err(AppError::Forbidden("write permission required".to_string()));
     }
@@ -880,6 +898,12 @@ pub async fn delete_channel(
     auth: EitherAuth,
     Path((project_id, channel_id)): Path<(String, String)>,
 ) -> AppResult<Json<serde_json::Value>> {
+    crate::api::enforce_rate_limit(
+        &state,
+        &crate::api::rate_limit_key_for_auth("channels_delete", &auth),
+        10,
+    )?;
+
     if !auth.has_permission("write") {
         return Err(AppError::Forbidden("write permission required".to_string()));
     }
@@ -927,6 +951,12 @@ pub async fn list_alert_logs(
     Path(project_id): Path<String>,
     Query(query): Query<AlertLogsQuery>,
 ) -> AppResult<Json<Vec<AlertLog>>> {
+    crate::api::enforce_rate_limit(
+        &state,
+        &crate::api::rate_limit_key_for_auth("alert_logs_list", &auth),
+        30,
+    )?;
+
     // Verify project access
     let project = ProjectRepository::find_by_id(&state.db, &project_id)
         .await?
@@ -987,6 +1017,12 @@ pub async fn list_alert_logs_across_projects(
     auth: EitherAuth,
     Query(query): Query<AcrossProjectsAlertLogsQuery>,
 ) -> AppResult<Json<AlertLogsAcrossProjectsResponse>> {
+    crate::api::enforce_rate_limit(
+        &state,
+        &crate::api::rate_limit_key_for_auth("alert_logs_across", &auth),
+        30,
+    )?;
+
     // Get projects based on auth type
     let projects = match &*auth {
         AuthIdentity::User(user) => {
@@ -1077,6 +1113,12 @@ pub async fn mute_alert_rule(
     Path((project_id, alert_id)): Path<(String, String)>,
     Json(request): Json<MuteAlertRequest>,
 ) -> AppResult<Json<AlertRuleResponse>> {
+    crate::api::enforce_rate_limit(
+        &state,
+        &crate::api::rate_limit_key_for_auth("alerts_mute", &auth),
+        20,
+    )?;
+
     if !auth.has_permission("write") {
         return Err(AppError::Forbidden("write permission required".to_string()));
     }
@@ -1132,6 +1174,12 @@ pub async fn unmute_alert_rule(
     auth: EitherAuth,
     Path((project_id, alert_id)): Path<(String, String)>,
 ) -> AppResult<Json<AlertRuleResponse>> {
+    crate::api::enforce_rate_limit(
+        &state,
+        &crate::api::rate_limit_key_for_auth("alerts_unmute", &auth),
+        20,
+    )?;
+
     if !auth.has_permission("write") {
         return Err(AppError::Forbidden("write permission required".to_string()));
     }

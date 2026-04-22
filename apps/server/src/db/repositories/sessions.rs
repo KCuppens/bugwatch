@@ -65,7 +65,7 @@ impl SessionRepository {
         user_agent: Option<&str>,
         jwt_secret: &str,
     ) -> Result<Session> {
-        let token_hash = hash_token(token, jwt_secret.as_bytes());
+        let token_hash = hash_token(token, jwt_secret.as_bytes())?;
         sqlx::query_as::<_, Session>(
             r#"
             INSERT INTO sessions (id, user_id, token_hash, expires_at, ip_address, user_agent)
@@ -102,7 +102,7 @@ impl SessionRepository {
         user_agent: Option<&str>,
         jwt_secret: &str,
     ) -> Result<bool> {
-        let token_hash = hash_token(token, jwt_secret.as_bytes());
+        let token_hash = hash_token(token, jwt_secret.as_bytes())?;
         let mut tx = pool.begin().await?;
 
         let deleted = sqlx::query("DELETE FROM sessions WHERE id = $1 AND expires_at > NOW()")
@@ -143,7 +143,7 @@ impl SessionRepository {
         token: &str,
         jwt_secret: &str,
     ) -> Result<()> {
-        let token_hash = hash_token(token, jwt_secret.as_bytes());
+        let token_hash = hash_token(token, jwt_secret.as_bytes())?;
         sqlx::query("UPDATE sessions SET token_hash = $1 WHERE id = $2")
             .bind(&token_hash)
             .bind(id)
@@ -167,8 +167,9 @@ impl SessionRepository {
 
 /// HMAC-SHA256 keyed on the JWT secret so a leaked token_hash column cannot
 /// be used to brute-force session tokens without also knowing the secret.
-fn hash_token(token: &str, secret: &[u8]) -> String {
-    let mut mac = HmacSha256::new_from_slice(secret).expect("HMAC accepts keys of any length");
+fn hash_token(token: &str, secret: &[u8]) -> Result<String> {
+    let mut mac = HmacSha256::new_from_slice(secret)
+        .map_err(|_| anyhow::anyhow!("Failed to create HMAC for token hashing"))?;
     mac.update(token.as_bytes());
-    hex::encode(mac.finalize().into_bytes())
+    Ok(hex::encode(mac.finalize().into_bytes()))
 }

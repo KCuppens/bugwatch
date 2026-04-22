@@ -1,3 +1,5 @@
+use std::sync::{Arc, OnceLock};
+
 use axum::{
     body::Bytes,
     extract::State,
@@ -5,12 +7,21 @@ use axum::{
 };
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
+use tokio::sync::Semaphore;
 use tracing::{info, warn};
 
 use crate::{
     db::repositories::{BillingEventRepository, OrganizationRepository},
     AppState,
 };
+
+static WEBHOOK_SEMAPHORE: OnceLock<Arc<Semaphore>> = OnceLock::new();
+
+fn webhook_semaphore() -> Arc<Semaphore> {
+    WEBHOOK_SEMAPHORE
+        .get_or_init(|| Arc::new(Semaphore::new(64)))
+        .clone()
+}
 
 /// Stripe webhook handler
 /// Handles subscription lifecycle events and credit purchases
@@ -131,7 +142,19 @@ pub async fn stripe_webhook(
             let event_id_owned = event_id.to_string();
             let event_type_for_panic = event_type_owned.clone();
             let event_id_for_panic = event_id_owned.clone();
+            let sem = webhook_semaphore();
+            let permit = match sem.try_acquire_owned() {
+                Ok(p) => p,
+                Err(_) => {
+                    tracing::warn!(event_id = %event_id_owned, "Webhook processing queue full");
+                    return Err((
+                        StatusCode::TOO_MANY_REQUESTS,
+                        "Webhook queue full".to_string(),
+                    ));
+                }
+            };
             let handle = tokio::spawn(async move {
+                let _permit = permit;
                 let result = match event_type_owned.as_str() {
                     "checkout.session.completed" => {
                         handle_checkout_completed(&state, &payload, &event_id_owned).await
@@ -199,8 +222,10 @@ fn verify_stripe_signature(payload: &[u8], signature_header: &str, secret: &str)
     // "bad signature" from "valid signature but stale timestamp".
     let signed_payload = format!("{}.{}", timestamp, String::from_utf8_lossy(payload));
 
-    let mut mac =
-        Hmac::<Sha256>::new_from_slice(secret.as_bytes()).expect("HMAC can take key of any size");
+    let Ok(mut mac) = Hmac::<Sha256>::new_from_slice(secret.as_bytes()) else {
+        tracing::error!("Failed to initialize HMAC for webhook signature verification");
+        return false;
+    };
     mac.update(signed_payload.as_bytes());
 
     let sig_valid = match hex::decode(signature) {
@@ -241,12 +266,14 @@ async fn handle_checkout_completed(
             "Missing data.object in checkout event".to_string(),
         ));
     }
-    let customer_id = session["customer"].as_str().unwrap_or("");
+    let customer_id = match session["customer"].as_str() {
+        Some(s) if !s.is_empty() => s,
+        _ => {
+            tracing::error!(event_id = %event_id, "Webhook payload missing customer_id");
+            return Err((StatusCode::BAD_REQUEST, "Missing customer ID".to_string()));
+        }
+    };
     let subscription_id = session["subscription"].as_str();
-
-    if customer_id.is_empty() {
-        return Err((StatusCode::BAD_REQUEST, "Missing customer ID".to_string()));
-    }
 
     // Find organization by Stripe customer ID
     let org = OrganizationRepository::find_by_stripe_customer(&state.db, customer_id)
@@ -381,15 +408,17 @@ async fn handle_invoice_paid(
             "Missing data.object in invoice event".to_string(),
         ));
     }
-    let customer_id = invoice["customer"].as_str().unwrap_or("");
+    let customer_id = match invoice["customer"].as_str() {
+        Some(s) if !s.is_empty() => s,
+        _ => {
+            tracing::error!(event_id = %event_id, "Webhook payload missing customer_id");
+            return Ok(());
+        }
+    };
     let amount_paid = invoice["amount_paid"]
         .as_i64()
         .and_then(|v| i32::try_from(v).ok())
         .unwrap_or(0);
-
-    if customer_id.is_empty() {
-        return Ok(());
-    }
 
     // G1: Atomically claim this event ID before any processing.
     // Uses ON CONFLICT DO NOTHING so concurrent retries from Stripe are deduplicated.
@@ -468,11 +497,13 @@ async fn handle_invoice_payment_failed(
             "Missing data.object in invoice event".to_string(),
         ));
     }
-    let customer_id = invoice["customer"].as_str().unwrap_or("");
-
-    if customer_id.is_empty() {
-        return Ok(());
-    }
+    let customer_id = match invoice["customer"].as_str() {
+        Some(s) if !s.is_empty() => s,
+        _ => {
+            tracing::error!(event_id = %event_id, "Webhook payload missing customer_id");
+            return Ok(());
+        }
+    };
 
     match OrganizationRepository::find_by_stripe_customer(&state.db, customer_id).await {
         Err(e) => {
@@ -544,16 +575,31 @@ async fn handle_subscription_updated(
             "Missing data.object in subscription event".to_string(),
         ));
     }
-    let customer_id = subscription["customer"].as_str().unwrap_or("");
-    let subscription_id = subscription["id"].as_str().unwrap_or("");
-    let status = subscription["status"].as_str().unwrap_or("active");
+    let customer_id = match subscription["customer"].as_str() {
+        Some(s) if !s.is_empty() => s,
+        _ => {
+            tracing::error!(event_id = %event_id, "Webhook payload missing customer_id");
+            return Ok(());
+        }
+    };
+    let subscription_id = match subscription["id"].as_str() {
+        Some(s) if !s.is_empty() => s,
+        _ => {
+            tracing::error!(event_id = %event_id, "Webhook payload missing subscription_id");
+            return Ok(());
+        }
+    };
+    let status = match subscription["status"].as_str() {
+        Some(s) if !s.is_empty() => s,
+        _ => {
+            tracing::error!(event_id = %event_id, "Webhook payload missing subscription status");
+            return Ok(());
+        }
+    };
+    // cancel_at_period_end: nice-to-have flag; safe default to false if absent.
     let cancel_at_period_end = subscription["cancel_at_period_end"]
         .as_bool()
         .unwrap_or(false);
-
-    if customer_id.is_empty() {
-        return Ok(());
-    }
 
     match OrganizationRepository::find_by_stripe_customer(&state.db, customer_id).await {
         Err(e) => {
@@ -586,10 +632,17 @@ async fn handle_subscription_updated(
                 .and_then(|t| chrono::DateTime::from_timestamp(t, 0))
                 .map(|dt| dt.with_timezone(&chrono::Utc));
 
-            // Determine tier
-            let price_id_str = subscription["items"]["data"][0]["price"]["id"]
-                .as_str()
-                .unwrap_or("");
+            // Determine tier — require price_id; empty would silently downgrade users to "free".
+            let price_id_str = match subscription["items"]["data"][0]["price"]["id"].as_str() {
+                Some(s) if !s.is_empty() => s,
+                _ => {
+                    tracing::error!(
+                        event_id = %event_id,
+                        "Webhook payload missing price_id for subscription update"
+                    );
+                    return Ok(());
+                }
+            };
             let tier = determine_tier_from_price_id(&state.config, price_id_str);
 
             // H5: guard against unknown price IDs silently downgrading to free
@@ -669,11 +722,13 @@ async fn handle_subscription_deleted(
             "Missing data.object in subscription event".to_string(),
         ));
     }
-    let customer_id = subscription["customer"].as_str().unwrap_or("");
-
-    if customer_id.is_empty() {
-        return Ok(());
-    }
+    let customer_id = match subscription["customer"].as_str() {
+        Some(s) if !s.is_empty() => s,
+        _ => {
+            tracing::error!(event_id = %event_id, "Webhook payload missing customer_id");
+            return Ok(());
+        }
+    };
 
     match OrganizationRepository::find_by_stripe_customer(&state.db, customer_id).await {
         Err(e) => {

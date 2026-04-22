@@ -267,17 +267,25 @@ pub async fn ingest_metrics(
     )
     .await?;
 
-    // 8. Async alert evaluation
+    // 8. Async alert evaluation (bounded by a timeout to prevent runaway tasks)
     let alerting = state.alerting_service.clone();
     let project_id = project.id.clone();
     let server_id_clone = server.id.clone();
     let metric_clone = metric.clone();
     tokio::spawn(async move {
-        if let Err(e) = alerting
-            .on_metrics_threshold(&project_id, &server_id_clone, &metric_clone)
-            .await
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            alerting.on_metrics_threshold(&project_id, &server_id_clone, &metric_clone),
+        )
+        .await
         {
-            tracing::error!("Failed to evaluate server metric alerts: {}", e);
+            Ok(Err(e)) => {
+                tracing::error!("Failed to evaluate server metric alerts: {}", e);
+            }
+            Err(_elapsed) => {
+                tracing::error!("Server metric alert evaluation timed out after 30s");
+            }
+            Ok(Ok(())) => {}
         }
     });
 
@@ -300,6 +308,7 @@ pub async fn list_servers(
     auth_user: AuthUser,
     Path(project_id): Path<String>,
 ) -> AppResult<Json<serde_json::Value>> {
+    crate::api::enforce_rate_limit(&state, &format!("servers_list:user:{}", auth_user.id), 30)?;
     require_project_owner(&state.db, &auth_user.id, &project_id).await?;
     let servers = ServerRepository::list_by_project(&state.db, &project_id).await?;
 
@@ -312,6 +321,7 @@ pub async fn servers_status(
     auth_user: AuthUser,
     Path(project_id): Path<String>,
 ) -> AppResult<Json<serde_json::Value>> {
+    crate::api::enforce_rate_limit(&state, &format!("servers_status:user:{}", auth_user.id), 60)?;
     require_project_owner(&state.db, &auth_user.id, &project_id).await?;
 
     let has_agent = ServerRepository::has_servers(&state.db, &project_id).await?;
@@ -344,6 +354,7 @@ pub async fn get_server_metrics(
     Path((project_id, server_id)): Path<(String, String)>,
     Query(params): Query<MetricsQuery>,
 ) -> AppResult<Json<serde_json::Value>> {
+    crate::api::enforce_rate_limit(&state, &format!("server_metrics:user:{}", auth_user.id), 60)?;
     require_project_owner(&state.db, &auth_user.id, &project_id).await?;
 
     // server_id here is the DB id of the server
@@ -422,6 +433,11 @@ pub async fn get_latest_metrics(
     auth_user: AuthUser,
     Path((project_id, server_id)): Path<(String, String)>,
 ) -> AppResult<Json<serde_json::Value>> {
+    crate::api::enforce_rate_limit(
+        &state,
+        &format!("server_metrics_latest:user:{}", auth_user.id),
+        60,
+    )?;
     require_project_owner(&state.db, &auth_user.id, &project_id).await?;
 
     let server = ServerRepository::find_by_id(&state.db, &server_id)

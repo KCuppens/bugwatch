@@ -62,6 +62,10 @@ pub fn validate_email(email: &str) -> AppResult<()> {
         Regex::new(r"^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$").unwrap()
     });
 
+    if email.len() < 3 {
+        return Err(AppError::Validation("Email address too short".to_string()));
+    }
+
     if email.len() > 254 {
         return Err(AppError::Validation(
             "Email address too long (max 254 characters)".to_string(),

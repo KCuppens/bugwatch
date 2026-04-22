@@ -80,6 +80,12 @@ pub async fn list_integrations(
     auth_user: AuthUser,
     x402_verified: Option<axum::Extension<crate::payments::X402PaymentVerified>>,
 ) -> AppResult<Json<ApiResponse<Vec<IntegrationResponse>>>> {
+    crate::api::enforce_rate_limit(
+        &state,
+        &format!("integrations_list:user:{}", auth_user.id),
+        30,
+    )?;
+
     if !state.config.deployment_mode.is_self_hosted()
         && !(state.config.x402_enabled && x402_verified.is_some())
     {
@@ -494,6 +500,12 @@ pub async fn delete_integration(
     x402_verified: Option<axum::Extension<crate::payments::X402PaymentVerified>>,
     Path(integration_id): Path<String>,
 ) -> AppResult<Json<ApiResponse<serde_json::Value>>> {
+    crate::api::enforce_rate_limit(
+        &state,
+        &format!("integrations_delete:user:{}", auth_user.id),
+        10,
+    )?;
+
     if !state.config.deployment_mode.is_self_hosted()
         && !(state.config.x402_enabled && x402_verified.is_some())
     {
@@ -802,6 +814,12 @@ pub async fn list_issue_links(
     auth_user: AuthUser,
     Path((project_id, issue_id)): Path<(String, String)>,
 ) -> AppResult<Json<ApiResponse<Vec<IssueLinkResponse>>>> {
+    crate::api::enforce_rate_limit(
+        &state,
+        &format!("issue_links_list:user:{}", auth_user.id),
+        60,
+    )?;
+
     // Basic auth check - no tier gate for reading links
     let org = OrganizationRepository::find_by_user(&state.db, &auth_user.id)
         .await?
@@ -849,6 +867,12 @@ pub async fn delete_issue_link(
     auth_user: AuthUser,
     Path((project_id, _issue_id, link_id)): Path<(String, String, String)>,
 ) -> AppResult<Json<ApiResponse<serde_json::Value>>> {
+    crate::api::enforce_rate_limit(
+        &state,
+        &format!("issue_links_delete:user:{}", auth_user.id),
+        10,
+    )?;
+
     let org = OrganizationRepository::find_by_user(&state.db, &auth_user.id)
         .await?
         .ok_or_else(|| AppError::BadRequest("No organization found".to_string()))?;
@@ -907,12 +931,39 @@ fn require_non_empty_secret(secret: &str, provider: &str) -> AppResult<()> {
     Ok(())
 }
 
+/// Best-effort client IP extraction from common proxy headers, with a fallback
+/// token so the bucket key is never empty. Used only for webhook endpoints
+/// (which have no authenticated user to key on).
+fn webhook_client_ip(headers: &HeaderMap) -> String {
+    if let Some(ip) = headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.split(',').next())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+    {
+        return ip;
+    }
+    if let Some(ip) = headers
+        .get("x-real-ip")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+    {
+        return ip;
+    }
+    "unknown".to_string()
+}
+
 /// POST /api/v1/webhooks/github - GitHub webhook for status sync
 pub async fn github_webhook(
     State(state): State<AppState>,
     headers: HeaderMap,
     body: Bytes,
 ) -> AppResult<Json<serde_json::Value>> {
+    let ip = webhook_client_ip(&headers);
+    crate::api::enforce_rate_limit(&state, &format!("webhook_github:{}", ip), 300)?;
+
     // Verify X-Hub-Signature-256
     let secret = state
         .config
@@ -972,6 +1023,9 @@ pub async fn jira_webhook(
     headers: HeaderMap,
     body: Bytes,
 ) -> AppResult<Json<serde_json::Value>> {
+    let ip = webhook_client_ip(&headers);
+    crate::api::enforce_rate_limit(&state, &format!("webhook_jira:{}", ip), 300)?;
+
     // Verify X-Hub-Signature
     let secret = state.config.jira_webhook_secret.as_deref().ok_or_else(|| {
         error!("JIRA_WEBHOOK_SECRET not configured - rejecting webhook");
@@ -999,7 +1053,12 @@ pub async fn jira_webhook(
 
     if webhook_event == "jira:issue_updated" {
         let issue = &payload["issue"];
-        let issue_id = issue["id"].as_str().unwrap_or("");
+        let issue_id = issue["id"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| {
+                AppError::BadRequest("Missing or empty issue_id in Jira webhook".to_string())
+            })?;
         let status = issue["fields"]["status"]["name"]
             .as_str()
             .unwrap_or("Unknown");
@@ -1020,6 +1079,9 @@ pub async fn linear_webhook(
     headers: HeaderMap,
     body: Bytes,
 ) -> AppResult<Json<serde_json::Value>> {
+    let ip = webhook_client_ip(&headers);
+    crate::api::enforce_rate_limit(&state, &format!("webhook_linear:{}", ip), 300)?;
+
     // Verify Linear-Signature
     let secret = state
         .config

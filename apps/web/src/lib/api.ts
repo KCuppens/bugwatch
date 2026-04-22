@@ -89,7 +89,9 @@ export async function refreshTokens(): Promise<boolean> {
       return true;
     } catch (e) {
       // Network error - don't clear tokens, might be temporary
-      console.debug("[Auth] Token refresh network error:", e);
+      if (process.env.NODE_ENV === "development") {
+        console.debug("[Auth] Token refresh network error:", e);
+      }
       return false;
     } finally {
       refreshPromise = null;
@@ -141,9 +143,9 @@ async function handleResponse<T>(response: Response): Promise<T> {
     return undefined as T;
   }
 
-  const contentType = response.headers.get('content-type');
-  if (!contentType?.includes('application/json')) {
-    throw new Error('Unexpected response format from server');
+  const contentType = response.headers.get("content-type");
+  if (!contentType?.includes("application/json")) {
+    throw new Error("Unexpected response format from server");
   }
 
   try {
@@ -177,7 +179,9 @@ async function fetchWithAuth(url: string, options: RequestInit = {}): Promise<Re
       // Exponential backoff with ±250ms jitter: ~1s, ~2s
       const delay = 1000 * Math.pow(2, attempt - 1) + Math.random() * 250;
       await new Promise((r) => setTimeout(r, delay));
-      console.debug(`[API] Retrying request (${attempt}/${FETCH_MAX_RETRIES}): ${url}`);
+      if (process.env.NODE_ENV === "development") {
+        console.debug(`[API] Retrying request (${attempt}/${FETCH_MAX_RETRIES}): ${url}`);
+      }
     }
 
     let response: Response;
@@ -198,14 +202,18 @@ async function fetchWithAuth(url: string, options: RequestInit = {}): Promise<Re
         // immediately rejected (e.g. another tab rotated the session first). Treat
         // as session expiry so the page never sees the raw server auth message.
         if (response.status === 401) {
-          console.debug("[Auth] Retry still 401 after refresh — dispatching bugwatch-auth-expired for:", url);
+          if (process.env.NODE_ENV === "development") {
+            console.debug("[Auth] Retry still 401 after refresh — dispatching bugwatch-auth-expired for:", url);
+          }
           window.dispatchEvent(new Event("bugwatch-auth-expired"));
           throw new ApiError(401, "session_expired", "Session expired. Redirecting to login.");
         }
       } else {
         // Refresh failed — session is fully expired. Throw a sentinel so pages can
         // identify auth expiry without exposing the raw server error message.
-        console.debug("[Auth] Session expired — dispatching bugwatch-auth-expired for:", url);
+        if (process.env.NODE_ENV === "development") {
+          console.debug("[Auth] Session expired — dispatching bugwatch-auth-expired for:", url);
+        }
         window.dispatchEvent(new Event("bugwatch-auth-expired"));
         throw new ApiError(401, "session_expired", "Session expired. Redirecting to login.");
       }
@@ -213,7 +221,11 @@ async function fetchWithAuth(url: string, options: RequestInit = {}): Promise<Re
 
     // 5xx: retry with backoff (4xx are client errors — fail fast)
     if (response.status >= 500 && attempt < FETCH_MAX_RETRIES) {
-      console.debug(`[API] Server error ${response.status}, will retry (${attempt + 1}/${FETCH_MAX_RETRIES}): ${url}`);
+      if (process.env.NODE_ENV === "development") {
+        console.debug(
+          `[API] Server error ${response.status}, will retry (${attempt + 1}/${FETCH_MAX_RETRIES}): ${url}`
+        );
+      }
       continue;
     }
 

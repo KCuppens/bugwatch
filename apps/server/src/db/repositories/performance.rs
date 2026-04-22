@@ -220,6 +220,7 @@ impl PerformanceRepository {
         end: DateTime<Utc>,
         limit: i64,
     ) -> Result<Vec<TransactionAggregate>> {
+        let limit = limit.max(1).min(10_000);
         let rows = sqlx::query_as::<
             _,
             (

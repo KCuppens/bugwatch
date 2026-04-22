@@ -177,7 +177,7 @@ impl NotificationChannelRepository {
         project_id: &str,
     ) -> Result<Vec<NotificationChannel>> {
         sqlx::query_as::<_, NotificationChannel>(
-            "SELECT * FROM notification_channels WHERE project_id = $1 ORDER BY created_at DESC",
+            "SELECT * FROM notification_channels WHERE project_id = $1 ORDER BY created_at DESC LIMIT 500",
         )
         .bind(project_id)
         .fetch_all(pool)
@@ -300,6 +300,7 @@ impl AlertLogRepository {
         project_id: &str,
         limit: u32,
     ) -> Result<Vec<AlertLog>> {
+        let limit = (limit.min(10_000)) as i64;
         sqlx::query_as::<_, AlertLog>(
             r#"
             SELECT al.* FROM alert_logs al
@@ -310,13 +311,14 @@ impl AlertLogRepository {
             "#,
         )
         .bind(project_id)
-        .bind(limit as i64)
+        .bind(limit)
         .fetch_all(pool)
         .await
         .map_err(Into::into)
     }
 
     pub async fn list_by_rule(pool: &DbPool, rule_id: &str, limit: u32) -> Result<Vec<AlertLog>> {
+        let limit = (limit.min(10_000)) as i64;
         sqlx::query_as::<_, AlertLog>(
             r#"
             SELECT * FROM alert_logs
@@ -326,7 +328,7 @@ impl AlertLogRepository {
             "#,
         )
         .bind(rule_id)
-        .bind(limit as i64)
+        .bind(limit)
         .fetch_all(pool)
         .await
         .map_err(Into::into)

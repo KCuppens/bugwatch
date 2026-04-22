@@ -323,6 +323,12 @@ pub async fn get_facets(
     auth: EitherAuth,
     Path(project_id): Path<String>,
 ) -> AppResult<Json<Facets>> {
+    crate::api::enforce_rate_limit(
+        &state,
+        &crate::api::rate_limit_key_for_auth("issues_facets", &auth),
+        60,
+    )?;
+
     let project = ProjectRepository::find_by_id(&state.db, &project_id)
         .await?
         .ok_or_else(|| AppError::NotFound("Project not found".to_string()))?;
@@ -465,6 +471,12 @@ pub async fn delete(
     auth: EitherAuth,
     Path((project_id, issue_id)): Path<(String, String)>,
 ) -> AppResult<Json<ApiResponse<serde_json::Value>>> {
+    crate::api::enforce_rate_limit(
+        &state,
+        &crate::api::rate_limit_key_for_auth("issues_delete", &auth),
+        10,
+    )?;
+
     require_project_access(&state.db, &auth, &project_id).await?;
 
     if !auth.has_permission("write") {
@@ -565,6 +577,12 @@ pub async fn get_frequency(
     Path((project_id, issue_id)): Path<(String, String)>,
     Query(params): Query<FrequencyParams>,
 ) -> AppResult<Json<ApiResponse<FrequencyData>>> {
+    crate::api::enforce_rate_limit(
+        &state,
+        &crate::api::rate_limit_key_for_auth("issues_frequency", &auth),
+        60,
+    )?;
+
     require_project_access(&state.db, &auth, &project_id).await?;
 
     // Get issue to verify it belongs to project
@@ -1005,6 +1023,12 @@ pub async fn get_impact(
     auth: EitherAuth,
     Path((project_id, issue_id)): Path<(String, String)>,
 ) -> AppResult<Json<ApiResponse<ImpactData>>> {
+    crate::api::enforce_rate_limit(
+        &state,
+        &crate::api::rate_limit_key_for_auth("issues_impact", &auth),
+        60,
+    )?;
+
     require_project_access(&state.db, &auth, &project_id).await?;
 
     // Get issue to verify it belongs to project
@@ -1150,6 +1174,12 @@ pub async fn list_across_projects(
     x402_verified: Option<axum::Extension<crate::payments::X402PaymentVerified>>,
     Query(params): Query<AcrossProjectsParams>,
 ) -> AppResult<Json<AcrossProjectsResponse>> {
+    crate::api::enforce_rate_limit(
+        &state,
+        &crate::api::rate_limit_key_for_auth("issues_across", &auth),
+        30,
+    )?;
+
     // Gate: Pro+ tier required for cross-project issue aggregation
     // x402_verified is set by the payment middleware when a valid feature_access payment was
     // verified; bypass the tier check only when x402 is enabled AND payment was verified.
@@ -1239,7 +1269,10 @@ pub async fn list_across_projects(
     )?;
     let total_pages = ((total as f64) / (limit as f64)).ceil() as u32;
 
-    // Enrich issues with project info
+    // Enrich issues with project info.
+    // Hard-cap the final aggregated vector at 500 entries as a defensive ceiling
+    // (per_page is already clamped to 100, but this protects against any future
+    // loosening of that clamp or bugs in upstream pagination math).
     let data: Vec<IssueWithProject> = issues
         .into_iter()
         .filter_map(|issue| {
@@ -1261,6 +1294,7 @@ pub async fn list_across_projects(
                 environment: issue.environment,
             })
         })
+        .take(500)
         .collect();
 
     Ok(Json(AcrossProjectsResponse {

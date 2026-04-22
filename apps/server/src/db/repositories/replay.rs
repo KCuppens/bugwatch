@@ -133,6 +133,8 @@ impl ReplayRepository {
         limit: i64,
         offset: i64,
     ) -> Result<Vec<SessionRecording>> {
+        let limit = limit.max(1).min(1000);
+        let offset = offset.max(0).min(100_000);
         sqlx::query_as::<_, SessionRecording>(
             "SELECT * FROM session_recordings WHERE project_id = $1 ORDER BY started_at DESC LIMIT $2 OFFSET $3",
         )

@@ -99,7 +99,9 @@ export default function SettingsPage() {
       const stored = localStorage.getItem("bugwatch-notification-prefs");
       if (stored) return parseNotifPrefs(stored);
     } catch (e) {
-      console.warn("Failed to parse notification preferences from localStorage:", e);
+      if (process.env.NODE_ENV === "development") {
+        console.warn("Failed to parse notification preferences from localStorage:", e);
+      }
     }
     return DEFAULT_NOTIF_PREFS;
   });
@@ -157,6 +159,8 @@ export default function SettingsPage() {
     if (verificationAttemptedRef.current) return;
     verificationAttemptedRef.current = true;
 
+    let mounted = true;
+
     async function verifyAndRefresh() {
       // If we have a session ID, verify it directly with Stripe
       if (sessionId) {
@@ -164,22 +168,28 @@ export default function SettingsPage() {
         setVerificationError(null);
         try {
           const result = await billingApi.verifyCheckout(sessionId);
+          if (!mounted) return;
           setVerificationResult(result);
           if (result.success) {
             // Verification successful - refresh user data
             await refreshUser();
+            if (!mounted) return;
             // Also refresh billing data
             try {
               const [orgResponse, subResponse] = await Promise.all([
                 billingApi.getOrganization(),
                 billingApi.getSubscription(),
               ]);
+              if (!mounted) return;
               setOrganization(orgResponse.organization);
               setIsOwner(orgResponse.is_owner);
               setSubscription(subResponse);
               setMembersCount(orgResponse.members_count);
             } catch (err) {
-              console.warn("[billing] Refresh after checkout verification failed:", err);
+              if (!mounted) return;
+              if (process.env.NODE_ENV === "development") {
+                console.warn("[billing] Refresh after checkout verification failed:", err);
+              }
               toast.info("Subscription verified — refresh the page if plan details look outdated");
             }
           } else {
@@ -188,17 +198,20 @@ export default function SettingsPage() {
             await refreshUser();
           }
         } catch {
+          if (!mounted) return;
           toast.error("Checkout verification failed");
           setVerificationError("Failed to verify checkout. Refreshing subscription data...");
           // Fallback to regular refresh
           await refreshUser();
         } finally {
-          setVerifying(false);
-          // Clean up URL params after verification attempt
-          const params = new URLSearchParams(searchParams.toString());
-          params.delete("session_id");
-          // Keep success=true to show the message, but remove session_id to prevent re-verification
-          router.replace(`/dashboard/settings?${params.toString()}`, { scroll: false });
+          if (mounted) {
+            setVerifying(false);
+            // Clean up URL params after verification attempt
+            const params = new URLSearchParams(searchParams.toString());
+            params.delete("session_id");
+            // Keep success=true to show the message, but remove session_id to prevent re-verification
+            router.replace(`/dashboard/settings?${params.toString()}`, { scroll: false });
+          }
         }
       } else {
         // No session ID - fallback to regular refresh (legacy behavior)
@@ -207,6 +220,10 @@ export default function SettingsPage() {
     }
 
     verifyAndRefresh();
+
+    return () => {
+      mounted = false;
+    };
   }, [success, sessionId, refreshUser, router, searchParams]);
 
   const handleSave = useCallback(async () => {

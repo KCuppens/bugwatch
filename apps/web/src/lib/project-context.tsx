@@ -41,9 +41,11 @@ function getStoredRecentProjectIds(): string[] {
   try {
     const stored = localStorage.getItem(STORAGE_KEYS.recentProjects);
     if (!stored) return [];
-    const parsed = JSON.parse(stored);
-    if (!Array.isArray(parsed)) return [];
-    return parsed;
+    const parsed: unknown = JSON.parse(stored);
+    if (Array.isArray(parsed) && parsed.every((item) => typeof item === "string")) {
+      return parsed as string[];
+    }
+    return [];
   } catch {
     return [];
   }

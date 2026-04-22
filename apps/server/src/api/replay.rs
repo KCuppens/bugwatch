@@ -314,6 +314,8 @@ pub async fn finish_recording(
     Json(req): Json<FinishRecordingRequest>,
 ) -> AppResult<Json<serde_json::Value>> {
     let api_key = extract_api_key(&headers)?;
+    crate::api::enforce_rate_limit(&state, &format!("replay_finish:apikey:{}", api_key), 60)?;
+
     let project = ProjectRepository::find_by_api_key(&state.db, &api_key)
         .await?
         .ok_or_else(|| AppError::Unauthorized("Invalid API key".to_string()))?;
@@ -368,6 +370,8 @@ pub async fn list_recordings(
     Path(project_id): Path<String>,
     Query(params): Query<ListRecordingsQuery>,
 ) -> AppResult<Json<serde_json::Value>> {
+    crate::api::enforce_rate_limit(&state, &format!("replay_list:user:{}", user.id), 30)?;
+
     // Tier gate
     {
         if !state.config.deployment_mode.is_self_hosted()
@@ -424,6 +428,8 @@ pub async fn get_recording(
     x402_verified: Option<axum::Extension<crate::payments::X402PaymentVerified>>,
     Path((project_id, recording_id)): Path<(String, String)>,
 ) -> AppResult<Json<serde_json::Value>> {
+    crate::api::enforce_rate_limit(&state, &format!("replay_get:user:{}", user.id), 60)?;
+
     {
         if !state.config.deployment_mode.is_self_hosted()
             && !(state.config.x402_enabled && x402_verified.is_some())
@@ -477,6 +483,8 @@ pub async fn get_segments(
     x402_verified: Option<axum::Extension<crate::payments::X402PaymentVerified>>,
     Path((project_id, recording_id)): Path<(String, String)>,
 ) -> AppResult<Json<Vec<SegmentData>>> {
+    crate::api::enforce_rate_limit(&state, &format!("replay_segments:user:{}", user.id), 60)?;
+
     {
         if !state.config.deployment_mode.is_self_hosted()
             && !(state.config.x402_enabled && x402_verified.is_some())
@@ -542,6 +550,8 @@ pub async fn get_issue_replay(
     x402_verified: Option<axum::Extension<crate::payments::X402PaymentVerified>>,
     Path((project_id, issue_id)): Path<(String, String)>,
 ) -> AppResult<Json<serde_json::Value>> {
+    crate::api::enforce_rate_limit(&state, &format!("replay_issue:user:{}", user.id), 60)?;
+
     {
         if !state.config.deployment_mode.is_self_hosted()
             && !(state.config.x402_enabled && x402_verified.is_some())

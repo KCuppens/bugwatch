@@ -162,7 +162,7 @@ impl IntegrationRepository {
         let encrypted_access = maybe_encrypt(access_token)?;
         let encrypted_refresh = refresh_token.map(maybe_encrypt).transpose()?;
 
-        sqlx::query(
+        let result = sqlx::query(
             r#"
             UPDATE integrations
             SET access_token = $1, refresh_token = $2, token_expires_at = $3, updated_at = NOW()
@@ -175,6 +175,11 @@ impl IntegrationRepository {
         .bind(id)
         .execute(pool)
         .await?;
+        if result.rows_affected() == 0 {
+            return Err(anyhow::anyhow!(
+                "Integration not found or could not be updated"
+            ));
+        }
         Ok(())
     }
 }

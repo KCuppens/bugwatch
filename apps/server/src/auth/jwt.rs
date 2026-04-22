@@ -1,6 +1,7 @@
 use chrono::{Duration, Utc};
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
+use subtle::ConstantTimeEq;
 
 use crate::{AppError, AppResult};
 
@@ -138,7 +139,7 @@ pub fn validate_token(token: &str, secret: &str) -> AppResult<Claims> {
 pub fn validate_access_token(token: &str, secret: &str) -> AppResult<Claims> {
     let claims = validate_token(token, secret)?;
 
-    if claims.token_type != "access" {
+    if !bool::from(claims.token_type.as_bytes().ct_eq(b"access")) {
         return Err(AppError::Unauthorized("Invalid token type".to_string()));
     }
 
@@ -155,7 +156,7 @@ pub fn validate_access_token(token: &str, secret: &str) -> AppResult<Claims> {
 pub fn validate_refresh_token(token: &str, secret: &str) -> AppResult<Claims> {
     let claims = validate_token(token, secret)?;
 
-    if claims.token_type != "refresh" {
+    if !bool::from(claims.token_type.as_bytes().ct_eq(b"refresh")) {
         return Err(AppError::Unauthorized("Invalid token type".to_string()));
     }
 

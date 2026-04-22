@@ -1,7 +1,31 @@
 use axum::{routing::delete, routing::get, routing::patch, routing::post, Json, Router};
 use serde::{Deserialize, Serialize};
 
-use crate::AppState;
+use crate::{auth::AuthIdentity, AppError, AppResult, AppState};
+
+/// Compute a composite rate-limit key for an `AuthIdentity` (user or agent).
+/// Using a composite key ensures user and agent identities never share a bucket.
+pub fn rate_limit_key_for_auth(prefix: &str, auth: &AuthIdentity) -> String {
+    match auth {
+        AuthIdentity::User(u) => format!("{}:user:{}", prefix, u.id),
+        AuthIdentity::Agent(a) => {
+            format!("{}:agent:{}:{}", prefix, a.organization_id, a.agent_key.id)
+        }
+    }
+}
+
+/// Apply a per-minute rate limit and convert a rejection into an `AppError`.
+pub fn enforce_rate_limit(state: &AppState, key: &str, limit: u32) -> AppResult<()> {
+    let result = state.rate_limiter.check(key, limit);
+    if !result.allowed {
+        return Err(AppError::RateLimitExceeded {
+            retry_after_secs: result.retry_after_secs.unwrap_or(60),
+            limit: result.limit,
+            remaining: result.remaining,
+        });
+    }
+    Ok(())
+}
 
 pub mod agent_keys;
 pub mod alerts;
