@@ -66,6 +66,16 @@ pub async fn create(
     auth_user: AuthUser,
     Json(req): Json<CreateAgentKeyRequest>,
 ) -> AppResult<Json<ApiResponse<AgentKeyCreatedResponse>>> {
+    // Rate limit: 10 create_agent_key requests per user
+    let rl = state
+        .rate_limiter
+        .check(&format!("create_agent_key:{}", auth_user.id), 10);
+    if !rl.allowed {
+        return Err(AppError::BadRequest(
+            "Too many requests. Please try again later.".to_string(),
+        ));
+    }
+
     // Validate name
     if req.name.trim().is_empty() {
         return Err(AppError::Validation("Key name cannot be empty".to_string()));
@@ -105,7 +115,7 @@ pub async fn create(
 
     // Generate the key
     let raw_key = generate_agent_key();
-    let hash = hash_agent_key(&raw_key);
+    let hash = hash_agent_key(&raw_key, state.config.jwt_secret.as_bytes());
     let prefix = key_prefix(&raw_key);
     let permissions_json = serde_json::to_string(&req.permissions)
         .map_err(|_| AppError::Internal("Failed to serialize permissions".to_string()))?;

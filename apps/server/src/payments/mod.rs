@@ -216,7 +216,7 @@ pub async fn apply_capacity_grant_in_tx(
         }
         "storage_bytes" => {
             sqlx::query(
-                "UPDATE organizations SET x402_extra_storage_bytes = x402_extra_storage_bytes + $1 WHERE id = $2"
+                "UPDATE organizations SET x402_extra_storage_bytes = LEAST(x402_extra_storage_bytes + $1, 107374182400) WHERE id = $2"
             )
             .bind(quantity)
             .bind(org_id)
@@ -376,7 +376,7 @@ async fn get_org_id_from_request(state: &AppState, req: &Request<Body>) -> Optio
         return None;
     }
 
-    let key_hash = hash_agent_key(key);
+    let key_hash = hash_agent_key(key, state.config.jwt_secret.as_bytes());
     let agent_key = AgentKeyRepository::find_by_hash(&state.db, &key_hash)
         .await
         .ok()??;

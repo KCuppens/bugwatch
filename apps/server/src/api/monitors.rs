@@ -546,11 +546,34 @@ pub async fn update(
         validate_monitor_url(url)?;
     }
 
-    // Validate interval if provided
+    // Validate interval if provided (B7: add upper bound)
     if let Some(interval) = request.interval_seconds {
         if interval < 30 {
             return Err(AppError::BadRequest(
                 "Interval must be at least 30 seconds".to_string(),
+            ));
+        }
+        if interval > 86_400 {
+            return Err(AppError::BadRequest(
+                "Interval must be at most 86400 seconds (1 day)".to_string(),
+            ));
+        }
+    }
+
+    // B8: timeout bounds on update
+    if let Some(timeout) = request.timeout_ms {
+        if timeout < 1_000 || timeout > 300_000 {
+            return Err(AppError::BadRequest(
+                "Timeout must be between 1000 and 300000 milliseconds".to_string(),
+            ));
+        }
+    }
+
+    // B9: body size cap on update
+    if let Some(ref body) = request.body {
+        if body.len() > 10_000 {
+            return Err(AppError::BadRequest(
+                "Monitor request body too large (max 10000 bytes)".to_string(),
             ));
         }
     }

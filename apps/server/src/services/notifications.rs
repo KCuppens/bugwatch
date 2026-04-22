@@ -498,7 +498,8 @@ impl NotificationService {
         recipient: &str,
         payload: &AlertPayload,
     ) -> Result<()> {
-        let subject = format!("[Bugwatch] {}", payload.title);
+        let title_safe = payload.title.replace('\r', "").replace('\n', " ");
+        let subject = format!("[Bugwatch] {}", title_safe);
         let html_body = self.build_email_html(payload);
 
         let email = LettreMessage::builder()
@@ -531,12 +532,13 @@ impl NotificationService {
         recipient: &str,
         payload: &AlertPayload,
     ) -> Result<()> {
-        let subject = format!("[Bugwatch] {}", payload.title);
+        let title_safe = payload.title.replace('\r', "").replace('\n', " ");
+        let subject = format!("[Bugwatch] {}", title_safe);
 
         // Build HTML email body
         let html_body = self.build_email_html(payload);
         // Strip CRLF to prevent email header injection via user-controlled fields.
-        let title_safe = payload.title.replace('\r', "").replace('\n', " ");
+        // title_safe is already defined above for the subject line.
         let message_safe = payload.message.replace('\r', "").replace('\n', " ");
         let text_body = format!(
             "{}\n\n{}\n\nProject: {}\nSeverity: {}\nTime: {}",
@@ -803,7 +805,7 @@ impl NotificationService {
             match block_config.block_type {
                 SlackBlockType::Header => {
                     // Slack section text limit: 3000 chars
-                    let header_text = format!("{} *{}*", emoji, payload.title);
+                    let header_text = format!("{} *{}*", emoji, slack_escape(&payload.title));
                     blocks.push(serde_json::json!({
                         "type": "section",
                         "text": {
@@ -814,11 +816,12 @@ impl NotificationService {
                 }
                 SlackBlockType::Message => {
                     // Slack section text limit: 3000 chars (account for backticks + ellipsis)
-                    let msg = if payload.message.len() > 2997 {
-                        let end = floor_char_boundary(&payload.message, 2993);
-                        format!("`{}...`", &payload.message[..end])
+                    let escaped_message = slack_escape(&payload.message);
+                    let msg = if escaped_message.len() > 2997 {
+                        let end = floor_char_boundary(&escaped_message, 2993);
+                        format!("`{}...`", &escaped_message[..end])
                     } else {
-                        format!("`{}`", payload.message)
+                        format!("`{}`", escaped_message)
                     };
                     blocks.push(serde_json::json!({
                         "type": "section",
@@ -835,7 +838,9 @@ impl NotificationService {
                     // Slack context text limit: 3000 chars
                     let context_text = format!(
                         "*Project:* {} | *Severity:* {} | *Time:* {}",
-                        payload.project_name, payload.severity, payload.timestamp
+                        slack_escape(&payload.project_name),
+                        payload.severity,
+                        payload.timestamp
                     );
                     blocks.push(serde_json::json!({
                         "type": "context",
@@ -900,7 +905,12 @@ impl NotificationService {
 
         // If no blocks were generated, add a minimal fallback block
         if blocks.is_empty() {
-            let fallback_block_text = format!("{} *{}*: {}", emoji, payload.title, payload.message);
+            let fallback_block_text = format!(
+                "{} *{}*: {}",
+                emoji,
+                slack_escape(&payload.title),
+                slack_escape(&payload.message)
+            );
             blocks.push(serde_json::json!({
                 "type": "section",
                 "text": {
@@ -912,7 +922,9 @@ impl NotificationService {
 
         let fallback_text = format!(
             "[{}] {}: {}",
-            payload.severity, payload.title, payload.message
+            payload.severity,
+            slack_escape(&payload.title),
+            slack_escape(&payload.message)
         );
 
         // Incoming webhooks do NOT support blocks inside attachments (that's
@@ -941,9 +953,11 @@ impl NotificationService {
 
         let status = response.status();
         if !status.is_success() {
-            let body = response.text().await.unwrap_or_default();
+            let raw = response.bytes().await.unwrap_or_default();
+            let body = String::from_utf8_lossy(if raw.len() > 512 { &raw[..512] } else { &raw })
+                .into_owned();
             error!("Slack webhook failed with status {}: {}", status, body);
-            return Err(anyhow!("Slack webhook failed: {} - {}", status, body));
+            return Err(anyhow!("Slack webhook failed with status {}", status));
         }
 
         info!(
@@ -1119,6 +1133,13 @@ fn truncate_str(s: &str, max_len: usize) -> String {
     }
     let truncated = &s[..floor_char_boundary(s, max_len.saturating_sub(3))];
     format!("{}...", truncated)
+}
+
+/// Escape Slack mrkdwn special characters to prevent injection in Slack messages.
+fn slack_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 /// Escape HTML special characters to prevent injection in email bodies.

@@ -343,14 +343,25 @@ impl PerformanceRepository {
     }
 
     pub async fn cleanup_old_transactions(pool: &DbPool, days: i32) -> Result<u64> {
-        let cutoff = Utc::now() - chrono::Duration::days(days as i64);
-
         // Spans are cascade-deleted via FK
-        let result = sqlx::query("DELETE FROM transactions WHERE created_at < $1")
-            .bind(cutoff)
+        let mut total_deleted: u64 = 0;
+        loop {
+            let result = sqlx::query(
+                "DELETE FROM transactions WHERE id IN (
+                    SELECT id FROM transactions
+                    WHERE created_at < NOW() - INTERVAL '1 day' * $1
+                    LIMIT 5000
+                )",
+            )
+            .bind(days)
             .execute(pool)
             .await?;
-
-        Ok(result.rows_affected())
+            let deleted = result.rows_affected();
+            total_deleted += deleted;
+            if deleted == 0 {
+                break;
+            }
+        }
+        Ok(total_deleted)
     }
 }

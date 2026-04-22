@@ -105,7 +105,7 @@ impl ReplayRepository {
     /// List segments for a recording, ordered by index
     pub async fn list_segments(pool: &DbPool, recording_id: &str) -> Result<Vec<SessionSegment>> {
         sqlx::query_as::<_, SessionSegment>(
-            "SELECT * FROM session_segments WHERE recording_id = $1 ORDER BY segment_index ASC",
+            "SELECT * FROM session_segments WHERE recording_id = $1 ORDER BY segment_index ASC LIMIT 10000",
         )
         .bind(recording_id)
         .fetch_all(pool)
@@ -168,13 +168,28 @@ impl ReplayRepository {
     pub async fn cleanup_old_recordings(pool: &DbPool, days: i32) -> Result<u64> {
         let cutoff = Utc::now() - chrono::Duration::days(days as i64);
 
-        // Segments are cascade-deleted when recordings are deleted
-        let result = sqlx::query("DELETE FROM session_recordings WHERE started_at < $1")
+        // Segments are cascade-deleted when recordings are deleted.
+        // Batched to avoid long-running table locks.
+        let mut total_deleted: u64 = 0;
+        loop {
+            let result = sqlx::query(
+                "DELETE FROM session_recordings WHERE id IN (
+                    SELECT id FROM session_recordings
+                    WHERE started_at < $1
+                    ORDER BY started_at LIMIT 1000
+                )",
+            )
             .bind(cutoff)
             .execute(pool)
             .await?;
+            let deleted = result.rows_affected();
+            total_deleted += deleted;
+            if deleted == 0 {
+                break;
+            }
+        }
 
-        Ok(result.rows_affected())
+        Ok(total_deleted)
     }
 
     /// Update recording stats (segment count and total size)

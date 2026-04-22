@@ -18,7 +18,7 @@ import {
   Loader2,
   ExternalLink,
 } from "lucide-react";
-import { projectsApi, type Project, type Platform, type Framework } from "@/lib/api";
+import { projectsApi, ApiError, type Project, type Platform, type Framework } from "@/lib/api";
 import { getSDKContent, interpolateApiKey, getPlatformConfig, getFrameworkConfig } from "@/lib/sdk-config";
 import { CodeBlock, InstallCommand } from "@/components/onboarding/CodeBlock";
 import { toast } from "sonner";
@@ -50,7 +50,7 @@ export default function ProjectSettingsPage() {
         setProject(response.data);
         setName(response.data.name);
       } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed to load project");
+        setError(err instanceof ApiError ? err.message : "Failed to load project");
         toast.error("Failed to load project");
       } finally {
         setIsLoading(false);

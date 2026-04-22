@@ -729,24 +729,39 @@ impl AlertingService {
                     _ => None, // Unknown actions are no-ops
                 };
                 if let Some(status) = new_status {
-                    match IssueRepository::update_status_for_project(
-                        &self.pool,
-                        issue_id,
-                        &rule.project_id,
-                        status,
-                    )
-                    .await
-                    {
-                        Ok(_) => info!(
-                            rule_id = %rule_id,
-                            "Webhook action '{}' applied to issue {}",
-                            action, issue_id
-                        ),
-                        Err(e) => error!(
-                            rule_id = %rule_id,
-                            "Failed to apply webhook action '{}' to issue {}: {}",
-                            action, issue_id, e
-                        ),
+                    // Verify issue belongs to this rule's project before applying status change
+                    let issue_valid = IssueRepository::find_by_id(&self.pool, issue_id)
+                        .await
+                        .ok()
+                        .flatten()
+                        .map(|i| i.project_id == rule.project_id)
+                        .unwrap_or(false);
+                    if !issue_valid {
+                        tracing::warn!(
+                            trigger_id = %issue_id,
+                            rule_project_id = %rule.project_id,
+                            "Webhook action trigger_id does not match a valid issue in rule's project — skipping status update"
+                        );
+                    } else {
+                        match IssueRepository::update_status_for_project(
+                            &self.pool,
+                            issue_id,
+                            &rule.project_id,
+                            status,
+                        )
+                        .await
+                        {
+                            Ok(_) => info!(
+                                rule_id = %rule_id,
+                                "Webhook action '{}' applied to issue {}",
+                                action, issue_id
+                            ),
+                            Err(e) => error!(
+                                rule_id = %rule_id,
+                                "Failed to apply webhook action '{}' to issue {}: {}",
+                                action, issue_id, e
+                            ),
+                        }
                     }
                 }
             }

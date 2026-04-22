@@ -30,7 +30,7 @@ impl SessionRepository {
     }
 
     pub async fn find_by_id(pool: &DbPool, id: &str) -> Result<Option<Session>> {
-        sqlx::query_as::<_, Session>("SELECT * FROM sessions WHERE id = $1")
+        sqlx::query_as::<_, Session>("SELECT * FROM sessions WHERE id = $1 AND expires_at > NOW()")
             .bind(id)
             .fetch_optional(pool)
             .await

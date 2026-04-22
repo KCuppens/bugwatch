@@ -127,6 +127,12 @@ pub fn validate_access_token(token: &str, secret: &str) -> AppResult<Claims> {
         return Err(AppError::Unauthorized("Invalid token type".to_string()));
     }
 
+    if claims.jti.is_none() {
+        return Err(AppError::Unauthorized(
+            "Token missing session identifier".to_string(),
+        ));
+    }
+
     Ok(claims)
 }
 

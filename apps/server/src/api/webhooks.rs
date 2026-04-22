@@ -103,6 +103,30 @@ pub async fn stripe_webhook(
         _ => {
             // Offload heavy operations (Stripe API calls, subscription updates) to background.
             // Stripe retries on 5xx or timeout — an immediate 200 prevents spurious retries.
+            //
+            // H4 TOCTOU fix: claim the event ID atomically before spawning via
+            // ON CONFLICT DO NOTHING. If another request already claimed it, skip.
+            // org_id is not yet known here; we use a sentinel and handlers update it.
+            let claimed = match BillingEventRepository::create_idempotent(
+                &state.db, "pending", event_type, event_id,
+            )
+            .await
+            {
+                Ok(inserted) => inserted,
+                Err(e) => {
+                    tracing::error!(event_id, "Failed to claim billing event slot: {}", e);
+                    // Fall through to spawn anyway — individual handlers have their own guard
+                    true
+                }
+            };
+            if !claimed {
+                info!(
+                    "Duplicate webhook event (pre-spawn guard), skipping: {}",
+                    event_id
+                );
+                return Ok(StatusCode::OK);
+            }
+
             let event_type_owned = event_type.to_string();
             let event_id_owned = event_id.to_string();
             let event_type_for_panic = event_type_owned.clone();
@@ -255,6 +279,23 @@ async fn handle_checkout_completed(
 
             // Determine tier from price ID
             let tier = determine_tier_from_subscription(&state.config, &subscription);
+            // H5: guard against unknown price IDs silently downgrading to free
+            if tier == "free" {
+                let price_id = subscription
+                    .items
+                    .data
+                    .first()
+                    .and_then(|item| item.price.as_ref())
+                    .map(|p| p.id.to_string())
+                    .unwrap_or_default();
+                tracing::error!(
+                    price_id = %price_id,
+                    org_id = %org.id,
+                    "Unknown price ID would downgrade org to free tier — skipping update"
+                );
+                return Ok(());
+            }
+
             let seats = subscription
                 .items
                 .data
@@ -418,6 +459,24 @@ async fn handle_invoice_payment_failed(
             );
         }
         Ok(Some(org)) => {
+            // Set subscription to past_due since payment failed
+            if let Err(e) = OrganizationRepository::update_subscription(
+                &state.db,
+                &org.id,
+                &org.tier,
+                org.seats,
+                org.stripe_subscription_id.as_deref(),
+                "past_due",
+                org.billing_interval.as_deref(),
+                org.current_period_start,
+                org.current_period_end,
+                org.cancel_at_period_end,
+            )
+            .await
+            {
+                tracing::warn!(org_id = %org.id, "Failed to set past_due status: {}", e);
+            }
+
             // Record billing event
             if let Err(e) = BillingEventRepository::create(
                 &state.db,
@@ -496,17 +555,34 @@ async fn handle_subscription_updated(
                 .map(|dt| dt.with_timezone(&chrono::Utc));
 
             // Determine tier
-            let tier = determine_tier_from_price_id(
-                &state.config,
-                subscription["items"]["data"][0]["price"]["id"]
-                    .as_str()
-                    .unwrap_or(""),
-            );
-
-            // Extract billing interval from the subscription payload
-            let interval = subscription["items"]["data"][0]["price"]["recurring"]["interval"]
+            let price_id_str = subscription["items"]["data"][0]["price"]["id"]
                 .as_str()
-                .map(|s| if s == "year" { "annual" } else { "monthly" }.to_string());
+                .unwrap_or("");
+            let tier = determine_tier_from_price_id(&state.config, price_id_str);
+
+            // H5: guard against unknown price IDs silently downgrading to free
+            if tier == "free" {
+                tracing::error!(
+                    price_id = %price_id_str,
+                    org_id = %org.id,
+                    "Unknown price ID would downgrade org to free tier — skipping update"
+                );
+                return Ok(());
+            }
+
+            // Extract billing interval from the subscription payload (H5: validate value)
+            let interval_str = subscription["items"]["data"][0]["price"]["recurring"]["interval"]
+                .as_str()
+                .unwrap_or("month");
+            let billing_interval = match interval_str {
+                "year" => "annual",
+                "month" => "monthly",
+                other => {
+                    tracing::warn!(interval = %other, "Unknown billing interval in subscription update");
+                    "monthly" // safe default
+                }
+            };
+            let interval = Some(billing_interval.to_string());
 
             OrganizationRepository::update_subscription(
                 &state.db,

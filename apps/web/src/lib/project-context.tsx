@@ -1,7 +1,7 @@
 "use client";
 
 import { createContext, useContext, useState, useEffect, useMemo, useCallback, type ReactNode } from "react";
-import { projectsApi, type Project } from "@/lib/api";
+import { projectsApi, ApiError, type Project } from "@/lib/api";
 
 const STORAGE_KEYS = {
   selectedProjectId: "bugwatch:selectedProjectId",
@@ -105,7 +105,7 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
       }
     } catch (err) {
       console.error("Failed to fetch projects:", err);
-      setError(err instanceof Error ? err.message : "Failed to load projects");
+      setError(err instanceof ApiError ? err.message : "Failed to load projects");
     } finally {
       setIsLoading(false);
     }

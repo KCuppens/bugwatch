@@ -597,6 +597,16 @@ pub async fn create_issue_link(
         ));
     }
 
+    // Rate limit: 10 requests per user per project
+    let rl = state
+        .rate_limiter
+        .check(&format!("issue_link:{}:{}", auth_user.id, project_id), 10);
+    if !rl.allowed {
+        return Err(AppError::BadRequest(
+            "Too many requests. Please try again later.".to_string(),
+        ));
+    }
+
     // Get the integration for this provider
     let integration =
         IntegrationRepository::find_by_org_and_provider(&state.db, &org.id, &req.provider)
@@ -613,6 +623,17 @@ pub async fn create_issue_link(
         .get("description")
         .and_then(|v| v.as_str())
         .unwrap_or("");
+
+    if title.len() > 500 {
+        return Err(AppError::BadRequest(
+            "title too long (max 500 characters)".to_string(),
+        ));
+    }
+    if description.len() > 10_000 {
+        return Err(AppError::BadRequest(
+            "description too long (max 10000 characters)".to_string(),
+        ));
+    }
     let event_url = format!(
         "{}/dashboard/issues/{}?project={}",
         state.config.app_url, issue_id, project_id

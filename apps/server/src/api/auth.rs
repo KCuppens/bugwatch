@@ -223,18 +223,38 @@ pub async fn signup(
     // Rate limit per IP (tight budget — signup is rarely called legitimately at high frequency)
     check_auth_rate_limit(&state, &headers, Some(peer_addr), "signup", 5)?;
 
+    // Normalize email to lowercase before any lookup or storage
+    let email = req.email.to_lowercase();
+
     // Validate email
-    validate_email(&req.email)?;
+    validate_email(&email)?;
 
     // Validate password
     validate_password(&req.password)?;
+
+    // Per-email rate limit: max 3 signup attempts per hour per address.
+    // Keyed on a SHA-256 hash of the lowercased email to avoid storing PII.
+    let email_key = {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(email.as_bytes());
+        format!("signup_email:{}", hex::encode(hasher.finalize()))
+    };
+    let rl = state.rate_limiter.check(&email_key, 3);
+    if !rl.allowed {
+        return Err(AppError::RateLimitExceeded {
+            retry_after_secs: rl.retry_after_secs.unwrap_or(60),
+            limit: rl.limit,
+            remaining: rl.remaining,
+        });
+    }
 
     // Hash password before the uniqueness check so both code paths take the same
     // amount of time, preventing email enumeration via response-time oracle.
     let password_hash = hash_password(&req.password)?;
 
     // Check if email already exists
-    if UserRepository::find_by_email(&state.db, &req.email)
+    if UserRepository::find_by_email(&state.db, &email)
         .await?
         .is_some()
     {
@@ -242,7 +262,7 @@ pub async fn signup(
     }
 
     // Create user
-    let user = UserRepository::create(&state.db, &req.email, &password_hash, req.name.as_deref())
+    let user = UserRepository::create(&state.db, &email, &password_hash, req.name.as_deref())
         .await
         .map_err(|e| AppError::Internal(format!("Failed to create user: {}", e)))?;
 
@@ -287,25 +307,20 @@ pub async fn login(
     // Rate limit per IP
     check_auth_rate_limit(&state, &headers, Some(peer_addr), "login", 5)?;
 
+    // Normalize email to lowercase before lookup
+    let email = req.email.to_lowercase();
+
     // Find user by email
-    let user = UserRepository::find_by_email(&state.db, &req.email)
+    let user = UserRepository::find_by_email(&state.db, &email)
         .await?
         .ok_or_else(|| AppError::Unauthorized("Invalid email or password".to_string()))?;
 
-    // Check if account is locked
-    if let Some(locked_until) = &user.locked_until {
-        if *locked_until > Utc::now() {
-            return Err(AppError::Unauthorized(
-                "Account is temporarily locked. Try again later.".to_string(),
-            ));
-        }
-    }
-
-    // Verify password
+    // Verify password first (always, for constant-time behaviour — prevents
+    // lockout status from leaking via response-time oracle).
     let is_valid = verify_password(&req.password, &user.password_hash)?;
 
     if !is_valid {
-        // Increment failed attempts
+        // Increment failed attempts and potentially lock the account
         UserRepository::increment_failed_attempts(&state.db, &user.id).await?;
         let client_ip = extract_client_ip(&headers, state.config.trust_proxy, Some(peer_addr));
         tracing::warn!(
@@ -317,6 +332,17 @@ pub async fn login(
         return Err(AppError::Unauthorized(
             "Invalid email or password".to_string(),
         ));
+    }
+
+    // Password is correct — now check lockout so the lock status is not
+    // observable via timing when the password is wrong.
+    // Intentional: lock after MAX_FAILED_ATTEMPTS consecutive failures; threshold is 5.
+    if let Some(locked_until) = &user.locked_until {
+        if *locked_until > Utc::now() {
+            return Err(AppError::Unauthorized(
+                "Account is temporarily locked. Try again later.".to_string(),
+            ));
+        }
     }
 
     // Reset failed attempts on successful login
@@ -699,7 +725,10 @@ pub async fn forgot_password(
         )
     };
 
-    let user = match UserRepository::find_by_email(&state.db, &req.email).await? {
+    // Normalize email to lowercase before lookup
+    let email = req.email.to_lowercase();
+
+    let user = match UserRepository::find_by_email(&state.db, &email).await? {
         Some(u) => u,
         None => return Ok(ok_response()), // don't reveal whether the email is registered
     };
@@ -767,7 +796,7 @@ pub async fn reset_password(
     ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Json(req): Json<ResetPasswordRequest>,
-) -> AppResult<Json<serde_json::Value>> {
+) -> AppResult<(HeaderMap, Json<serde_json::Value>)> {
     check_auth_rate_limit(&state, &headers, Some(peer_addr), "reset_password", 5)?;
 
     // Reject oversized inputs before HMAC/bcrypt
@@ -813,8 +842,18 @@ pub async fn reset_password(
 
     tracing::info!(user_id = %user_id, outcome = "password_reset", "Password reset successful");
 
-    Ok(Json(
-        serde_json::json!({ "data": { "message": "Password reset successfully. Please log in with your new password." } }),
+    // Clear auth cookies so any active browser session is also invalidated
+    let secure = state.config.cookie_secure;
+    let mut response_headers = HeaderMap::new();
+    for cookie in build_clear_cookies(secure) {
+        response_headers.append(header::SET_COOKIE, cookie);
+    }
+
+    Ok((
+        response_headers,
+        Json(
+            serde_json::json!({ "data": { "message": "Password reset successfully. Please log in with your new password." } }),
+        ),
     ))
 }
 

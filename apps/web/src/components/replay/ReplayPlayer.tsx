@@ -95,6 +95,12 @@ export function ReplayPlayer({ recordingId, projectId }: ReplayPlayerProps) {
 
     if (allRrwebEvents.length === 0) return;
 
+    const MAX_EVENTS = 50_000;
+    if (allRrwebEvents.length > MAX_EVENTS) {
+      setError("Session recording is too large to replay.");
+      return;
+    }
+
     // Guard against the dynamic import resolving after the effect cleanup
     // fires (component unmounted mid-mount) — otherwise we'd leak the
     // player + the setInterval below.

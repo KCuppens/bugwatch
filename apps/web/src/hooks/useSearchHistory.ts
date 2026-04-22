@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 
 const HISTORY_KEY = "bugwatch:search:history";
 const MAX_HISTORY = 20;
+const MAX_QUERY_LENGTH = 500;
 
 /**
  * Manages search history in localStorage
@@ -28,7 +29,7 @@ export function useSearchHistory() {
   }, []);
 
   const addToHistory = useCallback((query: string) => {
-    if (!query.trim()) return;
+    if (!query.trim() || query.length > MAX_QUERY_LENGTH) return;
 
     setHistory((prev) => {
       // Remove duplicates, add to front, trim to max

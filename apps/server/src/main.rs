@@ -611,12 +611,8 @@ async fn health_check(
     let _ = query; // unused — needed to keep the extractor list uniform
 
     // Rate limit /health to prevent it from being used as a free DB-query DoS vector.
-    let ip = headers
-        .get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.split(',').next())
-        .map(|s| s.trim().to_string())
-        .unwrap_or_else(|| peer_addr.ip().to_string());
+    let ip =
+        crate::api::auth::extract_client_ip(&headers, state.config.trust_proxy, Some(peer_addr));
     let check = state.rate_limiter.check(&format!("health:{}", ip), 60);
     if !check.allowed {
         return (StatusCode::TOO_MANY_REQUESTS, "Rate limit exceeded").into_response();

@@ -1,0 +1,6 @@
+{
+  "include": ["."],
+  "exclude": ["**/__pycache__", "**/node_modules", "**/.venv", "**/venv", "**/.git"],
+  "pythonVersion": "3.11",
+  "typeCheckingMode": "basic"
+}

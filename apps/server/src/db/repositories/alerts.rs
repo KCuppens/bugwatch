@@ -463,32 +463,20 @@ impl AlertLogRepository {
         if project_ids.is_empty() {
             return Ok(vec![]);
         }
-
-        let placeholders: Vec<String> = project_ids
-            .iter()
-            .enumerate()
-            .map(|(i, _)| format!("${}", i + 1))
-            .collect();
-
-        let query = format!(
+        sqlx::query_as::<_, AlertLog>(
             r#"
             SELECT al.* FROM alert_logs al
             JOIN alert_rules ar ON al.alert_rule_id = ar.id
-            WHERE ar.project_id IN ({})
+            WHERE ar.project_id = ANY($1)
             ORDER BY al.created_at DESC
-            LIMIT ${}
+            LIMIT $2
             "#,
-            placeholders.join(","),
-            project_ids.len() + 1
-        );
-
-        let mut q = sqlx::query_as::<_, AlertLog>(&query);
-        for pid in project_ids {
-            q = q.bind(pid);
-        }
-        q = q.bind(limit);
-
-        q.fetch_all(pool).await.map_err(Into::into)
+        )
+        .bind(project_ids)
+        .bind(limit)
+        .fetch_all(pool)
+        .await
+        .map_err(Into::into)
     }
 
     /// Get rule names and project IDs for a list of rule IDs
@@ -500,23 +488,13 @@ impl AlertLogRepository {
             return Ok(HashMap::new());
         }
 
-        let placeholders: Vec<String> = rule_ids
-            .iter()
-            .enumerate()
-            .map(|(i, _)| format!("${}", i + 1))
-            .collect();
+        let rows = sqlx::query_as::<_, (String, String, String)>(
+            "SELECT id, name, project_id FROM alert_rules WHERE id = ANY($1)",
+        )
+        .bind(rule_ids)
+        .fetch_all(pool)
+        .await?;
 
-        let query = format!(
-            "SELECT id, name, project_id FROM alert_rules WHERE id IN ({})",
-            placeholders.join(",")
-        );
-
-        let mut q = sqlx::query_as::<_, (String, String, String)>(&query);
-        for rid in rule_ids {
-            q = q.bind(rid);
-        }
-
-        let rows = q.fetch_all(pool).await?;
         let map = rows
             .into_iter()
             .map(|(id, name, project_id)| (id, (name, project_id)))
@@ -527,13 +505,25 @@ impl AlertLogRepository {
 
     /// Cleanup old alert logs to prevent database bloat
     pub async fn cleanup_old_logs(pool: &DbPool, days: i32) -> Result<u64> {
-        let result =
-            sqlx::query("DELETE FROM alert_logs WHERE created_at < NOW() - INTERVAL '1 day' * $1")
-                .bind(days)
-                .execute(pool)
-                .await?;
-
-        Ok(result.rows_affected())
+        let mut total_deleted: u64 = 0;
+        loop {
+            let result = sqlx::query(
+                "DELETE FROM alert_logs WHERE id IN (
+                    SELECT id FROM alert_logs
+                    WHERE created_at < NOW() - INTERVAL '1 day' * $1
+                    LIMIT 5000
+                )",
+            )
+            .bind(days)
+            .execute(pool)
+            .await?;
+            let deleted = result.rows_affected();
+            total_deleted += deleted;
+            if deleted == 0 {
+                break;
+            }
+        }
+        Ok(total_deleted)
     }
 }
 
@@ -600,12 +590,23 @@ impl EmailRateLimitRepository {
 
     /// Cleanup old rate limit records (older than 24 hours)
     pub async fn cleanup_old_records(pool: &DbPool) -> Result<u64> {
-        let result = sqlx::query(
-            "DELETE FROM email_rate_limits WHERE last_sent_at < NOW() - INTERVAL '24 hours'",
-        )
-        .execute(pool)
-        .await?;
-
-        Ok(result.rows_affected())
+        let mut total_deleted: u64 = 0;
+        loop {
+            let result = sqlx::query(
+                "DELETE FROM email_rate_limits WHERE id IN (
+                    SELECT id FROM email_rate_limits
+                    WHERE last_sent_at < NOW() - INTERVAL '24 hours'
+                    ORDER BY last_sent_at LIMIT 1000
+                )",
+            )
+            .execute(pool)
+            .await?;
+            let deleted = result.rows_affected();
+            total_deleted += deleted;
+            if deleted == 0 {
+                break;
+            }
+        }
+        Ok(total_deleted)
     }
 }

@@ -131,6 +131,21 @@ pub async fn create_alert_rule(
         return Err(AppError::Forbidden("write permission required".to_string()));
     }
 
+    // E5: rate limit create_alert_rule
+    let _rl_key_create_alert = {
+        let id = match &*auth {
+            AuthIdentity::User(u) => u.id.clone(),
+            AuthIdentity::Agent(a) => a.organization_id.clone(),
+        };
+        format!("create_alert:{}:{}", id, project_id)
+    };
+    let rl = state.rate_limiter.check(&_rl_key_create_alert, 30);
+    if !rl.allowed {
+        return Err(AppError::BadRequest(
+            "Too many requests. Please try again later.".to_string(),
+        ));
+    }
+
     // Verify project access
     let project = ProjectRepository::find_by_id(&state.db, &project_id)
         .await?
@@ -231,6 +246,13 @@ pub async fn create_alert_rule(
         ));
     }
 
+    // F2: cap channel_ids per alert rule
+    if request.channel_ids.len() > 20 {
+        return Err(AppError::BadRequest(
+            "Alert rule supports at most 20 notification channels".to_string(),
+        ));
+    }
+
     let actions_json = serde_json::to_string(&request.channel_ids)
         .map_err(|e| AppError::BadRequest(format!("Invalid channel IDs: {}", e)))?;
 
@@ -304,6 +326,60 @@ pub async fn update_alert_rule(
 
     if rule.project_id != project_id {
         return Err(AppError::Forbidden("Access denied".to_string()));
+    }
+
+    // B1: validate update fields
+    if let Some(ref name) = request.name {
+        if name.len() > 200 {
+            return Err(AppError::BadRequest(
+                "Alert rule name too long (max 200 characters)".to_string(),
+            ));
+        }
+    }
+    if let Some(ref condition) = request.condition {
+        let condition_json_check = serde_json::to_string(condition)
+            .map_err(|e| AppError::BadRequest(format!("Invalid condition: {}", e)))?;
+        if condition_json_check.len() > 65_536 {
+            return Err(AppError::BadRequest(
+                "Alert condition too complex (max 64KB)".to_string(),
+            ));
+        }
+        match condition {
+            AlertCondition::IssueFrequency {
+                threshold,
+                window_minutes,
+            } => {
+                if *threshold == 0 {
+                    return Err(AppError::BadRequest(
+                        "threshold must be greater than 0".to_string(),
+                    ));
+                }
+                if *window_minutes == 0 {
+                    return Err(AppError::BadRequest(
+                        "window_minutes must be greater than 0".to_string(),
+                    ));
+                }
+            }
+            AlertCondition::ServerOffline {
+                missing_minutes, ..
+            } => {
+                if *missing_minutes == 0 {
+                    return Err(AppError::BadRequest(
+                        "missing_minutes must be greater than 0".to_string(),
+                    ));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // F2: cap channel_ids on update
+    if let Some(ref ids) = request.channel_ids {
+        if ids.len() > 20 {
+            return Err(AppError::BadRequest(
+                "Alert rule supports at most 20 notification channels".to_string(),
+            ));
+        }
     }
 
     let condition_json = request
@@ -477,6 +553,21 @@ pub async fn create_channel(
         return Err(AppError::Forbidden("write permission required".to_string()));
     }
 
+    // E6: rate limit create_channel
+    let _rl_key_create_channel = {
+        let id = match &*auth {
+            AuthIdentity::User(u) => u.id.clone(),
+            AuthIdentity::Agent(a) => a.organization_id.clone(),
+        };
+        format!("create_channel:{}:{}", id, project_id)
+    };
+    let rl = state.rate_limiter.check(&_rl_key_create_channel, 30);
+    if !rl.allowed {
+        return Err(AppError::BadRequest(
+            "Too many requests. Please try again later.".to_string(),
+        ));
+    }
+
     // Verify project access
     let project = ProjectRepository::find_by_id(&state.db, &project_id)
         .await?
@@ -586,7 +677,7 @@ pub async fn create_channel(
         ));
     }
 
-    // B4: validate email recipient format
+    // B4: validate email recipient format; F1: cap recipients
     if let ChannelConfig::Email { ref recipients } = request.config {
         for r in recipients {
             if !is_valid_email(r) {
@@ -595,6 +686,11 @@ pub async fn create_channel(
                     r
                 )));
             }
+        }
+        if recipients.len() > 10 {
+            return Err(AppError::BadRequest(
+                "Email channel supports at most 10 recipients".to_string(),
+            ));
         }
     }
 
@@ -676,6 +772,33 @@ pub async fn update_channel(
 
     if channel.project_id != project_id {
         return Err(AppError::Forbidden("Access denied".to_string()));
+    }
+
+    // B2: validate channel name length on update
+    if let Some(ref name) = request.name {
+        if name.len() > 200 {
+            return Err(AppError::BadRequest(
+                "Channel name too long (max 200 characters)".to_string(),
+            ));
+        }
+    }
+
+    // For Email config updates, validate recipients
+    if let Some(ChannelConfig::Email { ref recipients }) = request.config {
+        for r in recipients {
+            if !is_valid_email(r) {
+                return Err(AppError::BadRequest(format!(
+                    "Invalid email address: {}",
+                    r
+                )));
+            }
+        }
+        // F1: cap recipients on update
+        if recipients.len() > 10 {
+            return Err(AppError::BadRequest(
+                "Email channel supports at most 10 recipients".to_string(),
+            ));
+        }
     }
 
     // H3: validate webhook/Slack URLs on update
@@ -902,7 +1025,7 @@ pub async fn list_alert_logs_across_projects(
 
 #[derive(Debug, Deserialize)]
 pub struct MuteAlertRequest {
-    pub duration_minutes: i32,
+    pub duration_minutes: u32,
 }
 
 /// POST /api/v1/projects/:project_id/alerts/:alert_id/mute
@@ -932,7 +1055,7 @@ pub async fn mute_alert_rule(
         return Err(AppError::Forbidden("Access denied".to_string()));
     }
 
-    if request.duration_minutes <= 0 {
+    if request.duration_minutes == 0 {
         return Err(AppError::BadRequest(
             "duration_minutes must be positive".to_string(),
         ));
@@ -946,10 +1069,14 @@ pub async fn mute_alert_rule(
     let muted_until =
         chrono::Utc::now() + chrono::Duration::minutes(request.duration_minutes as i64);
 
-    let updated =
-        AlertRuleRepository::mute(&state.db, &alert_id, muted_until, request.duration_minutes)
-            .await
-            .map_err(|e| AppError::Internal(format!("Failed to mute alert rule: {}", e)))?;
+    let updated = AlertRuleRepository::mute(
+        &state.db,
+        &alert_id,
+        muted_until,
+        request.duration_minutes as i32,
+    )
+    .await
+    .map_err(|e| AppError::Internal(format!("Failed to mute alert rule: {}", e)))?;
 
     let response = AlertRuleResponse::try_from(updated)
         .map_err(|e| AppError::Internal(format!("Failed to parse rule: {}", e)))?;
@@ -1001,6 +1128,22 @@ pub async fn test_alert_rule(
 ) -> AppResult<Json<serde_json::Value>> {
     if !auth.has_permission("write") {
         return Err(AppError::Forbidden("write permission required".to_string()));
+    }
+
+    // E1: rate limit test_alert_rule
+    {
+        let id = match &*auth {
+            AuthIdentity::User(u) => u.id.clone(),
+            AuthIdentity::Agent(a) => a.organization_id.clone(),
+        };
+        let rl = state
+            .rate_limiter
+            .check(&format!("test_alert:{}:{}", id, alert_id), 5);
+        if !rl.allowed {
+            return Err(AppError::BadRequest(
+                "Too many requests. Please try again later.".to_string(),
+            ));
+        }
     }
 
     let project = ProjectRepository::find_by_id(&state.db, &project_id)
@@ -1069,6 +1212,22 @@ pub async fn test_channel(
 ) -> AppResult<Json<serde_json::Value>> {
     if !auth.has_permission("write") {
         return Err(AppError::Forbidden("write permission required".to_string()));
+    }
+
+    // E1: rate limit test_channel
+    {
+        let id = match &*auth {
+            AuthIdentity::User(u) => u.id.clone(),
+            AuthIdentity::Agent(a) => a.organization_id.clone(),
+        };
+        let rl = state
+            .rate_limiter
+            .check(&format!("test_channel:{}:{}", id, channel_id), 5);
+        if !rl.allowed {
+            return Err(AppError::BadRequest(
+                "Too many requests. Please try again later.".to_string(),
+            ));
+        }
     }
 
     // Verify project access

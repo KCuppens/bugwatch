@@ -48,7 +48,7 @@ impl ServerRepository {
     /// List all servers for a project
     pub async fn list_by_project(pool: &DbPool, project_id: &str) -> Result<Vec<Server>> {
         let servers = sqlx::query_as::<_, Server>(
-            "SELECT * FROM servers WHERE project_id = $1 ORDER BY last_seen DESC",
+            "SELECT * FROM servers WHERE project_id = $1 ORDER BY last_seen DESC LIMIT 500",
         )
         .bind(project_id)
         .fetch_all(pool)
@@ -217,13 +217,24 @@ impl ServerMetricsRepository {
 
     /// Cleanup metrics older than given number of days
     pub async fn cleanup_old_metrics(pool: &DbPool, retention_days: i32) -> Result<u64> {
-        let result = sqlx::query(
-            "DELETE FROM server_metrics WHERE recorded_at < NOW() - make_interval(days => $1)",
-        )
-        .bind(retention_days)
-        .execute(pool)
-        .await?;
-
-        Ok(result.rows_affected())
+        let mut total_deleted: u64 = 0;
+        loop {
+            let result = sqlx::query(
+                "DELETE FROM server_metrics WHERE id IN (
+                    SELECT id FROM server_metrics
+                    WHERE recorded_at < NOW() - INTERVAL '1 day' * $1
+                    LIMIT 5000
+                )",
+            )
+            .bind(retention_days)
+            .execute(pool)
+            .await?;
+            let deleted = result.rows_affected();
+            total_deleted += deleted;
+            if deleted == 0 {
+                break;
+            }
+        }
+        Ok(total_deleted)
     }
 }

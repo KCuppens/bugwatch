@@ -93,6 +93,18 @@ pub async fn ingest_segment(
         ));
     }
 
+    // B4: bound segment_index
+    if req.segment_index < 0 {
+        return Err(AppError::BadRequest(
+            "segment_index must be non-negative".to_string(),
+        ));
+    }
+    if req.segment_index > 10_000 {
+        return Err(AppError::BadRequest(
+            "segment_index too large (max 10000)".to_string(),
+        ));
+    }
+
     // 2. Check tier and storage limits
     if !state.config.deployment_mode.is_self_hosted() {
         let replay_org = OrganizationRepository::find_by_project_id(&state.db, &project.id)
@@ -236,7 +248,15 @@ pub async fn ingest_segment(
     )
     .await?
     {
-        Some(r) => r,
+        Some(r) => {
+            // B4: cap total segment count per recording
+            if r.segment_count >= 10_000 {
+                return Err(AppError::BadRequest(
+                    "Recording has reached the maximum number of segments (10000)".to_string(),
+                ));
+            }
+            r
+        }
         None => {
             let started_at = req
                 .started_at
@@ -306,6 +326,20 @@ pub async fn finish_recording(
                 req.session_id
             ))
         })?;
+
+    // B5: bound duration_ms
+    if let Some(dur) = req.duration_ms {
+        if dur < 0 {
+            return Err(AppError::BadRequest(
+                "duration_ms must be non-negative".to_string(),
+            ));
+        }
+        if dur > 86_400_000 {
+            return Err(AppError::BadRequest(
+                "duration_ms too large (max 86400000 ms / 24h)".to_string(),
+            ));
+        }
+    }
 
     ReplayRepository::finish_recording(&state.db, &recording.id, req.duration_ms).await?;
 

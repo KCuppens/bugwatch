@@ -249,7 +249,8 @@ impl OrganizationRepository {
         Ok(result.rows_affected() > 0)
     }
 
-    /// Set Stripe customer ID
+    /// Set Stripe customer ID (idempotent — only writes if stripe_customer_id is NULL).
+    /// Returns Ok(true) if the row was updated, Ok(false) if a customer ID was already set.
     pub async fn set_stripe_customer(
         pool: &DbPool,
         id: &str,
@@ -257,7 +258,7 @@ impl OrganizationRepository {
     ) -> Result<()> {
         let now = chrono::Utc::now();
         sqlx::query(
-            "UPDATE organizations SET stripe_customer_id = $1, updated_at = $2 WHERE id = $3",
+            "UPDATE organizations SET stripe_customer_id = $1, updated_at = $2 WHERE id = $3 AND stripe_customer_id IS NULL",
         )
         .bind(stripe_customer_id)
         .bind(&now)
@@ -497,7 +498,7 @@ impl OrganizationMemberRepository {
     /// Get all members of an organization
     pub async fn list(pool: &DbPool, organization_id: &str) -> Result<Vec<OrganizationMember>> {
         sqlx::query_as::<_, OrganizationMember>(
-            "SELECT * FROM organization_members WHERE organization_id = $1 ORDER BY created_at",
+            "SELECT * FROM organization_members WHERE organization_id = $1 ORDER BY created_at LIMIT 1000",
         )
         .bind(organization_id)
         .fetch_all(pool)
@@ -638,7 +639,7 @@ impl UsageRepository {
     /// Get all usage records for an organization (historical)
     pub async fn list_all(pool: &DbPool, organization_id: &str) -> Result<Vec<UsageRecord>> {
         sqlx::query_as::<_, UsageRecord>(
-            "SELECT * FROM usage_records WHERE organization_id = $1 ORDER BY period_start DESC",
+            "SELECT * FROM usage_records WHERE organization_id = $1 ORDER BY period_start DESC LIMIT 1000",
         )
         .bind(organization_id)
         .fetch_all(pool)
@@ -681,6 +682,35 @@ impl BillingEventRepository {
         .fetch_one(pool)
         .await
         .map_err(Into::into)
+    }
+
+    /// Idempotent create: INSERT … ON CONFLICT (stripe_event_id) DO NOTHING.
+    /// Returns Ok(true) if the row was newly inserted, Ok(false) if it already existed
+    /// (i.e. a duplicate — caller should skip processing).
+    /// Requires the unique index added in migration 029.
+    pub async fn create_idempotent(
+        pool: &DbPool,
+        organization_id: &str,
+        event_type: &str,
+        stripe_event_id: &str,
+    ) -> Result<bool> {
+        let id = Uuid::new_v4().to_string();
+        let now = chrono::Utc::now();
+        let result = sqlx::query(
+            r#"
+            INSERT INTO billing_events (id, organization_id, event_type, stripe_event_id, created_at)
+            VALUES ($1, $2, $3, $4, $5)
+            ON CONFLICT (stripe_event_id) DO NOTHING
+            "#,
+        )
+        .bind(&id)
+        .bind(organization_id)
+        .bind(event_type)
+        .bind(stripe_event_id)
+        .bind(&now)
+        .execute(pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
     }
 
     /// Check if an event has already been processed (idempotency)

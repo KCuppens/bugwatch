@@ -142,7 +142,25 @@ pub async fn ingest_metrics(
         .await?
         .ok_or_else(|| AppError::Unauthorized("Invalid API key".to_string()))?;
 
-    // 3. Check tier — server monitoring is Pro+ only (bypassed in self-hosted mode or valid x402 payment)
+    // 3. Rate limit — checked before the expensive tier/org DB lookup (E4)
+    let rate_limit_result = state
+        .rate_limiter
+        .check_with_tier_lookup(
+            &api_key,
+            &state.db,
+            state.config.deployment_mode,
+            state.config.rate_limit_per_minute,
+        )
+        .await;
+    if !rate_limit_result.allowed {
+        return Err(AppError::RateLimitExceeded {
+            retry_after_secs: rate_limit_result.retry_after_secs.unwrap_or(60),
+            limit: rate_limit_result.limit,
+            remaining: rate_limit_result.remaining,
+        });
+    }
+
+    // 4. Check tier — server monitoring is Pro+ only (bypassed in self-hosted mode or valid x402 payment)
     if !state.config.deployment_mode.is_self_hosted()
         && !(state.config.x402_enabled && x402_verified.is_some())
     {
@@ -164,22 +182,41 @@ pub async fn ingest_metrics(
         }
     }
 
-    // 4. Rate limit
-    let rate_limit_result = state
-        .rate_limiter
-        .check_with_tier_lookup(
-            &api_key,
-            &state.db,
-            state.config.deployment_mode,
-            state.config.rate_limit_per_minute,
-        )
-        .await;
-    if !rate_limit_result.allowed {
-        return Err(AppError::RateLimitExceeded {
-            retry_after_secs: rate_limit_result.retry_after_secs.unwrap_or(60),
-            limit: rate_limit_result.limit,
-            remaining: rate_limit_result.remaining,
-        });
+    // 5. Validate field lengths (B3)
+    if payload.server_id.len() > 128 {
+        return Err(AppError::BadRequest(
+            "server_id too long (max 128 bytes)".to_string(),
+        ));
+    }
+    if payload.hostname.len() > 253 {
+        return Err(AppError::BadRequest(
+            "hostname too long (max 253 bytes)".to_string(),
+        ));
+    }
+    if payload.os.as_deref().map(|s| s.len()).unwrap_or(0) > 128 {
+        return Err(AppError::BadRequest(
+            "os too long (max 128 bytes)".to_string(),
+        ));
+    }
+    if payload.kernel.as_deref().map(|s| s.len()).unwrap_or(0) > 128 {
+        return Err(AppError::BadRequest(
+            "kernel too long (max 128 bytes)".to_string(),
+        ));
+    }
+
+    // B6: cap Vec counts
+    if payload.disks.as_ref().map(|v| v.len()).unwrap_or(0) > 100 {
+        return Err(AppError::BadRequest("Too many disks (max 100)".to_string()));
+    }
+    if payload.processes.as_ref().map(|v| v.len()).unwrap_or(0) > 500 {
+        return Err(AppError::BadRequest(
+            "Too many processes (max 500)".to_string(),
+        ));
+    }
+    if payload.docker.as_ref().map(|v| v.len()).unwrap_or(0) > 200 {
+        return Err(AppError::BadRequest(
+            "Too many docker containers (max 200)".to_string(),
+        ));
     }
 
     // 5. Upsert server record

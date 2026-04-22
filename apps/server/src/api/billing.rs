@@ -315,6 +315,24 @@ pub async fn add_member(
         ));
     }
 
+    // Rate limit: 20 add_member requests per user
+    let rl = state
+        .rate_limiter
+        .check(&format!("add_member:{}", user.id), 20);
+    if !rl.allowed {
+        return Err((
+            StatusCode::TOO_MANY_REQUESTS,
+            "Too many requests".to_string(),
+        ));
+    }
+
+    if req.email.len() > 256 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Email too long (max 256 characters)".to_string(),
+        ));
+    }
+
     // Find user by email
     let target_user = UserRepository::find_by_email(&state.db, &req.email)
         .await
@@ -1741,6 +1759,17 @@ mod saas_billing {
         State(state): State<AppState>,
         Json(req): Json<ValidateCouponRequest>,
     ) -> Result<Json<CouponInfo>, (StatusCode, String)> {
+        // Rate limit: 10 validate_coupon requests per user
+        let rl = state
+            .rate_limiter
+            .check(&format!("validate_coupon:{}", _user.id), 10);
+        if !rl.allowed {
+            return Err((
+                StatusCode::TOO_MANY_REQUESTS,
+                "Too many requests".to_string(),
+            ));
+        }
+
         let stripe = state.stripe.as_ref().ok_or((
             StatusCode::SERVICE_UNAVAILABLE,
             "Stripe not configured".to_string(),
@@ -1754,7 +1783,10 @@ mod saas_billing {
         })?;
 
         if !coupon.valid {
-            return Err((StatusCode::BAD_REQUEST, "Coupon is not valid".to_string()));
+            return Err((
+                StatusCode::NOT_FOUND,
+                "Coupon not found or invalid".to_string(),
+            ));
         }
 
         Ok(Json(coupon))

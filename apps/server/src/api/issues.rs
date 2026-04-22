@@ -133,6 +133,21 @@ pub async fn search(
 ) -> AppResult<Json<SearchResponse>> {
     let start = std::time::Instant::now();
 
+    // Rate limit: 60 search requests per identity per project
+    let auth_key = auth
+        .user_id()
+        .map(|id| id.to_string())
+        .or_else(|| auth.agent_org_id().map(|id| format!("agent:{}", id)))
+        .unwrap_or_else(|| "anonymous".to_string());
+    let rl = state
+        .rate_limiter
+        .check(&format!("search:{}:{}", auth_key, project_id), 60);
+    if !rl.allowed {
+        return Err(AppError::BadRequest(
+            "Too many requests. Please try again later.".to_string(),
+        ));
+    }
+
     require_project_access(&state.db, &auth, &project_id).await?;
 
     let page = req.page.unwrap_or(1).max(1);

@@ -326,9 +326,8 @@ export default function ProjectsPage() {
                         (revealedKeys.get(project.id) ?? "(error loading key)")
                       ) : (
                         <>
-                          {project.api_key}
-                          <span aria-hidden="true">{"•".repeat(12)}</span>
-                          <span className="sr-only">hidden</span>
+                          <span aria-hidden="true">{"•".repeat(24)}</span>
+                          <span className="sr-only">API key hidden</span>
                         </>
                       )}
                     </code>

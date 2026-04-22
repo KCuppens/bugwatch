@@ -63,6 +63,7 @@ impl UserRepository {
             UPDATE users
             SET failed_login_attempts = failed_login_attempts + 1,
                 locked_until = CASE
+                    -- Lock after 5th failed attempt (pre-increment value >= 4 ≡ post-increment >= 5)
                     WHEN failed_login_attempts >= 4
                     THEN NOW() + INTERVAL '15 minutes'
                     ELSE locked_until

@@ -3,7 +3,8 @@ use axum::{
     extract::FromRequestParts,
     http::{header::AUTHORIZATION, request::Parts, HeaderName},
 };
-use sha2::{Digest, Sha256};
+use hmac::{Hmac, Mac};
+use sha2::Sha256;
 
 use crate::{
     db::{models::AgentKey, repositories::AgentKeyRepository},
@@ -28,11 +29,14 @@ impl AgentAuth {
     }
 }
 
-/// Hash an agent key using SHA-256
-pub fn hash_agent_key(key: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(key.as_bytes());
-    hex::encode(hasher.finalize())
+/// Hash an agent key using HMAC-SHA256 keyed on the application secret.
+/// Using HMAC instead of plain SHA-256 means a leaked key_hash column cannot
+/// be brute-forced without also knowing the JWT secret.
+pub fn hash_agent_key(key: &str, secret: &[u8]) -> String {
+    type HmacSha256 = Hmac<Sha256>;
+    let mut mac = HmacSha256::new_from_slice(secret).expect("HMAC accepts any key length");
+    mac.update(key.as_bytes());
+    hex::encode(mac.finalize().into_bytes())
 }
 
 /// Generate a new agent API key
@@ -87,7 +91,7 @@ impl FromRequestParts<AppState> for AgentAuth {
         }
 
         // Hash and look up
-        let key_hash = hash_agent_key(&api_key);
+        let key_hash = hash_agent_key(&api_key, state.config.jwt_secret.as_bytes());
         let agent_key = AgentKeyRepository::find_by_hash(&state.db, &key_hash)
             .await
             .map_err(|_| AppError::Internal("Failed to validate agent key".to_string()))?
@@ -150,15 +154,17 @@ mod tests {
     #[test]
     fn hash_agent_key_deterministic() {
         let key = "bw_agent_abc123";
-        let hash1 = hash_agent_key(key);
-        let hash2 = hash_agent_key(key);
+        let secret = b"test-secret";
+        let hash1 = hash_agent_key(key, secret);
+        let hash2 = hash_agent_key(key, secret);
         assert_eq!(hash1, hash2, "Same input should produce same hash");
     }
 
     #[test]
     fn hash_agent_key_different_inputs_different_hashes() {
-        let hash1 = hash_agent_key("bw_agent_key1");
-        let hash2 = hash_agent_key("bw_agent_key2");
+        let secret = b"test-secret";
+        let hash1 = hash_agent_key("bw_agent_key1", secret);
+        let hash2 = hash_agent_key("bw_agent_key2", secret);
         assert_ne!(
             hash1, hash2,
             "Different inputs should produce different hashes"
@@ -167,11 +173,11 @@ mod tests {
 
     #[test]
     fn hash_agent_key_is_64_hex_chars() {
-        let hash = hash_agent_key("bw_agent_test");
+        let hash = hash_agent_key("bw_agent_test", b"test-secret");
         assert_eq!(
             hash.len(),
             64,
-            "SHA-256 hex digest should be 64 chars, got: {}",
+            "HMAC-SHA256 hex digest should be 64 chars, got: {}",
             hash.len()
         );
         assert!(
