@@ -230,7 +230,7 @@ pub async fn update(
     }
 
     // Update comment
-    CommentRepository::update(&state.db, &comment_id, &req.content).await?;
+    CommentRepository::update(&state.db, &comment_id, &issue_id, &req.content).await?;
 
     // Get updated comment
     let updated = CommentRepository::find_by_id(&state.db, &comment_id)
@@ -298,7 +298,7 @@ pub async fn delete(
     }
 
     // Delete comment
-    CommentRepository::delete(&state.db, &comment_id).await?;
+    CommentRepository::delete(&state.db, &comment_id, &issue_id).await?;
 
     Ok(Json(ApiResponse {
         data: serde_json::json!({ "message": "Comment deleted successfully" }),

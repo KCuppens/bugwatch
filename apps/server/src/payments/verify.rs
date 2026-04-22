@@ -3,6 +3,8 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use tracing;
 
+use crate::error::AppError;
+
 pub struct OnChainVerifier {
     rpc_url: String,
     client: Client,
@@ -15,14 +17,17 @@ struct RpcResponse {
 }
 
 impl OnChainVerifier {
-    pub fn new(rpc_url: String) -> Self {
-        Self {
-            rpc_url,
-            client: Client::builder()
-                .timeout(std::time::Duration::from_secs(30))
-                .build()
-                .expect("Failed to build HTTP client"),
-        }
+    /// Build an on-chain verifier backed by a reqwest client with a 30s timeout.
+    ///
+    /// Returns an error instead of panicking if the underlying TLS/HTTP client cannot
+    /// be initialised — startup code should propagate this so the process fails cleanly
+    /// rather than unwinding inside construction.
+    pub fn new(rpc_url: String) -> Result<Self, AppError> {
+        let client = Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .map_err(|e| AppError::Internal(format!("OnChainVerifier HTTP client init: {e}")))?;
+        Ok(Self { rpc_url, client })
     }
 
     /// Verifies a USDC ERC-20 Transfer event on Base.

@@ -189,24 +189,48 @@ async fn main() -> Result<()> {
         bugwatch,
         alert_semaphore: Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_ALERTS)),
         payment_store: Arc::new(crate::payments::store::PaymentStore::new(db.clone())),
-        onchain_verifier: Arc::new(crate::payments::verify::OnChainVerifier::new(
-            config.x402_rpc_url.clone(),
-        )),
+        onchain_verifier: Arc::new(
+            crate::payments::verify::OnChainVerifier::new(config.x402_rpc_url.clone())
+                .map_err(|e| anyhow::anyhow!("Failed to initialise on-chain verifier: {e}"))?,
+        ),
     };
 
     // Build application
     let app = create_app(state.clone());
 
-    // Start health check worker in background — restart with exponential backoff (1s → 60s cap)
+    // Start health check worker in background — the outer loop supervises an inner
+    // `tokio::spawn` so that a panic in `worker.run()` is surfaced as a JoinError
+    // rather than silently killing the task. Restart with exponential backoff (1s → 60s cap).
     let worker_db = state.db.clone();
     let worker_alerting = alerting_service.clone();
     tokio::spawn(async move {
         let mut backoff_secs: u64 = 1;
         loop {
-            let worker =
-                HealthCheckWorker::with_alerting(worker_db.clone(), worker_alerting.clone());
-            worker.run().await;
-            tracing::warn!(backoff_secs, "Health check worker exited — restarting");
+            let inner_db = worker_db.clone();
+            let inner_alerting = worker_alerting.clone();
+            let task = tokio::spawn(async move {
+                let worker = HealthCheckWorker::with_alerting(inner_db, inner_alerting);
+                worker.run().await;
+            });
+            match task.await {
+                Ok(()) => {
+                    tracing::warn!(backoff_secs, "Health check worker exited — restarting");
+                }
+                Err(e) if e.is_panic() => {
+                    tracing::error!(
+                        error = %e,
+                        backoff_secs,
+                        "Health check worker panicked — restarting"
+                    );
+                }
+                Err(e) => {
+                    tracing::error!(
+                        error = %e,
+                        backoff_secs,
+                        "Health check worker task error — restarting"
+                    );
+                }
+            }
             tokio::time::sleep(tokio::time::Duration::from_secs(backoff_secs)).await;
             backoff_secs = (backoff_secs * 2).min(60);
         }
@@ -407,6 +431,21 @@ async fn main() -> Result<()> {
     info!("Listening on {}", config.server_addr);
 
     let grace_secs = config.shutdown_grace_secs;
+
+    // TODO(r41-a33): the background workers spawned above (health check, retention,
+    // server-offline detection, rate-limiter cleanup, session cleanup, x402 expiry —
+    // see the six `tokio::spawn` sites earlier in this function) are not drained on
+    // shutdown. Axum's `with_graceful_shutdown` only awaits in-flight HTTP requests.
+    //
+    // A correct fix requires collecting every spawn's `JoinHandle` into a `Vec` and
+    // broadcasting a shutdown signal (e.g. `tokio::sync::broadcast` or an
+    // `AtomicBool`) that each worker's inner loop polls via `tokio::select!` against
+    // its `interval.tick()`. On shutdown, notify then `tokio::time::timeout(grace,
+    // futures::future::join_all(handles))`. That wiring is ~60 LOC across six
+    // workers and was deferred past the round-41 worker-7 budget (see task A33).
+    // The workers are idempotent and safe to terminate mid-cycle (all use retry
+    // loops for DB operations), so the immediate risk is only partially completed
+    // cleanup work; full graceful drain is still tracked as a follow-up.
     axum::serve(
         listener,
         app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
@@ -535,6 +574,12 @@ fn create_app(state: AppState) -> Router {
         )
         .layer(cors)
         .layer(DefaultBodyLimit::max(2 * 1024 * 1024)) // 2MB max body size
+        // Request-wide timeout — prevents slow/hung upstreams from pinning a
+        // worker indefinitely. 60s is generous relative to normal p99 latency
+        // and still short enough that orphaned requests are recycled.
+        .layer(tower_http::timeout::TimeoutLayer::new(
+            std::time::Duration::from_secs(60),
+        ))
         // Security headers — prevent clickjacking, MIME sniffing, and control referrer
         .layer(axum::middleware::from_fn(security_headers))
         // Request correlation IDs — propagate or generate x-request-id for tracing

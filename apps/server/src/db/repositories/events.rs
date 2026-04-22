@@ -69,11 +69,19 @@ impl EventRepository {
         .map_err(Into::into)
     }
 
-    pub async fn count_by_issue(pool: &DbPool, issue_id: &str) -> Result<i64> {
-        let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM events WHERE issue_id = $1")
-            .bind(issue_id)
-            .fetch_one(pool)
-            .await?;
+    pub async fn count_by_issue(pool: &DbPool, issue_id: &str, project_id: &str) -> Result<i64> {
+        // Scope by project_id as defense-in-depth — even if a caller forgot to
+        // verify the issue belongs to the claimed project, the count will be 0
+        // for cross-tenant issue ids.
+        let (count,): (i64,) = sqlx::query_as(
+            r#"SELECT COUNT(*) FROM events e
+               JOIN issues i ON e.issue_id = i.id
+               WHERE e.issue_id = $1 AND i.project_id = $2"#,
+        )
+        .bind(issue_id)
+        .bind(project_id)
+        .fetch_one(pool)
+        .await?;
         Ok(count)
     }
 

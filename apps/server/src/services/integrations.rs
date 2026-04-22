@@ -11,6 +11,47 @@ pub struct ExternalIssue {
     pub status: Option<String>,
 }
 
+/// Escape Markdown-significant characters so user-supplied text is embedded
+/// as literal content rather than formatting. Intentionally limited to a safe
+/// subset of characters commonly used for markdown injection.
+fn markdown_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '\\' | '[' | ']' | '(' | ')' | '#' | '!' | '`' | '*' | '_' => {
+                out.push('\\');
+                out.push(ch);
+            }
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+/// Strip ASCII control characters (\x00-\x1F) except newline and tab, and
+/// cap the resulting string at `max_bytes` UTF-8 bytes without splitting a
+/// multi-byte character.
+fn sanitize_for_adf(s: &str) -> String {
+    let mut cleaned = String::with_capacity(s.len());
+    for ch in s.chars() {
+        let c = ch as u32;
+        if c < 0x20 && ch != '\n' && ch != '\t' {
+            continue;
+        }
+        cleaned.push(ch);
+    }
+    const MAX_BYTES: usize = 30_000;
+    if cleaned.len() <= MAX_BYTES {
+        return cleaned;
+    }
+    let mut end = MAX_BYTES;
+    while end > 0 && !cleaned.is_char_boundary(end) {
+        end -= 1;
+    }
+    cleaned.truncate(end);
+    cleaned
+}
+
 /// Format a Bugwatch issue body for external issue trackers (Markdown)
 pub fn format_issue_body(
     title: &str,
@@ -18,12 +59,17 @@ pub fn format_issue_body(
     event_url: &str,
     extra_context: Option<&str>,
 ) -> String {
+    let safe_title = markdown_escape(title);
+    let safe_issue_id = markdown_escape(issue_id);
     let mut body = format!(
         "## Bugwatch Issue\n\n**Title:** {}\n**Issue ID:** {}\n\n[View in Bugwatch]({})\n",
-        title, issue_id, event_url
+        safe_title, safe_issue_id, event_url
     );
     if let Some(ctx) = extra_context {
-        body.push_str(&format!("\n### Additional Context\n\n{}\n", ctx));
+        body.push_str(&format!(
+            "\n### Additional Context\n\n{}\n",
+            markdown_escape(ctx)
+        ));
     }
     body.push_str("\n---\n*Created by [Bugwatch](https://bugwatch.dev)*\n");
     body
@@ -170,7 +216,11 @@ impl JiraService {
             cloud_id
         );
 
-        // Convert markdown body to Jira ADF format (simplified)
+        // Convert markdown body to Jira ADF format (simplified).
+        // Always wrap user-supplied content as a single plain "text" node so
+        // an attacker cannot inject arbitrary ADF structure via keywords like
+        // `{"type":"..."`. Control chars are stripped and the body is capped.
+        let safe_body = sanitize_for_adf(body);
         let adf_body = serde_json::json!({
             "type": "doc",
             "version": 1,
@@ -178,7 +228,7 @@ impl JiraService {
                 "type": "paragraph",
                 "content": [{
                     "type": "text",
-                    "text": body
+                    "text": safe_body
                 }]
             }]
         });

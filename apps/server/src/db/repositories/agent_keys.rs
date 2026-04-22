@@ -64,6 +64,7 @@ impl AgentKeyRepository {
         pool: &DbPool,
         organization_id: &str,
     ) -> Result<Vec<AgentKey>> {
+        // Hard cap to prevent unbounded scans on organizations with huge key counts.
         sqlx::query_as::<_, AgentKey>(
             "SELECT * FROM agent_keys WHERE organization_id = $1 ORDER BY created_at DESC LIMIT 10000",
         )
@@ -136,6 +137,7 @@ impl AgentAuditLogRepository {
         agent_key_id: &str,
         limit: i64,
     ) -> Result<Vec<AgentAuditLog>> {
+        let limit = limit.max(1).min(10_000);
         sqlx::query_as::<_, AgentAuditLog>(
             "SELECT * FROM agent_audit_log WHERE agent_key_id = $1 ORDER BY created_at DESC LIMIT $2",
         )
@@ -152,6 +154,7 @@ impl AgentAuditLogRepository {
         organization_id: &str,
         limit: i64,
     ) -> Result<Vec<AgentAuditLog>> {
+        let limit = limit.max(1).min(10_000);
         sqlx::query_as::<_, AgentAuditLog>(
             r#"
             SELECT al.* FROM agent_audit_log al

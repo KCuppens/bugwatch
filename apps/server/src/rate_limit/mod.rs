@@ -11,9 +11,10 @@ use crate::billing::tiers::{self, Tier};
 use crate::config::DeploymentMode;
 use crate::db::{repositories::OrganizationRepository, DbPool};
 
-// 60s TTL ensures tier upgrades take effect within 1 minute without requiring
-// explicit cache invalidation on every billing code path.
-const TIER_CACHE_TTL: Duration = Duration::from_secs(60);
+// 5-minute TTL bounds memory for the tier cache while still letting upgrades take
+// effect without explicit invalidation on every billing code path. Entries are evicted
+// lazily on read (see `check_with_tier_lookup`); no background task is required.
+const TIER_CACHE_TTL: Duration = Duration::from_secs(300);
 
 fn tier_cache() -> &'static DashMap<String, (u32, Instant)> {
     static CACHE: OnceLock<DashMap<String, (u32, Instant)>> = OnceLock::new();

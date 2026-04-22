@@ -18,12 +18,22 @@ export function useFirstError(): UseFirstErrorReturn {
   const { selectedProject } = useProject();
   const { checklist, markMilestone } = useOnboarding();
 
-  // Check localStorage eagerly — no state needed for early-exit path
-  const alreadyCelebrated = typeof window !== "undefined" && localStorage.getItem(CELEBRATED_KEY) === "true";
+  // Read localStorage inside an effect to avoid SSR access and hydration
+  // mismatch. Start optimistic (not celebrated); the effect below promotes
+  // the ref and flag if a previous dismissal is persisted.
+  const [alreadyCelebrated, setAlreadyCelebrated] = useState(false);
 
   const [firstIssue, setFirstIssue] = useState<Issue | null>(null);
   const [shouldCelebrate, setShouldCelebrate] = useState(false);
-  const celebratedRef = useRef(alreadyCelebrated || checklist.first_error);
+  const celebratedRef = useRef<boolean>(checklist.first_error);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (localStorage.getItem(CELEBRATED_KEY) === "true") {
+      celebratedRef.current = true;
+      setAlreadyCelebrated(true);
+    }
+  }, []);
 
   const dismiss = () => {
     if (typeof window !== "undefined") {

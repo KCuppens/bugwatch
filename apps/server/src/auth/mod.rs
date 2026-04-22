@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod cookie;
 pub mod either;
 pub mod jwt;
 pub mod middleware;

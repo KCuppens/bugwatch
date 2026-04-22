@@ -5,7 +5,7 @@ use axum::{
 };
 
 use crate::{
-    auth::jwt::validate_access_token,
+    auth::{cookie::extract_cookie, jwt::validate_access_token},
     db::{
         models::User,
         repositories::{SessionRepository, UserRepository},
@@ -48,11 +48,7 @@ impl FromRequestParts<AppState> for AuthUser {
                 .headers
                 .get(axum::http::header::COOKIE)
                 .and_then(|v| v.to_str().ok())
-                .and_then(|cookies| {
-                    cookies
-                        .split(';')
-                        .find_map(|c| c.trim().strip_prefix("access_token="))
-                })
+                .and_then(|cookies| extract_cookie(cookies, "access_token"))
         };
 
         let token = token_from_header

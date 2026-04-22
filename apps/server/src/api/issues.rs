@@ -169,6 +169,9 @@ pub async fn search(
                 ));
             }
         }
+        // Allowlist-check status/level and shape-check environment before we
+        // forward the lists to the DB layer.
+        validate_search_filters(filters)?;
     }
 
     // B2: cap numeric filter values to prevent absurdly large DB parameters
@@ -285,6 +288,67 @@ pub struct SearchFiltersRequest {
     pub last_seen_after: Option<String>,
     pub last_seen_before: Option<String>,
     pub text: Option<String>,
+}
+
+/// Max entries allowed per list filter (status / level / environment).
+/// Pathologically large filter lists can explode SQL IN-clauses and DB planner
+/// work, so cap them to a reasonable number.
+const MAX_FILTER_VEC_LEN: usize = 50;
+
+/// Max byte length for a single environment name. Environments are user-defined,
+/// so we can't use an allowlist — instead we validate shape (printable ASCII).
+const MAX_ENVIRONMENT_LEN: usize = 64;
+
+/// Allowed issue status values — must match the DB column's accepted set
+/// (`'unresolved'` is the default; `update_status` in this file accepts
+/// `unresolved | resolved | ignored`; `archived` / `new` are tolerated here
+/// for forward-compat with the UI's saved-search presets).
+const ALLOWED_STATUSES: &[&str] = &["unresolved", "resolved", "ignored", "archived", "new"];
+
+/// Allowed event/issue level values — matches `EventLevel` in `api/events.rs`.
+const ALLOWED_LEVELS: &[&str] = &["debug", "info", "warning", "error", "fatal"];
+
+/// Validate the user-supplied filter vectors against allowlists / shape rules
+/// before they are forwarded to the DB. Returns `AppError::Validation` with a
+/// generic message on any mismatch (intentionally non-specific to avoid echoing
+/// attacker input back in error responses).
+fn validate_search_filters(f: &SearchFiltersRequest) -> AppResult<()> {
+    fn check_allowlist(values: &Option<Vec<String>>, allowed: &[&str]) -> AppResult<()> {
+        if let Some(vs) = values {
+            if vs.len() > MAX_FILTER_VEC_LEN {
+                return Err(AppError::Validation("invalid filter value".into()));
+            }
+            for v in vs {
+                if !allowed.contains(&v.as_str()) {
+                    return Err(AppError::Validation("invalid filter value".into()));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    check_allowlist(&f.status, ALLOWED_STATUSES)?;
+    check_allowlist(&f.level, ALLOWED_LEVELS)?;
+
+    // Environment is user-defined — validate shape only: non-empty, <=64 chars,
+    // printable ASCII (no control bytes, no newlines, no NUL). Cap the list too.
+    if let Some(envs) = &f.environment {
+        if envs.len() > MAX_FILTER_VEC_LEN {
+            return Err(AppError::Validation("invalid filter value".into()));
+        }
+        for env in envs {
+            if env.is_empty() || env.len() > MAX_ENVIRONMENT_LEN {
+                return Err(AppError::Validation("invalid filter value".into()));
+            }
+            // Printable ASCII: 0x20..=0x7E, rejecting everything else (incl. UTF-8
+            // multi-byte, control chars, tabs, newlines).
+            if !env.bytes().all(|b| (0x20..=0x7E).contains(&b)) {
+                return Err(AppError::Validation("invalid filter value".into()));
+            }
+        }
+    }
+
+    Ok(())
 }
 
 #[derive(Debug, Deserialize, Clone, Copy)]
@@ -1051,7 +1115,7 @@ pub async fn get_impact(
         EventRepository::count_in_range(&state.db, &issue_id, two_hours_ago, one_hour_ago),
         EventRepository::top_tag_values(&state.db, &issue_id, "browser", 5),
         EventRepository::top_tag_values(&state.db, &issue_id, "os.name", 5),
-        EventRepository::count_by_issue(&state.db, &issue_id),
+        EventRepository::count_by_issue(&state.db, &issue_id, &project_id),
     )?;
 
     let trend_percent = if prev_hour_count > 0 {
@@ -1213,16 +1277,43 @@ pub async fn list_across_projects(
         }
     }
 
-    // Get all projects based on auth type
+    // Get all projects based on auth type.
+    // Cap at 1000 to prevent unbounded fan-out while still covering every
+    // realistic tenant. If a caller is actually at the cap, log a warning so
+    // ops can spot silent truncation.
+    const CROSS_PROJECT_CAP: i64 = 1000;
     let projects = match &*auth {
         AuthIdentity::User(user) => {
-            ProjectRepository::find_by_owner(&state.db, &user.id, 100, 0).await?
+            ProjectRepository::find_by_owner(&state.db, &user.id, CROSS_PROJECT_CAP, 0).await?
         }
         AuthIdentity::Agent(agent) => {
-            ProjectRepository::find_by_organization(&state.db, &agent.organization_id, 100, 0)
-                .await?
+            ProjectRepository::find_by_organization(
+                &state.db,
+                &agent.organization_id,
+                CROSS_PROJECT_CAP,
+                0,
+            )
+            .await?
         }
     };
+    if projects.len() as i64 == CROSS_PROJECT_CAP {
+        match &*auth {
+            AuthIdentity::User(user) => {
+                tracing::warn!(
+                    user_id = %user.id,
+                    cap = CROSS_PROJECT_CAP,
+                    "project list at cap — may be truncated"
+                );
+            }
+            AuthIdentity::Agent(agent) => {
+                tracing::warn!(
+                    organization_id = %agent.organization_id,
+                    cap = CROSS_PROJECT_CAP,
+                    "project list at cap — may be truncated"
+                );
+            }
+        }
+    }
 
     if projects.is_empty() {
         return Ok(Json(AcrossProjectsResponse {
@@ -1341,6 +1432,15 @@ pub async fn get_stats_by_project(
     auth: EitherAuth,
     x402_verified: Option<axum::Extension<crate::payments::X402PaymentVerified>>,
 ) -> AppResult<Json<ProjectStatsResponse>> {
+    // Per-identity rate limit: this endpoint fans out across every project the
+    // caller owns (one stats aggregation + one project list), so cap at 30/min
+    // to match the cross-project list endpoint's load profile.
+    crate::api::enforce_rate_limit(
+        &state,
+        &crate::api::rate_limit_key_for_auth("issues_stats_by_project", &auth),
+        30,
+    )?;
+
     // Gate: Pro+ tier required for cross-project statistics
     // x402_verified is set by the payment middleware when a valid feature_access payment was
     // verified; bypass the tier check only when x402 is enabled AND payment was verified.
@@ -1374,16 +1474,42 @@ pub async fn get_stats_by_project(
         }
     }
 
-    // Get all projects based on auth type
+    // Get all projects based on auth type.
+    // Cap at 1000 to prevent unbounded fan-out; log when we hit the cap so
+    // ops can spot silent truncation for tenants with more projects.
+    const STATS_PROJECT_CAP: i64 = 1000;
     let projects = match &*auth {
         AuthIdentity::User(user) => {
-            ProjectRepository::find_by_owner(&state.db, &user.id, 100, 0).await?
+            ProjectRepository::find_by_owner(&state.db, &user.id, STATS_PROJECT_CAP, 0).await?
         }
         AuthIdentity::Agent(agent) => {
-            ProjectRepository::find_by_organization(&state.db, &agent.organization_id, 100, 0)
-                .await?
+            ProjectRepository::find_by_organization(
+                &state.db,
+                &agent.organization_id,
+                STATS_PROJECT_CAP,
+                0,
+            )
+            .await?
         }
     };
+    if projects.len() as i64 == STATS_PROJECT_CAP {
+        match &*auth {
+            AuthIdentity::User(user) => {
+                tracing::warn!(
+                    user_id = %user.id,
+                    cap = STATS_PROJECT_CAP,
+                    "project list at cap — may be truncated"
+                );
+            }
+            AuthIdentity::Agent(agent) => {
+                tracing::warn!(
+                    organization_id = %agent.organization_id,
+                    cap = STATS_PROJECT_CAP,
+                    "project list at cap — may be truncated"
+                );
+            }
+        }
+    }
 
     if projects.is_empty() {
         return Ok(Json(ProjectStatsResponse {

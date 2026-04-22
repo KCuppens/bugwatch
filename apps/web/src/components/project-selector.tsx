@@ -162,7 +162,13 @@ export function ProjectSelector() {
     (prefilledName?: string) => {
       setOpen(false);
       setSearch("");
-      const qs = prefilledName ? `?name=${encodeURIComponent(prefilledName)}` : "";
+      // Validate prefilledName: length <= 100 and only printable chars (no
+      // control chars, no newlines, no tabs). encodeURIComponent handles
+      // escaping but does not block pathological input.
+
+      const isSafeName = (v: string) => v.length > 0 && v.length <= 100 && !/[\x00-\x1f\x7f]/.test(v);
+      const safeName = prefilledName && isSafeName(prefilledName) ? prefilledName : undefined;
+      const qs = safeName ? `?name=${encodeURIComponent(safeName)}` : "";
       router.push(`/dashboard/projects/new${qs}`);
     },
     [router]

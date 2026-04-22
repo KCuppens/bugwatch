@@ -76,8 +76,11 @@ export default function LoginPage() {
     try {
       await login(email, password);
       const next = searchParams.get("next") ?? "";
-      const SAFE_PATH_RE = /^\/[a-zA-Z0-9_\-./]*$/
-      const destination = next && SAFE_PATH_RE.test(next) ? next : "/dashboard";
+      // Allow only same-origin paths. Regex-style char classes with `.` can let
+      // `..` through, so explicitly reject any path containing `..` to block
+      // traversal like `/a/../secret`.
+      const isSafeNext = next.startsWith("/") && !next.startsWith("//") && !next.includes("..");
+      const destination = isSafeNext ? next : "/dashboard";
       router.push(destination);
     } catch (err) {
       if (err instanceof ApiError) {

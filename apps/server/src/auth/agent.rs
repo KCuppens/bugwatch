@@ -7,7 +7,10 @@ use hmac::{Hmac, Mac};
 use sha2::Sha256;
 
 use crate::{
-    db::{models::AgentKey, repositories::AgentKeyRepository},
+    db::{
+        models::AgentKey,
+        repositories::{AgentKeyRepository, OrganizationRepository},
+    },
     AppError, AppState,
 };
 
@@ -105,11 +108,35 @@ impl FromRequestParts<AppState> for AgentAuth {
                 AppError::Unauthorized("Invalid or revoked agent API key".to_string())
             })?;
 
-        // Parse permissions
+        // Tenant post-check: reject if the key's organization was deleted or
+        // is otherwise missing. The auth path cannot know the target org up
+        // front (the key defines it), so this catches orphaned-key edge cases
+        // rather than defending against a cross-tenant request.
+        if OrganizationRepository::find_by_id(&state.db, &agent_key.organization_id)
+            .await
+            .map_err(|_| AppError::Internal("Failed to validate tenant".to_string()))?
+            .is_none()
+        {
+            tracing::warn!(
+                agent_key_id = %agent_key.id,
+                organization_id = %agent_key.organization_id,
+                "agent key references missing organization, rejecting"
+            );
+            return Err(AppError::Unauthorized(
+                "Invalid or revoked agent API key".to_string(),
+            ));
+        }
+
+        // Parse permissions. Malformed JSON is treated as no permissions, but
+        // logged so operators can spot corruption.
         let permissions: Vec<String> =
             serde_json::from_str(&agent_key.permissions).unwrap_or_else(|e| {
-                tracing::error!(error = %e, "Invalid agent permissions JSON in database");
-                vec![]
+                tracing::warn!(
+                    agent_key_id = %agent_key.id,
+                    error = %e,
+                    "malformed permissions JSON on agent key, treating as empty"
+                );
+                Vec::new()
             });
 
         let organization_id = agent_key.organization_id.clone();

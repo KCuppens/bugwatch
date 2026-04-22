@@ -10,6 +10,7 @@ use uuid;
 
 use crate::{
     auth::{
+        cookie::extract_cookie,
         jwt::{generate_tokens, validate_refresh_token},
         middleware::AuthUser,
         password::{hash_password, validate_email, validate_password, verify_password},
@@ -411,12 +412,7 @@ pub async fn logout(
     let cookie_token = headers
         .get(axum::http::header::COOKIE)
         .and_then(|v| v.to_str().ok())
-        .and_then(|cookies| {
-            cookies
-                .split(';')
-                .find_map(|c| c.trim().strip_prefix("access_token="))
-                .map(|s| s.to_string())
-        });
+        .and_then(|cookies| extract_cookie(cookies, "access_token").map(|s| s.to_string()));
 
     let cookie_token = cookie_token.ok_or_else(|| {
         AppError::Unauthorized("Logout requires an active session cookie".to_string())
@@ -466,12 +462,7 @@ pub async fn refresh(
     let refresh_token = headers
         .get(axum::http::header::COOKIE)
         .and_then(|v| v.to_str().ok())
-        .and_then(|cookies| {
-            cookies
-                .split(';')
-                .find_map(|c| c.trim().strip_prefix("refresh_token="))
-                .map(|s| s.to_string())
-        })
+        .and_then(|cookies| extract_cookie(cookies, "refresh_token").map(|s| s.to_string()))
         .ok_or_else(|| AppError::Unauthorized("Missing refresh token".to_string()))?;
 
     // Validate refresh token

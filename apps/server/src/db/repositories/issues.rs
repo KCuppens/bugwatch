@@ -77,42 +77,35 @@ impl IssueRepository {
         limit: i64,
         offset: i64,
     ) -> Result<Vec<Issue>> {
-        let limit = limit.min(1000);
-        let mut param_idx = 2;
-        let mut query = String::from("SELECT * FROM issues WHERE project_id = $1");
-        let mut params: Vec<String> = vec![project_id.to_string()];
+        let limit = limit.max(1).min(1000);
+        let offset = offset.max(0).min(100_000);
+
+        // Use QueryBuilder instead of manual `$N` placeholder tracking —
+        // every value goes through push_bind so there's no risk of a stray
+        // filter string bypassing parameterisation.
+        let mut qb: sqlx::QueryBuilder<sqlx::Postgres> =
+            sqlx::QueryBuilder::new("SELECT * FROM issues WHERE project_id = ");
+        qb.push_bind(project_id);
 
         if let Some(s) = status {
-            query.push_str(&format!(" AND status = ${}", param_idx));
-            params.push(s.to_string());
-            param_idx += 1;
+            qb.push(" AND status = ").push_bind(s);
         }
-
         if let Some(l) = level {
-            query.push_str(&format!(" AND level = ${}", param_idx));
-            params.push(l.to_string());
-            param_idx += 1;
+            qb.push(" AND level = ").push_bind(l);
         }
-
         if let Some(e) = environment {
-            query.push_str(&format!(" AND environment = ${}", param_idx));
-            params.push(e.to_string());
-            param_idx += 1;
+            qb.push(" AND environment = ").push_bind(e);
         }
 
-        query.push_str(&format!(
-            " ORDER BY last_seen DESC LIMIT ${} OFFSET ${}",
-            param_idx,
-            param_idx + 1
-        ));
+        qb.push(" ORDER BY last_seen DESC LIMIT ")
+            .push_bind(limit)
+            .push(" OFFSET ")
+            .push_bind(offset);
 
-        let mut q = sqlx::query_as::<_, Issue>(&query);
-        for p in &params {
-            q = q.bind(p);
-        }
-        q = q.bind(limit).bind(offset);
-
-        q.fetch_all(pool).await.map_err(Into::into)
+        qb.build_query_as::<Issue>()
+            .fetch_all(pool)
+            .await
+            .map_err(Into::into)
     }
 
     pub async fn count_by_project(
@@ -254,16 +247,18 @@ impl IssueRepository {
 
     /// Get facet counts for filtering UI (single UNION ALL query)
     pub async fn get_facets(pool: &DbPool, project_id: &str) -> Result<Facets> {
+        // Cap each facet to a safe number of distinct values — if a column has
+        // more than 1000 unique values the UI can't render them usefully anyway.
         let rows = sqlx::query_as::<_, (String, String, i64)>(
             r#"
-            SELECT 'level' as facet_type, level as facet_value, COUNT(*) as count
-            FROM issues WHERE project_id = $1 GROUP BY level
+            (SELECT 'level' as facet_type, level as facet_value, COUNT(*) as count
+             FROM issues WHERE project_id = $1 GROUP BY level LIMIT 1000)
             UNION ALL
-            SELECT 'status' as facet_type, status as facet_value, COUNT(*) as count
-            FROM issues WHERE project_id = $1 GROUP BY status
+            (SELECT 'status' as facet_type, status as facet_value, COUNT(*) as count
+             FROM issues WHERE project_id = $1 GROUP BY status LIMIT 1000)
             UNION ALL
-            SELECT 'environment' as facet_type, environment as facet_value, COUNT(*) as count
-            FROM issues WHERE project_id = $1 GROUP BY environment
+            (SELECT 'environment' as facet_type, environment as facet_value, COUNT(*) as count
+             FROM issues WHERE project_id = $1 GROUP BY environment LIMIT 1000)
             "#,
         )
         .bind(project_id)

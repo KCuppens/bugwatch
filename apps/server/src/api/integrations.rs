@@ -183,8 +183,10 @@ pub async fn oauth_authorize(
     use hmac::{Hmac, Mac};
     use sha2::Sha256;
     type HmacSha256 = Hmac<Sha256>;
-    let mut mac =
-        HmacSha256::new_from_slice(oauth_secret.as_bytes()).expect("HMAC can take key of any size");
+    let mut mac = HmacSha256::new_from_slice(oauth_secret.as_bytes()).map_err(|e| {
+        tracing::error!(error = %e, "HMAC init failed");
+        AppError::Internal("HMAC init failed".into())
+    })?;
     mac.update(state_data.as_bytes());
     let signature = hex::encode(mac.finalize().into_bytes());
     let state_param = format!("{}:{}", state_data, signature);
@@ -292,8 +294,10 @@ pub async fn oauth_callback(
     use sha2::Sha256;
     type HmacSha256 = Hmac<Sha256>;
     let oauth_secret = state.config.oauth_state_secret.clone();
-    let mut mac =
-        HmacSha256::new_from_slice(oauth_secret.as_bytes()).expect("HMAC can take key of any size");
+    let mut mac = HmacSha256::new_from_slice(oauth_secret.as_bytes()).map_err(|e| {
+        tracing::error!(error = %e, "HMAC init failed");
+        AppError::Internal("HMAC init failed".into())
+    })?;
     mac.update(state_data.as_bytes());
     let expected = hex::encode(mac.finalize().into_bytes());
     if signature != expected {
@@ -910,8 +914,15 @@ fn verify_webhook_signature(payload: &[u8], signature: &str, secret: &str) -> bo
     use sha2::Sha256;
     type HmacSha256 = Hmac<Sha256>;
 
-    let mut mac =
-        HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC can take key of any size");
+    // HMAC-SHA256 accepts keys of any size, but guard against panics on the
+    // request-handling thread if the underlying library ever changes.
+    let mut mac = match HmacSha256::new_from_slice(secret.as_bytes()) {
+        Ok(m) => m,
+        Err(e) => {
+            error!(error = %e, "HMAC init failed");
+            return false;
+        }
+    };
     mac.update(payload);
 
     // Decode hex signature; on failure, use a dummy value so we still do
@@ -993,7 +1004,10 @@ pub async fn github_webhook(
     let payload: serde_json::Value = serde_json::from_slice(&body)
         .map_err(|e| AppError::BadRequest(format!("Invalid JSON: {}", e)))?;
 
-    let action = payload["action"].as_str().unwrap_or("");
+    let action = payload["action"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| AppError::BadRequest("Missing or empty 'action' field".to_string()))?;
     let issue = &payload["issue"];
 
     if action == "closed" || action == "reopened" {
@@ -1049,7 +1063,10 @@ pub async fn jira_webhook(
     let payload: serde_json::Value = serde_json::from_slice(&body)
         .map_err(|e| AppError::BadRequest(format!("Invalid JSON: {}", e)))?;
 
-    let webhook_event = payload["webhookEvent"].as_str().unwrap_or("");
+    let webhook_event = payload["webhookEvent"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| AppError::BadRequest("Missing or empty 'webhookEvent' field".to_string()))?;
 
     if webhook_event == "jira:issue_updated" {
         let issue = &payload["issue"];
@@ -1063,10 +1080,12 @@ pub async fn jira_webhook(
             .as_str()
             .unwrap_or("Unknown");
 
-        let updated =
-            IssueLinkRepository::update_status(&state.db, "jira", issue_id, status).await?;
-        if updated > 0 {
-            info!("Synced Jira issue {} status to {}", issue_id, status);
+        if !issue_id.is_empty() {
+            let updated =
+                IssueLinkRepository::update_status(&state.db, "jira", issue_id, status).await?;
+            if updated > 0 {
+                info!("Synced Jira issue {} status to {}", issue_id, status);
+            }
         }
     }
 
@@ -1106,18 +1125,24 @@ pub async fn linear_webhook(
     let payload: serde_json::Value = serde_json::from_slice(&body)
         .map_err(|e| AppError::BadRequest(format!("Invalid JSON: {}", e)))?;
 
-    let action = payload["action"].as_str().unwrap_or("");
+    let action = payload["action"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| AppError::BadRequest("Missing or empty 'action' field".to_string()))?;
     let data_type = payload["type"].as_str().unwrap_or("");
 
     if data_type == "Issue" && (action == "update" || action == "create") {
         let data = &payload["data"];
-        let issue_id = data["id"].as_str().unwrap_or("");
+        let issue_id = data["id"].as_str().filter(|s| !s.is_empty()).unwrap_or("");
         let state_label = data["state"]["name"].as_str().unwrap_or("Unknown");
 
-        let updated =
-            IssueLinkRepository::update_status(&state.db, "linear", issue_id, state_label).await?;
-        if updated > 0 {
-            info!("Synced Linear issue {} status to {}", issue_id, state_label);
+        if !issue_id.is_empty() {
+            let updated =
+                IssueLinkRepository::update_status(&state.db, "linear", issue_id, state_label)
+                    .await?;
+            if updated > 0 {
+                info!("Synced Linear issue {} status to {}", issue_id, state_label);
+            }
         }
     }
 

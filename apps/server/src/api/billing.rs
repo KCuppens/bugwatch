@@ -651,7 +651,18 @@ mod saas_billing {
             }
         };
 
-        let seats = req.seats.unwrap_or(1).min(10_000).max(1) as i64;
+        let seats_req = req.seats.unwrap_or(1);
+        // Reject nonsensical seat values up-front. Callers can only legitimately
+        // request 1..=10_000 seats; anything else is almost certainly a crafted
+        // request (overflow/abuse) and would cause Stripe to reject the session
+        // with a less helpful error.
+        if !(1..=10_000).contains(&seats_req) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "seats must be 1..=10000".to_string(),
+            ));
+        }
+        let seats = seats_req as i64;
         let annual = req.annual.unwrap_or(false);
 
         // Validate redirect URLs — require exact origin prefix with trailing slash to prevent
@@ -1271,20 +1282,21 @@ mod saas_billing {
             "No active subscription to modify".to_string(),
         ))?;
 
-        // G2: Explicit seats >= 1 guard before the member-count check.
-        if req.seats.unwrap_or(1) < 1 {
+        // Explicit seats range check — must be 1..=10_000. Reject overflow/abuse early
+        // (Stripe would reject with a less helpful error). Mirrors the checkout validator.
+        let seats_req = req.seats.unwrap_or(org.seats);
+        if !(1..=10_000).contains(&seats_req) {
             return Err((
                 StatusCode::BAD_REQUEST,
-                "Seat count must be at least 1".to_string(),
+                "seats must be 1..=10000".to_string(),
             ));
         }
 
         // G3: Enforce member-count floor — cannot reduce seats below current member count.
-        let new_seats_requested = req.seats.unwrap_or(org.seats);
         let current_members = OrganizationMemberRepository::count(&state.db, &org.id)
             .await
             .map_err(db_err)?;
-        if new_seats_requested < current_members {
+        if seats_req < current_members {
             return Err((
                 StatusCode::BAD_REQUEST,
                 format!(
@@ -1318,8 +1330,7 @@ mod saas_billing {
         }
         // advisory_conn stays in scope until the function returns, releasing the lock automatically.
 
-        // G6: Clamp seats: floor at 1, ceiling at 10,000.
-        let seats = new_seats_requested.max(1).min(10_000) as i64;
+        let seats = seats_req as i64;
         let annual = req
             .annual
             .unwrap_or(org.billing_interval.as_deref() == Some("annual"));
@@ -1427,8 +1438,14 @@ mod saas_billing {
             "No active subscription".to_string(),
         ))?;
 
-        // G6: Clamp seats: floor at 1, ceiling at 10,000.
-        let seats = req.seats.unwrap_or(org.seats).max(1).min(10_000) as i64;
+        let seats_req = req.seats.unwrap_or(org.seats);
+        if !(1..=10_000).contains(&seats_req) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "seats must be 1..=10000".to_string(),
+            ));
+        }
+        let seats = seats_req as i64;
         // Mirror change_plan: inherit the current billing interval rather than defaulting to monthly
         let annual = req
             .annual
@@ -1497,16 +1514,13 @@ mod saas_billing {
             "No active subscription".to_string(),
         ))?;
 
-        if req.seats < 1 {
+        // Seat request must be within the allowed range. Capping at 10_000
+        // mirrors the checkout validator and prevents an attacker from
+        // attempting a huge-number integer-overflow style request.
+        if !(1..=10_000).contains(&req.seats) {
             return Err((
                 StatusCode::BAD_REQUEST,
-                "Seats must be at least 1".to_string(),
-            ));
-        }
-        if req.seats > 10_000 {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                "Seats cannot exceed 10,000".to_string(),
+                "seats must be 1..=10000".to_string(),
             ));
         }
 
@@ -1637,37 +1651,64 @@ mod saas_billing {
     }
 
     /// Get single invoice details
+    ///
+    /// IDOR-safe ordering: we must avoid distinguishing "invoice exists but
+    /// belongs to another org" from "invoice does not exist". Both branches
+    /// return the exact same status code and message ("Invoice not found"),
+    /// and we do the ownership check inline so that timing differences
+    /// between the two paths are minimized.
     pub async fn get_invoice(
         user: AuthUser,
         State(state): State<AppState>,
         Path(invoice_id): Path<String>,
     ) -> Result<Json<InvoiceDetail>, (StatusCode, String)> {
+        // Generic, identical "not found" response used for every failure mode
+        // so an attacker can't distinguish cases by response code or message.
+        let not_found = || (StatusCode::NOT_FOUND, "Invoice not found".to_string());
+
         let stripe = state.stripe.as_ref().ok_or((
             StatusCode::SERVICE_UNAVAILABLE,
             "Stripe not configured".to_string(),
         ))?;
 
+        // Cheap syntactic check — Stripe invoice IDs start with "in_". Anything
+        // else never needs to reach Stripe and is safely rejected as NOT_FOUND.
+        if !invoice_id.starts_with("in_") {
+            return Err(not_found());
+        }
+
         let org = OrganizationRepository::find_by_user(&state.db, &user.id)
             .await
             .map_err(db_err)?
-            .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
+            .ok_or_else(not_found)?;
 
-        let customer_id = org
-            .stripe_customer_id
-            .as_ref()
-            .ok_or((StatusCode::NOT_FOUND, "No billing history".to_string()))?;
+        // Determine the org's Stripe customer first. If we don't have one we
+        // short-circuit with the same not-found response (no org can own any
+        // invoice without a customer mapping).
+        let customer_id = match org.stripe_customer_id.as_deref() {
+            Some(cid) if !cid.is_empty() => cid.to_string(),
+            _ => return Err(not_found()),
+        };
 
-        let invoice = stripe
-            .get_invoice(&invoice_id)
-            .await
-            .map_err(|e| {
+        // Now fetch from Stripe. Both "Stripe returned an error" and
+        // "Stripe returned an invoice belonging to a different customer"
+        // collapse into the same generic not_found response.
+        let invoice = match stripe.get_invoice(&invoice_id).await {
+            Ok(inv) => inv,
+            Err(e) => {
                 tracing::error!(org_id = %org.id, invoice_id = %invoice_id, "Failed to fetch invoice: {}", e);
-                (StatusCode::NOT_FOUND, "Invoice not found".to_string())
-            })?;
+                return Err(not_found());
+            }
+        };
 
-        // Verify the invoice belongs to this org's Stripe customer (prevents IDOR)
+        // Ownership check: must match this org's Stripe customer ID.
         if invoice.customer_id.as_deref() != Some(customer_id.as_str()) {
-            return Err((StatusCode::NOT_FOUND, "Invoice not found".to_string()));
+            tracing::warn!(
+                org_id = %org.id,
+                invoice_id = %invoice_id,
+                "invoice ownership mismatch — rejecting as not-found"
+            );
+            return Err(not_found());
         }
 
         Ok(Json(invoice))

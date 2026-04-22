@@ -10,7 +10,10 @@ use crate::{
         agent::{generate_agent_key, hash_agent_key, key_prefix},
         AuthUser,
     },
-    db::repositories::{AgentAuditLogRepository, AgentKeyRepository, OrganizationRepository},
+    db::repositories::{
+        AgentAuditLogRepository, AgentKeyRepository, OrganizationMemberRepository,
+        OrganizationRepository,
+    },
     AppError, AppResult, AppState,
 };
 
@@ -271,6 +274,20 @@ pub async fn audit_log(
     let org = OrganizationRepository::find_by_user(&state.db, &auth_user.id)
         .await?
         .ok_or_else(|| AppError::BadRequest("No organization found".to_string()))?;
+
+    // Audit logs are sensitive (keystroke of agent activity). Restrict to org
+    // owner or an `admin` member — matches the owner/admin RBAC pattern used
+    // in billing.rs (invite/remove members).
+    let caller_member =
+        OrganizationMemberRepository::find_by_user_in_org(&state.db, &org.id, &auth_user.id)
+            .await?;
+    let can_view =
+        org.owner_id == auth_user.id || caller_member.map(|m| m.role == "admin").unwrap_or(false);
+    if !can_view {
+        return Err(AppError::Forbidden(
+            "Only owner or admin can view agent key audit logs".to_string(),
+        ));
+    }
 
     let key = AgentKeyRepository::find_by_id(&state.db, &key_id)
         .await?

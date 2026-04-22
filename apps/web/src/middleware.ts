@@ -47,7 +47,13 @@ export async function middleware(req: NextRequest) {
     const valid = await hasValidSession(req);
     if (!valid) {
       const loginUrl = new URL("/login", req.url);
-      loginUrl.searchParams.set("next", pathname);
+      // Only persist the pathname as `next` if it is a same-origin path with
+      // no traversal sequences. Regex char classes that include `.` can let
+      // `..` through, so reject any path containing `..` explicitly.
+      const isSafeNext = pathname.startsWith("/") && !pathname.startsWith("//") && !pathname.includes("..");
+      if (isSafeNext) {
+        loginUrl.searchParams.set("next", pathname);
+      }
       return NextResponse.redirect(loginUrl);
     }
   }
@@ -57,8 +63,8 @@ export async function middleware(req: NextRequest) {
     if (valid) {
       const { searchParams } = req.nextUrl;
       const next = searchParams.get("next") ?? "/dashboard";
-      const SAFE_PATH_RE = /^\/[a-zA-Z0-9_\-./]*$/
-      const safeNext = next && SAFE_PATH_RE.test(next) ? next : '/dashboard';
+      const SAFE_PATH_RE = /^\/[a-zA-Z0-9_\-./]*$/;
+      const safeNext = next && SAFE_PATH_RE.test(next) ? next : "/dashboard";
       return NextResponse.redirect(new URL(safeNext, req.url));
     }
   }

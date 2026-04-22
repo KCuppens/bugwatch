@@ -854,7 +854,8 @@ impl NotificationService {
                     }));
                 }
                 SlackBlockType::Message => {
-                    // Slack section text limit: 3000 chars (account for backticks + ellipsis)
+                    // Slack section text limit: 3000 chars (account for backticks + ellipsis).
+                    // Escape backticks in the message so it can't break out of the inline code span.
                     let escaped_message = slack_escape(&payload.message);
                     let msg = if escaped_message.len() > 2997 {
                         let end = floor_char_boundary(&escaped_message, 2993);
@@ -878,8 +879,8 @@ impl NotificationService {
                     let context_text = format!(
                         "*Project:* {} | *Severity:* {} | *Time:* {}",
                         slack_escape(&payload.project_name),
-                        payload.severity,
-                        payload.timestamp
+                        slack_escape(&payload.severity),
+                        slack_escape(&payload.timestamp)
                     );
                     blocks.push(serde_json::json!({
                         "type": "context",
@@ -1173,11 +1174,17 @@ fn truncate_str(s: &str, max_len: usize) -> String {
     format!("{}...", truncated)
 }
 
-/// Escape Slack mrkdwn special characters to prevent injection in Slack messages.
+/// Escape characters that have special meaning in Slack mrkdwn so that
+/// user-supplied content is rendered as literal text. Covers the `&<>`
+/// entities Slack requires plus the most common mrkdwn formatters
+/// (`*` bold/italic, backtick for code). `_` and `~` are intentionally
+/// omitted to avoid mangling legitimate identifiers in alert bodies.
 fn slack_escape(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
+        .replace('`', "'")
+        .replace('*', "\\*")
 }
 
 /// Escape HTML special characters to prevent injection in email bodies.

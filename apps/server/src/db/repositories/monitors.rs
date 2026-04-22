@@ -126,6 +126,7 @@ impl MonitorRepository {
     }
 
     pub async fn list_active(pool: &DbPool) -> Result<Vec<Monitor>> {
+        // Hard cap to protect memory on deployments with huge monitor counts.
         sqlx::query_as::<_, Monitor>(
             "SELECT * FROM monitors WHERE is_active = TRUE ORDER BY last_checked_at ASC NULLS FIRST LIMIT 10000",
         )

@@ -221,7 +221,12 @@ pub struct Organization {
     pub slug: String,
     pub owner_id: String,
     pub tier: String,
+    // Stripe identifiers are internal-only and must never be exposed to
+    // clients (they're useful to attackers for phishing / support-desk
+    // social engineering). FromRow still populates them for server-side use.
+    #[serde(skip_serializing)]
     pub stripe_customer_id: Option<String>,
+    #[serde(skip_serializing)]
     pub stripe_subscription_id: Option<String>,
     pub subscription_status: String,
     pub seats: i32,

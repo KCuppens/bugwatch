@@ -7,6 +7,7 @@ use axum::{
 };
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
+use subtle::ConstantTimeEq;
 use tokio::sync::Semaphore;
 use tracing::{info, warn};
 
@@ -43,6 +44,13 @@ pub async fn stripe_webhook(
             StatusCode::BAD_REQUEST,
             "Missing Stripe signature".to_string(),
         ))?;
+
+    // Reject non-UTF-8 payloads explicitly rather than silently replacing
+    // invalid bytes via from_utf8_lossy (which could mask a malformed body
+    // that fails signature verification but still reaches the JSON parser).
+    if std::str::from_utf8(&body).is_err() {
+        return Err((StatusCode::BAD_REQUEST, "invalid utf-8".to_string()));
+    }
 
     // Verify webhook signature
     if !verify_stripe_signature(&body, signature, webhook_secret) {
@@ -199,6 +207,15 @@ pub async fn stripe_webhook(
 
 /// Verify Stripe webhook signature
 fn verify_stripe_signature(payload: &[u8], signature_header: &str, secret: &str) -> bool {
+    // Reject payloads that aren't valid UTF-8 up-front. Stripe signs the raw
+    // payload bytes directly, so invalid UTF-8 would never match a legitimate
+    // signature — but we also avoid String::from_utf8_lossy, which would
+    // silently mangle bytes and could, in theory, produce a payload whose
+    // signature happens to match a crafted HMAC.
+    if std::str::from_utf8(payload).is_err() {
+        return false;
+    }
+
     // Parse the signature header
     let mut timestamp = "";
     let mut signature = "";
@@ -217,33 +234,55 @@ fn verify_stripe_signature(payload: &[u8], signature_header: &str, secret: &str)
         return false;
     }
 
+    // Build the signed payload. Safe after the UTF-8 check above.
+    let payload_str = match std::str::from_utf8(payload) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    let signed_payload = format!("{}.{}", timestamp, payload_str);
+
     // Verify HMAC signature first (constant-time), then check timestamp.
     // This order prevents timing oracles: an attacker cannot distinguish
     // "bad signature" from "valid signature but stale timestamp".
-    let signed_payload = format!("{}.{}", timestamp, String::from_utf8_lossy(payload));
-
+    //
+    // We constant-time compare hex strings directly (rather than
+    // hex-decode + verify_slice) to avoid a timing oracle on the decode:
+    // a malformed hex string would previously short-circuit before the
+    // HMAC was computed, leaking info about the input via latency.
     let Ok(mut mac) = Hmac::<Sha256>::new_from_slice(secret.as_bytes()) else {
         tracing::error!("Failed to initialize HMAC for webhook signature verification");
         return false;
     };
     mac.update(signed_payload.as_bytes());
+    let expected_hex = hex::encode(mac.finalize().into_bytes());
 
-    let sig_valid = match hex::decode(signature) {
-        Ok(sig_bytes) => mac.verify_slice(&sig_bytes).is_ok(),
-        Err(_) => return false,
+    let sig_valid = if signature.len() == expected_hex.len() {
+        bool::from(signature.as_bytes().ct_eq(expected_hex.as_bytes()))
+    } else {
+        // Still go through the motions to equalize timing.
+        let dummy = vec![0u8; expected_hex.len()];
+        let _ = bool::from(dummy.ct_eq(expected_hex.as_bytes()));
+        false
     };
     if !sig_valid {
         return false;
     }
 
-    // Only after confirming a valid signature, enforce the 5-minute replay window.
+    // Only after confirming a valid signature, enforce the replay window.
+    // Asymmetric bounds: allow up to 5 minutes of skew in the past
+    // (Stripe retries may legitimately span this), but only 1 minute in
+    // the future (far-future timestamps almost certainly indicate a
+    // replay or crafted request; 60s is well above realistic clock drift).
     if let Ok(ts) = timestamp.parse::<i64>() {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs() as i64;
-        if (now - ts).abs() > 300 {
-            tracing::warn!("Stripe webhook rejected: timestamp too old ({ts})");
+        let delta = now - ts;
+        // delta > 0  => event is in the past (allow up to 300s)
+        // delta < 0  => event is in the future (allow up to 60s of skew)
+        if delta > 300 || delta < -60 {
+            tracing::warn!("Stripe webhook rejected: timestamp out of window ({ts})");
             return false;
         }
     } else {
@@ -274,6 +313,24 @@ async fn handle_checkout_completed(
         }
     };
     let subscription_id = session["subscription"].as_str();
+
+    // Stripe customer IDs always start with "cus_" — reject anything else.
+    // This guards against malformed/crafted webhook payloads that slip a
+    // value matching some other schema (e.g. a price or account id).
+    if !customer_id.starts_with("cus_") {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Invalid Stripe customer ID format".to_string(),
+        ));
+    }
+    if let Some(sid) = subscription_id {
+        if !sid.starts_with("sub_") {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "Invalid Stripe subscription ID format".to_string(),
+            ));
+        }
+    }
 
     // Find organization by Stripe customer ID
     let org = OrganizationRepository::find_by_stripe_customer(&state.db, customer_id)
@@ -415,10 +472,25 @@ async fn handle_invoice_paid(
             return Ok(());
         }
     };
-    let amount_paid = invoice["amount_paid"]
-        .as_i64()
-        .and_then(|v| i32::try_from(v).ok())
-        .unwrap_or(0);
+    // Stripe customer IDs always start with "cus_" — reject anything else so
+    // malformed or crafted payloads never reach the DB.
+    if !customer_id.starts_with("cus_") {
+        tracing::warn!(
+            customer_id,
+            "rejecting invoice.paid with malformed customer id"
+        );
+        return Ok(());
+    }
+    // Validate amount_paid: reject zero/negative values. A genuine
+    // "invoice.paid" should always carry a positive amount — a zero or
+    // negative value indicates either a malformed payload or a refund
+    // masquerading as a payment, neither of which should be credited.
+    let amount_paid_raw = invoice["amount_paid"].as_i64().unwrap_or(0);
+    if amount_paid_raw <= 0 {
+        tracing::warn!(event_id = %event_id, amount_paid = amount_paid_raw, "rejecting invoice with non-positive amount");
+        return Ok(());
+    }
+    let amount_paid = i32::try_from(amount_paid_raw).unwrap_or(i32::MAX);
 
     // G1: Atomically claim this event ID before any processing.
     // Uses ON CONFLICT DO NOTHING so concurrent retries from Stripe are deduplicated.
@@ -504,6 +576,13 @@ async fn handle_invoice_payment_failed(
             return Ok(());
         }
     };
+    if !customer_id.starts_with("cus_") {
+        tracing::warn!(
+            customer_id,
+            "rejecting invoice.payment_failed with malformed customer id"
+        );
+        return Ok(());
+    }
 
     match OrganizationRepository::find_by_stripe_customer(&state.db, customer_id).await {
         Err(e) => {
@@ -601,6 +680,22 @@ async fn handle_subscription_updated(
         .as_bool()
         .unwrap_or(false);
 
+    // Reject webhooks whose Stripe identifiers don't match the expected
+    // prefixes — helps catch spoofed/mis-routed payloads before they touch
+    // the database.
+    if !customer_id.starts_with("cus_") {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Invalid Stripe customer ID format".to_string(),
+        ));
+    }
+    if !subscription_id.starts_with("sub_") {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Invalid Stripe subscription ID format".to_string(),
+        ));
+    }
+
     match OrganizationRepository::find_by_stripe_customer(&state.db, customer_id).await {
         Err(e) => {
             tracing::error!(
@@ -643,6 +738,15 @@ async fn handle_subscription_updated(
                     return Ok(());
                 }
             };
+            // Reject price IDs that don't look like Stripe price IDs
+            // (they should always start with "price_"). Malformed/crafted
+            // payloads would otherwise reach determine_tier_from_price_id.
+            if !price_id_str.starts_with("price_") {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    "Invalid Stripe price ID format".to_string(),
+                ));
+            }
             let tier = determine_tier_from_price_id(&state.config, price_id_str);
 
             // H5: guard against unknown price IDs silently downgrading to free
@@ -729,6 +833,13 @@ async fn handle_subscription_deleted(
             return Ok(());
         }
     };
+
+    if !customer_id.starts_with("cus_") {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Invalid Stripe customer ID format".to_string(),
+        ));
+    }
 
     match OrganizationRepository::find_by_stripe_customer(&state.db, customer_id).await {
         Err(e) => {

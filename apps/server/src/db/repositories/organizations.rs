@@ -526,8 +526,9 @@ impl OrganizationMemberRepository {
 
     /// Get all members of an organization
     pub async fn list(pool: &DbPool, organization_id: &str) -> Result<Vec<OrganizationMember>> {
+        // Hard cap — no organization should ever need more than 10k members in one page.
         sqlx::query_as::<_, OrganizationMember>(
-            "SELECT * FROM organization_members WHERE organization_id = $1 ORDER BY created_at LIMIT 1000",
+            "SELECT * FROM organization_members WHERE organization_id = $1 ORDER BY created_at LIMIT 10000",
         )
         .bind(organization_id)
         .fetch_all(pool)
@@ -761,7 +762,7 @@ impl BillingEventRepository {
         organization_id: &str,
         limit: i32,
     ) -> Result<Vec<BillingEvent>> {
-        let limit = limit.max(1).min(10_000);
+        let limit = limit.max(1).min(1000);
         sqlx::query_as::<_, BillingEvent>(
             "SELECT * FROM billing_events WHERE organization_id = $1 ORDER BY created_at DESC LIMIT $2",
         )

@@ -14,6 +14,10 @@ impl CommentRepository {
         limit: i64,
         offset: i64,
     ) -> AppResult<Vec<IssueComment>> {
+        // Clamp user-supplied pagination to safe bounds.
+        let limit = limit.max(1).min(1000);
+        let offset = offset.max(0).min(100_000);
+
         let comments = sqlx::query_as::<_, IssueComment>(
             r#"
             SELECT id, issue_id, user_id, content, created_at, updated_at
@@ -75,28 +79,30 @@ impl CommentRepository {
         Ok(comment)
     }
 
-    pub async fn update(db: &DbPool, id: &str, content: &str) -> AppResult<()> {
+    pub async fn update(db: &DbPool, id: &str, issue_id: &str, content: &str) -> AppResult<()> {
         let now = Utc::now();
 
         sqlx::query(
             r#"
             UPDATE issue_comments
             SET content = $1, updated_at = $2
-            WHERE id = $3
+            WHERE id = $3 AND issue_id = $4
             "#,
         )
         .bind(content)
         .bind(now)
         .bind(id)
+        .bind(issue_id)
         .execute(db)
         .await?;
 
         Ok(())
     }
 
-    pub async fn delete(db: &DbPool, id: &str) -> AppResult<()> {
-        sqlx::query("DELETE FROM issue_comments WHERE id = $1")
+    pub async fn delete(db: &DbPool, id: &str, issue_id: &str) -> AppResult<()> {
+        sqlx::query("DELETE FROM issue_comments WHERE id = $1 AND issue_id = $2")
             .bind(id)
+            .bind(issue_id)
             .execute(db)
             .await?;
 
