@@ -19,7 +19,7 @@ vi.mock("@bugwatch/core", () => ({
   getClient: vi.fn(() => null),
 }));
 
-import { init, withBugwatchServerSideProps, withBugwatchStaticProps, withBugwatchApi } from "./index";
+import { init, withBugwatch, withBugwatchServerSideProps, withBugwatchStaticProps, withBugwatchApi } from "./index";
 import * as core from "@bugwatch/core";
 
 beforeEach(() => {
@@ -58,6 +58,79 @@ describe("init", () => {
     vi.stubEnv("NEXT_RUNTIME", "edge");
     init({ apiKey: "bw_key" });
     expect(mockSetTag).toHaveBeenCalledWith("next.runtime", "edge");
+  });
+
+  it("detects edge runtime from EdgeRuntime global", () => {
+    vi.stubGlobal("EdgeRuntime", "edge");
+    init({ apiKey: "bw_key" });
+    expect(mockSetTag).toHaveBeenCalledWith("next.runtime", "edge");
+    vi.unstubAllGlobals();
+  });
+});
+
+// ── withBugwatch ──────────────────────────────────────────────────────────────
+describe("withBugwatch", () => {
+  it("returns a function that returns a NextConfig", () => {
+    const configFn = withBugwatch({ apiKey: "bw_key" });
+    const result = configFn({});
+    expect(result).toBeDefined();
+    expect(typeof result.webpack).toBe("function");
+  });
+
+  it("calls init when apiKey is provided (window is undefined in Node env)", () => {
+    const configFn = withBugwatch({ apiKey: "bw_key" });
+    configFn({});
+    expect(mockNodeInit).toHaveBeenCalledWith(expect.objectContaining({ apiKey: "bw_key" }));
+  });
+
+  it("does not call init when no apiKey", () => {
+    const configFn = withBugwatch({} as any);
+    configFn({});
+    expect(mockNodeInit).not.toHaveBeenCalled();
+  });
+
+  it("uses default empty config when called with no argument", () => {
+    const configFn = withBugwatch({ apiKey: "bw_key" });
+    expect(() => configFn()).not.toThrow();
+  });
+
+  it("passes through existing nextConfig properties", () => {
+    const configFn = withBugwatch({ apiKey: "bw_key" });
+    const result = configFn({ reactStrictMode: true });
+    expect((result as any).reactStrictMode).toBe(true);
+  });
+
+  it("adds hidden-source-map devtool in production non-server build", () => {
+    const configFn = withBugwatch({ apiKey: "bw_key" });
+    const nextConfig = configFn({});
+    const webpackConfig: any = {};
+    nextConfig.webpack!(webpackConfig, { dev: false, isServer: false } as any);
+    expect(webpackConfig.devtool).toBe("hidden-source-map");
+  });
+
+  it("does not set source map in dev mode", () => {
+    const configFn = withBugwatch({ apiKey: "bw_key" });
+    const nextConfig = configFn({});
+    const webpackConfig: any = {};
+    nextConfig.webpack!(webpackConfig, { dev: true, isServer: false } as any);
+    expect(webpackConfig.devtool).toBeUndefined();
+  });
+
+  it("calls existing webpack function when provided", () => {
+    const originalWebpack = vi.fn(() => ({ custom: "config" }));
+    const configFn = withBugwatch({ apiKey: "bw_key" });
+    const nextConfig = configFn({ webpack: originalWebpack });
+    const result = nextConfig.webpack!({} as any, { dev: true, isServer: true } as any);
+    expect(originalWebpack).toHaveBeenCalled();
+    expect(result).toEqual({ custom: "config" });
+  });
+
+  it("returns config directly when no existing webpack function", () => {
+    const configFn = withBugwatch({ apiKey: "bw_key" });
+    const nextConfig = configFn({});
+    const inputConfig: any = { mode: "production" };
+    const result = nextConfig.webpack!(inputConfig, { dev: false, isServer: true } as any);
+    expect(result).toBe(inputConfig);
   });
 });
 

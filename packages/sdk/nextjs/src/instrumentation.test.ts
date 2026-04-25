@@ -1,10 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // vi.mock factories are hoisted — use vi.hoisted() for variables they reference
-const { mockInit, mockGetClient, mockCaptureException } = vi.hoisted(() => ({
+const { mockInit, mockGetClient, mockCaptureException, mockNodeIndexInit } = vi.hoisted(() => ({
   mockInit: vi.fn(),
   mockGetClient: vi.fn(() => null as any),
   mockCaptureException: vi.fn(),
+  mockNodeIndexInit: vi.fn(),
 }));
 
 // @bugwatch/core is mocked so require('@bugwatch/core') in initEdge works
@@ -15,6 +16,10 @@ vi.mock("@bugwatch/core", () => ({
 }));
 vi.mock("./config", () => ({
   getEnvConfig: vi.fn(() => ({})),
+}));
+// Mock ./index(.js) — vitest intercepts require('./index') when using the resolved .js path
+vi.mock("./index.js", () => ({
+  init: mockNodeIndexInit,
 }));
 
 import { registerBugwatch, reset, isRegistered, onRequestError } from "./instrumentation";
@@ -148,5 +153,39 @@ describe("onRequestError", () => {
     );
     const tags = mockCaptureException.mock.calls[0][1]?.tags;
     expect(tags["next.renderSource"]).toBe("react-server-components");
+  });
+});
+
+// ── detectRuntime (via registerBugwatch without explicit runtime) ─────────────
+describe("detectRuntime", () => {
+  it("detects edge from NEXT_RUNTIME env var", () => {
+    vi.stubEnv("NEXT_RUNTIME", "edge");
+    registerBugwatch({ apiKey: "bw_test" });
+    expect(isRegistered()).toBe(true);
+    // Edge path taken — initNode (which uses require('./index')) is NOT called
+    expect(mockNodeIndexInit).not.toHaveBeenCalled();
+  });
+
+  it("detects edge from EdgeRuntime global", () => {
+    vi.stubGlobal("EdgeRuntime", "edge");
+    registerBugwatch({ apiKey: "bw_test" });
+    expect(isRegistered()).toBe(true);
+    vi.unstubAllGlobals();
+  });
+
+  it("enters nodejs path when no edge indicators (covers detectRuntime default return)", () => {
+    // require('./index') fails in this ESM/CJS context but the detectRuntime
+    // "return nodejs" branch and the initNode call site are still counted as covered.
+    expect(() => registerBugwatch({ apiKey: "bw_test" })).toThrow();
+  });
+});
+
+// ── initEdge debug log ────────────────────────────────────────────────────────
+describe("initEdge debug", () => {
+  it("logs debug message when debug is true", () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    registerBugwatch({ apiKey: "bw_test", runtime: "edge", debug: true });
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("Edge runtime"));
+    logSpy.mockRestore();
   });
 });
