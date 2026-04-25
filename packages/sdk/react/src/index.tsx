@@ -139,18 +139,22 @@ function setupFetchInstrumentation(options: { endpoint?: string; debug?: boolean
       const response = await originalFetch.call(window, input, init);
       const duration = Date.now() - startTime;
 
-      // Add breadcrumb for every request
-      coreAddBreadcrumb({
-        category: "http",
-        message: `${method.toUpperCase()} ${url}`,
-        level: response.ok ? "info" : "warning",
-        data: {
-          method: method.toUpperCase(),
-          url,
-          status_code: response.status,
-          duration_ms: duration,
-        },
-      });
+      // Add breadcrumb for every request — wrapped so SDK errors never break caller's fetch
+      try {
+        coreAddBreadcrumb({
+          category: "http",
+          message: `${method.toUpperCase()} ${url}`,
+          level: response.ok ? "info" : "warning",
+          data: {
+            method: method.toUpperCase(),
+            url,
+            status_code: response.status,
+            duration_ms: duration,
+          },
+        });
+      } catch {
+        // Instrumentation must not break the user's fetch
+      }
 
       // Capture 4xx/5xx responses as errors (exclude 401/403 — expected auth flow)
       if (response.status >= 400 && response.status !== 401 && response.status !== 403) {
@@ -178,27 +182,31 @@ function setupFetchInstrumentation(options: { endpoint?: string; debug?: boolean
           }
         }
 
-        const error = new Error(`HTTP ${response.status}: ${method.toUpperCase()} ${url}`);
-        error.name = "HttpError";
-        coreCaptureException(error, {
-          level: response.status >= 500 ? "error" : "warning",
-          tags: {
-            mechanism: "fetch",
-            "http.method": method.toUpperCase(),
-            "http.status_code": String(response.status),
-            "http.url": url,
-          },
-          request: {
-            url,
-            method: method.toUpperCase(),
-          },
-          extra: {
-            request_body: requestBody || undefined,
-            response_body: responseBody || "(empty response)",
-            response_status: response.status,
-            duration_ms: duration,
-          },
-        });
+        try {
+          const error = new Error(`HTTP ${response.status}: ${method.toUpperCase()} ${url}`);
+          error.name = "HttpError";
+          coreCaptureException(error, {
+            level: response.status >= 500 ? "error" : "warning",
+            tags: {
+              mechanism: "fetch",
+              "http.method": method.toUpperCase(),
+              "http.status_code": String(response.status),
+              "http.url": url,
+            },
+            request: {
+              url,
+              method: method.toUpperCase(),
+            },
+            extra: {
+              request_body: requestBody || undefined,
+              response_body: responseBody || "(empty response)",
+              response_status: response.status,
+              duration_ms: duration,
+            },
+          });
+        } catch {
+          // Instrumentation must not break the user's fetch
+        }
       }
 
       return response;
@@ -206,29 +214,37 @@ function setupFetchInstrumentation(options: { endpoint?: string; debug?: boolean
       const duration = Date.now() - startTime;
 
       // Network error (DNS failure, CORS, connection refused, etc.)
-      coreAddBreadcrumb({
-        category: "http",
-        message: `${method.toUpperCase()} ${url} (network error)`,
-        level: "error",
-        data: {
-          method: method.toUpperCase(),
-          url,
-          duration_ms: duration,
-          error: error instanceof Error ? error.message : String(error),
-        },
-      });
+      try {
+        coreAddBreadcrumb({
+          category: "http",
+          message: `${method.toUpperCase()} ${url} (network error)`,
+          level: "error",
+          data: {
+            method: method.toUpperCase(),
+            url,
+            duration_ms: duration,
+            error: error instanceof Error ? error.message : String(error),
+          },
+        });
+      } catch {
+        // Instrumentation must not break the user's fetch
+      }
 
       const networkError = error instanceof Error ? error : new Error(String(error));
       networkError.name = networkError.name || "NetworkError";
 
-      coreCaptureException(networkError, {
-        level: "error",
-        tags: {
-          mechanism: "fetch",
-          "http.method": method.toUpperCase(),
-          "http.url": url,
-        },
-      });
+      try {
+        coreCaptureException(networkError, {
+          level: "error",
+          tags: {
+            mechanism: "fetch",
+            "http.method": method.toUpperCase(),
+            "http.url": url,
+          },
+        });
+      } catch {
+        // Instrumentation must not break the user's fetch
+      }
 
       // Mark as already captured so unhandledrejection handler skips it
       if (error instanceof Error) {
@@ -573,10 +589,15 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
       }
 
       return (
-        <div style={{ padding: "20px", fontFamily: "sans-serif" }}>
+        <div
+          role="alert"
+          style={{ padding: "20px", fontFamily: "sans-serif", color: "#212529", backgroundColor: "#ffffff" }}
+        >
           <h2>Something went wrong</h2>
           <p>{this.state.error.message}</p>
-          <button onClick={this.reset}>Try again</button>
+          <button onClick={this.reset} aria-label="Retry after error">
+            Try again
+          </button>
         </div>
       );
     }

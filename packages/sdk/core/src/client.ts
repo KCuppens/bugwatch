@@ -114,8 +114,10 @@ export class Bugwatch implements BugwatchClient {
       throw new Error(`[Bugwatch] Invalid sampleRate: ${sr}. Must be between 0 and 1.`);
     }
     const mes = this.options.maxErrorsPerSession;
-    if (mes !== undefined && mes < 0) {
-      throw new Error(`[Bugwatch] Invalid maxErrorsPerSession: ${mes}. Must be >= 0 (use 0 to disable).`);
+    if (mes !== undefined && (!Number.isInteger(mes) || mes < 0)) {
+      throw new Error(
+        `[Bugwatch] Invalid maxErrorsPerSession: ${mes}. Must be a non-negative integer (use 0 to disable).`
+      );
     }
 
     this.transport = this.createTransport();
@@ -191,8 +193,13 @@ export class Bugwatch implements BugwatchClient {
       return "";
     }
 
-    this.transport.send(processedEvent).catch(() => {
-      // Errors are logged by transport
+    this.transport.send(processedEvent).catch((err) => {
+      if (this.options.debug) console.error("[Bugwatch] transport.send failed:", err);
+      try {
+        this.options.onDropped?.(processedEvent.event_id, "network_error");
+      } catch (e) {
+        if (this.options.debug) console.error("[Bugwatch] onDropped callback threw:", e);
+      }
     });
 
     return processedEvent.event_id;
@@ -206,11 +213,14 @@ export class Bugwatch implements BugwatchClient {
       return "";
     }
 
+    // Generate event ID upfront so all drop reasons (including pre-creation) report a real ID
+    const earlyEventId = generateEventId();
+
     // Sample rate check
     if (Math.random() > (this.options.sampleRate || 1.0)) {
       if (this.options.debug) console.log("[Bugwatch] Error dropped: sample_rate");
       try {
-        this.options.onDropped?.("", "sample_rate");
+        this.options.onDropped?.(earlyEventId, "sample_rate");
       } catch (err) {
         if (this.options.debug) console.error("[Bugwatch] onDropped callback threw:", err);
       }
@@ -221,7 +231,7 @@ export class Bugwatch implements BugwatchClient {
     if (this.shouldIgnoreError(error)) {
       if (this.options.debug) console.log(`[Bugwatch] Error dropped: ignored (message: "${error.message}")`);
       try {
-        this.options.onDropped?.("", "ignored");
+        this.options.onDropped?.(earlyEventId, "ignored");
       } catch (err) {
         if (this.options.debug) console.error("[Bugwatch] onDropped callback threw:", err);
       }
@@ -232,7 +242,7 @@ export class Bugwatch implements BugwatchClient {
     if (this.options.filterBrowserNoise && isBrowserNoise(error)) {
       if (this.options.debug) console.log(`[Bugwatch] Error dropped: browser_noise (message: "${error.message}")`);
       try {
-        this.options.onDropped?.("", "browser_noise");
+        this.options.onDropped?.(earlyEventId, "browser_noise");
       } catch (err) {
         if (this.options.debug) console.error("[Bugwatch] onDropped callback threw:", err);
       }
@@ -252,7 +262,7 @@ export class Bugwatch implements BugwatchClient {
     // Drop errors from denied script URLs
     if (this.options.denyUrls && shouldDenyUrl(filenames, sourceUrl, this.options.denyUrls)) {
       if (this.options.debug)
-        console.log(`[Bugwatch] Error dropped: deny_url (source: "${sourceUrl ?? filenames[0]}")`);
+        console.log(`[Bugwatch] Error dropped: deny_url (source: "${sourceUrl ?? filenames[0] ?? "(unknown)"}")`);
       try {
         this.options.onDropped?.(event.event_id, "deny_url");
       } catch (err) {
@@ -263,7 +273,10 @@ export class Bugwatch implements BugwatchClient {
 
     // Drop errors not matching the allowed URL whitelist
     if (this.options.allowUrls && !shouldAllowUrl(filenames, sourceUrl, this.options.allowUrls)) {
-      if (this.options.debug) console.log(`[Bugwatch] Error dropped: allow_url (no frame matched allowUrls)`);
+      if (this.options.debug)
+        console.log(
+          `[Bugwatch] Error dropped: allow_url (no frame matched allowUrls; stackless errors always pass through)`
+        );
       try {
         this.options.onDropped?.(event.event_id, "allow_url");
       } catch (err) {
@@ -307,6 +320,17 @@ export class Bugwatch implements BugwatchClient {
    */
   captureMessage(message: string, level: ErrorEvent["level"] = "info"): string {
     if (!this.initialized) {
+      return "";
+    }
+
+    // Sample rate check (consistent with captureException)
+    if (Math.random() > (this.options.sampleRate || 1.0)) {
+      if (this.options.debug) console.log("[Bugwatch] Message dropped: sample_rate");
+      try {
+        this.options.onDropped?.(generateEventId(), "sample_rate");
+      } catch (err) {
+        if (this.options.debug) console.error("[Bugwatch] onDropped callback threw:", err);
+      }
       return "";
     }
 

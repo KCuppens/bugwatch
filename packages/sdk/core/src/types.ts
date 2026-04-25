@@ -80,6 +80,10 @@ export interface BugwatchOptions {
   /**
    * Called whenever an event is dropped (rate limited, sampled out, beforeSend returned null, etc.).
    * Use this to monitor SDK health in production — silent drops are the #1 source of "the SDK isn't working" bugs.
+   *
+   * Drop order in captureException: sample_rate → ignored → browser_noise → deny_url → allow_url → min_level → session_rate_limit → before_send.
+   * For pre-creation drops (sample_rate, ignored, browser_noise) eventId is a unique ID generated for the attempted capture,
+   * not the final event_id (no event was created). For all other drops eventId matches the event's event_id.
    */
   onDropped?: (
     eventId: string,

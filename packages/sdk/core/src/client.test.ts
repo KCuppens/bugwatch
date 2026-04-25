@@ -17,7 +17,7 @@ function makeOkResponse(): Response {
  */
 function installFetchMock(): ReturnType<typeof vi.fn> {
   const fn = vi.fn(() => Promise.resolve(makeOkResponse()));
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+   
   (globalThis as any).fetch = fn;
   return fn;
 }
@@ -54,7 +54,7 @@ describe("Bugwatch client", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     randomSpy = null;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
     (globalThis as any).fetch = originalFetch;
     vi.unstubAllGlobals();
   });
@@ -98,7 +98,7 @@ describe("Bugwatch client", () => {
 
     it("warns to console when apiKey is missing AND debug=true", () => {
       const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
       new Bugwatch({ apiKey: "" as any, debug: true });
       expect(warn).toHaveBeenCalled();
     });
@@ -165,7 +165,7 @@ describe("Bugwatch client", () => {
       expect(id).toBe("");
     });
 
-    it('returns "" when sampled out and calls onDropped("sample_rate")', async () => {
+    it('returns "" when sampled out and calls onDropped("sample_rate") with a non-empty eventId', async () => {
       const fetchMock = installFetchMock();
       const onDropped = vi.fn();
       // 0.9 > 0.1 → sampled out. We avoid sampleRate=0 because the source
@@ -174,7 +174,9 @@ describe("Bugwatch client", () => {
       const client = new Bugwatch({ apiKey: "k", sampleRate: 0.1, onDropped });
       const id = client.captureException(new Error("x"));
       expect(id).toBe("");
-      expect(onDropped).toHaveBeenCalledWith("", "sample_rate");
+      // earlyEventId is now generated upfront so all drops get a real non-empty ID
+      expect(onDropped).toHaveBeenCalledWith(expect.any(String), "sample_rate");
+      expect(onDropped.mock.calls[0][0]).not.toBe("");
       await flushMicrotasks();
       expect(fetchMock).not.toHaveBeenCalled();
     });
