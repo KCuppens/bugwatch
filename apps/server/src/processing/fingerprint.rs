@@ -337,4 +337,204 @@ mod tests {
             generate_fingerprint(&exc_from_retry)
         );
     }
+
+    // ── helpers ──────────────────────────────────────────────────────────────
+
+    fn make_exc(exception_type: &str, value: &str, frames: Vec<StackFrame>) -> ExceptionInfo {
+        ExceptionInfo {
+            exception_type: exception_type.to_string(),
+            value: value.to_string(),
+            stacktrace: frames,
+        }
+    }
+
+    fn make_frame(filename: &str, function: &str, in_app: bool) -> StackFrame {
+        StackFrame {
+            filename: filename.to_string(),
+            function: function.to_string(),
+            lineno: 1,
+            colno: 1,
+            abs_path: None,
+            context_line: None,
+            pre_context: None,
+            post_context: None,
+            in_app,
+        }
+    }
+
+    // ── unminify_react_error ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_unminify_react_error_known_code() {
+        let input = "Minified React error #418; see https://reactjs.org/docs/error-decoder.html";
+        let result = unminify_react_error(input);
+        assert!(
+            result.contains("React Error #418"),
+            "expected 'React Error #418' in: {result}"
+        );
+        assert!(
+            result.contains("Hydration failed"),
+            "expected 'Hydration failed' in: {result}"
+        );
+    }
+
+    #[test]
+    fn test_unminify_react_error_known_code_with_args() {
+        let input = "Minified React error #418?args[0]=div&args[1]=span";
+        let result = unminify_react_error(input);
+        assert!(
+            result.contains("React Error #418"),
+            "expected 'React Error #418' in: {result}"
+        );
+        // Both arg values should appear in the output
+        assert!(result.contains("div"), "expected arg 'div' in: {result}");
+        assert!(result.contains("span"), "expected arg 'span' in: {result}");
+    }
+
+    #[test]
+    fn test_unminify_react_error_unknown_code_fallback() {
+        let input = "Minified React error #9999";
+        let result = unminify_react_error(input);
+        assert_eq!(result, "React Error #9999: Minified React error #9999");
+    }
+
+    #[test]
+    fn test_unminify_react_error_non_react_unchanged() {
+        let input = "TypeError: cannot read";
+        let result = unminify_react_error(input);
+        assert_eq!(result, input);
+    }
+
+    #[test]
+    fn test_unminify_react_error_empty_string() {
+        let result = unminify_react_error("");
+        assert_eq!(result, "");
+    }
+
+    // ── generate_title ────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_generate_title_short_message() {
+        let exc = make_exc("TypeError", "short message", vec![]);
+        let title = generate_title(&exc);
+        assert_eq!(title, "TypeError: short message");
+    }
+
+    #[test]
+    fn test_generate_title_exactly_100_chars_no_truncation() {
+        // Build a message that is exactly 100 characters long
+        let msg: String = "a".repeat(100);
+        let exc = make_exc("TypeError", &msg, vec![]);
+        let title = generate_title(&exc);
+        assert_eq!(title, format!("TypeError: {}", msg));
+        assert!(
+            !title.ends_with("..."),
+            "title should not be truncated at exactly 100 chars"
+        );
+    }
+
+    #[test]
+    fn test_generate_title_over_100_chars_truncated() {
+        let msg: String = "b".repeat(105);
+        let exc = make_exc("TypeError", &msg, vec![]);
+        let title = generate_title(&exc);
+        // Should truncate to first 97 chars + "..."
+        let expected = format!("TypeError: {}...", "b".repeat(97));
+        assert_eq!(title, expected);
+    }
+
+    #[test]
+    fn test_generate_title_react_minified_unminified() {
+        let exc = make_exc("Error", "Minified React error #418", vec![]);
+        let title = generate_title(&exc);
+        assert!(
+            title.starts_with("Error: React Error #418"),
+            "title should start with 'Error: React Error #418', got: {title}"
+        );
+    }
+
+    #[test]
+    fn test_generate_title_unicode_truncation_uses_char_count() {
+        // Each '€' is 3 bytes in UTF-8; use 105 of them so byte count >> 100 but char count = 105
+        let msg: String = "€".repeat(105);
+        let exc = make_exc("TypeError", &msg, vec![]);
+        let title = generate_title(&exc);
+        // Must truncate at char boundary: first 97 '€' chars + "..."
+        let expected = format!("TypeError: {}...", "€".repeat(97));
+        assert_eq!(title, expected);
+    }
+
+    // ── generate_fingerprint additional cases ─────────────────────────────────
+
+    #[test]
+    fn test_fingerprint_no_in_app_falls_back_to_first_frame() {
+        // All frames have in_app: false; fingerprint should still use the first frame
+        let frames = vec![
+            make_frame("src/vendor/lib.js", "internalFn", false),
+            make_frame("src/app/index.js", "main", false),
+        ];
+        let exc = make_exc("RangeError", "out of range", frames.clone());
+        let fp = generate_fingerprint(&exc);
+
+        // Build a second exception identical in type, first frame, and message
+        let exc2 = make_exc("RangeError", "out of range", frames);
+        assert_eq!(fp, generate_fingerprint(&exc2));
+
+        // Changing the first frame should change the fingerprint
+        let exc_diff_frame = make_exc(
+            "RangeError",
+            "out of range",
+            vec![make_frame("src/vendor/other.js", "otherFn", false)],
+        );
+        assert_ne!(fp, generate_fingerprint(&exc_diff_frame));
+    }
+
+    #[test]
+    fn test_fingerprint_empty_stacktrace_uses_type_and_message_only() {
+        let exc1 = make_exc("TypeError", "something went wrong", vec![]);
+        let exc2 = make_exc("TypeError", "something went wrong", vec![]);
+        // Same type + message, no frames → must produce the same fingerprint
+        assert_eq!(generate_fingerprint(&exc1), generate_fingerprint(&exc2));
+
+        // Different type → different fingerprint even with empty stacktrace
+        let exc3 = make_exc("RangeError", "something went wrong", vec![]);
+        assert_ne!(generate_fingerprint(&exc1), generate_fingerprint(&exc3));
+    }
+
+    #[test]
+    fn test_fingerprint_different_exception_types_differ() {
+        let frame = make_frame("src/app.ts", "doWork", true);
+        let exc_type = make_exc("TypeError", "oops", vec![frame.clone()]);
+        let exc_range = make_exc("RangeError", "oops", vec![frame]);
+        assert_ne!(
+            generate_fingerprint(&exc_type),
+            generate_fingerprint(&exc_range)
+        );
+    }
+
+    #[test]
+    fn test_fingerprint_same_message_different_types_differ() {
+        let exc1 = make_exc("TypeError", "failed", vec![]);
+        let exc2 = make_exc("SyntaxError", "failed", vec![]);
+        assert_ne!(generate_fingerprint(&exc1), generate_fingerprint(&exc2));
+    }
+
+    #[test]
+    fn test_fingerprint_is_32_hex_chars() {
+        let exc = make_exc(
+            "Error",
+            "test message",
+            vec![make_frame("src/index.ts", "main", true)],
+        );
+        let fp = generate_fingerprint(&exc);
+        assert_eq!(
+            fp.len(),
+            32,
+            "fingerprint should be 32 hex characters, got: {fp}"
+        );
+        assert!(
+            fp.chars().all(|c| c.is_ascii_hexdigit()),
+            "fingerprint should only contain hex chars, got: {fp}"
+        );
+    }
 }
