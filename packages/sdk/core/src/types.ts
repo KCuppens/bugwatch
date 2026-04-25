@@ -27,6 +27,41 @@ export interface BugwatchOptions {
   /** Patterns to ignore (matches against error message) */
   ignoreErrors?: (string | RegExp)[];
   /**
+   * Drop errors where any stack frame filename or the window.onerror source URL
+   * matches one of these patterns (substring match for strings, regex test for RegExp).
+   * These are script URLs, not the current page URL.
+   * Examples: ['gtm.js', 'facebook.net', /doubleclick\.net/i]
+   * Use case: suppress ad scripts, Facebook Pixel, Google Tag Manager, Hotjar, etc.
+   */
+  denyUrls?: (string | RegExp)[];
+  /**
+   * Only capture errors where at least one stack frame filename or the window.onerror
+   * source URL matches one of these patterns (script URLs, not the page URL).
+   * Stackless errors (no frames available) are always allowed through to avoid silent
+   * blind spots in cross-origin environments. Empty array is equivalent to undefined.
+   * IMPORTANT: a typo here silently drops all non-matching errors — use debug:true to verify.
+   * Examples: ['myapp.com', /app\.example\.com/i]
+   */
+  allowUrls?: (string | RegExp)[];
+  /**
+   * Minimum event level to capture. Events below this level are dropped.
+   * Level order (ascending): "debug" < "info" < "warning" < "error" < "fatal".
+   * Applies to both captureException and captureMessage. Default: "debug" (capture all).
+   */
+  minLevel?: "debug" | "info" | "warning" | "error" | "fatal";
+  /**
+   * When true, automatically drops a curated set of known-useless browser errors
+   * (Script error., ResizeObserver loop, AbortError, ChunkLoadError, etc.).
+   * Default: false (opt-in).
+   */
+  filterBrowserNoise?: boolean;
+  /**
+   * Maximum number of errors to send per browser session. After this limit is
+   * reached all subsequent capture calls are dropped. Set to 0 (default) to disable.
+   * Resets on page reload. Counts total errors across all types.
+   */
+  maxErrorsPerSession?: number;
+  /**
    * @experimental Performance monitoring is experimental and the API may change.
    * Set `experimentalPerformance: true` to enable.
    */
@@ -48,7 +83,18 @@ export interface BugwatchOptions {
    */
   onDropped?: (
     eventId: string,
-    reason: "rate_limited" | "sample_rate" | "not_initialized" | "before_send" | "network_error" | "ignored"
+    reason:
+      | "rate_limited"
+      | "sample_rate"
+      | "not_initialized"
+      | "before_send"
+      | "network_error"
+      | "ignored"
+      | "deny_url"
+      | "allow_url"
+      | "min_level"
+      | "browser_noise"
+      | "session_rate_limit"
   ) => void;
 }
 
@@ -167,7 +213,12 @@ export interface ErrorEvent {
   breadcrumbs?: Breadcrumb[];
   /** Tags */
   tags?: Record<string, string>;
-  /** Extra context data */
+  /**
+   * Extra context data.
+   * Note: `__sourceUrl` is a reserved SDK field used internally for URL-based
+   * filtering (denyUrls/allowUrls). It is stripped before the event is sent.
+   * Do not set it directly in your own context.
+   */
   extra?: Record<string, unknown>;
   /** User context */
   user?: UserContext;

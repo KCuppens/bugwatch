@@ -53,6 +53,11 @@ const DEFAULT_REACT_OPTIONS: Partial<ReactOptions> = {
   captureHttpErrors: true,
 };
 
+// Internal marker interface — avoids `as any` when tagging captured errors
+interface MarkedError extends Error {
+  __bugwatch_captured?: boolean;
+}
+
 /**
  * Bugwatch context
  */
@@ -82,10 +87,7 @@ export function useBugwatch(): BugwatchContextValue {
 /**
  * Hook to capture exceptions
  */
-export function useCaptureException(): (
-  error: Error,
-  context?: Partial<ErrorEvent>
-) => string {
+export function useCaptureException(): (error: Error, context?: Partial<ErrorEvent>) => string {
   const { captureException } = useBugwatch();
   return captureException;
 }
@@ -93,10 +95,7 @@ export function useCaptureException(): (
 /**
  * Hook to capture messages
  */
-export function useCaptureMessage(): (
-  message: string,
-  level?: ErrorEvent["level"]
-) => string {
+export function useCaptureMessage(): (message: string, level?: ErrorEvent["level"]) => string {
   const { captureMessage } = useBugwatch();
   return captureMessage;
 }
@@ -108,7 +107,7 @@ export function useCaptureMessage(): (
  * - Capture network errors as exceptions
  * Returns cleanup function to restore original fetch
  */
-function setupFetchInstrumentation(options: { endpoint?: string }): () => void {
+function setupFetchInstrumentation(options: { endpoint?: string; debug?: boolean }): () => void {
   const originalFetch = window.fetch;
   const sdkEndpoint = options.endpoint || "https://api.bugwatch.dev";
   const sdkEventUrl = `${sdkEndpoint}/api/v1/events`;
@@ -116,15 +115,18 @@ function setupFetchInstrumentation(options: { endpoint?: string }): () => void {
   window.fetch = async function (input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
     let url: string;
     try {
-      url = typeof input === "string"
-        ? input
-        : input instanceof URL
-          ? input.href
-          : (input as Request).url || String(input);
-    } catch {
+      url =
+        typeof input === "string" ? input : input instanceof URL ? input.href : (input as Request).url || String(input);
+    } catch (err) {
+      if (options.debug) {
+        console.warn("[Bugwatch] fetch instrumentation skipped — could not extract URL:", err);
+      }
       return originalFetch.call(window, input, init);
     }
-    const method = init?.method || (typeof input !== "string" && !(input instanceof URL) ? (input as Request).method : "GET") || "GET";
+    const method =
+      init?.method ||
+      (typeof input !== "string" && !(input instanceof URL) ? (input as Request).method : "GET") ||
+      "GET";
 
     // Skip instrumenting our own SDK event requests to avoid infinite loops
     if (url.startsWith(sdkEventUrl)) {
@@ -153,25 +155,23 @@ function setupFetchInstrumentation(options: { endpoint?: string }): () => void {
       // Capture 4xx/5xx responses as errors (exclude 401/403 — expected auth flow)
       if (response.status >= 400 && response.status !== 401 && response.status !== 403) {
         // Clone response to read body without consuming the original
-        let responseBody = '';
+        let responseBody = "";
         try {
           responseBody = await response.clone().text();
           if (responseBody.length > 2000) {
-            responseBody = responseBody.substring(0, 2000) + '...(truncated)';
+            responseBody = responseBody.substring(0, 2000) + "...(truncated)";
           }
         } catch {
           // Ignore body read errors
         }
 
         // Capture request body if present
-        let requestBody = '';
+        let requestBody = "";
         if (init?.body) {
           try {
-            requestBody = typeof init.body === 'string'
-              ? init.body
-              : JSON.stringify(init.body);
+            requestBody = typeof init.body === "string" ? init.body : JSON.stringify(init.body);
             if (requestBody.length > 2000) {
-              requestBody = requestBody.substring(0, 2000) + '...(truncated)';
+              requestBody = requestBody.substring(0, 2000) + "...(truncated)";
             }
           } catch {
             // Ignore serialization errors
@@ -218,9 +218,7 @@ function setupFetchInstrumentation(options: { endpoint?: string }): () => void {
         },
       });
 
-      const networkError = error instanceof Error
-        ? error
-        : new Error(String(error));
+      const networkError = error instanceof Error ? error : new Error(String(error));
       networkError.name = networkError.name || "NetworkError";
 
       coreCaptureException(networkError, {
@@ -234,7 +232,7 @@ function setupFetchInstrumentation(options: { endpoint?: string }): () => void {
 
       // Mark as already captured so unhandledrejection handler skips it
       if (error instanceof Error) {
-        (error as any).__bugwatch_captured = true;
+        (error as MarkedError).__bugwatch_captured = true;
       }
 
       throw error; // Re-throw so the caller still gets the error
@@ -284,18 +282,10 @@ interface BugwatchProviderProps {
  * </BugwatchProvider>
  * ```
  */
-export function BugwatchProvider({
-  options,
-  children,
-  fallback,
-  onError,
-}: BugwatchProviderProps): JSX.Element {
+export function BugwatchProvider({ options, children, fallback, onError }: BugwatchProviderProps): JSX.Element {
   // Serialize options to a stable string so useEffect doesn't re-run on every render.
   // Object identity of `options` changes every render if passed inline.
-  const optionsKey = useMemo(
-    () => (options ? JSON.stringify(options) : ""),
-    [options]
-  );
+  const optionsKey = useMemo(() => (options ? JSON.stringify(options) : ""), [options]);
   const optionsRef = useRef(options);
   optionsRef.current = options;
 
@@ -308,8 +298,8 @@ export function BugwatchProvider({
 
     // Skip initialization if no API key is available
     if (!mergedOptions.apiKey) {
-      if (process.env.NODE_ENV === 'development') {
-        console.warn('[Bugwatch] No API key provided. Set BUGWATCH_API_KEY env var or pass options.apiKey');
+      if (process.env.NODE_ENV === "development") {
+        console.warn("[Bugwatch] No API key provided. Set BUGWATCH_API_KEY env var or pass options.apiKey");
       }
       return;
     }
@@ -318,8 +308,8 @@ export function BugwatchProvider({
     try {
       coreInit(mergedOptions);
     } catch (err) {
-      if (process.env.NODE_ENV === 'development') {
-        console.error('[Bugwatch] Initialization failed:', err);
+      if (process.env.NODE_ENV === "development") {
+        console.error("[Bugwatch] Initialization failed:", err);
       }
       return;
     }
@@ -341,9 +331,10 @@ export function BugwatchProvider({
       if (mergedOptions.captureGlobalErrors) {
         originalOnError = window.onerror;
         window.onerror = (message, source, lineno, colno, error) => {
-          if (error && !(error as any).__bugwatch_captured && !isBrowserExtensionError(error)) {
+          if (error && !(error as MarkedError).__bugwatch_captured && !isBrowserExtensionError(error)) {
             coreCaptureException(error, {
               tags: { mechanism: "window.onerror" },
+              extra: { __sourceUrl: source, lineno, colno },
             });
           }
           if (originalOnError) {
@@ -356,13 +347,10 @@ export function BugwatchProvider({
       if (mergedOptions.captureUnhandledRejections) {
         unhandledRejectionHandler = (event: PromiseRejectionEvent) => {
           // Skip if already captured by fetch instrumentation
-          if (event.reason && (event.reason as any).__bugwatch_captured) {
+          if (event.reason instanceof Error && (event.reason as MarkedError).__bugwatch_captured) {
             return;
           }
-          const error =
-            event.reason instanceof Error
-              ? event.reason
-              : new Error(String(event.reason));
+          const error = event.reason instanceof Error ? event.reason : new Error(String(event.reason));
           // Skip errors originating from browser extensions
           if (isBrowserExtensionError(error)) {
             return;
@@ -429,29 +417,19 @@ export function BugwatchProvider({
         }
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [optionsKey]);
 
-  const captureException = useCallback(
-    (error: Error, context?: Partial<ErrorEvent>) => {
-      return coreCaptureException(error, context);
-    },
-    []
-  );
+  const captureException = useCallback((error: Error, context?: Partial<ErrorEvent>) => {
+    return coreCaptureException(error, context);
+  }, []);
 
-  const captureMessage = useCallback(
-    (message: string, level?: ErrorEvent["level"]) => {
-      return coreCaptureMessage(message, level);
-    },
-    []
-  );
+  const captureMessage = useCallback((message: string, level?: ErrorEvent["level"]) => {
+    return coreCaptureMessage(message, level);
+  }, []);
 
-  const addBreadcrumb = useCallback(
-    (breadcrumb: Omit<Breadcrumb, "timestamp">) => {
-      coreAddBreadcrumb(breadcrumb);
-    },
-    []
-  );
+  const addBreadcrumb = useCallback((breadcrumb: Omit<Breadcrumb, "timestamp">) => {
+    coreAddBreadcrumb(breadcrumb);
+  }, []);
 
   const setUser = useCallback((user: UserContext | null) => {
     coreSetUser(user);

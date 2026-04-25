@@ -37,12 +37,7 @@ export type {
 export { Transaction, Span } from "./performance";
 
 // Transport implementations
-export {
-  HttpTransport,
-  NoopTransport,
-  ConsoleTransport,
-  BatchTransport,
-} from "./transport";
+export { HttpTransport, NoopTransport, ConsoleTransport, BatchTransport } from "./transport";
 
 // PII scrubbing
 export { scrubEvent } from "./scrubbing";
@@ -52,6 +47,14 @@ export { createPersistentQueue, type PersistentQueue } from "./persistent-queue"
 
 // Utilities
 export { parseStackTrace, extractErrorInfo, isBrowserExtensionError } from "./stacktrace";
+export {
+  shouldDenyUrl,
+  shouldAllowUrl,
+  shouldDropByLevel,
+  isBrowserNoise,
+  sessionErrorCounter,
+  BROWSER_NOISE_PATTERNS,
+} from "./filters";
 export { generateFingerprint, fingerprintFromException } from "./fingerprint";
 
 // Environment utilities
@@ -168,10 +171,7 @@ function tryLazyInit(): boolean {
  * If the SDK is not initialized but BUGWATCH_API_KEY environment variable is set,
  * the SDK will auto-initialize before capturing.
  */
-export function captureException(
-  error: Error,
-  context?: Partial<import("./types").ErrorEvent>
-): string {
+export function captureException(error: Error, context?: Partial<import("./types").ErrorEvent>): string {
   // Try lazy initialization if not initialized
   if (!globalClient && !tryLazyInit()) {
     console.warn("[Bugwatch] SDK not initialized. Call init() first or set BUGWATCH_API_KEY environment variable.");
@@ -186,10 +186,7 @@ export function captureException(
  * If the SDK is not initialized but BUGWATCH_API_KEY environment variable is set,
  * the SDK will auto-initialize before capturing.
  */
-export function captureMessage(
-  message: string,
-  level?: import("./types").ErrorEvent["level"]
-): string {
+export function captureMessage(message: string, level?: import("./types").ErrorEvent["level"]): string {
   // Try lazy initialization if not initialized
   if (!globalClient && !tryLazyInit()) {
     console.warn("[Bugwatch] SDK not initialized. Call init() first or set BUGWATCH_API_KEY environment variable.");
@@ -202,9 +199,7 @@ export function captureMessage(
  * Add a breadcrumb using the global client.
  * If called within a request context, adds to the request-scoped breadcrumbs.
  */
-export function addBreadcrumb(
-  breadcrumb: Omit<import("./types").Breadcrumb, "timestamp">
-): void {
+export function addBreadcrumb(breadcrumb: Omit<import("./types").Breadcrumb, "timestamp">): void {
   if (!globalClient) {
     return;
   }
@@ -309,10 +304,7 @@ export async function close(): Promise<void> {
  * Start a new performance transaction using the global client.
  * Returns a Transaction object. Call .finish() when the operation completes.
  */
-export function startTransaction(
-  name: string,
-  op: string
-): import("./performance").Transaction {
+export function startTransaction(name: string, op: string): import("./performance").Transaction {
   if (!globalClient && !tryLazyInit()) {
     // Return a no-op transaction that doesn't send anything
     return new _Transaction(name, op);
