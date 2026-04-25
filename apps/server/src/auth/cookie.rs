@@ -5,7 +5,7 @@
 /// `strip_prefix("name=")` attacks where values such as
 /// `a=name=X; name=Y` would misparse.
 ///
-/// Returns the first match's value (untrimmed after `=`). If the same cookie
+/// Returns the first match's value (trimmed together with the segment). If the same cookie
 /// appears multiple times, the first occurrence wins.
 pub fn extract_cookie<'a>(header: &'a str, name: &str) -> Option<&'a str> {
     for segment in header.split(';') {
@@ -79,7 +79,7 @@ mod tests {
     fn empty_segments_are_skipped() {
         assert_eq!(
             extract_cookie(";; access_token=ok ;;", "access_token"),
-            Some("ok ")
+            Some("ok")
         );
     }
 }
