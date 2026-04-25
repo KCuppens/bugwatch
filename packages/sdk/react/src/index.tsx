@@ -58,6 +58,21 @@ interface MarkedError extends Error {
   __bugwatch_captured?: boolean;
 }
 
+// Tracks active fetch instrumentation to prevent double-wrapping from
+// nested BugwatchProviders or React StrictMode double-mount in dev.
+let fetchInstrumentationCount = 0;
+
+// Serializes options to a stable change-detection string. Unlike JSON.stringify,
+// converts RegExp values to their string form so denyUrls/allowUrls pattern changes
+// are correctly detected as re-initialization triggers.
+function serializeOptions(opts: Partial<ReactOptions>): string {
+  return JSON.stringify(opts, (_, value) => {
+    if (value instanceof RegExp) return value.toString();
+    if (typeof value === "function") return "[Function]";
+    return value as unknown;
+  });
+}
+
 /**
  * Bugwatch context
  */
@@ -108,6 +123,15 @@ export function useCaptureMessage(): (message: string, level?: ErrorEvent["level
  * Returns cleanup function to restore original fetch
  */
 function setupFetchInstrumentation(options: { endpoint?: string; debug?: boolean }): () => void {
+  // Prevent double-wrapping from nested providers or StrictMode re-mount
+  if (fetchInstrumentationCount > 0) {
+    fetchInstrumentationCount++;
+    return () => {
+      fetchInstrumentationCount--;
+    };
+  }
+  fetchInstrumentationCount++;
+
   const originalFetch = window.fetch;
   const sdkEndpoint = options.endpoint || "https://api.bugwatch.dev";
   const sdkEventUrl = `${sdkEndpoint}/api/v1/events`;
@@ -256,7 +280,10 @@ function setupFetchInstrumentation(options: { endpoint?: string; debug?: boolean
   };
 
   return () => {
-    window.fetch = originalFetch;
+    fetchInstrumentationCount--;
+    if (fetchInstrumentationCount === 0) {
+      window.fetch = originalFetch;
+    }
   };
 }
 
@@ -301,7 +328,8 @@ interface BugwatchProviderProps {
 export function BugwatchProvider({ options, children, fallback, onError }: BugwatchProviderProps): JSX.Element {
   // Serialize options to a stable string so useEffect doesn't re-run on every render.
   // Object identity of `options` changes every render if passed inline.
-  const optionsKey = useMemo(() => (options ? JSON.stringify(options) : ""), [options]);
+  // serializeOptions handles RegExp values so denyUrls/allowUrls pattern changes are detected.
+  const optionsKey = useMemo(() => (options ? serializeOptions(options) : ""), [options]);
   const optionsRef = useRef(options);
   optionsRef.current = options;
 

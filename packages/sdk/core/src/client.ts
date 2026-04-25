@@ -120,6 +120,13 @@ export class Bugwatch implements BugwatchClient {
       );
     }
 
+    const ep = this.options.endpoint ?? "";
+    if (ep && !ep.startsWith("https://") && !ep.includes("localhost") && !ep.includes("127.0.0.1")) {
+      console.warn(
+        `[Bugwatch] Endpoint "${ep}" does not use HTTPS. All error events (including stack traces and user context) will be transmitted insecurely.`
+      );
+    }
+
     this.transport = this.createTransport();
     this.breadcrumbs = new RingBuffer<Breadcrumb>(this.options.maxBreadcrumbs || 100);
 
