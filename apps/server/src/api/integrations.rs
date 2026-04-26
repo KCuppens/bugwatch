@@ -1304,4 +1304,478 @@ mod tests {
             StatusCode::UNAUTHORIZED
         );
     }
+
+    // ── helpers ───────────────────────────────────────────────────────────────
+
+    fn peer() -> std::net::SocketAddr {
+        "127.0.0.1:1234".parse().unwrap()
+    }
+
+    async fn make_webhook_app() -> axum::Router {
+        use crate::config::{Config, DeploymentMode};
+        use std::sync::Arc;
+
+        let pool = crate::db::test_helpers::test_any_pool().await;
+        let config = Config {
+            server_addr: "127.0.0.1:0".to_string(),
+            database_url: "sqlite::memory:".to_string(),
+            jwt_secret: "test-jwt-secret-exactly-32-chars!!".to_string(),
+            jwt_access_expiration: 900,
+            jwt_refresh_expiration: 604800,
+            deployment_mode: DeploymentMode::SelfHosted,
+            environment: "test".to_string(),
+            app_url: "http://localhost:3001".to_string(),
+            allowed_origins: vec![],
+            retention_days: 90,
+            rate_limit_per_minute: 10000,
+            smtp_host: None,
+            smtp_port: None,
+            smtp_user: None,
+            smtp_password: None,
+            smtp_from: None,
+            stripe_secret_key: None,
+            stripe_webhook_secret: None,
+            stripe_price_id_pro_monthly: None,
+            stripe_price_id_pro_annual: None,
+            stripe_price_id_team_monthly: None,
+            stripe_price_id_team_annual: None,
+            bugwatch_api_key: None,
+            bugwatch_endpoint: None,
+            bugwatch_enabled: false,
+            github_client_id: None,
+            github_client_secret: None,
+            jira_client_id: None,
+            jira_client_secret: None,
+            linear_client_id: None,
+            linear_client_secret: None,
+            trust_proxy: false,
+            cookie_secure: false,
+            encryption_key: None,
+            password_reset_secret: "test-pw-reset-secret-exactly-32ch".to_string(),
+            oauth_state_secret: "test-oauth-state-secret-exactly32!".to_string(),
+            github_webhook_secret: Some("wh-secret-github".to_string()),
+            jira_webhook_secret: Some("wh-secret-jira".to_string()),
+            linear_webhook_secret: Some("wh-secret-linear".to_string()),
+            database_max_connections: 1,
+            shutdown_grace_secs: 5,
+            x402_enabled: false,
+            x402_wallet_address: "0x0000000000000000000000000000000000000000".to_string(),
+            x402_rpc_url: "https://mainnet.base.org".to_string(),
+            x402_usdc_address: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913".to_string(),
+        };
+
+        let alerting_service =
+            Arc::new(crate::AlertingService::new(pool.clone(), config.app_url.clone()).await);
+        let notification_service = Arc::new(crate::NotificationService::new().await);
+
+        let state = crate::AppState {
+            db: pool.clone(),
+            config: Arc::new(config),
+            rate_limiter: crate::RateLimiter::new(),
+            alerting_service,
+            notification_service,
+            bugwatch: None,
+            alert_semaphore: Arc::new(tokio::sync::Semaphore::new(100)),
+            payment_store: Arc::new(crate::payments::store::PaymentStore::new(pool)),
+            onchain_verifier: Arc::new(
+                crate::payments::verify::OnChainVerifier::new(
+                    "https://mainnet.base.org".to_string(),
+                )
+                .expect("reqwest client init cannot fail in tests"),
+            ),
+        };
+
+        axum::Router::new()
+            .nest("/api/v1", crate::api::router())
+            .with_state(state)
+    }
+
+    async fn signup_and_get_token(app: &axum::Router, email: &str) -> String {
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/auth/signup")
+            .header("content-type", "application/json")
+            .extension(axum::extract::ConnectInfo(peer()))
+            .body(Body::from(format!(
+                r#"{{"email":"{}","password":"StrongPass1!"}}"#,
+                email
+            )))
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        for v in resp.headers().get_all("set-cookie") {
+            let s = v.to_str().unwrap_or("");
+            if let Some(rest) = s.strip_prefix("access_token=") {
+                return rest.split(';').next().unwrap_or("").to_string();
+            }
+        }
+        panic!("no access_token in signup response");
+    }
+
+    async fn create_org(app: &axum::Router, token: &str) {
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/organization")
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::from(r#"{"name":"Test Org"}"#))
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert!(
+            resp.status().is_success(),
+            "org creation failed: {}",
+            resp.status()
+        );
+    }
+
+    async fn create_project_with_key(app: &axum::Router, token: &str) -> (String, String) {
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/projects")
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::from(r#"{"name":"Integration Test Project"}"#))
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let id = json["data"]["id"].as_str().unwrap().to_string();
+        let key = json["data"]["api_key"].as_str().unwrap().to_string();
+        (id, key)
+    }
+
+    async fn ingest_event_and_get_issue(
+        app: &axum::Router,
+        api_key: &str,
+        token: &str,
+        project_id: &str,
+    ) -> String {
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/events")
+            .header("content-type", "application/json")
+            .header("x-api-key", api_key)
+            .body(Body::from(r#"{"event_id":"ev-il-r15","timestamp":"2024-01-01T00:00:00Z","level":"error","exception":{"type":"LinkError","value":"link err","stacktrace":[]}}"#))
+            .unwrap();
+        app.clone().oneshot(req).await.unwrap();
+
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!("/api/v1/projects/{}/issues", project_id))
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        json["data"][0]["id"].as_str().unwrap().to_string()
+    }
+
+    fn hmac_hex(secret: &str, payload: &[u8]) -> String {
+        use hmac::{Hmac, Mac};
+        use sha2::Sha256;
+        type HmacSha256 = Hmac<Sha256>;
+        let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).unwrap();
+        mac.update(payload);
+        hex::encode(mac.finalize().into_bytes())
+    }
+
+    // ── webhook tests (no secret configured) ─────────────────────────────────
+
+    #[tokio::test]
+    async fn github_webhook_no_secret_configured_returns_403() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/webhooks/github")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"action":"closed","issue":{"id":1}}"#))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::FORBIDDEN
+        );
+    }
+
+    #[tokio::test]
+    async fn jira_webhook_no_secret_configured_returns_403() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/webhooks/jira")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"webhookEvent":"jira:issue_updated"}"#))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::FORBIDDEN
+        );
+    }
+
+    #[tokio::test]
+    async fn linear_webhook_no_secret_configured_returns_403() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/webhooks/linear")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"action":"update","type":"Issue"}"#))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::FORBIDDEN
+        );
+    }
+
+    // ── webhook tests (secret configured) ────────────────────────────────────
+
+    #[tokio::test]
+    async fn github_webhook_missing_signature_header_returns_403() {
+        let app = make_webhook_app().await;
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/webhooks/github")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"action":"closed","issue":{"id":1}}"#))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::FORBIDDEN
+        );
+    }
+
+    #[tokio::test]
+    async fn github_webhook_invalid_signature_returns_403() {
+        let app = make_webhook_app().await;
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/webhooks/github")
+            .header("content-type", "application/json")
+            .header("x-hub-signature-256", "sha256=deadbeef")
+            .body(Body::from(r#"{"action":"closed","issue":{"id":1}}"#))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::FORBIDDEN
+        );
+    }
+
+    #[tokio::test]
+    async fn github_webhook_valid_closed_event_returns_ok() {
+        let app = make_webhook_app().await;
+        let payload = r#"{"action":"closed","issue":{"id":42}}"#;
+        let sig = hmac_hex("wh-secret-github", payload.as_bytes());
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/webhooks/github")
+            .header("content-type", "application/json")
+            .header("x-hub-signature-256", format!("sha256={}", sig))
+            .body(Body::from(payload))
+            .unwrap();
+        assert_eq!(app.oneshot(req).await.unwrap().status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn github_webhook_reopened_event_returns_ok() {
+        let app = make_webhook_app().await;
+        let payload = r#"{"action":"reopened","issue":{"id":7}}"#;
+        let sig = hmac_hex("wh-secret-github", payload.as_bytes());
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/webhooks/github")
+            .header("content-type", "application/json")
+            .header("x-hub-signature-256", format!("sha256={}", sig))
+            .body(Body::from(payload))
+            .unwrap();
+        assert_eq!(app.oneshot(req).await.unwrap().status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn jira_webhook_valid_issue_updated_returns_ok() {
+        let app = make_webhook_app().await;
+        let payload = r#"{"webhookEvent":"jira:issue_updated","issue":{"id":"PROJ-1","fields":{"status":{"name":"Done"}}}}"#;
+        let sig = hmac_hex("wh-secret-jira", payload.as_bytes());
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/webhooks/jira")
+            .header("content-type", "application/json")
+            .header("x-hub-signature", format!("sha256={}", sig))
+            .body(Body::from(payload))
+            .unwrap();
+        assert_eq!(app.oneshot(req).await.unwrap().status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn linear_webhook_valid_issue_update_returns_ok() {
+        let app = make_webhook_app().await;
+        let payload =
+            r#"{"action":"update","type":"Issue","data":{"id":"lin-1","state":{"name":"Done"}}}"#;
+        let sig = hmac_hex("wh-secret-linear", payload.as_bytes());
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/webhooks/linear")
+            .header("content-type", "application/json")
+            .header("linear-signature", sig)
+            .body(Body::from(payload))
+            .unwrap();
+        assert_eq!(app.oneshot(req).await.unwrap().status(), StatusCode::OK);
+    }
+
+    // ── oauth authorize tests ─────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn oauth_authorize_without_auth_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/integrations/oauth/github/authorize")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn oauth_authorize_unknown_provider_returns_400() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "oauth_unknown@example.com").await;
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/integrations/oauth/notreal/authorize")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    #[tokio::test]
+    async fn oauth_authorize_github_not_configured_returns_400() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "oauth_github_nc@example.com").await;
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/integrations/oauth/github/authorize")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    #[tokio::test]
+    async fn oauth_callback_invalid_state_format_returns_400() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/integrations/oauth/github/callback?code=testcode&state=invalid")
+            .extension(axum::extract::ConnectInfo(peer()))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    // ── integration list / delete ─────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn list_integrations_returns_empty_array() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "list_integ_r15@example.com").await;
+        create_org(&app, &token).await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/integrations")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(json["data"].as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn delete_integration_not_found_returns_404() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "del_integ_nf_r15@example.com").await;
+        create_org(&app, &token).await;
+
+        let req = Request::builder()
+            .method("DELETE")
+            .uri("/api/v1/integrations/nonexistent-id")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+
+    // ── issue links ───────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn list_issue_links_returns_empty() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "list_links_r15@example.com").await;
+        create_org(&app, &token).await;
+        let (project_id, api_key) = create_project_with_key(&app, &token).await;
+        let issue_id = ingest_event_and_get_issue(&app, &api_key, &token, &project_id).await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!(
+                "/api/v1/projects/{}/issues/{}/links",
+                project_id, issue_id
+            ))
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(json["data"].as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn delete_issue_link_not_found_returns_404() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "del_link_nf_r15@example.com").await;
+        create_org(&app, &token).await;
+        let (project_id, api_key) = create_project_with_key(&app, &token).await;
+        let issue_id = ingest_event_and_get_issue(&app, &api_key, &token, &project_id).await;
+
+        let req = Request::builder()
+            .method("DELETE")
+            .uri(format!(
+                "/api/v1/projects/{}/issues/{}/links/fake-link-id",
+                project_id, issue_id
+            ))
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::NOT_FOUND
+        );
+    }
 }
