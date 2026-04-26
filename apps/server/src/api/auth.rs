@@ -1296,4 +1296,253 @@ mod tests {
         let response = app.oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
+
+    // ── helpers for multi-endpoint tests ────────────────────────────────────
+
+    fn peer() -> std::net::SocketAddr {
+        "127.0.0.1:1234".parse().unwrap()
+    }
+
+    /// Sign up and return (access_token, refresh_token) from Set-Cookie headers.
+    async fn signup_and_get_tokens(app: &axum::Router, email: &str) -> (String, String) {
+        use axum::body::Body;
+        use axum::http::Request;
+        use tower::ServiceExt;
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/auth/signup")
+            .header("content-type", "application/json")
+            .extension(axum::extract::ConnectInfo(peer()))
+            .body(Body::from(format!(
+                r#"{{"email":"{}","password":"StrongPass1!"}}"#,
+                email
+            )))
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        let mut access = String::new();
+        let mut refresh = String::new();
+        for v in resp.headers().get_all("set-cookie") {
+            let s = v.to_str().unwrap_or("");
+            if let Some(rest) = s.strip_prefix("access_token=") {
+                access = rest.split(';').next().unwrap_or("").to_string();
+            } else if let Some(rest) = s.strip_prefix("refresh_token=") {
+                refresh = rest.split(';').next().unwrap_or("").to_string();
+            }
+        }
+        assert!(!access.is_empty(), "no access_token in signup response");
+        (access, refresh)
+    }
+
+    // ── GET /auth/me (authenticated) ─────────────────────────────────────────
+
+    #[tokio::test]
+    async fn me_authenticated_returns_user_data() {
+        use axum::body::Body;
+        use axum::http::{Request, StatusCode};
+        use tower::ServiceExt;
+        let app = make_test_app().await;
+        let (token, _) = signup_and_get_tokens(&app, "me_authed@example.com").await;
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/auth/me")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(json["data"]["email"]
+            .as_str()
+            .unwrap()
+            .contains("me_authed"));
+    }
+
+    // ── PATCH /auth/me ────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn update_profile_sets_name() {
+        use axum::body::Body;
+        use axum::http::{Request, StatusCode};
+        use tower::ServiceExt;
+        let app = make_test_app().await;
+        let (token, _) = signup_and_get_tokens(&app, "profile_upd@example.com").await;
+        let req = Request::builder()
+            .method("PATCH")
+            .uri("/api/v1/auth/me")
+            .header("authorization", format!("Bearer {}", token))
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"name":"Alice"}"#))
+            .unwrap();
+        assert_eq!(app.oneshot(req).await.unwrap().status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn update_profile_empty_name_returns_422() {
+        use axum::body::Body;
+        use axum::http::{Request, StatusCode};
+        use tower::ServiceExt;
+        let app = make_test_app().await;
+        let (token, _) = signup_and_get_tokens(&app, "profile_empty@example.com").await;
+        let req = Request::builder()
+            .method("PATCH")
+            .uri("/api/v1/auth/me")
+            .header("authorization", format!("Bearer {}", token))
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"name":"   "}"#))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+    }
+
+    // ── POST /auth/logout ─────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn logout_returns_200_and_clears_cookies() {
+        use axum::body::Body;
+        use axum::http::{Request, StatusCode};
+        use tower::ServiceExt;
+        let app = make_test_app().await;
+        let (token, _) = signup_and_get_tokens(&app, "logout_ok@example.com").await;
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/auth/logout")
+            .header("authorization", format!("Bearer {}", token))
+            .header("cookie", format!("access_token={}", token))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let has_max_age_0 = resp
+            .headers()
+            .get_all("set-cookie")
+            .iter()
+            .any(|v| v.to_str().unwrap_or("").contains("Max-Age=0"));
+        assert!(has_max_age_0, "logout should clear cookies");
+    }
+
+    #[tokio::test]
+    async fn logout_without_cookie_returns_401() {
+        use axum::body::Body;
+        use axum::http::{Request, StatusCode};
+        use tower::ServiceExt;
+        let app = make_test_app().await;
+        let (token, _) = signup_and_get_tokens(&app, "logout_nocookie@example.com").await;
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/auth/logout")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    // ── POST /auth/refresh ────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn refresh_without_cookie_returns_401() {
+        use axum::body::Body;
+        use axum::http::{Request, StatusCode};
+        use tower::ServiceExt;
+        let app = make_test_app().await;
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/auth/refresh")
+            .extension(axum::extract::ConnectInfo(peer()))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn refresh_with_valid_token_returns_200() {
+        use axum::body::Body;
+        use axum::http::{Request, StatusCode};
+        use tower::ServiceExt;
+        let app = make_test_app().await;
+        let (_, refresh) = signup_and_get_tokens(&app, "refresh_ok@example.com").await;
+        assert!(!refresh.is_empty(), "no refresh_token cookie");
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/auth/refresh")
+            .header("cookie", format!("refresh_token={}", refresh))
+            .extension(axum::extract::ConnectInfo(peer()))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(app.oneshot(req).await.unwrap().status(), StatusCode::OK);
+    }
+
+    // ── POST /auth/change-password ────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn change_password_succeeds() {
+        use axum::body::Body;
+        use axum::http::{Request, StatusCode};
+        use tower::ServiceExt;
+        let app = make_test_app().await;
+        let (token, _) = signup_and_get_tokens(&app, "changepw@example.com").await;
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/auth/change-password")
+            .header("authorization", format!("Bearer {}", token))
+            .header("content-type", "application/json")
+            .extension(axum::extract::ConnectInfo(peer()))
+            .body(Body::from(
+                r#"{"current_password":"StrongPass1!","new_password":"NewPass2@"}"#,
+            ))
+            .unwrap();
+        assert_eq!(app.oneshot(req).await.unwrap().status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn change_password_wrong_current_returns_401() {
+        use axum::body::Body;
+        use axum::http::{Request, StatusCode};
+        use tower::ServiceExt;
+        let app = make_test_app().await;
+        let (token, _) = signup_and_get_tokens(&app, "changepw_wrong@example.com").await;
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/auth/change-password")
+            .header("authorization", format!("Bearer {}", token))
+            .header("content-type", "application/json")
+            .extension(axum::extract::ConnectInfo(peer()))
+            .body(Body::from(
+                r#"{"current_password":"WrongPass1!","new_password":"NewPass2@"}"#,
+            ))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    // ── POST /auth/forgot-password ────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn forgot_password_unknown_email_returns_200() {
+        use axum::body::Body;
+        use axum::http::{Request, StatusCode};
+        use tower::ServiceExt;
+        let app = make_test_app().await;
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/auth/forgot-password")
+            .header("content-type", "application/json")
+            .extension(axum::extract::ConnectInfo(peer()))
+            .body(Body::from(r#"{"email":"nobody@example.com"}"#))
+            .unwrap();
+        // Always 200 regardless of whether email exists (prevents enumeration)
+        assert_eq!(app.oneshot(req).await.unwrap().status(), StatusCode::OK);
+    }
 }
