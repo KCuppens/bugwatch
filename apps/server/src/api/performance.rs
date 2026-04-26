@@ -594,4 +594,282 @@ mod tests {
             StatusCode::ACCEPTED
         );
     }
+
+    // ── auth guards for dashboard endpoints ──────────────────────────────────
+
+    #[tokio::test]
+    async fn get_summary_without_auth_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/projects/proj1/performance/summary")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn list_transactions_without_auth_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/projects/proj1/performance/transactions")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn get_charts_without_auth_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/projects/proj1/performance/charts")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    // ── dashboard happy paths ─────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn get_summary_returns_200() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "perf_summary@example.com").await;
+        let (project_id, _) = create_project_with_key(&app, &token).await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!(
+                "/api/v1/projects/{}/performance/summary",
+                project_id
+            ))
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(app.oneshot(req).await.unwrap().status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn list_transactions_returns_200() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "perf_txlist@example.com").await;
+        let (project_id, _) = create_project_with_key(&app, &token).await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!(
+                "/api/v1/projects/{}/performance/transactions",
+                project_id
+            ))
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(app.oneshot(req).await.unwrap().status(), StatusCode::OK);
+    }
+
+    // get_charts_returns_200 is omitted: get_time_series uses EXTRACT(EPOCH FROM
+    // ...::timestamptz) which is Postgres-only and always 500s on the SQLite test backend.
+
+    #[tokio::test]
+    async fn get_summary_project_not_found_returns_404() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "perf_404@example.com").await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/projects/nonexistent/performance/summary")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+
+    // ── ingest additional field validation ────────────────────────────────────
+
+    #[tokio::test]
+    async fn ingest_transaction_trace_id_too_long_returns_422() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "txn_trace@example.com").await;
+        let (_, api_key) = create_project_with_key(&app, &token).await;
+
+        let long = "x".repeat(65);
+        let body = format!(
+            r#"{{"transaction_name":"GET /","trace_id":"{}","span_id":"s","op":"http","duration_ms":1.0,"started_at":"2024-01-01T00:00:00Z","finished_at":"2024-01-01T00:00:01Z"}}"#,
+            long
+        );
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/transactions")
+            .header("content-type", "application/json")
+            .header("x-api-key", api_key)
+            .body(Body::from(body))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+    }
+
+    #[tokio::test]
+    async fn ingest_transaction_span_id_too_long_returns_422() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "txn_spanid@example.com").await;
+        let (_, api_key) = create_project_with_key(&app, &token).await;
+
+        let long = "x".repeat(65);
+        let body = format!(
+            r#"{{"transaction_name":"GET /","trace_id":"t","span_id":"{}","op":"http","duration_ms":1.0,"started_at":"2024-01-01T00:00:00Z","finished_at":"2024-01-01T00:00:01Z"}}"#,
+            long
+        );
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/transactions")
+            .header("content-type", "application/json")
+            .header("x-api-key", api_key)
+            .body(Body::from(body))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+    }
+
+    #[tokio::test]
+    async fn ingest_transaction_op_too_long_returns_422() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "txn_oplong@example.com").await;
+        let (_, api_key) = create_project_with_key(&app, &token).await;
+
+        let long = "x".repeat(129);
+        let body = format!(
+            r#"{{"transaction_name":"GET /","trace_id":"t","span_id":"s","op":"{}","duration_ms":1.0,"started_at":"2024-01-01T00:00:00Z","finished_at":"2024-01-01T00:00:01Z"}}"#,
+            long
+        );
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/transactions")
+            .header("content-type", "application/json")
+            .header("x-api-key", api_key)
+            .body(Body::from(body))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+    }
+
+    #[tokio::test]
+    async fn ingest_transaction_invalid_finished_at_returns_422() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "txn_finbad@example.com").await;
+        let (_, api_key) = create_project_with_key(&app, &token).await;
+
+        let body = r#"{"transaction_name":"GET /","trace_id":"t","span_id":"s","op":"http","duration_ms":1.0,"started_at":"2024-01-01T00:00:00Z","finished_at":"not-a-date"}"#;
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/transactions")
+            .header("content-type", "application/json")
+            .header("x-api-key", api_key)
+            .body(Body::from(body))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+    }
+
+    #[tokio::test]
+    async fn ingest_transaction_with_spans_succeeds() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "txn_spans@example.com").await;
+        let (_, api_key) = create_project_with_key(&app, &token).await;
+
+        let body = r#"{
+            "transaction_name": "GET /api/users",
+            "trace_id": "trace1",
+            "span_id": "root1",
+            "op": "http.server",
+            "duration_ms": 42.0,
+            "started_at": "2024-01-01T00:00:00Z",
+            "finished_at": "2024-01-01T00:00:00.042Z",
+            "spans": [
+                {
+                    "span_id": "child1",
+                    "parent_span_id": "root1",
+                    "op": "db.query",
+                    "description": "SELECT 1",
+                    "duration_ms": 10.0,
+                    "started_at": "2024-01-01T00:00:00Z",
+                    "finished_at": "2024-01-01T00:00:00.010Z",
+                    "status": "ok"
+                }
+            ]
+        }"#;
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/transactions")
+            .header("content-type", "application/json")
+            .header("x-api-key", api_key)
+            .body(Body::from(body))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::ACCEPTED
+        );
+    }
+
+    #[tokio::test]
+    async fn ingest_transaction_too_many_spans_returns_422() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "txn_manyspan@example.com").await;
+        let (_, api_key) = create_project_with_key(&app, &token).await;
+
+        let spans: Vec<serde_json::Value> = (0..101)
+            .map(|i| {
+                serde_json::json!({
+                    "span_id": format!("span{}", i),
+                    "parent_span_id": "root1",
+                    "op": "db.query",
+                    "duration_ms": 1.0,
+                    "started_at": "2024-01-01T00:00:00Z",
+                    "finished_at": "2024-01-01T00:00:00.001Z"
+                })
+            })
+            .collect();
+        let body = serde_json::json!({
+            "transaction_name": "GET /",
+            "trace_id": "t",
+            "span_id": "root1",
+            "op": "http",
+            "duration_ms": 1.0,
+            "started_at": "2024-01-01T00:00:00Z",
+            "finished_at": "2024-01-01T00:00:01Z",
+            "spans": spans
+        })
+        .to_string();
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/transactions")
+            .header("content-type", "application/json")
+            .header("x-api-key", api_key)
+            .body(Body::from(body))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+    }
 }

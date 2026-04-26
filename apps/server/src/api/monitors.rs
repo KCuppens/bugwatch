@@ -1204,4 +1204,222 @@ mod tests {
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
     }
+
+    // ── create monitor validation ─────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn create_monitor_name_too_long_returns_400() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "mname_long@example.com").await;
+        let project_id = create_project(&app, &token).await;
+
+        let long_name = "x".repeat(201);
+        let body = format!(r#"{{"name":"{}","url":"https://example.com"}}"#, long_name);
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("/api/v1/projects/{}/monitors", project_id))
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::from(body))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    #[tokio::test]
+    async fn create_monitor_empty_name_returns_400() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "mempty_name@example.com").await;
+        let project_id = create_project(&app, &token).await;
+
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("/api/v1/projects/{}/monitors", project_id))
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::from(r#"{"name":"   ","url":"https://example.com"}"#))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    #[tokio::test]
+    async fn create_monitor_interval_too_low_returns_400() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "mint_low@example.com").await;
+        let project_id = create_project(&app, &token).await;
+
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("/api/v1/projects/{}/monitors", project_id))
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::from(
+                r#"{"name":"M","url":"https://example.com","interval_seconds":5}"#,
+            ))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    #[tokio::test]
+    async fn create_monitor_interval_too_high_returns_400() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "mint_high@example.com").await;
+        let project_id = create_project(&app, &token).await;
+
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("/api/v1/projects/{}/monitors", project_id))
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::from(
+                r#"{"name":"M","url":"https://example.com","interval_seconds":999999}"#,
+            ))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    #[tokio::test]
+    async fn create_monitor_invalid_timeout_returns_400() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "mtimeout_low@example.com").await;
+        let project_id = create_project(&app, &token).await;
+
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("/api/v1/projects/{}/monitors", project_id))
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::from(
+                r#"{"name":"M","url":"https://example.com","timeout_ms":100}"#,
+            ))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    #[tokio::test]
+    async fn create_monitor_invalid_method_returns_400() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "mmethod_bad@example.com").await;
+        let project_id = create_project(&app, &token).await;
+
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("/api/v1/projects/{}/monitors", project_id))
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::from(
+                r#"{"name":"M","url":"https://example.com","method":"INVALID"}"#,
+            ))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    #[tokio::test]
+    async fn create_monitor_invalid_expected_status_returns_400() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "mstatus_bad@example.com").await;
+        let project_id = create_project(&app, &token).await;
+
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("/api/v1/projects/{}/monitors", project_id))
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::from(
+                r#"{"name":"M","url":"https://example.com","expected_status":99}"#,
+            ))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    // ── update monitor validation ─────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn update_monitor_invalid_interval_returns_400() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "mupd_int@example.com").await;
+        let project_id = create_project(&app, &token).await;
+        let monitor_id = create_monitor_for_project(&app, &token, &project_id).await;
+
+        let req = Request::builder()
+            .method("PATCH")
+            .uri(format!(
+                "/api/v1/projects/{}/monitors/{}",
+                project_id, monitor_id
+            ))
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::from(r#"{"interval_seconds":10}"#))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    #[tokio::test]
+    async fn update_monitor_invalid_timeout_returns_400() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "mupd_tmout@example.com").await;
+        let project_id = create_project(&app, &token).await;
+        let monitor_id = create_monitor_for_project(&app, &token, &project_id).await;
+
+        let req = Request::builder()
+            .method("PATCH")
+            .uri(format!(
+                "/api/v1/projects/{}/monitors/{}",
+                project_id, monitor_id
+            ))
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::from(r#"{"timeout_ms":500}"#))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    #[tokio::test]
+    async fn update_monitor_invalid_method_returns_400() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "mupd_meth@example.com").await;
+        let project_id = create_project(&app, &token).await;
+        let monitor_id = create_monitor_for_project(&app, &token, &project_id).await;
+
+        let req = Request::builder()
+            .method("PATCH")
+            .uri(format!(
+                "/api/v1/projects/{}/monitors/{}",
+                project_id, monitor_id
+            ))
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::from(r#"{"method":"BADVERB"}"#))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
 }
