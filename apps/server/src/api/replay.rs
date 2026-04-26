@@ -590,3 +590,191 @@ pub async fn get_issue_replay(
         _ => Ok(Json(serde_json::json!({ "data": null }))),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use axum::http::StatusCode;
+    use axum::{body::Body, http::Request};
+    use serde_json::Value;
+    use tower::ServiceExt;
+
+    async fn make_app() -> axum::Router {
+        let state = crate::db::test_helpers::test_app_state().await;
+        axum::Router::new()
+            .nest("/api/v1", crate::api::router())
+            .with_state(state)
+    }
+
+    fn peer() -> std::net::SocketAddr {
+        "127.0.0.1:1234".parse().unwrap()
+    }
+
+    async fn signup_and_get_token(app: &axum::Router, email: &str) -> String {
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/auth/signup")
+            .header("content-type", "application/json")
+            .extension(axum::extract::ConnectInfo(peer()))
+            .body(Body::from(format!(
+                r#"{{"email":"{}","password":"StrongPass1!"}}"#,
+                email
+            )))
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        for v in resp.headers().get_all("set-cookie") {
+            let s = v.to_str().unwrap_or("");
+            if let Some(rest) = s.strip_prefix("access_token=") {
+                return rest.split(';').next().unwrap_or("").to_string();
+            }
+        }
+        panic!("no access_token in signup response");
+    }
+
+    async fn create_project_with_key(app: &axum::Router, token: &str) -> (String, String) {
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/projects")
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::from(r#"{"name":"Replay Test Project"}"#))
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        let id = json["data"]["id"].as_str().unwrap().to_string();
+        let key = json["data"]["api_key"].as_str().unwrap().to_string();
+        (id, key)
+    }
+
+    // ── SDK ingestion auth guards ─────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn ingest_segment_without_api_key_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/replay/segments")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                r#"{"session_id":"sess1","segment_index":0,"data":"AAAA"}"#,
+            ))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn finish_recording_without_api_key_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/replay/finish")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"session_id":"sess1"}"#))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    // ── dashboard auth guards ─────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn list_recordings_without_auth_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/projects/proj1/replay")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn get_recording_without_auth_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/projects/proj1/replay/rec1")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn get_segments_without_auth_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/projects/proj1/replay/rec1/segments")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    // ── SDK ingestion validation ──────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn ingest_segment_invalid_api_key_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/replay/segments")
+            .header("content-type", "application/json")
+            .header("x-api-key", "bad-key")
+            .body(Body::from(
+                r#"{"session_id":"sess1","segment_index":0,"data":"AAAA"}"#,
+            ))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn ingest_segment_succeeds_with_valid_key() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "replay_seg@example.com").await;
+        let (_, api_key) = create_project_with_key(&app, &token).await;
+
+        // base64-encoded minimal rrweb payload
+        let b64_data = base64::Engine::encode(
+            &base64::engine::general_purpose::STANDARD,
+            br#"[{"type":4,"data":{"href":"http://example.com","width":1280,"height":800},"timestamp":1000}]"#,
+        );
+        let body = format!(
+            r#"{{"session_id":"test-session-1","segment_index":0,"data":"{}"}}"#,
+            b64_data
+        );
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/replay/segments")
+            .header("content-type", "application/json")
+            .header("x-api-key", &api_key)
+            .body(Body::from(body))
+            .unwrap();
+        let status = app.oneshot(req).await.unwrap().status();
+        assert!(
+            status == StatusCode::OK
+                || status == StatusCode::CREATED
+                || status == StatusCode::ACCEPTED,
+            "expected 2xx, got {}",
+            status
+        );
+    }
+}

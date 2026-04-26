@@ -1148,3 +1148,160 @@ pub async fn linear_webhook(
 
     Ok(Json(serde_json::json!({ "ok": true })))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::StatusCode;
+    use axum::{body::Body, http::Request};
+    use tower::ServiceExt;
+
+    async fn make_app() -> axum::Router {
+        let state = crate::db::test_helpers::test_app_state().await;
+        axum::Router::new()
+            .nest("/api/v1", crate::api::router())
+            .with_state(state)
+    }
+
+    // ── verify_webhook_signature ───────────────────────────────────────────────
+
+    #[test]
+    fn webhook_sig_valid_signature_matches() {
+        use hmac::{Hmac, Mac};
+        use sha2::Sha256;
+        type HmacSha256 = Hmac<Sha256>;
+
+        let payload = b"hello world";
+        let secret = "mysecret";
+        let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).unwrap();
+        mac.update(payload);
+        let sig_hex = hex::encode(mac.finalize().into_bytes());
+
+        assert!(verify_webhook_signature(payload, &sig_hex, secret));
+    }
+
+    #[test]
+    fn webhook_sig_wrong_signature_fails() {
+        assert!(!verify_webhook_signature(b"hello", "deadbeef", "secret"));
+    }
+
+    #[test]
+    fn webhook_sig_invalid_hex_fails() {
+        assert!(!verify_webhook_signature(b"hello", "not-hex!!", "secret"));
+    }
+
+    #[test]
+    fn webhook_sig_mismatched_payload_fails() {
+        use hmac::{Hmac, Mac};
+        use sha2::Sha256;
+        type HmacSha256 = Hmac<Sha256>;
+
+        let secret = "mysecret";
+        let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).unwrap();
+        mac.update(b"original");
+        let sig_hex = hex::encode(mac.finalize().into_bytes());
+
+        assert!(!verify_webhook_signature(b"tampered", &sig_hex, secret));
+    }
+
+    // ── require_non_empty_secret ───────────────────────────────────────────────
+
+    #[test]
+    fn non_empty_secret_ok() {
+        assert!(require_non_empty_secret("s3cr3t", "github").is_ok());
+    }
+
+    #[test]
+    fn empty_secret_returns_forbidden() {
+        let err = require_non_empty_secret("", "github").unwrap_err();
+        assert!(matches!(err, crate::AppError::Forbidden(_)));
+    }
+
+    // ── webhook_client_ip ─────────────────────────────────────────────────────
+
+    #[test]
+    fn client_ip_x_forwarded_for() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert("x-forwarded-for", "1.2.3.4".parse().unwrap());
+        assert_eq!(webhook_client_ip(&headers), "1.2.3.4");
+    }
+
+    #[test]
+    fn client_ip_multiple_forwarded_uses_first() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert("x-forwarded-for", "5.6.7.8, 10.0.0.1".parse().unwrap());
+        assert_eq!(webhook_client_ip(&headers), "5.6.7.8");
+    }
+
+    #[test]
+    fn client_ip_x_real_ip_fallback() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert("x-real-ip", "9.9.9.9".parse().unwrap());
+        assert_eq!(webhook_client_ip(&headers), "9.9.9.9");
+    }
+
+    #[test]
+    fn client_ip_no_headers_returns_unknown() {
+        let headers = axum::http::HeaderMap::new();
+        assert_eq!(webhook_client_ip(&headers), "unknown");
+    }
+
+    // ── auth guards ───────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn list_integrations_without_auth_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/integrations")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_integration_without_auth_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("DELETE")
+            .uri("/api/v1/integrations/some-id")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn list_issue_links_without_auth_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/projects/proj1/issues/issue1/links")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn create_issue_link_without_auth_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/projects/proj1/issues/issue1/links")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"provider":"github","config":{}}"#))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+}

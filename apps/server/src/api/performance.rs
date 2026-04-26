@@ -207,14 +207,14 @@ pub async fn ingest_transaction(
         description: payload.description,
         status: payload.status.unwrap_or_else(|| "ok".to_string()),
         duration_ms: payload.duration_ms,
-        started_at,
-        finished_at,
+        started_at: crate::db::types::Timestamp(started_at),
+        finished_at: crate::db::types::Timestamp(finished_at),
         environment: payload.environment,
         release: payload.release,
         tags: payload.tags.map(|t| t.to_string()),
         data: payload.data.map(|d| d.to_string()),
         user_id: payload.user_id,
-        created_at: Utc::now(),
+        created_at: crate::db::types::Timestamp(Utc::now()),
     };
 
     PerformanceRepository::create_transaction(&state.db, &transaction).await?;
@@ -382,4 +382,216 @@ fn parse_time_range(
         .unwrap_or_else(|| end_dt - Duration::hours(default_hours));
 
     (start_dt, end_dt)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::StatusCode;
+    use axum::{body::Body, http::Request};
+    use serde_json::Value;
+    use tower::ServiceExt;
+
+    async fn make_app() -> axum::Router {
+        let state = crate::db::test_helpers::test_app_state().await;
+        axum::Router::new()
+            .nest("/api/v1", crate::api::router())
+            .with_state(state)
+    }
+
+    fn peer() -> std::net::SocketAddr {
+        "127.0.0.1:1234".parse().unwrap()
+    }
+
+    async fn signup_and_get_token(app: &axum::Router, email: &str) -> String {
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/auth/signup")
+            .header("content-type", "application/json")
+            .extension(axum::extract::ConnectInfo(peer()))
+            .body(Body::from(format!(
+                r#"{{"email":"{}","password":"StrongPass1!"}}"#,
+                email
+            )))
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        for v in resp.headers().get_all("set-cookie") {
+            let s = v.to_str().unwrap_or("");
+            if let Some(rest) = s.strip_prefix("access_token=") {
+                return rest.split(';').next().unwrap_or("").to_string();
+            }
+        }
+        panic!("no access_token in signup response");
+    }
+
+    async fn create_project_with_key(app: &axum::Router, token: &str) -> (String, String) {
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/projects")
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::from(r#"{"name":"Perf Test Project"}"#))
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        let id = json["data"]["id"].as_str().unwrap().to_string();
+        let key = json["data"]["api_key"].as_str().unwrap().to_string();
+        (id, key)
+    }
+
+    fn valid_payload() -> &'static str {
+        r#"{
+            "transaction_name": "GET /api/users",
+            "trace_id": "abc123",
+            "span_id": "span001",
+            "op": "http.server",
+            "duration_ms": 42.0,
+            "started_at": "2024-01-01T00:00:00Z",
+            "finished_at": "2024-01-01T00:00:00.042Z"
+        }"#
+    }
+
+    // ── parse_time_range ──────────────────────────────────────────────────────
+
+    #[test]
+    fn parse_time_range_no_args_defaults_24h() {
+        let before = Utc::now() - Duration::hours(25);
+        let (start, end) = parse_time_range(None, None, 24);
+        assert!(end > before, "end should be close to now");
+        let diff_hours = (end - start).num_hours();
+        assert_eq!(diff_hours, 24);
+    }
+
+    #[test]
+    fn parse_time_range_valid_rfc3339_parsed() {
+        let (start, end) = parse_time_range(
+            Some("2024-01-01T00:00:00Z"),
+            Some("2024-01-02T00:00:00Z"),
+            24,
+        );
+        assert_eq!(end - start, Duration::hours(24));
+    }
+
+    #[test]
+    fn parse_time_range_invalid_end_falls_back_to_now() {
+        let before = Utc::now() - Duration::minutes(1);
+        let (_, end) = parse_time_range(None, Some("not-a-date"), 24);
+        assert!(end >= before, "invalid end should default to now");
+    }
+
+    #[test]
+    fn parse_time_range_invalid_start_falls_back_to_default() {
+        let (start, end) = parse_time_range(Some("bad"), Some("2024-06-01T12:00:00Z"), 6);
+        let diff_hours = (end - start).num_hours();
+        assert_eq!(
+            diff_hours, 6,
+            "invalid start should default to end minus default_hours"
+        );
+    }
+
+    #[test]
+    fn parse_time_range_custom_default_hours() {
+        let (start, end) = parse_time_range(None, None, 1);
+        let diff_mins = (end - start).num_minutes();
+        assert_eq!(diff_mins, 60);
+    }
+
+    // ── ingest_transaction auth/validation ────────────────────────────────────
+
+    #[tokio::test]
+    async fn ingest_transaction_without_api_key_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/transactions")
+            .header("content-type", "application/json")
+            .body(Body::from(valid_payload()))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn ingest_transaction_invalid_api_key_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/transactions")
+            .header("content-type", "application/json")
+            .header("x-api-key", "invalid-key")
+            .body(Body::from(valid_payload()))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn ingest_transaction_name_too_long_returns_400() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "txn_long_name@example.com").await;
+        let (_, api_key) = create_project_with_key(&app, &token).await;
+
+        let long_name = "x".repeat(201);
+        let body = format!(
+            r#"{{"transaction_name":"{}","trace_id":"t","span_id":"s","op":"http","duration_ms":1.0,"started_at":"2024-01-01T00:00:00Z","finished_at":"2024-01-01T00:00:01Z"}}"#,
+            long_name
+        );
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/transactions")
+            .header("content-type", "application/json")
+            .header("x-api-key", api_key)
+            .body(Body::from(body))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+    }
+
+    #[tokio::test]
+    async fn ingest_transaction_invalid_timestamp_returns_400() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "txn_bad_ts@example.com").await;
+        let (_, api_key) = create_project_with_key(&app, &token).await;
+
+        let body = r#"{"transaction_name":"GET /","trace_id":"t","span_id":"s","op":"http","duration_ms":1.0,"started_at":"not-a-date","finished_at":"2024-01-01T00:00:01Z"}"#;
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/transactions")
+            .header("content-type", "application/json")
+            .header("x-api-key", api_key)
+            .body(Body::from(body))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+    }
+
+    #[tokio::test]
+    async fn ingest_transaction_succeeds_with_valid_payload() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "txn_valid@example.com").await;
+        let (_, api_key) = create_project_with_key(&app, &token).await;
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/transactions")
+            .header("content-type", "application/json")
+            .header("x-api-key", api_key)
+            .body(Body::from(valid_payload()))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::ACCEPTED
+        );
+    }
 }
