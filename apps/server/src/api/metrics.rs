@@ -692,4 +692,236 @@ mod tests {
             .unwrap();
         assert_eq!(app.oneshot(req).await.unwrap().status(), StatusCode::OK);
     }
+
+    #[tokio::test]
+    async fn servers_status_no_agents_returns_200() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "status_noagent@example.com").await;
+        let (project_id, _) = create_project_with_key(&app, &token).await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!("/api/v1/projects/{}/servers/status", project_id))
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["has_agent"], false);
+        assert_eq!(json["server_count"], 0);
+    }
+
+    #[tokio::test]
+    async fn servers_status_with_agent_returns_200() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "status_agent@example.com").await;
+        let (project_id, api_key) = create_project_with_key(&app, &token).await;
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/metrics")
+            .header("content-type", "application/json")
+            .header("x-api-key", &api_key)
+            .body(Body::from(
+                r#"{"server_id":"srv-status","hostname":"web-01"}"#,
+            ))
+            .unwrap();
+        app.clone().oneshot(req).await.unwrap();
+
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!("/api/v1/projects/{}/servers/status", project_id))
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["has_agent"], true);
+        assert_eq!(json["server_count"], 1);
+    }
+
+    #[tokio::test]
+    async fn get_server_metrics_project_not_found_returns_404() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "metrics_404proj@example.com").await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/projects/nonexistent-proj/servers/srv1/metrics")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+
+    #[tokio::test]
+    async fn get_server_metrics_server_not_found_returns_404() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "metrics_404srv@example.com").await;
+        let (project_id, _) = create_project_with_key(&app, &token).await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!(
+                "/api/v1/projects/{}/servers/nonexistent-srv/metrics",
+                project_id
+            ))
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+
+    #[tokio::test]
+    async fn get_server_metrics_after_ingest_returns_200() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "metrics_range@example.com").await;
+        let (project_id, api_key) = create_project_with_key(&app, &token).await;
+
+        let ingest_req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/metrics")
+            .header("content-type", "application/json")
+            .header("x-api-key", &api_key)
+            .body(Body::from(
+                r#"{"server_id":"srv-range","hostname":"web-01","cpu":{"usage_percent":42.5}}"#,
+            ))
+            .unwrap();
+        let ingest_resp = app.clone().oneshot(ingest_req).await.unwrap();
+        let bytes = axum::body::to_bytes(ingest_resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        let server_db_id = json["server_db_id"].as_str().unwrap().to_string();
+
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!(
+                "/api/v1/projects/{}/servers/{}/metrics?period=1h",
+                project_id, server_db_id
+            ))
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(json["data"].is_array());
+    }
+
+    #[tokio::test]
+    async fn get_latest_metrics_after_ingest_returns_200() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "metrics_latest@example.com").await;
+        let (project_id, api_key) = create_project_with_key(&app, &token).await;
+
+        let ingest_req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/metrics")
+            .header("content-type", "application/json")
+            .header("x-api-key", &api_key)
+            .body(Body::from(
+                r#"{"server_id":"srv-latest","hostname":"web-01","memory":{"total_bytes":8589934592,"used_bytes":4294967296,"available_bytes":4294967296,"usage_percent":50.0}}"#,
+            ))
+            .unwrap();
+        let ingest_resp = app.clone().oneshot(ingest_req).await.unwrap();
+        let bytes = axum::body::to_bytes(ingest_resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        let server_db_id = json["server_db_id"].as_str().unwrap().to_string();
+
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!(
+                "/api/v1/projects/{}/servers/{}/metrics/latest",
+                project_id, server_db_id
+            ))
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(!json["data"].is_null());
+        assert_eq!(json["data"]["mem_usage_percent"], 50.0);
+    }
+
+    #[tokio::test]
+    async fn ingest_metrics_server_id_too_long_returns_400() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "metrics_srvid@example.com").await;
+        let (_, api_key) = create_project_with_key(&app, &token).await;
+
+        let long_id = "s".repeat(129);
+        let payload = format!(r#"{{"server_id":"{}","hostname":"host1"}}"#, long_id);
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/metrics")
+            .header("content-type", "application/json")
+            .header("x-api-key", &api_key)
+            .body(Body::from(payload))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    #[tokio::test]
+    async fn get_server_metrics_invalid_period_returns_400() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "metrics_period@example.com").await;
+        let (project_id, api_key) = create_project_with_key(&app, &token).await;
+
+        let ingest_req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/metrics")
+            .header("content-type", "application/json")
+            .header("x-api-key", &api_key)
+            .body(Body::from(
+                r#"{"server_id":"srv-period","hostname":"web-01"}"#,
+            ))
+            .unwrap();
+        let ingest_resp = app.clone().oneshot(ingest_req).await.unwrap();
+        let bytes = axum::body::to_bytes(ingest_resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        let server_db_id = json["server_db_id"].as_str().unwrap().to_string();
+
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!(
+                "/api/v1/projects/{}/servers/{}/metrics?period=30m",
+                project_id, server_db_id
+            ))
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
 }

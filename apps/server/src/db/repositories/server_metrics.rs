@@ -87,13 +87,15 @@ impl ServerRepository {
 
     /// Check if a project has any servers registered
     pub async fn has_servers(pool: &DbPool, project_id: &str) -> Result<bool> {
-        let exists: bool =
-            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM servers WHERE project_id = $1)")
+        // Use COUNT with LIMIT 1 instead of EXISTS: the Any driver cannot decode
+        // SQLite's INTEGER 0/1 result from EXISTS into a native Rust bool.
+        let count: i64 =
+            sqlx::query_scalar("SELECT COUNT(1) FROM servers WHERE project_id = $1 LIMIT 1")
                 .bind(project_id)
                 .fetch_one(pool)
                 .await?;
 
-        Ok(exists)
+        Ok(count > 0)
     }
 
     /// Count servers for a project

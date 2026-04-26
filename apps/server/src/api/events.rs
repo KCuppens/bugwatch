@@ -653,4 +653,330 @@ mod tests {
     fn fingerprint_differs_for_different_inputs() {
         assert_ne!(sha256_fingerprint("foo"), sha256_fingerprint("bar"));
     }
+
+    // ── Integration tests ─────────────────────────────────────────────────────
+
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+    };
+    use serde_json::Value;
+    use tower::ServiceExt;
+
+    async fn make_app() -> axum::Router {
+        let state = crate::db::test_helpers::test_app_state().await;
+        axum::Router::new()
+            .nest("/api/v1", crate::api::router())
+            .with_state(state)
+    }
+
+    fn peer() -> std::net::SocketAddr {
+        "127.0.0.1:1234".parse().unwrap()
+    }
+
+    async fn signup_and_get_token(app: &axum::Router, email: &str) -> String {
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/auth/signup")
+            .header("content-type", "application/json")
+            .extension(axum::extract::ConnectInfo(peer()))
+            .body(Body::from(format!(
+                r#"{{"email":"{}","password":"StrongPass1!"}}"#,
+                email
+            )))
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        for v in resp.headers().get_all("set-cookie") {
+            let s = v.to_str().unwrap_or("");
+            if let Some(rest) = s.strip_prefix("access_token=") {
+                return rest.split(';').next().unwrap_or("").to_string();
+            }
+        }
+        panic!("no access_token in signup response");
+    }
+
+    async fn create_project_with_key(app: &axum::Router, token: &str) -> (String, String) {
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/projects")
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::from(r#"{"name":"Events Test Project"}"#))
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        let id = json["data"]["id"].as_str().unwrap().to_string();
+        let key = json["data"]["api_key"].as_str().unwrap().to_string();
+        (id, key)
+    }
+
+    #[tokio::test]
+    async fn ingest_without_api_key_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/events")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                r#"{"event_id":"e1","timestamp":"2024-01-01T00:00:00Z","level":"error"}"#,
+            ))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn ingest_invalid_api_key_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/events")
+            .header("content-type", "application/json")
+            .header("x-api-key", "not-a-real-key")
+            .body(Body::from(
+                r#"{"event_id":"e2","timestamp":"2024-01-01T00:00:00Z","level":"error"}"#,
+            ))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn ingest_succeeds_returns_202() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "ingest_ok@example.com").await;
+        let (_, api_key) = create_project_with_key(&app, &token).await;
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/events")
+            .header("content-type", "application/json")
+            .header("x-api-key", &api_key)
+            .body(Body::from(
+                r#"{"event_id":"evt-ok-001","timestamp":"2024-01-01T00:00:00Z","level":"error","exception":{"type":"Error","value":"Something went wrong","stacktrace":[]}}"#,
+            ))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::ACCEPTED);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["status"].as_str(), Some("accepted"));
+    }
+
+    #[tokio::test]
+    async fn ingest_message_event_no_exception_returns_202() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "ingest_msg@example.com").await;
+        let (_, api_key) = create_project_with_key(&app, &token).await;
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/events")
+            .header("content-type", "application/json")
+            .header("x-api-key", &api_key)
+            .body(Body::from(
+                r#"{"event_id":"evt-msg-001","timestamp":"2024-01-01T00:00:00Z","level":"info","message":"User logged in"}"#,
+            ))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::ACCEPTED
+        );
+    }
+
+    #[tokio::test]
+    async fn ingest_duplicate_event_returns_202_duplicate() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "ingest_dup@example.com").await;
+        let (_, api_key) = create_project_with_key(&app, &token).await;
+
+        let payload = r#"{"event_id":"evt-dup-001","timestamp":"2024-01-01T00:00:00Z","level":"error","exception":{"type":"Error","value":"dup","stacktrace":[]}}"#;
+
+        let req1 = Request::builder()
+            .method("POST")
+            .uri("/api/v1/events")
+            .header("content-type", "application/json")
+            .header("x-api-key", &api_key)
+            .body(Body::from(payload))
+            .unwrap();
+        let resp1 = app.clone().oneshot(req1).await.unwrap();
+        assert_eq!(resp1.status(), StatusCode::ACCEPTED);
+
+        let req2 = Request::builder()
+            .method("POST")
+            .uri("/api/v1/events")
+            .header("content-type", "application/json")
+            .header("x-api-key", &api_key)
+            .body(Body::from(payload))
+            .unwrap();
+        let resp2 = app.clone().oneshot(req2).await.unwrap();
+        assert_eq!(resp2.status(), StatusCode::ACCEPTED);
+        let bytes = axum::body::to_bytes(resp2.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["status"].as_str(), Some("duplicate"));
+    }
+
+    #[tokio::test]
+    async fn ingest_too_many_tags_returns_422() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "ingest_tags@example.com").await;
+        let (_, api_key) = create_project_with_key(&app, &token).await;
+
+        let tags: String = (0..65)
+            .map(|i| format!(r#""key{}":"val{}""#, i, i))
+            .collect::<Vec<_>>()
+            .join(",");
+        let payload = format!(
+            r#"{{"event_id":"evt-tags-001","timestamp":"2024-01-01T00:00:00Z","level":"error","tags":{{{}}}}}"#,
+            tags
+        );
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/events")
+            .header("content-type", "application/json")
+            .header("x-api-key", &api_key)
+            .body(Body::from(payload))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+    }
+
+    #[tokio::test]
+    async fn ingest_tag_value_too_long_returns_422() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "ingest_taglen@example.com").await;
+        let (_, api_key) = create_project_with_key(&app, &token).await;
+
+        let long_val = "x".repeat(257);
+        let payload = format!(
+            r#"{{"event_id":"evt-taglen-001","timestamp":"2024-01-01T00:00:00Z","level":"error","tags":{{"key":"{}"}}}}"#,
+            long_val
+        );
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/events")
+            .header("content-type", "application/json")
+            .header("x-api-key", &api_key)
+            .body(Body::from(payload))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+    }
+
+    #[tokio::test]
+    async fn ingest_environment_too_long_returns_422() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "ingest_env@example.com").await;
+        let (_, api_key) = create_project_with_key(&app, &token).await;
+
+        let long_env = "e".repeat(65);
+        let payload = format!(
+            r#"{{"event_id":"evt-env-001","timestamp":"2024-01-01T00:00:00Z","level":"error","environment":"{}"}}"#,
+            long_env
+        );
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/events")
+            .header("content-type", "application/json")
+            .header("x-api-key", &api_key)
+            .body(Body::from(payload))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+    }
+
+    #[tokio::test]
+    async fn ingest_invalid_timestamp_returns_422() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "ingest_ts@example.com").await;
+        let (_, api_key) = create_project_with_key(&app, &token).await;
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/events")
+            .header("content-type", "application/json")
+            .header("x-api-key", &api_key)
+            .body(Body::from(
+                r#"{"event_id":"evt-ts-001","timestamp":"not-a-timestamp","level":"error"}"#,
+            ))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+    }
+
+    #[tokio::test]
+    async fn ingest_too_many_stack_frames_returns_422() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "ingest_frames@example.com").await;
+        let (_, api_key) = create_project_with_key(&app, &token).await;
+
+        let frame = r#"{"filename":"app.js","function":"fn","lineno":1,"colno":1,"in_app":false}"#;
+        let frames = (0..201).map(|_| frame).collect::<Vec<_>>().join(",");
+        let payload = format!(
+            r#"{{"event_id":"evt-frames-001","timestamp":"2024-01-01T00:00:00Z","level":"error","exception":{{"type":"Error","value":"err","stacktrace":[{}]}}}}"#,
+            frames
+        );
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/events")
+            .header("content-type", "application/json")
+            .header("x-api-key", &api_key)
+            .body(Body::from(payload))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+    }
+
+    #[tokio::test]
+    async fn ingest_too_many_breadcrumbs_returns_422() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "ingest_crumbs@example.com").await;
+        let (_, api_key) = create_project_with_key(&app, &token).await;
+
+        let crumbs: String = (0..101)
+            .map(|i| {
+                format!(
+                    r#"{{"timestamp":"2024-01-01T00:00:00Z","type":"default","category":"cat","message":"msg{}"}}"#,
+                    i
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        let payload = format!(
+            r#"{{"event_id":"evt-crumbs-001","timestamp":"2024-01-01T00:00:00Z","level":"error","breadcrumbs":[{}]}}"#,
+            crumbs
+        );
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/events")
+            .header("content-type", "application/json")
+            .header("x-api-key", &api_key)
+            .body(Body::from(payload))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+    }
 }
