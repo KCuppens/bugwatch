@@ -51,7 +51,7 @@ async-trait = "0.1"
 
 # Cryptography
 hex = "0.4"
-hmac = "0.12"
+hmac = "0.13"
 aes-gcm = "0.10"
 rand = "0.8"
 subtle = "2"
