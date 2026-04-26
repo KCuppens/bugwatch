@@ -459,4 +459,225 @@ mod tests {
             status
         );
     }
+
+    // ── helpers ───────────────────────────────────────────────────────────────
+
+    async fn create_org(app: &axum::Router, token: &str) {
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/organization")
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::from(r#"{"name":"Test Org"}"#))
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert!(
+            resp.status().is_success(),
+            "org creation failed: {}",
+            resp.status()
+        );
+    }
+
+    async fn create_agent_key(app: &axum::Router, token: &str) -> String {
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/agent-keys")
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::from(
+                r#"{"name":"my-key","permissions":["read","write"]}"#,
+            ))
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK, "create key failed");
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        json["data"]["id"].as_str().unwrap().to_string()
+    }
+
+    // ── happy paths ───────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn create_key_succeeds() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "agentkeys_happy@example.com").await;
+        create_org(&app, &token).await;
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/agent-keys")
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::from(
+                r#"{"name":"my-key","permissions":["read","write"]}"#,
+            ))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["data"]["name"], "my-key");
+        assert!(json["data"]["key"].as_str().is_some());
+        assert!(json["data"]["key_prefix"].as_str().is_some());
+    }
+
+    #[tokio::test]
+    async fn list_keys_returns_created_key() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "agentkeys_list2@example.com").await;
+        create_org(&app, &token).await;
+        create_agent_key(&app, &token).await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/agent-keys")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let keys = json["data"].as_array().unwrap();
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys[0]["name"], "my-key");
+    }
+
+    #[tokio::test]
+    async fn revoke_key_succeeds() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "agentkeys_revoke@example.com").await;
+        create_org(&app, &token).await;
+        let key_id = create_agent_key(&app, &token).await;
+
+        let req = Request::builder()
+            .method("DELETE")
+            .uri(format!("/api/v1/agent-keys/{}", key_id))
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn revoke_key_not_found_returns_404() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "agentkeys_revoke404@example.com").await;
+        create_org(&app, &token).await;
+
+        let req = Request::builder()
+            .method("DELETE")
+            .uri("/api/v1/agent-keys/nonexistent-id")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn audit_log_returns_entries_after_create() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "agentkeys_audit@example.com").await;
+        create_org(&app, &token).await;
+        let key_id = create_agent_key(&app, &token).await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!("/api/v1/agent-keys/{}/audit-log", key_id))
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let logs = json["data"].as_array().unwrap();
+        assert!(!logs.is_empty(), "audit log should have at least one entry");
+        assert_eq!(logs[0]["action"], "agent_key.created");
+    }
+
+    #[tokio::test]
+    async fn audit_log_key_not_found_returns_404() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "agentkeys_audit404@example.com").await;
+        create_org(&app, &token).await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/agent-keys/nonexistent-id/audit-log")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    // ── validation ────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn create_key_empty_name_returns_422() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "agentkeys_emptyname@example.com").await;
+        create_org(&app, &token).await;
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/agent-keys")
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::from(r#"{"name":"   ","permissions":["read"]}"#))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    #[tokio::test]
+    async fn create_key_name_too_long_returns_422() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "agentkeys_longname@example.com").await;
+        create_org(&app, &token).await;
+
+        let long_name = "x".repeat(101);
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/agent-keys")
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::from(format!(
+                r#"{{"name":"{}","permissions":["read"]}}"#,
+                long_name
+            )))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    #[tokio::test]
+    async fn create_key_invalid_permission_returns_422() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "agentkeys_badperm@example.com").await;
+        create_org(&app, &token).await;
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/agent-keys")
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::from(
+                r#"{"name":"bad-perm-key","permissions":["superuser"]}"#,
+            ))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
 }
