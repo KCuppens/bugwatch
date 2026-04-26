@@ -2160,4 +2160,351 @@ mod tests {
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
+
+    // ── list alert rules / list channels ──────────────────────────────────────
+
+    #[tokio::test]
+    async fn list_alert_rules_returns_created_rule() {
+        let app = make_app().await;
+        let token = signup_and_token(&app, "list_rules_r16@example.com").await;
+        let pid = create_project_id(&app, &token).await;
+
+        let create_req = Request::builder()
+            .method("POST")
+            .uri(format!("/api/v1/projects/{}/alerts", pid))
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::from(
+                r#"{"name":"Listed Rule","condition":{"type":"new_issue"},"channel_ids":[]}"#,
+            ))
+            .unwrap();
+        app.clone().oneshot(create_req).await.unwrap();
+
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!("/api/v1/projects/{}/alerts", pid))
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        let rules = json.as_array().unwrap();
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0]["name"], "Listed Rule");
+    }
+
+    #[tokio::test]
+    async fn list_channels_returns_created_channel() {
+        let app = make_app().await;
+        let token = signup_and_token(&app, "list_channels_r16@example.com").await;
+        let pid = create_project_id(&app, &token).await;
+
+        let create_req = Request::builder()
+            .method("POST")
+            .uri(format!("/api/v1/projects/{}/channels", pid))
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::from(r#"{"name":"List Chan","channel_type":"email","config":{"type":"email","recipients":["r@example.com"]}}"#))
+            .unwrap();
+        app.clone().oneshot(create_req).await.unwrap();
+
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!("/api/v1/projects/{}/channels", pid))
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        let channels = json.as_array().unwrap();
+        assert_eq!(channels.len(), 1);
+        assert_eq!(channels[0]["name"], "List Chan");
+    }
+
+    // ── test_alert_rule / test_channel auth guards ────────────────────────────
+
+    #[tokio::test]
+    async fn test_alert_rule_without_auth_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/projects/p1/alerts/a1/test")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn test_channel_without_auth_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/projects/p1/channels/c1/test")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    // ── test_alert_rule / test_channel not-found paths ────────────────────────
+
+    #[tokio::test]
+    async fn test_alert_rule_not_found_returns_404() {
+        let app = make_app().await;
+        let token = signup_and_token(&app, "test_rule_nf_r16@example.com").await;
+        let pid = create_project_id(&app, &token).await;
+
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("/api/v1/projects/{}/alerts/nonexistent/test", pid))
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+
+    #[tokio::test]
+    async fn test_channel_not_found_returns_404() {
+        let app = make_app().await;
+        let token = signup_and_token(&app, "test_chan_nf_r16@example.com").await;
+        let pid = create_project_id(&app, &token).await;
+
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!(
+                "/api/v1/projects/{}/channels/nonexistent/test",
+                pid
+            ))
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+
+    #[tokio::test]
+    async fn test_alert_rule_with_no_channels_returns_ok() {
+        let app = make_app().await;
+        let token = signup_and_token(&app, "test_rule_noc_r16@example.com").await;
+        let pid = create_project_id(&app, &token).await;
+
+        let create_req = Request::builder()
+            .method("POST")
+            .uri(format!("/api/v1/projects/{}/alerts", pid))
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::from(
+                r#"{"name":"No Channels","condition":{"type":"new_issue"},"channel_ids":[]}"#,
+            ))
+            .unwrap();
+        let resp = app.clone().oneshot(create_req).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        let rule_id = json["id"].as_str().unwrap().to_string();
+
+        let test_req = Request::builder()
+            .method("POST")
+            .uri(format!("/api/v1/projects/{}/alerts/{}/test", pid, rule_id))
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(test_req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    // ── alert rule condition validation ───────────────────────────────────────
+
+    #[tokio::test]
+    async fn create_alert_rule_frequency_zero_threshold_returns_400() {
+        let app = make_app().await;
+        let token = signup_and_token(&app, "alert_freq_zero_t@example.com").await;
+        let pid = create_project_id(&app, &token).await;
+
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("/api/v1/projects/{}/alerts", pid))
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::from(r#"{"name":"Freq","condition":{"type":"issue_frequency","threshold":0,"window_minutes":5},"channel_ids":[]}"#))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    #[tokio::test]
+    async fn create_alert_rule_frequency_zero_window_returns_400() {
+        let app = make_app().await;
+        let token = signup_and_token(&app, "alert_freq_zero_w@example.com").await;
+        let pid = create_project_id(&app, &token).await;
+
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("/api/v1/projects/{}/alerts", pid))
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::from(r#"{"name":"Freq","condition":{"type":"issue_frequency","threshold":5,"window_minutes":0},"channel_ids":[]}"#))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    #[tokio::test]
+    async fn create_alert_rule_too_many_channels_returns_400() {
+        let app = make_app().await;
+        let token = signup_and_token(&app, "alert_too_many_ch@example.com").await;
+        let pid = create_project_id(&app, &token).await;
+
+        let channel_ids: Vec<String> = (0..21).map(|i| format!("ch-{}", i)).collect();
+        let channel_ids_json = serde_json::to_string(&channel_ids).unwrap();
+        let body = format!(
+            r#"{{"name":"Many","condition":{{"type":"new_issue"}},"channel_ids":{}}}"#,
+            channel_ids_json
+        );
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("/api/v1/projects/{}/alerts", pid))
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::from(body))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    // ── mute validation ───────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn mute_alert_rule_duration_zero_returns_400() {
+        let app = make_app().await;
+        let token = signup_and_token(&app, "mute_zero_r16@example.com").await;
+        let pid = create_project_id(&app, &token).await;
+
+        let create_req = Request::builder()
+            .method("POST")
+            .uri(format!("/api/v1/projects/{}/alerts", pid))
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::from(
+                r#"{"name":"MuteMe","condition":{"type":"new_issue"},"channel_ids":[]}"#,
+            ))
+            .unwrap();
+        let resp = app.clone().oneshot(create_req).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        let rule_id = json["id"].as_str().unwrap().to_string();
+
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("/api/v1/projects/{}/alerts/{}/mute", pid, rule_id))
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::from(r#"{"duration_minutes":0}"#))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    #[tokio::test]
+    async fn mute_alert_rule_duration_too_long_returns_400() {
+        let app = make_app().await;
+        let token = signup_and_token(&app, "mute_long_r16@example.com").await;
+        let pid = create_project_id(&app, &token).await;
+
+        let create_req = Request::builder()
+            .method("POST")
+            .uri(format!("/api/v1/projects/{}/alerts", pid))
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::from(
+                r#"{"name":"MuteLong","condition":{"type":"new_issue"},"channel_ids":[]}"#,
+            ))
+            .unwrap();
+        let resp = app.clone().oneshot(create_req).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        let rule_id = json["id"].as_str().unwrap().to_string();
+
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("/api/v1/projects/{}/alerts/{}/mute", pid, rule_id))
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::from(r#"{"duration_minutes":10081}"#))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    // ── channel update / delete not-found paths ───────────────────────────────
+
+    #[tokio::test]
+    async fn update_channel_not_found_returns_404() {
+        let app = make_app().await;
+        let token = signup_and_token(&app, "chan_upd_nf_r16@example.com").await;
+        let pid = create_project_id(&app, &token).await;
+
+        let req = Request::builder()
+            .method("PATCH")
+            .uri(format!("/api/v1/projects/{}/channels/nonexistent", pid))
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::from(r#"{"name":"X"}"#))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_channel_not_found_returns_404() {
+        let app = make_app().await;
+        let token = signup_and_token(&app, "chan_del_nf_r16@example.com").await;
+        let pid = create_project_id(&app, &token).await;
+
+        let req = Request::builder()
+            .method("DELETE")
+            .uri(format!("/api/v1/projects/{}/channels/nonexistent", pid))
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::NOT_FOUND
+        );
+    }
 }
