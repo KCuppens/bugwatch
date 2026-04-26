@@ -3,7 +3,7 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
-use crate::api::events::{ExceptionInfo, StackFrame};
+use crate::api::events::ExceptionInfo;
 
 static RE_SINGLE_QUOTE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"'[^']*'").unwrap());
 static RE_DOUBLE_QUOTE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#""[^"]*""#).unwrap());
@@ -209,6 +209,7 @@ pub fn generate_title(exception: &ExceptionInfo) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api::events::StackFrame;
 
     #[test]
     fn test_normalize_message() {

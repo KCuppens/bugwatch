@@ -35,13 +35,17 @@ fn validate_channel_url(url: &str) -> AppResult<()> {
     let host_part = url
         .trim_start_matches("https://")
         .trim_start_matches("http://");
-    let host = host_part
-        .split('/')
-        .next()
-        .unwrap_or("")
-        .split(':')
-        .next()
-        .unwrap_or("");
+    let host_with_port = host_part.split('/').next().unwrap_or("");
+    let host = if host_with_port.starts_with('[') {
+        // IPv6 literal: [::1] or [::1]:8080 — extract between brackets
+        host_with_port
+            .split(']')
+            .next()
+            .unwrap_or("")
+            .trim_start_matches('[')
+    } else {
+        host_with_port.split(':').next().unwrap_or("")
+    };
     if host == "localhost" || host.ends_with(".local") || host.ends_with(".internal") {
         return Err(AppError::BadRequest(
             "Webhook URL must not target internal hostnames".to_string(),
@@ -122,7 +126,7 @@ impl TryFrom<AlertRule> for AlertRuleResponse {
             name: rule.name,
             condition,
             channel_ids,
-            is_active: rule.is_active,
+            is_active: *rule.is_active,
             created_at: rule.created_at.to_rfc3339(),
             muted_until: rule.muted_until.map(|t| t.to_rfc3339()),
         })
@@ -586,7 +590,7 @@ impl From<NotificationChannel> for ChannelResponse {
             name: channel.name,
             channel_type: channel.channel_type,
             config,
-            is_active: channel.is_active,
+            is_active: *channel.is_active,
             created_at: channel.created_at.to_rfc3339(),
         }
     }
@@ -1265,7 +1269,7 @@ pub async fn test_alert_rule(
             .await
             .map_err(|e| AppError::Internal(format!("Failed to fetch channels: {}", e)))?
             .into_iter()
-            .filter(|c| c.is_active)
+            .filter(|c| *c.is_active)
             .map(|c| (c.id.clone(), c))
             .collect();
 
@@ -1367,4 +1371,101 @@ pub async fn test_channel(
     Ok(Json(
         serde_json::json!({ "message": "Test notification sent" }),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ---- is_valid_email ----
+
+    #[test]
+    fn valid_email_accepted() {
+        assert!(is_valid_email("user@example.com"));
+        assert!(is_valid_email("a+tag@sub.domain.org"));
+    }
+
+    #[test]
+    fn email_missing_at_rejected() {
+        assert!(!is_valid_email("userexample.com"));
+    }
+
+    #[test]
+    fn email_missing_local_rejected() {
+        assert!(!is_valid_email("@example.com"));
+    }
+
+    #[test]
+    fn email_domain_no_dot_rejected() {
+        assert!(!is_valid_email("user@localhost"));
+    }
+
+    #[test]
+    fn email_domain_leading_dot_rejected() {
+        assert!(!is_valid_email("user@.example.com"));
+    }
+
+    #[test]
+    fn email_domain_trailing_dot_rejected() {
+        assert!(!is_valid_email("user@example.com."));
+    }
+
+    // ---- validate_channel_url ----
+
+    #[test]
+    fn valid_https_url_accepted() {
+        assert!(validate_channel_url("https://hooks.slack.com/services/T00/B00/xyz").is_ok());
+    }
+
+    #[test]
+    fn valid_http_url_accepted() {
+        assert!(validate_channel_url("http://webhook.example.com/hook").is_ok());
+    }
+
+    #[test]
+    fn url_without_scheme_rejected() {
+        let err = validate_channel_url("webhook.example.com/hook").unwrap_err();
+        assert!(matches!(err, AppError::BadRequest(_)));
+    }
+
+    #[test]
+    fn localhost_url_rejected() {
+        let err = validate_channel_url("http://localhost/hook").unwrap_err();
+        assert!(matches!(err, AppError::BadRequest(_)));
+    }
+
+    #[test]
+    fn dot_local_url_rejected() {
+        let err = validate_channel_url("https://myserver.local/hook").unwrap_err();
+        assert!(matches!(err, AppError::BadRequest(_)));
+    }
+
+    #[test]
+    fn dot_internal_url_rejected() {
+        let err = validate_channel_url("https://svc.internal/hook").unwrap_err();
+        assert!(matches!(err, AppError::BadRequest(_)));
+    }
+
+    #[test]
+    fn loopback_ip_rejected() {
+        let err = validate_channel_url("http://127.0.0.1/hook").unwrap_err();
+        assert!(matches!(err, AppError::BadRequest(_)));
+    }
+
+    #[test]
+    fn private_ip_rejected() {
+        let err = validate_channel_url("http://192.168.1.1/hook").unwrap_err();
+        assert!(matches!(err, AppError::BadRequest(_)));
+    }
+
+    #[test]
+    fn ipv6_loopback_rejected() {
+        let err = validate_channel_url("http://[::1]/hook").unwrap_err();
+        assert!(matches!(err, AppError::BadRequest(_)));
+    }
+
+    #[test]
+    fn public_ip_accepted() {
+        assert!(validate_channel_url("https://8.8.8.8/hook").is_ok());
+    }
 }

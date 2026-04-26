@@ -27,7 +27,7 @@ impl MonitorRepository {
         sqlx::query_as::<_, Monitor>(
             r#"
             INSERT INTO monitors (id, project_id, name, url, method, interval_seconds, timeout_ms, expected_status, headers, body, created_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             RETURNING *
             "#,
         )
@@ -41,22 +41,23 @@ impl MonitorRepository {
         .bind(expected_status)
         .bind(headers)
         .bind(body)
-        .bind(now)
+        .bind(now.to_rfc3339())
         .fetch_one(pool)
         .await
         .map_err(Into::into)
     }
 
     pub async fn find_by_id(pool: &DbPool, id: &str) -> Result<Option<Monitor>> {
-        sqlx::query_as::<_, Monitor>("SELECT * FROM monitors WHERE id = $1")
+        sqlx::query_as::<_, Monitor>("SELECT * FROM monitors WHERE id = ?")
             .bind(id)
             .fetch_optional(pool)
             .await
             .map_err(Into::into)
     }
 
+    #[allow(dead_code)]
     pub async fn count_by_project(pool: &DbPool, project_id: &str) -> Result<i64> {
-        let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM monitors WHERE project_id = $1")
+        let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM monitors WHERE project_id = ?")
             .bind(project_id)
             .fetch_one(pool)
             .await?;
@@ -69,7 +70,7 @@ impl MonitorRepository {
             r#"
             SELECT COUNT(*) FROM monitors m
             JOIN projects p ON m.project_id = p.id
-            WHERE p.owner_id = $1
+            WHERE p.owner_id = ?
             "#,
         )
         .bind(owner_id)
@@ -86,7 +87,7 @@ impl MonitorRepository {
             r#"
             SELECT COUNT(*) FROM monitors m
             JOIN projects p ON m.project_id = p.id
-            WHERE p.organization_id = $1
+            WHERE p.organization_id = ?
             "#,
         )
         .bind(organization_id)
@@ -106,9 +107,9 @@ impl MonitorRepository {
         let monitors = sqlx::query_as::<_, Monitor>(
             r#"
             SELECT * FROM monitors
-            WHERE project_id = $1
+            WHERE project_id = ?
             ORDER BY created_at DESC
-            LIMIT $2 OFFSET $3
+            LIMIT ? OFFSET ?
             "#,
         )
         .bind(project_id)
@@ -117,7 +118,7 @@ impl MonitorRepository {
         .fetch_all(pool)
         .await?;
 
-        let total: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM monitors WHERE project_id = $1")
+        let total: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM monitors WHERE project_id = ?")
             .bind(project_id)
             .fetch_one(pool)
             .await?;
@@ -126,9 +127,8 @@ impl MonitorRepository {
     }
 
     pub async fn list_active(pool: &DbPool) -> Result<Vec<Monitor>> {
-        // Hard cap to protect memory on deployments with huge monitor counts.
         sqlx::query_as::<_, Monitor>(
-            "SELECT * FROM monitors WHERE is_active = TRUE ORDER BY last_checked_at ASC NULLS FIRST LIMIT 10000",
+            "SELECT * FROM monitors WHERE is_active = 1 ORDER BY created_at DESC",
         )
         .fetch_all(pool)
         .await
@@ -136,25 +136,22 @@ impl MonitorRepository {
     }
 
     /// Atomically claim up to `batch_size` monitors that are due for a health check.
-    /// Sets `last_checked_at = NOW()` so concurrent workers skip claimed rows via
-    /// FOR UPDATE SKIP LOCKED, preventing duplicate checks across replicas.
+    /// Sets `last_checked_at = NOW()` so concurrent workers skip claimed rows.
     pub async fn claim_due_monitors(pool: &DbPool, batch_size: i32) -> Result<Vec<Monitor>> {
         sqlx::query_as::<_, Monitor>(
             r#"
-            WITH claimed AS (
+            UPDATE monitors
+            SET last_checked_at = NOW()
+            WHERE id IN (
                 SELECT id FROM monitors
                 WHERE is_active = TRUE
                   AND (
                       last_checked_at IS NULL
-                      OR last_checked_at + (interval '1 second' * interval_seconds) <= NOW()
+                      OR datetime(last_checked_at, '+' || interval_seconds || ' seconds') <= datetime('now')
                   )
-                ORDER BY last_checked_at ASC NULLS FIRST
-                LIMIT $1
-                FOR UPDATE SKIP LOCKED
+                ORDER BY last_checked_at ASC
+                LIMIT ?
             )
-            UPDATE monitors
-            SET last_checked_at = NOW()
-            WHERE id IN (SELECT id FROM claimed)
             RETURNING *
             "#,
         )
@@ -172,13 +169,20 @@ impl MonitorRepository {
             return Ok(vec![]);
         }
 
-        sqlx::query_as::<_, Monitor>(
-            "SELECT * FROM monitors WHERE project_id = ANY($1) AND is_active = TRUE ORDER BY current_status ASC, name ASC",
-        )
-        .bind(project_ids)
-        .fetch_all(pool)
-        .await
-        .map_err(Into::into)
+        let placeholders = project_ids
+            .iter()
+            .map(|_| "?")
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT * FROM monitors WHERE project_id IN ({}) AND is_active = TRUE ORDER BY current_status ASC, name ASC",
+            placeholders
+        );
+        let mut q = sqlx::query_as::<_, Monitor>(&sql);
+        for pid in project_ids {
+            q = q.bind(pid);
+        }
+        q.fetch_all(pool).await.map_err(Into::into)
     }
 
     pub async fn update(
@@ -196,16 +200,16 @@ impl MonitorRepository {
     ) -> Result<Monitor> {
         sqlx::query_as::<_, Monitor>(
             "UPDATE monitors
-             SET name = COALESCE($1, name),
-                 url = COALESCE($2, url),
-                 method = COALESCE($3, method),
-                 interval_seconds = COALESCE($4, interval_seconds),
-                 timeout_ms = COALESCE($5, timeout_ms),
-                 expected_status = COALESCE($6, expected_status),
-                 headers = COALESCE($7, headers),
-                 body = COALESCE($8, body),
-                 is_active = COALESCE($9, is_active)
-             WHERE id = $10
+             SET name = COALESCE(?, name),
+                 url = COALESCE(?, url),
+                 method = COALESCE(?, method),
+                 interval_seconds = COALESCE(?, interval_seconds),
+                 timeout_ms = COALESCE(?, timeout_ms),
+                 expected_status = COALESCE(?, expected_status),
+                 headers = COALESCE(?, headers),
+                 body = COALESCE(?, body),
+                 is_active = COALESCE(?, is_active)
+             WHERE id = ?
              RETURNING *",
         )
         .bind(name)
@@ -224,7 +228,7 @@ impl MonitorRepository {
     }
 
     pub async fn delete(pool: &DbPool, id: &str) -> Result<()> {
-        sqlx::query("DELETE FROM monitors WHERE id = $1")
+        sqlx::query("DELETE FROM monitors WHERE id = ?")
             .bind(id)
             .execute(pool)
             .await?;
@@ -237,9 +241,9 @@ impl MonitorRepository {
         status: &str,
         checked_at: DateTime<Utc>,
     ) -> Result<()> {
-        sqlx::query("UPDATE monitors SET current_status = $1, last_checked_at = $2 WHERE id = $3")
+        sqlx::query("UPDATE monitors SET current_status = ?, last_checked_at = ? WHERE id = ?")
             .bind(status)
-            .bind(checked_at)
+            .bind(checked_at.to_rfc3339())
             .bind(id)
             .execute(pool)
             .await?;
@@ -264,7 +268,7 @@ impl MonitorCheckRepository {
         sqlx::query_as::<_, MonitorCheck>(
             r#"
             INSERT INTO monitor_checks (id, monitor_id, status, response_time_ms, status_code, error_message, checked_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             RETURNING *
             "#,
         )
@@ -274,7 +278,7 @@ impl MonitorCheckRepository {
         .bind(response_time_ms)
         .bind(status_code)
         .bind(error_message)
-        .bind(now)
+        .bind(now.to_rfc3339())
         .fetch_one(pool)
         .await
         .map_err(Into::into)
@@ -288,9 +292,9 @@ impl MonitorCheckRepository {
         sqlx::query_as::<_, MonitorCheck>(
             r#"
             SELECT * FROM monitor_checks
-            WHERE monitor_id = $1
+            WHERE monitor_id = ?
             ORDER BY checked_at DESC
-            LIMIT $2
+            LIMIT ?
             "#,
         )
         .bind(monitor_id)
@@ -311,11 +315,11 @@ impl MonitorCheckRepository {
             r#"
             SELECT
                 COUNT(*) as total,
-                COALESCE(SUM(CASE WHEN status = 'up' THEN 1 ELSE 0 END), 0)::BIGINT as up_count,
-                AVG(response_time_ms)::double precision as avg_response
+                COALESCE(SUM(CASE WHEN status = 'up' THEN 1 ELSE 0 END), 0) as up_count,
+                AVG(response_time_ms) as avg_response
             FROM monitor_checks
-            WHERE monitor_id = $1
-            AND checked_at >= NOW() - INTERVAL '1 hour' * $2
+            WHERE monitor_id = ?
+            AND checked_at >= datetime('now', '-' || ? || ' hours')
             "#,
         )
         .bind(monitor_id)
@@ -337,23 +341,30 @@ impl MonitorCheckRepository {
             return Ok(std::collections::HashMap::new());
         }
 
-        let rows: Vec<(String, i64, i64, Option<f64>)> = sqlx::query_as(
+        let placeholders = monitor_ids
+            .iter()
+            .map(|_| "?")
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
             r#"
             SELECT
                 monitor_id,
                 COUNT(*) as total,
-                COALESCE(SUM(CASE WHEN status = 'up' THEN 1 ELSE 0 END), 0)::BIGINT as up_count,
-                AVG(response_time_ms)::double precision as avg_response
+                COALESCE(SUM(CASE WHEN status = 'up' THEN 1 ELSE 0 END), 0) as up_count,
+                AVG(response_time_ms) as avg_response
             FROM monitor_checks
-            WHERE monitor_id = ANY($1)
-              AND checked_at >= NOW() - INTERVAL '1 hour' * $2
+            WHERE monitor_id IN ({})
+              AND checked_at >= datetime('now', '-' || ? || ' hours')
             GROUP BY monitor_id
             "#,
-        )
-        .bind(monitor_ids)
-        .bind(hours)
-        .fetch_all(pool)
-        .await?;
+            placeholders
+        );
+        let mut q = sqlx::query_as::<_, (String, i64, i64, Option<f64>)>(&sql);
+        for mid in monitor_ids {
+            q = q.bind(mid);
+        }
+        let rows = q.bind(hours).fetch_all(pool).await?;
 
         Ok(rows
             .into_iter()
@@ -370,26 +381,37 @@ impl MonitorCheckRepository {
             return Ok(std::collections::HashMap::new());
         }
 
-        let rows: Vec<(String, String)> = sqlx::query_as(
+        let placeholders = monitor_ids
+            .iter()
+            .map(|_| "?")
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
             r#"
-            SELECT DISTINCT ON (monitor_id) monitor_id, error_message
-            FROM monitor_checks
-            WHERE monitor_id = ANY($1)
+            SELECT monitor_id, error_message
+            FROM monitor_checks mc1
+            WHERE monitor_id IN ({})
               AND status = 'down'
               AND error_message IS NOT NULL
-            ORDER BY monitor_id, checked_at DESC
+              AND checked_at = (
+                  SELECT MAX(checked_at) FROM monitor_checks mc2
+                  WHERE mc2.monitor_id = mc1.monitor_id AND mc2.status = 'down'
+              )
             "#,
-        )
-        .bind(monitor_ids)
-        .fetch_all(pool)
-        .await?;
+            placeholders
+        );
+        let mut q = sqlx::query_as::<_, (String, String)>(&sql);
+        for mid in monitor_ids {
+            q = q.bind(mid);
+        }
+        let rows = q.fetch_all(pool).await?;
 
         Ok(rows.into_iter().collect())
     }
 
     pub async fn cleanup_old_checks(pool: &DbPool, days: i32) -> Result<u64> {
         let result = sqlx::query(
-            "DELETE FROM monitor_checks WHERE checked_at < NOW() - INTERVAL '1 day' * $1",
+            "DELETE FROM monitor_checks WHERE checked_at < datetime('now', '-' || ? || ' days')",
         )
         .bind(days)
         .execute(pool)
@@ -403,7 +425,7 @@ impl MonitorCheckRepository {
         let result: Option<(Option<String>,)> = sqlx::query_as(
             r#"
             SELECT error_message FROM monitor_checks
-            WHERE monitor_id = $1 AND status = 'down' AND error_message IS NOT NULL
+            WHERE monitor_id = ? AND status = 'down' AND error_message IS NOT NULL
             ORDER BY checked_at DESC
             LIMIT 1
             "#,
@@ -430,15 +452,15 @@ impl MonitorIncidentRepository {
         sqlx::query_as::<_, MonitorIncident>(
             r#"
             INSERT INTO monitor_incidents (id, monitor_id, started_at, cause, created_at)
-            VALUES ($1, $2, $3, $4, $5)
+            VALUES (?, ?, ?, ?, ?)
             RETURNING *
             "#,
         )
         .bind(&id)
         .bind(monitor_id)
-        .bind(now)
+        .bind(now.to_rfc3339())
         .bind(cause)
-        .bind(now)
+        .bind(now.to_rfc3339())
         .fetch_one(pool)
         .await
         .map_err(Into::into)
@@ -450,12 +472,12 @@ impl MonitorIncidentRepository {
         sqlx::query_as::<_, MonitorIncident>(
             r#"
             UPDATE monitor_incidents
-            SET resolved_at = $1
-            WHERE id = $2
+            SET resolved_at = ?
+            WHERE id = ?
             RETURNING *
             "#,
         )
-        .bind(now)
+        .bind(now.to_rfc3339())
         .bind(id)
         .fetch_one(pool)
         .await
@@ -467,7 +489,7 @@ impl MonitorIncidentRepository {
         monitor_id: &str,
     ) -> Result<Option<MonitorIncident>> {
         sqlx::query_as::<_, MonitorIncident>(
-            "SELECT * FROM monitor_incidents WHERE monitor_id = $1 AND resolved_at IS NULL ORDER BY started_at DESC LIMIT 1",
+            "SELECT * FROM monitor_incidents WHERE monitor_id = ? AND resolved_at IS NULL ORDER BY started_at DESC LIMIT 1",
         )
         .bind(monitor_id)
         .fetch_optional(pool)
@@ -483,9 +505,9 @@ impl MonitorIncidentRepository {
         sqlx::query_as::<_, MonitorIncident>(
             r#"
             SELECT * FROM monitor_incidents
-            WHERE monitor_id = $1
+            WHERE monitor_id = ?
             ORDER BY started_at DESC
-            LIMIT $2
+            LIMIT ?
             "#,
         )
         .bind(monitor_id)
@@ -493,5 +515,621 @@ impl MonitorIncidentRepository {
         .fetch_all(pool)
         .await
         .map_err(Into::into)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::test_helpers::test_any_pool;
+
+    #[tokio::test]
+    async fn create_and_find_monitor() {
+        let pool = test_any_pool().await;
+        let m = MonitorRepository::create(
+            &pool,
+            "proj-1",
+            "Homepage",
+            "https://example.com",
+            "GET",
+            60,
+            5000,
+            Some(200),
+            "{}",
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(m.name, "Homepage");
+        assert_eq!(m.current_status, "unknown");
+
+        let found = MonitorRepository::find_by_id(&pool, &m.id).await.unwrap();
+        assert_eq!(found.unwrap().id, m.id);
+    }
+
+    #[tokio::test]
+    async fn count_by_project() {
+        let pool = test_any_pool().await;
+        MonitorRepository::create(
+            &pool,
+            "pm",
+            "M1",
+            "http://a.com",
+            "GET",
+            60,
+            5000,
+            None,
+            "{}",
+            None,
+        )
+        .await
+        .unwrap();
+        MonitorRepository::create(
+            &pool,
+            "pm",
+            "M2",
+            "http://b.com",
+            "GET",
+            60,
+            5000,
+            None,
+            "{}",
+            None,
+        )
+        .await
+        .unwrap();
+        let count = MonitorRepository::count_by_project(&pool, "pm")
+            .await
+            .unwrap();
+        assert_eq!(count, 2);
+    }
+
+    #[tokio::test]
+    async fn list_by_project_pagination() {
+        let pool = test_any_pool().await;
+        MonitorRepository::create(
+            &pool,
+            "pp",
+            "M1",
+            "http://a.com",
+            "GET",
+            60,
+            5000,
+            None,
+            "{}",
+            None,
+        )
+        .await
+        .unwrap();
+        MonitorRepository::create(
+            &pool,
+            "pp",
+            "M2",
+            "http://b.com",
+            "GET",
+            60,
+            5000,
+            None,
+            "{}",
+            None,
+        )
+        .await
+        .unwrap();
+        let (monitors, total) = MonitorRepository::list_by_project(&pool, "pp", 1, 10)
+            .await
+            .unwrap();
+        assert_eq!(monitors.len(), 2);
+        assert_eq!(total, 2);
+    }
+
+    #[tokio::test]
+    async fn update_monitor() {
+        let pool = test_any_pool().await;
+        let m = MonitorRepository::create(
+            &pool,
+            "pu",
+            "Old",
+            "http://old.com",
+            "GET",
+            60,
+            5000,
+            None,
+            "{}",
+            None,
+        )
+        .await
+        .unwrap();
+        let updated = MonitorRepository::update(
+            &pool,
+            &m.id,
+            Some("New"),
+            Some("http://new.com"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(updated.name, "New");
+        assert_eq!(updated.url, "http://new.com");
+    }
+
+    #[tokio::test]
+    async fn delete_monitor() {
+        let pool = test_any_pool().await;
+        let m = MonitorRepository::create(
+            &pool,
+            "pd",
+            "Del",
+            "http://d.com",
+            "GET",
+            60,
+            5000,
+            None,
+            "{}",
+            None,
+        )
+        .await
+        .unwrap();
+        MonitorRepository::delete(&pool, &m.id).await.unwrap();
+        assert!(MonitorRepository::find_by_id(&pool, &m.id)
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn monitor_check_create_and_list() {
+        let pool = test_any_pool().await;
+        let m = MonitorRepository::create(
+            &pool,
+            "pc",
+            "Check",
+            "http://c.com",
+            "GET",
+            60,
+            5000,
+            None,
+            "{}",
+            None,
+        )
+        .await
+        .unwrap();
+        MonitorCheckRepository::create(&pool, &m.id, "up", Some(120), Some(200), None)
+            .await
+            .unwrap();
+        MonitorCheckRepository::create(&pool, &m.id, "down", None, Some(500), Some("timeout"))
+            .await
+            .unwrap();
+
+        let checks = MonitorCheckRepository::list_by_monitor(&pool, &m.id, 10)
+            .await
+            .unwrap();
+        assert_eq!(checks.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn get_uptime_stats() {
+        let pool = test_any_pool().await;
+        let m = MonitorRepository::create(
+            &pool,
+            "pus",
+            "Stats",
+            "http://s.com",
+            "GET",
+            60,
+            5000,
+            None,
+            "{}",
+            None,
+        )
+        .await
+        .unwrap();
+        MonitorCheckRepository::create(&pool, &m.id, "up", Some(100), Some(200), None)
+            .await
+            .unwrap();
+        MonitorCheckRepository::create(&pool, &m.id, "up", Some(110), Some(200), None)
+            .await
+            .unwrap();
+        MonitorCheckRepository::create(&pool, &m.id, "down", None, Some(500), Some("err"))
+            .await
+            .unwrap();
+
+        let (total, up, _avg) = MonitorCheckRepository::get_uptime_stats(&pool, &m.id, 24)
+            .await
+            .unwrap();
+        assert_eq!(total, 3);
+        assert_eq!(up, 2);
+    }
+
+    #[tokio::test]
+    async fn incident_create_and_resolve() {
+        let pool = test_any_pool().await;
+        let m = MonitorRepository::create(
+            &pool,
+            "pi",
+            "Inc",
+            "http://i.com",
+            "GET",
+            60,
+            5000,
+            None,
+            "{}",
+            None,
+        )
+        .await
+        .unwrap();
+        let inc = MonitorIncidentRepository::create(&pool, &m.id, Some("timeout"))
+            .await
+            .unwrap();
+        assert!(inc.resolved_at.is_none());
+
+        let open = MonitorIncidentRepository::find_open_by_monitor(&pool, &m.id)
+            .await
+            .unwrap();
+        assert!(open.is_some());
+
+        MonitorIncidentRepository::resolve(&pool, &inc.id)
+            .await
+            .unwrap();
+        let open_after = MonitorIncidentRepository::find_open_by_monitor(&pool, &m.id)
+            .await
+            .unwrap();
+        assert!(open_after.is_none());
+    }
+
+    #[tokio::test]
+    async fn update_monitor_status() {
+        let pool = test_any_pool().await;
+        let m = MonitorRepository::create(
+            &pool,
+            "pst",
+            "Status",
+            "http://st.com",
+            "GET",
+            60,
+            5000,
+            None,
+            "{}",
+            None,
+        )
+        .await
+        .unwrap();
+        MonitorRepository::update_status(&pool, &m.id, "up", Utc::now())
+            .await
+            .unwrap();
+        let updated = MonitorRepository::find_by_id(&pool, &m.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(updated.current_status, "up");
+    }
+
+    #[tokio::test]
+    async fn count_by_owner() {
+        let pool = test_any_pool().await;
+        sqlx::query("INSERT INTO projects (id, name, slug, api_key, api_key_hash, owner_id) VALUES (?, ?, ?, ?, '', ?)")
+            .bind("proj-cbo").bind("P").bind("slug-cbo").bind("key-cbo").bind("owner-x")
+            .execute(&pool).await.unwrap();
+        MonitorRepository::create(
+            &pool,
+            "proj-cbo",
+            "M",
+            "http://x.com",
+            "GET",
+            60,
+            5000,
+            None,
+            "{}",
+            None,
+        )
+        .await
+        .unwrap();
+        let count = MonitorRepository::count_by_owner(&pool, "owner-x")
+            .await
+            .unwrap();
+        assert_eq!(count, 1);
+        let zero = MonitorRepository::count_by_owner(&pool, "owner-none")
+            .await
+            .unwrap();
+        assert_eq!(zero, 0);
+    }
+
+    #[tokio::test]
+    async fn count_by_organization() {
+        let pool = test_any_pool().await;
+        sqlx::query("INSERT INTO projects (id, name, slug, api_key, api_key_hash, owner_id, organization_id) VALUES (?, ?, ?, ?, '', ?, ?)")
+            .bind("proj-cborg").bind("P").bind("slug-cborg").bind("key-cborg").bind("u1").bind("org-x")
+            .execute(&pool).await.unwrap();
+        MonitorRepository::create(
+            &pool,
+            "proj-cborg",
+            "M",
+            "http://x.com",
+            "GET",
+            60,
+            5000,
+            None,
+            "{}",
+            None,
+        )
+        .await
+        .unwrap();
+        let count = MonitorRepository::count_by_organization(&pool, "org-x")
+            .await
+            .unwrap();
+        assert_eq!(count, 1);
+        let zero = MonitorRepository::count_by_organization(&pool, "org-none")
+            .await
+            .unwrap();
+        assert_eq!(zero, 0);
+    }
+
+    #[tokio::test]
+    async fn list_active_monitors() {
+        let pool = test_any_pool().await;
+        MonitorRepository::create(
+            &pool,
+            "la-proj",
+            "Active",
+            "http://a.com",
+            "GET",
+            60,
+            5000,
+            None,
+            "{}",
+            None,
+        )
+        .await
+        .unwrap();
+        let all = MonitorRepository::list_active(&pool).await.unwrap();
+        assert!(!all.is_empty());
+        assert!(all.iter().any(|m| m.name == "Active"));
+    }
+
+    #[tokio::test]
+    async fn list_active_across_projects_empty_input() {
+        let pool = test_any_pool().await;
+        let result = MonitorRepository::list_active_across_projects(&pool, &[])
+            .await
+            .unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_active_across_projects_scoped() {
+        let pool = test_any_pool().await;
+        MonitorRepository::create(
+            &pool,
+            "laap-a",
+            "Ma",
+            "http://a.com",
+            "GET",
+            60,
+            5000,
+            None,
+            "{}",
+            None,
+        )
+        .await
+        .unwrap();
+        MonitorRepository::create(
+            &pool,
+            "laap-b",
+            "Mb",
+            "http://b.com",
+            "GET",
+            60,
+            5000,
+            None,
+            "{}",
+            None,
+        )
+        .await
+        .unwrap();
+        let ids = vec!["laap-a".to_string()];
+        let result = MonitorRepository::list_active_across_projects(&pool, &ids)
+            .await
+            .unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].project_id, "laap-a");
+    }
+
+    #[tokio::test]
+    async fn batch_uptime_stats_empty_input() {
+        let pool = test_any_pool().await;
+        let result = MonitorCheckRepository::batch_uptime_stats(&pool, &[], 24)
+            .await
+            .unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn batch_uptime_stats_with_data() {
+        let pool = test_any_pool().await;
+        let m1 = MonitorRepository::create(
+            &pool,
+            "bus-proj",
+            "BUS1",
+            "http://x.com",
+            "GET",
+            60,
+            5000,
+            None,
+            "{}",
+            None,
+        )
+        .await
+        .unwrap();
+        let m2 = MonitorRepository::create(
+            &pool,
+            "bus-proj",
+            "BUS2",
+            "http://y.com",
+            "GET",
+            60,
+            5000,
+            None,
+            "{}",
+            None,
+        )
+        .await
+        .unwrap();
+        MonitorCheckRepository::create(&pool, &m1.id, "up", Some(100), Some(200), None)
+            .await
+            .unwrap();
+        MonitorCheckRepository::create(&pool, &m1.id, "down", None, Some(500), Some("err"))
+            .await
+            .unwrap();
+        MonitorCheckRepository::create(&pool, &m2.id, "up", Some(50), Some(200), None)
+            .await
+            .unwrap();
+        let ids = vec![m1.id.clone(), m2.id.clone()];
+        let stats = MonitorCheckRepository::batch_uptime_stats(&pool, &ids, 24)
+            .await
+            .unwrap();
+        let (total1, up1, _) = stats[&m1.id];
+        assert_eq!(total1, 2);
+        assert_eq!(up1, 1);
+        let (total2, up2, _) = stats[&m2.id];
+        assert_eq!(total2, 1);
+        assert_eq!(up2, 1);
+    }
+
+    #[tokio::test]
+    async fn batch_last_errors_empty_input() {
+        let pool = test_any_pool().await;
+        let result = MonitorCheckRepository::batch_last_errors(&pool, &[])
+            .await
+            .unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn batch_last_errors_with_down_check() {
+        let pool = test_any_pool().await;
+        let m = MonitorRepository::create(
+            &pool,
+            "ble-proj",
+            "BLE",
+            "http://z.com",
+            "GET",
+            60,
+            5000,
+            None,
+            "{}",
+            None,
+        )
+        .await
+        .unwrap();
+        MonitorCheckRepository::create(&pool, &m.id, "down", None, Some(500), Some("conn refused"))
+            .await
+            .unwrap();
+        let ids = vec![m.id.clone()];
+        let errors = MonitorCheckRepository::batch_last_errors(&pool, &ids)
+            .await
+            .unwrap();
+        assert_eq!(errors.get(&m.id).map(|s| s.as_str()), Some("conn refused"));
+    }
+
+    #[tokio::test]
+    async fn cleanup_old_checks_noop() {
+        let pool = test_any_pool().await;
+        let deleted = MonitorCheckRepository::cleanup_old_checks(&pool, 30)
+            .await
+            .unwrap();
+        assert_eq!(deleted, 0);
+    }
+
+    #[tokio::test]
+    async fn get_last_error_no_checks() {
+        let pool = test_any_pool().await;
+        let m = MonitorRepository::create(
+            &pool,
+            "gle-proj",
+            "GLE",
+            "http://a.com",
+            "GET",
+            60,
+            5000,
+            None,
+            "{}",
+            None,
+        )
+        .await
+        .unwrap();
+        let result = MonitorCheckRepository::get_last_error(&pool, &m.id)
+            .await
+            .unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn get_last_error_returns_message() {
+        let pool = test_any_pool().await;
+        let m = MonitorRepository::create(
+            &pool,
+            "gler-proj",
+            "GLER",
+            "http://a.com",
+            "GET",
+            60,
+            5000,
+            None,
+            "{}",
+            None,
+        )
+        .await
+        .unwrap();
+        MonitorCheckRepository::create(&pool, &m.id, "up", Some(100), Some(200), None)
+            .await
+            .unwrap();
+        MonitorCheckRepository::create(
+            &pool,
+            &m.id,
+            "down",
+            None,
+            Some(503),
+            Some("service unavailable"),
+        )
+        .await
+        .unwrap();
+        let result = MonitorCheckRepository::get_last_error(&pool, &m.id)
+            .await
+            .unwrap();
+        assert_eq!(result.as_deref(), Some("service unavailable"));
+    }
+
+    #[tokio::test]
+    async fn incident_list_by_monitor() {
+        let pool = test_any_pool().await;
+        let m = MonitorRepository::create(
+            &pool,
+            "ilbm-proj",
+            "ILBM",
+            "http://a.com",
+            "GET",
+            60,
+            5000,
+            None,
+            "{}",
+            None,
+        )
+        .await
+        .unwrap();
+        MonitorIncidentRepository::create(&pool, &m.id, Some("first"))
+            .await
+            .unwrap();
+        MonitorIncidentRepository::create(&pool, &m.id, Some("second"))
+            .await
+            .unwrap();
+        let incidents = MonitorIncidentRepository::list_by_monitor(&pool, &m.id, 10)
+            .await
+            .unwrap();
+        assert_eq!(incidents.len(), 2);
     }
 }

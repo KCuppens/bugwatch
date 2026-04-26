@@ -181,33 +181,18 @@ pub async fn create(
     let slug = generate_slug(&req.name);
 
     // Begin a transaction so the count check and INSERT are atomic.
-    // An advisory lock keyed on owner_id serialises concurrent project-create
-    // requests for the same user, preventing TOCTOU races on the project limit.
     let mut tx = state
         .db
         .begin()
         .await
         .map_err(|e| AppError::Internal(format!("Failed to start transaction: {}", e)))?;
 
-    let lock_key: i64 = {
-        use std::hash::{Hash, Hasher};
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        owner_id.hash(&mut h);
-        h.finish() as i64
-    };
-    sqlx::query("SELECT pg_advisory_xact_lock($1)")
-        .bind(lock_key)
-        .execute(&mut *tx)
+    // Re-count within the transaction to get a consistent view
+    let current_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM projects WHERE owner_id = ?")
+        .bind(&owner_id)
+        .fetch_one(&mut *tx)
         .await
-        .map_err(|e| AppError::Internal(format!("Failed to acquire project limit lock: {}", e)))?;
-
-    // Re-count within the lock to get a consistent view
-    let current_count: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM projects WHERE owner_id = $1")
-            .bind(&owner_id)
-            .fetch_one(&mut *tx)
-            .await
-            .map_err(|e| AppError::Internal(format!("Failed to count projects: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Failed to count projects: {}", e)))?;
 
     if let Some(project_limit) = limits.project_limit {
         let x402_extra = org
@@ -510,7 +495,7 @@ pub async fn verify_events(
     }
 
     // Count issues for this project (events are grouped into issues)
-    let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM issues WHERE project_id = $1")
+    let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM issues WHERE project_id = ?")
         .bind(&id)
         .fetch_one(&state.db)
         .await?;
@@ -538,4 +523,48 @@ fn generate_slug(name: &str) -> String {
     // Add a short unique suffix to avoid collisions
     let suffix = &uuid::Uuid::new_v4().to_string()[..8];
     format!("{}-{}", base_slug, suffix)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn slug_lowercases_name() {
+        let slug = generate_slug("MyProject");
+        assert!(slug.starts_with("myproject-"));
+    }
+
+    #[test]
+    fn slug_replaces_spaces_with_dashes() {
+        let slug = generate_slug("my project");
+        assert!(slug.starts_with("my-project-"));
+    }
+
+    #[test]
+    fn slug_replaces_special_chars_with_dashes() {
+        let slug = generate_slug("hello@world!");
+        assert!(slug.starts_with("hello-world-"));
+    }
+
+    #[test]
+    fn slug_has_unique_suffix() {
+        let s1 = generate_slug("same");
+        let s2 = generate_slug("same");
+        assert_ne!(s1, s2);
+    }
+
+    #[test]
+    fn slug_suffix_length_is_eight() {
+        let slug = generate_slug("test");
+        // format: "test-{8chars}"
+        let suffix = slug.split('-').last().unwrap();
+        assert_eq!(suffix.len(), 8);
+    }
+
+    #[test]
+    fn slug_all_alphanumeric_name_unchanged() {
+        let slug = generate_slug("abc123");
+        assert!(slug.starts_with("abc123-"));
+    }
 }

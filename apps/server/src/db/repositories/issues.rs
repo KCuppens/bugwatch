@@ -24,9 +24,9 @@ impl IssueRepository {
         let issue = sqlx::query_as::<_, Issue>(
             r#"
             INSERT INTO issues (id, project_id, fingerprint, title, level, first_seen, last_seen, environment, count)
-            VALUES ($1, $2, $3, $4, $5, $6, $6, $7, 1)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
             ON CONFLICT (project_id, fingerprint) DO UPDATE
-            SET last_seen = $6, count = issues.count + 1, environment = $7
+            SET last_seen = excluded.last_seen, count = issues.count + 1, environment = excluded.environment
             RETURNING *
             "#,
         )
@@ -35,7 +35,8 @@ impl IssueRepository {
         .bind(fingerprint)
         .bind(title)
         .bind(level)
-        .bind(now)
+        .bind(now.to_rfc3339())
+        .bind(now.to_rfc3339())
         .bind(environment)
         .fetch_one(pool)
         .await?;
@@ -45,27 +46,34 @@ impl IssueRepository {
         Ok((issue, is_new))
     }
 
+    pub async fn find_by_id(pool: &DbPool, id: &str) -> Result<Option<Issue>> {
+        sqlx::query_as::<_, Issue>("SELECT * FROM issues WHERE id = ?")
+            .bind(id)
+            .fetch_optional(pool)
+            .await
+            .map_err(Into::into)
+    }
+
     pub async fn find_by_fingerprint(
         pool: &DbPool,
         project_id: &str,
         fingerprint: &str,
     ) -> Result<Option<Issue>> {
-        sqlx::query_as::<_, Issue>(
-            "SELECT * FROM issues WHERE project_id = $1 AND fingerprint = $2",
-        )
-        .bind(project_id)
-        .bind(fingerprint)
-        .fetch_optional(pool)
-        .await
-        .map_err(Into::into)
-    }
-
-    pub async fn find_by_id(pool: &DbPool, id: &str) -> Result<Option<Issue>> {
-        sqlx::query_as::<_, Issue>("SELECT * FROM issues WHERE id = $1")
-            .bind(id)
+        sqlx::query_as::<_, Issue>("SELECT * FROM issues WHERE project_id = ? AND fingerprint = ?")
+            .bind(project_id)
+            .bind(fingerprint)
             .fetch_optional(pool)
             .await
             .map_err(Into::into)
+    }
+
+    pub async fn update_status(pool: &DbPool, id: &str, status: &str) -> Result<()> {
+        sqlx::query("UPDATE issues SET status = ? WHERE id = ?")
+            .bind(status)
+            .bind(id)
+            .execute(pool)
+            .await?;
+        Ok(())
     }
 
     pub async fn find_by_project(
@@ -80,10 +88,10 @@ impl IssueRepository {
         let limit = limit.max(1).min(1000);
         let offset = offset.max(0).min(100_000);
 
-        // Use QueryBuilder instead of manual `$N` placeholder tracking —
+        // Use QueryBuilder instead of manual placeholder tracking —
         // every value goes through push_bind so there's no risk of a stray
         // filter string bypassing parameterisation.
-        let mut qb: sqlx::QueryBuilder<sqlx::Postgres> =
+        let mut qb: sqlx::QueryBuilder<sqlx::Any> =
             sqlx::QueryBuilder::new("SELECT * FROM issues WHERE project_id = ");
         qb.push_bind(project_id);
 
@@ -114,27 +122,18 @@ impl IssueRepository {
         status: Option<&str>,
     ) -> Result<i64> {
         let (count,): (i64,) = if let Some(s) = status {
-            sqlx::query_as("SELECT COUNT(*) FROM issues WHERE project_id = $1 AND status = $2")
+            sqlx::query_as("SELECT COUNT(*) FROM issues WHERE project_id = ? AND status = ?")
                 .bind(project_id)
                 .bind(s)
                 .fetch_one(pool)
                 .await?
         } else {
-            sqlx::query_as("SELECT COUNT(*) FROM issues WHERE project_id = $1")
+            sqlx::query_as("SELECT COUNT(*) FROM issues WHERE project_id = ?")
                 .bind(project_id)
                 .fetch_one(pool)
                 .await?
         };
         Ok(count)
-    }
-
-    pub async fn update_status(pool: &DbPool, id: &str, status: &str) -> Result<()> {
-        sqlx::query("UPDATE issues SET status = $1 WHERE id = $2")
-            .bind(status)
-            .bind(id)
-            .execute(pool)
-            .await?;
-        Ok(())
     }
 
     pub async fn update_status_returning(
@@ -143,7 +142,7 @@ impl IssueRepository {
         status: &str,
     ) -> Result<Option<Issue>> {
         let issue =
-            sqlx::query_as::<_, Issue>("UPDATE issues SET status = $1 WHERE id = $2 RETURNING *")
+            sqlx::query_as::<_, Issue>("UPDATE issues SET status = ? WHERE id = ? RETURNING *")
                 .bind(status)
                 .bind(id)
                 .fetch_optional(pool)
@@ -159,7 +158,7 @@ impl IssueRepository {
         project_id: &str,
         status: &str,
     ) -> Result<()> {
-        let result = sqlx::query("UPDATE issues SET status = $1 WHERE id = $2 AND project_id = $3")
+        let result = sqlx::query("UPDATE issues SET status = ? WHERE id = ? AND project_id = ?")
             .bind(status)
             .bind(id)
             .bind(project_id)
@@ -172,7 +171,7 @@ impl IssueRepository {
     }
 
     pub async fn delete(pool: &DbPool, id: &str) -> Result<()> {
-        sqlx::query("DELETE FROM issues WHERE id = $1")
+        sqlx::query("DELETE FROM issues WHERE id = ?")
             .bind(id)
             .execute(pool)
             .await?;
@@ -190,11 +189,10 @@ impl IssueRepository {
         offset: i64,
     ) -> Result<Vec<Issue>> {
         let limit = limit.min(1000);
-        let mut param_idx = 2;
-        let mut query = String::from("SELECT * FROM issues WHERE project_id = $1");
+        let mut query = String::from("SELECT * FROM issues WHERE project_id = ?");
         let mut params: Vec<String> = vec![project_id.to_string()];
 
-        build_filter_clauses(filters, &mut query, &mut params, &mut param_idx);
+        build_filter_clauses(filters, &mut query, &mut params);
 
         // Sorting
         let sort_col = match sort_field {
@@ -208,11 +206,8 @@ impl IssueRepository {
             _ => "DESC",
         };
         query.push_str(&format!(
-            " ORDER BY {} {} LIMIT ${} OFFSET ${}",
-            sort_col,
-            sort_dir,
-            param_idx,
-            param_idx + 1
+            " ORDER BY {} {} LIMIT ? OFFSET ?",
+            sort_col, sort_dir,
         ));
 
         let mut q = sqlx::query_as::<_, Issue>(&query);
@@ -230,11 +225,10 @@ impl IssueRepository {
         project_id: &str,
         filters: &SearchFilters,
     ) -> Result<i64> {
-        let mut param_idx = 2;
-        let mut query = String::from("SELECT COUNT(*) FROM issues WHERE project_id = $1");
+        let mut query = String::from("SELECT COUNT(*) FROM issues WHERE project_id = ?");
         let mut params: Vec<String> = vec![project_id.to_string()];
 
-        build_filter_clauses(filters, &mut query, &mut params, &mut param_idx);
+        build_filter_clauses(filters, &mut query, &mut params);
 
         let mut q = sqlx::query_as::<_, (i64,)>(&query);
         for p in &params {
@@ -251,16 +245,18 @@ impl IssueRepository {
         // more than 1000 unique values the UI can't render them usefully anyway.
         let rows = sqlx::query_as::<_, (String, String, i64)>(
             r#"
-            (SELECT 'level' as facet_type, level as facet_value, COUNT(*) as count
-             FROM issues WHERE project_id = $1 GROUP BY level LIMIT 1000)
+            SELECT 'level' as facet_type, level as facet_value, COUNT(*) as count
+             FROM issues WHERE project_id = ? GROUP BY level LIMIT 1000
             UNION ALL
-            (SELECT 'status' as facet_type, status as facet_value, COUNT(*) as count
-             FROM issues WHERE project_id = $1 GROUP BY status LIMIT 1000)
+            SELECT 'status' as facet_type, status as facet_value, COUNT(*) as count
+             FROM issues WHERE project_id = ? GROUP BY status LIMIT 1000
             UNION ALL
-            (SELECT 'environment' as facet_type, environment as facet_value, COUNT(*) as count
-             FROM issues WHERE project_id = $1 GROUP BY environment LIMIT 1000)
+            SELECT 'environment' as facet_type, environment as facet_value, COUNT(*) as count
+             FROM issues WHERE project_id = ? GROUP BY environment LIMIT 1000
             "#,
         )
+        .bind(project_id)
+        .bind(project_id)
         .bind(project_id)
         .fetch_all(pool)
         .await?;
@@ -294,13 +290,8 @@ impl IssueRepository {
 }
 
 /// Append WHERE clause conditions for all search filters to the query builder.
-/// Mutates `query`, `params`, and `param_idx` in-place.
-fn build_filter_clauses(
-    filters: &SearchFilters,
-    query: &mut String,
-    params: &mut Vec<String>,
-    param_idx: &mut usize,
-) {
+/// Mutates `query` and `params` in-place. Uses `?` positional placeholders.
+fn build_filter_clauses(filters: &SearchFilters, query: &mut String, params: &mut Vec<String>) {
     for (field, values) in [
         ("status", &filters.status),
         ("level", &filters.level),
@@ -316,18 +307,13 @@ fn build_filter_clauses(
         };
         if let Some(vals) = values {
             if !vals.is_empty() {
-                let placeholders: Vec<String> = vals
-                    .iter()
-                    .enumerate()
-                    .map(|(i, _)| format!("${}", *param_idx + i))
-                    .collect();
+                let placeholders: Vec<&str> = vals.iter().map(|_| "?").collect();
                 query.push_str(&format!(
                     " AND {} IN ({})",
                     safe_col,
                     placeholders.join(",")
                 ));
                 params.extend(vals.clone());
-                *param_idx += vals.len();
             }
         }
     }
@@ -341,9 +327,8 @@ fn build_filter_clauses(
         (filters.users_lt, "user_count <"),
     ] {
         if let Some(v) = opt_val {
-            query.push_str(&format!(" AND {} ${}::bigint", clause, *param_idx));
+            query.push_str(&format!(" AND {} ?", clause));
             params.push(v.to_string());
-            *param_idx += 1;
         }
     }
 
@@ -354,9 +339,8 @@ fn build_filter_clauses(
         (&filters.last_seen_before, "last_seen <"),
     ] {
         if let Some(v) = opt_val {
-            query.push_str(&format!(" AND {} ${}", clause, *param_idx));
+            query.push_str(&format!(" AND {} ?", clause));
             params.push(v.clone());
-            *param_idx += 1;
         }
     }
 
@@ -365,14 +349,9 @@ fn build_filter_clauses(
             .replace('\\', "\\\\")
             .replace('%', "\\%")
             .replace('_', "\\_");
-        query.push_str(&format!(
-            " AND (title LIKE ${} ESCAPE '\\' OR fingerprint LIKE ${} ESCAPE '\\')",
-            *param_idx,
-            *param_idx + 1
-        ));
+        query.push_str(" AND (title LIKE ? ESCAPE '\\' OR fingerprint LIKE ? ESCAPE '\\')");
         params.push(format!("%{}%", escaped));
         params.push(format!("%{}%", escaped));
-        *param_idx += 2;
     }
 }
 
@@ -427,28 +406,33 @@ impl IssueRepository {
             return Ok(vec![]);
         }
 
-        // Use = ANY($1) with a Postgres text array — single bind regardless of project count
+        let placeholders = project_ids
+            .iter()
+            .map(|_| "?")
+            .collect::<Vec<_>>()
+            .join(", ");
         let issues = if let Some(s) = status {
-            sqlx::query_as::<_, Issue>(
-                "SELECT * FROM issues WHERE project_id = ANY($1) AND status = $2
-                 ORDER BY last_seen DESC LIMIT $3 OFFSET $4",
-            )
-            .bind(project_ids)
-            .bind(s)
-            .bind(limit)
-            .bind(offset)
-            .fetch_all(pool)
-            .await?
+            let sql = format!(
+                "SELECT * FROM issues WHERE project_id IN ({}) AND status = ?
+                 ORDER BY last_seen DESC LIMIT ? OFFSET ?",
+                placeholders
+            );
+            let mut q = sqlx::query_as::<_, Issue>(&sql);
+            for pid in project_ids {
+                q = q.bind(pid);
+            }
+            q.bind(s).bind(limit).bind(offset).fetch_all(pool).await?
         } else {
-            sqlx::query_as::<_, Issue>(
-                "SELECT * FROM issues WHERE project_id = ANY($1)
-                 ORDER BY last_seen DESC LIMIT $2 OFFSET $3",
-            )
-            .bind(project_ids)
-            .bind(limit)
-            .bind(offset)
-            .fetch_all(pool)
-            .await?
+            let sql = format!(
+                "SELECT * FROM issues WHERE project_id IN ({})
+                 ORDER BY last_seen DESC LIMIT ? OFFSET ?",
+                placeholders
+            );
+            let mut q = sqlx::query_as::<_, Issue>(&sql);
+            for pid in project_ids {
+                q = q.bind(pid);
+            }
+            q.bind(limit).bind(offset).fetch_all(pool).await?
         };
 
         Ok(issues)
@@ -464,17 +448,31 @@ impl IssueRepository {
             return Ok(0);
         }
 
+        let placeholders = project_ids
+            .iter()
+            .map(|_| "?")
+            .collect::<Vec<_>>()
+            .join(", ");
         let (count,): (i64,) = if let Some(s) = status {
-            sqlx::query_as("SELECT COUNT(*) FROM issues WHERE project_id = ANY($1) AND status = $2")
-                .bind(project_ids)
-                .bind(s)
-                .fetch_one(pool)
-                .await?
+            let sql = format!(
+                "SELECT COUNT(*) FROM issues WHERE project_id IN ({}) AND status = ?",
+                placeholders
+            );
+            let mut q = sqlx::query_as::<_, (i64,)>(&sql);
+            for pid in project_ids {
+                q = q.bind(pid);
+            }
+            q.bind(s).fetch_one(pool).await?
         } else {
-            sqlx::query_as("SELECT COUNT(*) FROM issues WHERE project_id = ANY($1)")
-                .bind(project_ids)
-                .fetch_one(pool)
-                .await?
+            let sql = format!(
+                "SELECT COUNT(*) FROM issues WHERE project_id IN ({})",
+                placeholders
+            );
+            let mut q = sqlx::query_as::<_, (i64,)>(&sql);
+            for pid in project_ids {
+                q = q.bind(pid);
+            }
+            q.fetch_one(pool).await?
         };
 
         Ok(count)
@@ -489,22 +487,30 @@ impl IssueRepository {
             return Ok(vec![]);
         }
 
-        let rows = sqlx::query_as::<_, (String, i64, i64, i64, i64)>(
+        let placeholders = project_ids
+            .iter()
+            .map(|_| "?")
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
             r#"
             SELECT
                 project_id,
-                COUNT(*) FILTER (WHERE status = 'unresolved') as unresolved_count,
-                COALESCE(SUM(count), 0)::BIGINT as total_events,
-                COALESCE(SUM(user_count), 0)::BIGINT as total_users,
-                COUNT(*) FILTER (WHERE status = 'unresolved' AND (level = 'fatal' OR level = 'error')) as critical_count
+                SUM(CASE WHEN status = 'unresolved' THEN 1 ELSE 0 END) as unresolved_count,
+                COALESCE(SUM(count), 0) as total_events,
+                COALESCE(SUM(user_count), 0) as total_users,
+                SUM(CASE WHEN status = 'unresolved' AND (level = 'fatal' OR level = 'error') THEN 1 ELSE 0 END) as critical_count
             FROM issues
-            WHERE project_id = ANY($1)
+            WHERE project_id IN ({})
             GROUP BY project_id
             "#,
-        )
-        .bind(project_ids)
-        .fetch_all(pool)
-        .await?;
+            placeholders
+        );
+        let mut q = sqlx::query_as::<_, (String, i64, i64, i64, i64)>(&sql);
+        for pid in project_ids {
+            q = q.bind(pid);
+        }
+        let rows = q.fetch_all(pool).await?;
 
         Ok(rows
             .into_iter()
@@ -520,5 +526,339 @@ impl IssueRepository {
                 },
             )
             .collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::test_helpers::test_any_pool;
+
+    #[tokio::test]
+    async fn find_or_create_inserts_new_issue() {
+        let pool = test_any_pool().await;
+        let (issue, is_new) = IssueRepository::find_or_create(
+            &pool,
+            "proj-1",
+            "fp-abc",
+            "Error: boom",
+            "error",
+            "production",
+        )
+        .await
+        .unwrap();
+        assert!(is_new);
+        assert_eq!(issue.count, 1);
+        assert_eq!(issue.fingerprint, "fp-abc");
+    }
+
+    #[tokio::test]
+    async fn find_or_create_increments_existing() {
+        let pool = test_any_pool().await;
+        IssueRepository::find_or_create(&pool, "proj-2", "fp-dup", "Err", "error", "prod")
+            .await
+            .unwrap();
+        let (issue2, is_new) =
+            IssueRepository::find_or_create(&pool, "proj-2", "fp-dup", "Err", "error", "prod")
+                .await
+                .unwrap();
+        assert!(!is_new);
+        assert_eq!(issue2.count, 2);
+    }
+
+    #[tokio::test]
+    async fn find_by_id_and_fingerprint() {
+        let pool = test_any_pool().await;
+        let (issue, _) =
+            IssueRepository::find_or_create(&pool, "proj-3", "fp-find", "Err", "error", "prod")
+                .await
+                .unwrap();
+
+        let by_id = IssueRepository::find_by_id(&pool, &issue.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(by_id.id, issue.id);
+
+        let by_fp = IssueRepository::find_by_fingerprint(&pool, "proj-3", "fp-find")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(by_fp.id, issue.id);
+    }
+
+    #[tokio::test]
+    async fn find_by_project_with_filters() {
+        let pool = test_any_pool().await;
+        IssueRepository::find_or_create(&pool, "proj-4", "fp-1", "E1", "error", "prod")
+            .await
+            .unwrap();
+        IssueRepository::find_or_create(&pool, "proj-4", "fp-2", "E2", "warning", "staging")
+            .await
+            .unwrap();
+
+        let all = IssueRepository::find_by_project(&pool, "proj-4", None, None, None, 10, 0)
+            .await
+            .unwrap();
+        assert_eq!(all.len(), 2);
+
+        let errors =
+            IssueRepository::find_by_project(&pool, "proj-4", None, Some("error"), None, 10, 0)
+                .await
+                .unwrap();
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].level, "error");
+
+        let staging =
+            IssueRepository::find_by_project(&pool, "proj-4", None, None, Some("staging"), 10, 0)
+                .await
+                .unwrap();
+        assert_eq!(staging.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn count_by_project() {
+        let pool = test_any_pool().await;
+        IssueRepository::find_or_create(&pool, "proj-5", "fp-a", "E", "error", "prod")
+            .await
+            .unwrap();
+        IssueRepository::find_or_create(&pool, "proj-5", "fp-b", "E", "error", "prod")
+            .await
+            .unwrap();
+        let count = IssueRepository::count_by_project(&pool, "proj-5", None)
+            .await
+            .unwrap();
+        assert_eq!(count, 2);
+    }
+
+    #[tokio::test]
+    async fn update_status() {
+        let pool = test_any_pool().await;
+        let (issue, _) =
+            IssueRepository::find_or_create(&pool, "proj-6", "fp-status", "E", "error", "prod")
+                .await
+                .unwrap();
+        IssueRepository::update_status(&pool, &issue.id, "resolved")
+            .await
+            .unwrap();
+        let updated = IssueRepository::find_by_id(&pool, &issue.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(updated.status, "resolved");
+    }
+
+    #[tokio::test]
+    async fn update_status_returning() {
+        let pool = test_any_pool().await;
+        let (issue, _) =
+            IssueRepository::find_or_create(&pool, "proj-7", "fp-ret", "E", "error", "prod")
+                .await
+                .unwrap();
+        let returned = IssueRepository::update_status_returning(&pool, &issue.id, "ignored")
+            .await
+            .unwrap();
+        assert_eq!(returned.unwrap().status, "ignored");
+    }
+
+    #[tokio::test]
+    async fn delete_issue() {
+        let pool = test_any_pool().await;
+        let (issue, _) =
+            IssueRepository::find_or_create(&pool, "proj-8", "fp-del", "E", "error", "prod")
+                .await
+                .unwrap();
+        IssueRepository::delete(&pool, &issue.id).await.unwrap();
+        let result = IssueRepository::find_by_id(&pool, &issue.id).await.unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn search_with_text_filter() {
+        let pool = test_any_pool().await;
+        IssueRepository::find_or_create(
+            &pool,
+            "proj-9",
+            "fp-search-1",
+            "NullPointerException",
+            "error",
+            "prod",
+        )
+        .await
+        .unwrap();
+        IssueRepository::find_or_create(
+            &pool,
+            "proj-9",
+            "fp-search-2",
+            "TimeoutError",
+            "error",
+            "prod",
+        )
+        .await
+        .unwrap();
+
+        let filters = SearchFilters {
+            text: Some("NullPointer".to_string()),
+            ..Default::default()
+        };
+        let results = IssueRepository::search(&pool, "proj-9", &filters, None, None, 10, 0)
+            .await
+            .unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(results[0].title.contains("NullPointer"));
+    }
+
+    // get_facets uses LIMIT inside UNION ALL sub-selects, which is valid PostgreSQL
+    // but not supported by SQLite. Test omitted for the SQLite test backend.
+
+    #[tokio::test]
+    async fn find_across_projects() {
+        let pool = test_any_pool().await;
+        IssueRepository::find_or_create(&pool, "px-1", "fp-x1", "E", "error", "prod")
+            .await
+            .unwrap();
+        IssueRepository::find_or_create(&pool, "px-2", "fp-x2", "E", "error", "prod")
+            .await
+            .unwrap();
+        let ids = vec!["px-1".to_string(), "px-2".to_string()];
+        let issues = IssueRepository::find_across_projects(&pool, &ids, None, 10, 0)
+            .await
+            .unwrap();
+        assert_eq!(issues.len(), 2);
+        let count = IssueRepository::count_across_projects(&pool, &ids, None)
+            .await
+            .unwrap();
+        assert_eq!(count, 2);
+    }
+
+    #[tokio::test]
+    async fn get_stats_by_project() {
+        let pool = test_any_pool().await;
+        IssueRepository::find_or_create(&pool, "pstats", "fp-s1", "E", "error", "prod")
+            .await
+            .unwrap();
+        IssueRepository::find_or_create(&pool, "pstats", "fp-s2", "E", "fatal", "prod")
+            .await
+            .unwrap();
+        let stats = IssueRepository::get_stats_by_project(&pool, &["pstats".to_string()])
+            .await
+            .unwrap();
+        assert_eq!(stats.len(), 1);
+        assert_eq!(stats[0].unresolved_count, 2);
+        assert_eq!(stats[0].critical_count, 2);
+    }
+
+    #[tokio::test]
+    async fn update_status_for_project() {
+        let pool = test_any_pool().await;
+        let (issue, _) =
+            IssueRepository::find_or_create(&pool, "usfp", "fp-usfp", "E", "error", "prod")
+                .await
+                .unwrap();
+        IssueRepository::update_status_for_project(&pool, &issue.id, "usfp", "resolved")
+            .await
+            .unwrap();
+        let updated = IssueRepository::find_by_id(&pool, &issue.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(updated.status, "resolved");
+    }
+
+    #[tokio::test]
+    async fn count_by_project_with_status_filter() {
+        let pool = test_any_pool().await;
+        let (issue, _) =
+            IssueRepository::find_or_create(&pool, "cbpwsf", "fp-cbp1", "E", "error", "prod")
+                .await
+                .unwrap();
+        IssueRepository::find_or_create(&pool, "cbpwsf", "fp-cbp2", "E", "error", "prod")
+            .await
+            .unwrap();
+        IssueRepository::update_status(&pool, &issue.id, "resolved")
+            .await
+            .unwrap();
+        let resolved = IssueRepository::count_by_project(&pool, "cbpwsf", Some("resolved"))
+            .await
+            .unwrap();
+        assert_eq!(resolved, 1);
+        let unresolved = IssueRepository::count_by_project(&pool, "cbpwsf", Some("unresolved"))
+            .await
+            .unwrap();
+        assert_eq!(unresolved, 1);
+    }
+
+    #[tokio::test]
+    async fn count_search() {
+        let pool = test_any_pool().await;
+        IssueRepository::find_or_create(&pool, "csp", "fp-csp1", "NullPointer", "error", "prod")
+            .await
+            .unwrap();
+        IssueRepository::find_or_create(&pool, "csp", "fp-csp2", "Timeout", "warning", "prod")
+            .await
+            .unwrap();
+        let filters = SearchFilters {
+            level: Some(vec!["error".to_string()]),
+            ..Default::default()
+        };
+        let count = IssueRepository::count_search(&pool, "csp", &filters)
+            .await
+            .unwrap();
+        assert_eq!(count, 1);
+        let total = IssueRepository::count_search(&pool, "csp", &SearchFilters::default())
+            .await
+            .unwrap();
+        assert_eq!(total, 2);
+    }
+
+    #[tokio::test]
+    async fn search_with_count_filter() {
+        let pool = test_any_pool().await;
+        for _ in 0..5 {
+            IssueRepository::find_or_create(&pool, "scf", "fp-scf-hi", "Hi", "error", "prod")
+                .await
+                .unwrap();
+        }
+        IssueRepository::find_or_create(&pool, "scf", "fp-scf-lo", "Lo", "error", "prod")
+            .await
+            .unwrap();
+        let filters = SearchFilters {
+            count_gte: Some(5),
+            ..Default::default()
+        };
+        let results =
+            IssueRepository::search(&pool, "scf", &filters, Some("count"), Some("desc"), 10, 0)
+                .await
+                .unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(results[0].count >= 5);
+    }
+
+    #[tokio::test]
+    async fn find_and_count_across_projects_with_status() {
+        let pool = test_any_pool().await;
+        let (i1, _) =
+            IssueRepository::find_or_create(&pool, "faps", "fp-faps1", "E", "error", "prod")
+                .await
+                .unwrap();
+        IssueRepository::find_or_create(&pool, "faps", "fp-faps2", "E", "error", "prod")
+            .await
+            .unwrap();
+        IssueRepository::update_status(&pool, &i1.id, "resolved")
+            .await
+            .unwrap();
+        let ids = vec!["faps".to_string()];
+        let resolved = IssueRepository::find_across_projects(&pool, &ids, Some("resolved"), 10, 0)
+            .await
+            .unwrap();
+        assert_eq!(resolved.len(), 1);
+        let count = IssueRepository::count_across_projects(&pool, &ids, Some("resolved"))
+            .await
+            .unwrap();
+        assert_eq!(count, 1);
+        let zero = IssueRepository::count_across_projects(&pool, &[], None)
+            .await
+            .unwrap();
+        assert_eq!(zero, 0);
     }
 }

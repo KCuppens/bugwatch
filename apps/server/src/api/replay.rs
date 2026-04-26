@@ -10,7 +10,6 @@ use tracing::info;
 use crate::{
     auth::middleware::AuthUser,
     db::repositories::{OrganizationRepository, ProjectRepository, ReplayRepository},
-    middleware::tier_guard::features,
     AppError, AppResult, AppState,
 };
 
@@ -134,7 +133,7 @@ pub async fn ingest_segment(
         let limits = crate::billing::tiers::get_tier_limits(tier);
         if limits.replay_storage_bytes > 0 {
             let current_usage: (i64,) = sqlx::query_as(
-                "SELECT COALESCE(SUM(total_size_bytes), 0) FROM session_recordings WHERE project_id = $1"
+                "SELECT COALESCE(SUM(total_size_bytes), 0) FROM session_recordings WHERE project_id = ?"
             )
             .bind(&project.id)
             .fetch_one(&state.db)
@@ -284,7 +283,7 @@ pub async fn ingest_segment(
             .await?;
 
     // 8. Update recording stats (atomic increment to avoid race conditions)
-    sqlx::query("UPDATE session_recordings SET segment_count = segment_count + 1, total_size_bytes = total_size_bytes + $1 WHERE id = $2")
+    sqlx::query("UPDATE session_recordings SET segment_count = segment_count + 1, total_size_bytes = total_size_bytes + ? WHERE id = ?")
         .bind(decoded.len() as i64)
         .bind(&recording.id)
         .execute(&state.db)
@@ -381,16 +380,16 @@ pub async fn list_recordings(
                 .await
                 .map_err(|e| AppError::Internal(e.to_string()))?
                 .ok_or_else(|| AppError::Forbidden("No organization found".to_string()))?;
-            if !crate::billing::tiers::can_access_feature(&org.tier, features::SESSION_REPLAY) {
+            if !crate::billing::tiers::can_access_feature(&org.tier, "session_replay") {
                 return Err(crate::payments::x402_feature_response(
                     &state,
-                    features::SESSION_REPLAY,
+                    "session_replay",
                     &format!("/api/v1/projects/{}/replay", project_id),
                     &org.id,
                     None,
                     &format!(
                         "The '{}' feature is not available on your current plan ({}). Please upgrade to access this feature.",
-                        features::SESSION_REPLAY, org.tier
+                        "session_replay", org.tier
                     ),
                 ).await);
             }
@@ -438,16 +437,16 @@ pub async fn get_recording(
                 .await
                 .map_err(|e| AppError::Internal(e.to_string()))?
                 .ok_or_else(|| AppError::Forbidden("No organization found".to_string()))?;
-            if !crate::billing::tiers::can_access_feature(&org.tier, features::SESSION_REPLAY) {
+            if !crate::billing::tiers::can_access_feature(&org.tier, "session_replay") {
                 return Err(crate::payments::x402_feature_response(
                     &state,
-                    features::SESSION_REPLAY,
+                    "session_replay",
                     &format!("/api/v1/projects/{}/replay", project_id),
                     &org.id,
                     None,
                     &format!(
                         "The '{}' feature is not available on your current plan ({}). Please upgrade to access this feature.",
-                        features::SESSION_REPLAY, org.tier
+                        "session_replay", org.tier
                     ),
                 ).await);
             }
@@ -493,16 +492,16 @@ pub async fn get_segments(
                 .await
                 .map_err(|e| AppError::Internal(e.to_string()))?
                 .ok_or_else(|| AppError::Forbidden("No organization found".to_string()))?;
-            if !crate::billing::tiers::can_access_feature(&org.tier, features::SESSION_REPLAY) {
+            if !crate::billing::tiers::can_access_feature(&org.tier, "session_replay") {
                 return Err(crate::payments::x402_feature_response(
                     &state,
-                    features::SESSION_REPLAY,
+                    "session_replay",
                     &format!("/api/v1/projects/{}/replay", project_id),
                     &org.id,
                     None,
                     &format!(
                         "The '{}' feature is not available on your current plan ({}). Please upgrade to access this feature.",
-                        features::SESSION_REPLAY, org.tier
+                        "session_replay", org.tier
                     ),
                 ).await);
             }
@@ -560,16 +559,16 @@ pub async fn get_issue_replay(
                 .await
                 .map_err(|e| AppError::Internal(e.to_string()))?
                 .ok_or_else(|| AppError::Forbidden("No organization found".to_string()))?;
-            if !crate::billing::tiers::can_access_feature(&org.tier, features::SESSION_REPLAY) {
+            if !crate::billing::tiers::can_access_feature(&org.tier, "session_replay") {
                 return Err(crate::payments::x402_feature_response(
                     &state,
-                    features::SESSION_REPLAY,
+                    "session_replay",
                     &format!("/api/v1/projects/{}/replay", project_id),
                     &org.id,
                     None,
                     &format!(
                         "The '{}' feature is not available on your current plan ({}). Please upgrade to access this feature.",
-                        features::SESSION_REPLAY, org.tier
+                        "session_replay", org.tier
                     ),
                 ).await);
             }

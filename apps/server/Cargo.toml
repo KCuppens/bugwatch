@@ -24,7 +24,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
 # Database
-sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "uuid", "chrono", "migrate"] }
+sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "sqlite", "any", "uuid", "chrono", "migrate"] }
 
 # Authentication
 jsonwebtoken = "9.3"
@@ -81,6 +81,11 @@ bugwatch = { version = "0.2", features = ["async"] }
 
 [dev-dependencies]
 tokio-test = "0.4"
+
+[profile.dev]
+# Reduce debug info to avoid MSVC LNK1318 PDB file limit on Windows.
+# Line-table info is enough for stack traces; full DWARF is not needed in dev.
+debug = 1
 
 [profile.release]
 # Full link-time optimization; slower builds, ~20-30% smaller binary and

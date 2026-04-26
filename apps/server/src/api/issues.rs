@@ -1568,3 +1568,316 @@ pub async fn get_stats_by_project(
 
     Ok(Json(ProjectStatsResponse { data, totals }))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    // ---- parse_payload_value ----
+
+    #[test]
+    fn parse_payload_value_valid_json() {
+        let v = parse_payload_value(r#"{"key":"val"}"#);
+        assert_eq!(v["key"], "val");
+    }
+
+    #[test]
+    fn parse_payload_value_invalid_json_returns_null() {
+        let v = parse_payload_value("not json");
+        assert_eq!(v, serde_json::Value::Null);
+    }
+
+    #[test]
+    fn parse_payload_value_empty_string_returns_null() {
+        let v = parse_payload_value("");
+        assert_eq!(v, serde_json::Value::Null);
+    }
+
+    // ---- parse_exception_from_payload ----
+
+    #[test]
+    fn parse_exception_sentry_format() {
+        let payload = json!({
+            "exception": {
+                "values": [{
+                    "type": "ValueError",
+                    "value": "bad input",
+                    "stacktrace": {
+                        "frames": [{
+                            "filename": "main.py",
+                            "lineno": 42,
+                            "colno": 0
+                        }]
+                    }
+                }]
+            }
+        });
+        let exc = parse_exception_from_payload(&payload).unwrap();
+        assert_eq!(exc.exception_type, "ValueError");
+        assert_eq!(exc.value, "bad input");
+        assert_eq!(exc.stacktrace[0].filename, "main.py");
+        assert_eq!(exc.stacktrace[0].lineno, 42);
+    }
+
+    #[test]
+    fn parse_exception_bugwatch_format() {
+        let payload = json!({
+            "exception": {
+                "type": "RuntimeError",
+                "value": "oops",
+                "stacktrace": [{
+                    "filename": "app.rs",
+                    "lineno": 10,
+                    "colno": 0
+                }]
+            }
+        });
+        let exc = parse_exception_from_payload(&payload).unwrap();
+        assert_eq!(exc.exception_type, "RuntimeError");
+        assert_eq!(exc.value, "oops");
+        assert_eq!(exc.stacktrace[0].filename, "app.rs");
+    }
+
+    #[test]
+    fn parse_exception_missing_returns_none() {
+        let payload = json!({"message": "no exception here"});
+        assert!(parse_exception_from_payload(&payload).is_none());
+    }
+
+    // ---- parse_tags_from_payload ----
+
+    #[test]
+    fn parse_tags_extracts_object_tags() {
+        let payload = json!({
+            "tags": {"env": "prod", "version": "1.0"}
+        });
+        let tags = parse_tags_from_payload(&payload);
+        assert_eq!(tags.get("env").map(|s| s.as_str()), Some("prod"));
+        assert_eq!(tags.get("version").map(|s| s.as_str()), Some("1.0"));
+    }
+
+    #[test]
+    fn parse_tags_extracts_environment_and_release() {
+        let payload = json!({
+            "environment": "staging",
+            "release": "v2.3.4"
+        });
+        let tags = parse_tags_from_payload(&payload);
+        assert_eq!(tags.get("environment").map(|s| s.as_str()), Some("staging"));
+        assert_eq!(tags.get("release").map(|s| s.as_str()), Some("v2.3.4"));
+    }
+
+    #[test]
+    fn parse_tags_extracts_browser_context() {
+        let payload = json!({
+            "contexts": {
+                "browser": {"name": "Chrome", "version": "120"}
+            }
+        });
+        let tags = parse_tags_from_payload(&payload);
+        assert!(tags
+            .get("browser")
+            .map(|s| s.as_str())
+            .unwrap_or("")
+            .contains("Chrome"));
+    }
+
+    #[test]
+    fn parse_tags_empty_payload_returns_empty_map() {
+        let tags = parse_tags_from_payload(&json!({}));
+        assert!(tags.is_empty());
+    }
+
+    // ---- parse_breadcrumbs_from_payload ----
+
+    #[test]
+    fn parse_breadcrumbs_extracts_fields() {
+        let payload = json!({
+            "breadcrumbs": [{
+                "timestamp": "2024-01-01T00:00:00Z",
+                "type": "http",
+                "category": "fetch",
+                "message": "GET /api",
+                "level": "info"
+            }]
+        });
+        let crumbs = parse_breadcrumbs_from_payload(&payload);
+        assert_eq!(crumbs.len(), 1);
+        assert_eq!(crumbs[0].category, "fetch");
+        assert_eq!(crumbs[0].message.as_deref(), Some("GET /api"));
+    }
+
+    #[test]
+    fn parse_breadcrumbs_missing_returns_empty() {
+        let crumbs = parse_breadcrumbs_from_payload(&json!({}));
+        assert!(crumbs.is_empty());
+    }
+
+    #[test]
+    fn parse_breadcrumbs_default_level_is_info() {
+        let payload = json!({
+            "breadcrumbs": [{"timestamp": "t", "category": "ui"}]
+        });
+        let crumbs = parse_breadcrumbs_from_payload(&payload);
+        assert_eq!(crumbs[0].level, "info");
+    }
+
+    // ---- parse_request_context_from_payload ----
+
+    #[test]
+    fn parse_request_context_extracts_url_and_method() {
+        let payload = json!({
+            "request": {"url": "https://example.com/api", "method": "POST"}
+        });
+        let ctx = parse_request_context_from_payload(&payload).unwrap();
+        assert_eq!(ctx.url.as_deref(), Some("https://example.com/api"));
+        assert_eq!(ctx.method.as_deref(), Some("POST"));
+    }
+
+    #[test]
+    fn parse_request_context_redacts_auth_header() {
+        let payload = json!({
+            "request": {
+                "url": "https://example.com",
+                "headers": {
+                    "Authorization": "Bearer secret",
+                    "Content-Type": "application/json"
+                }
+            }
+        });
+        let ctx = parse_request_context_from_payload(&payload).unwrap();
+        let headers = ctx.headers.unwrap();
+        assert_eq!(
+            headers.get("Authorization").map(|s| s.as_str()),
+            Some("[REDACTED]")
+        );
+        assert_eq!(
+            headers.get("Content-Type").map(|s| s.as_str()),
+            Some("application/json")
+        );
+    }
+
+    #[test]
+    fn parse_request_context_falls_back_to_extra_request() {
+        let payload = json!({
+            "extra": {
+                "request": {"url": "https://fallback.com", "method": "GET"}
+            }
+        });
+        let ctx = parse_request_context_from_payload(&payload).unwrap();
+        assert_eq!(ctx.url.as_deref(), Some("https://fallback.com"));
+    }
+
+    #[test]
+    fn parse_request_context_missing_returns_none() {
+        assert!(parse_request_context_from_payload(&json!({})).is_none());
+    }
+
+    // ---- parse_user_context_from_payload ----
+
+    #[test]
+    fn parse_user_context_extracts_fields() {
+        let payload = json!({
+            "user": {"id": "u1", "email": "a@b.com", "username": "alice"}
+        });
+        let user = parse_user_context_from_payload(&payload).unwrap();
+        assert_eq!(user.id.as_deref(), Some("u1"));
+        assert_eq!(user.email.as_deref(), Some("a@b.com"));
+        assert_eq!(user.username.as_deref(), Some("alice"));
+    }
+
+    #[test]
+    fn parse_user_context_missing_returns_none() {
+        assert!(parse_user_context_from_payload(&json!({})).is_none());
+    }
+
+    // ---- parse_extra_from_payload ----
+
+    #[test]
+    fn parse_extra_returns_value_when_present() {
+        let payload = json!({"extra": {"foo": "bar"}});
+        let extra = parse_extra_from_payload(&payload).unwrap();
+        assert_eq!(extra["foo"], "bar");
+    }
+
+    #[test]
+    fn parse_extra_returns_none_when_absent() {
+        assert!(parse_extra_from_payload(&json!({})).is_none());
+    }
+
+    // ---- validate_search_filters ----
+
+    fn base_filters() -> SearchFiltersRequest {
+        SearchFiltersRequest {
+            status: None,
+            level: None,
+            environment: None,
+            count_gt: None,
+            count_lt: None,
+            count_gte: None,
+            count_lte: None,
+            users_gt: None,
+            users_lt: None,
+            first_seen_after: None,
+            first_seen_before: None,
+            last_seen_after: None,
+            last_seen_before: None,
+            text: None,
+        }
+    }
+
+    #[test]
+    fn validate_search_filters_valid_status() {
+        let f = SearchFiltersRequest {
+            status: Some(vec!["unresolved".to_string()]),
+            ..base_filters()
+        };
+        assert!(validate_search_filters(&f).is_ok());
+    }
+
+    #[test]
+    fn validate_search_filters_invalid_status_rejected() {
+        let f = SearchFiltersRequest {
+            status: Some(vec!["hacked".to_string()]),
+            ..base_filters()
+        };
+        assert!(validate_search_filters(&f).is_err());
+    }
+
+    #[test]
+    fn validate_search_filters_invalid_level_rejected() {
+        let f = SearchFiltersRequest {
+            level: Some(vec!["error".to_string(), "hacked".to_string()]),
+            ..base_filters()
+        };
+        assert!(validate_search_filters(&f).is_err());
+    }
+
+    #[test]
+    fn validate_search_filters_environment_non_ascii_rejected() {
+        let f = SearchFiltersRequest {
+            environment: Some(vec!["prod\nnewline".to_string()]),
+            ..base_filters()
+        };
+        assert!(validate_search_filters(&f).is_err());
+    }
+
+    #[test]
+    fn validate_search_filters_environment_too_long_rejected() {
+        let f = SearchFiltersRequest {
+            environment: Some(vec!["a".repeat(65)]),
+            ..base_filters()
+        };
+        assert!(validate_search_filters(&f).is_err());
+    }
+
+    #[test]
+    fn validate_search_filters_valid_environment_accepted() {
+        let f = SearchFiltersRequest {
+            environment: Some(vec!["production".to_string(), "staging".to_string()]),
+            ..base_filters()
+        };
+        assert!(validate_search_filters(&f).is_ok());
+    }
+}

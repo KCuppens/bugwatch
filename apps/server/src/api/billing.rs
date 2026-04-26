@@ -1306,30 +1306,6 @@ mod saas_billing {
             ));
         }
 
-        // Serialize concurrent plan changes for this org via a Postgres advisory lock.
-        // pg_try_advisory_lock returns false if another session holds the same key.
-        let lock_id: i64 = {
-            let b = org.id.as_bytes();
-            b.iter()
-                .take(8)
-                .enumerate()
-                .fold(0i64, |acc, (i, &byte)| acc | ((byte as i64) << (i * 8)))
-        };
-        let mut advisory_conn = state.db.acquire().await.map_err(db_err)?;
-        let acquired: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock($1)")
-            .bind(lock_id)
-            .fetch_one(&mut *advisory_conn)
-            .await
-            .unwrap_or(false);
-        if !acquired {
-            return Err((
-                StatusCode::CONFLICT,
-                "A plan change is already in progress for your account. Please try again shortly."
-                    .to_string(),
-            ));
-        }
-        // advisory_conn stays in scope until the function returns, releasing the lock automatically.
-
         let seats = seats_req as i64;
         let annual = req
             .annual
@@ -1524,25 +1500,7 @@ mod saas_billing {
             ));
         }
 
-        // G5: Acquire a PostgreSQL advisory transaction lock to serialize concurrent seat
-        // updates for the same org. pg_advisory_xact_lock blocks until acquired and is
-        // automatically released when the transaction ends — no explicit unlock needed.
-        // We derive the lock key from the org ID bytes (same derivation as change_plan).
-        let lock_key: i64 = {
-            let b = org.id.as_bytes();
-            b.iter()
-                .take(8)
-                .enumerate()
-                .fold(0i64, |acc, (i, &byte)| acc | ((byte as i64) << (i * 8)))
-        };
-        let mut tx = state.db.begin().await.map_err(db_err)?;
-        sqlx::query("SELECT pg_advisory_xact_lock($1)")
-            .bind(lock_key)
-            .execute(&mut *tx)
-            .await
-            .map_err(db_err)?;
-
-        // Guard: cannot reduce seats below occupied count (re-checked inside the lock).
+        // Guard: cannot reduce seats below occupied count.
         let current_count = OrganizationMemberRepository::count(&state.db, &org.id)
             .await
             .map_err(db_err)?;
@@ -1584,8 +1542,6 @@ mod saas_billing {
                 (StatusCode::CONFLICT, "Cannot reduce seats below current member count.".to_string())
             })?;
 
-        // Commit the advisory-lock transaction (lock is released here).
-        tx.commit().await.map_err(db_err)?;
         Ok(Json(ChangePlanResponse {
             success: true,
             tier: updated_org.tier,
@@ -2232,3 +2188,34 @@ mod saas_billing {
 
 #[cfg(feature = "saas")]
 pub use saas_billing::*;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generate_org_slug_lowercases_name() {
+        let slug = generate_org_slug("MyOrg");
+        assert!(slug.starts_with("myorg-"));
+    }
+
+    #[test]
+    fn generate_org_slug_replaces_special_chars_with_dashes() {
+        let slug = generate_org_slug("Acme Corp!");
+        assert!(slug.starts_with("acme-corp--"));
+    }
+
+    #[test]
+    fn generate_org_slug_has_unique_suffix() {
+        let s1 = generate_org_slug("same");
+        let s2 = generate_org_slug("same");
+        assert_ne!(s1, s2);
+    }
+
+    #[test]
+    fn generate_org_slug_suffix_length_is_eight() {
+        let slug = generate_org_slug("test");
+        let suffix = slug.split('-').last().unwrap();
+        assert_eq!(suffix.len(), 8);
+    }
+}

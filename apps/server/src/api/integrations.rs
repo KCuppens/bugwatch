@@ -15,7 +15,7 @@ use crate::{
         IntegrationRepository, IssueLinkRepository, IssueRepository, OrganizationRepository,
         ProjectRepository,
     },
-    middleware::tier_guard::{features, TierGuard},
+    middleware::tier_guard::TierGuard,
     services::integrations::{format_issue_body, GitHubService, JiraService, LinearService},
     AppError, AppResult, AppState,
 };
@@ -92,16 +92,16 @@ pub async fn list_integrations(
         let guard = TierGuard::for_user(&auth_user, &state)
             .await
             .map_err(|(_status, msg)| AppError::Forbidden(msg))?;
-        if !guard.has_feature(features::GITHUB_INTEGRATION) {
+        if !guard.has_feature("github_issues") {
             return Err(crate::payments::x402_feature_response(
                 &state,
-                features::GITHUB_INTEGRATION,
+                "github_issues",
                 "/api/v1/integrations",
                 &guard.organization_id,
                 None,
                 &format!(
                     "The '{}' feature is not available on your current plan ({}). Please upgrade to access this feature.",
-                    features::GITHUB_INTEGRATION, guard.tier
+                    "github_issues", guard.tier
                 ),
             ).await);
         }
@@ -146,16 +146,16 @@ pub async fn oauth_authorize(
         let guard = TierGuard::for_user(&auth_user, &state)
             .await
             .map_err(|(_status, msg)| AppError::Forbidden(msg))?;
-        if !guard.has_feature(features::GITHUB_INTEGRATION) {
+        if !guard.has_feature("github_issues") {
             return Err(crate::payments::x402_feature_response(
                 &state,
-                features::GITHUB_INTEGRATION,
+                "github_issues",
                 &format!("/api/v1/integrations/oauth/{}/authorize", provider),
                 &guard.organization_id,
                 None,
                 &format!(
                     "The '{}' feature is not available on your current plan ({}). Please upgrade to access this feature.",
-                    features::GITHUB_INTEGRATION, guard.tier
+                    "github_issues", guard.tier
                 ),
             ).await);
         }
@@ -516,16 +516,16 @@ pub async fn delete_integration(
         let guard = TierGuard::for_user(&auth_user, &state)
             .await
             .map_err(|(_status, msg)| AppError::Forbidden(msg))?;
-        if !guard.has_feature(features::GITHUB_INTEGRATION) {
+        if !guard.has_feature("github_issues") {
             return Err(crate::payments::x402_feature_response(
                 &state,
-                features::GITHUB_INTEGRATION,
+                "github_issues",
                 &format!("/api/v1/integrations/{}", integration_id),
                 &guard.organization_id,
                 None,
                 &format!(
                     "The '{}' feature is not available on your current plan ({}). Please upgrade to access this feature.",
-                    features::GITHUB_INTEGRATION, guard.tier
+                    "github_issues", guard.tier
                 ),
             ).await);
         }
@@ -572,16 +572,16 @@ pub async fn create_issue_link(
         let guard = TierGuard::for_user(&auth_user, &state)
             .await
             .map_err(|(_status, msg)| AppError::Forbidden(msg))?;
-        if !guard.has_feature(features::GITHUB_INTEGRATION) {
+        if !guard.has_feature("github_issues") {
             return Err(crate::payments::x402_feature_response(
                 &state,
-                features::GITHUB_INTEGRATION,
+                "github_issues",
                 &format!("/api/v1/projects/{}/issues/{}/links", project_id, issue_id),
                 &guard.organization_id,
                 None,
                 &format!(
                     "The '{}' feature is not available on your current plan ({}). Please upgrade to access this feature.",
-                    features::GITHUB_INTEGRATION, guard.tier
+                    "github_issues", guard.tier
                 ),
             ).await);
         }
@@ -802,7 +802,7 @@ pub async fn create_issue_link(
             external_issue_key: link.external_issue_key,
             external_issue_url: link.external_issue_url,
             external_status: link.external_status,
-            sync_enabled: link.sync_enabled,
+            sync_enabled: *link.sync_enabled,
             created_at: link.created_at.to_rfc3339(),
         },
     }))
@@ -853,7 +853,7 @@ pub async fn list_issue_links(
             external_issue_key: l.external_issue_key,
             external_issue_url: l.external_issue_url,
             external_status: l.external_status,
-            sync_enabled: l.sync_enabled,
+            sync_enabled: *l.sync_enabled,
             created_at: l.created_at.to_rfc3339(),
         })
         .collect();
