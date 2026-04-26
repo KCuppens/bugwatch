@@ -1422,4 +1422,178 @@ mod tests {
             StatusCode::BAD_REQUEST
         );
     }
+
+    // ── auth guards for get / update / delete / list_checks ──────────────────
+
+    #[tokio::test]
+    async fn get_monitor_without_auth_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/projects/p1/monitors/m1")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn update_monitor_without_auth_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("PATCH")
+            .uri("/api/v1/projects/p1/monitors/m1")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"name":"X"}"#))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_monitor_without_auth_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("DELETE")
+            .uri("/api/v1/projects/p1/monitors/m1")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn list_checks_without_auth_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/projects/p1/monitors/m1/checks")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    // ── not-found paths ───────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn update_monitor_not_found_returns_404() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "mupd_nf@example.com").await;
+        let project_id = create_project(&app, &token).await;
+
+        let req = Request::builder()
+            .method("PATCH")
+            .uri(format!(
+                "/api/v1/projects/{}/monitors/nonexistent",
+                project_id
+            ))
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::from(r#"{"name":"Updated"}"#))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_monitor_not_found_returns_404() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "mdel_nf@example.com").await;
+        let project_id = create_project(&app, &token).await;
+
+        let req = Request::builder()
+            .method("DELETE")
+            .uri(format!(
+                "/api/v1/projects/{}/monitors/nonexistent",
+                project_id
+            ))
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+
+    #[tokio::test]
+    async fn list_checks_monitor_not_found_returns_404() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "mchk_nf@example.com").await;
+        let project_id = create_project(&app, &token).await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!(
+                "/api/v1/projects/{}/monitors/nonexistent/checks",
+                project_id
+            ))
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+
+    // ── update url validation ─────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn update_monitor_private_ip_url_rejected() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "mupd_priv@example.com").await;
+        let project_id = create_project(&app, &token).await;
+        let monitor_id = create_monitor_for_project(&app, &token, &project_id).await;
+
+        let req = Request::builder()
+            .method("PATCH")
+            .uri(format!(
+                "/api/v1/projects/{}/monitors/{}",
+                project_id, monitor_id
+            ))
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::from(r#"{"url":"http://192.168.0.1/private"}"#))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    #[tokio::test]
+    async fn update_monitor_name_too_long_returns_400() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "mupd_long@example.com").await;
+        let project_id = create_project(&app, &token).await;
+        let monitor_id = create_monitor_for_project(&app, &token, &project_id).await;
+
+        let long_name = "x".repeat(201);
+        let req = Request::builder()
+            .method("PATCH")
+            .uri(format!(
+                "/api/v1/projects/{}/monitors/{}",
+                project_id, monitor_id
+            ))
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::from(format!(r#"{{"name":"{}"}}"#, long_name)))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
 }

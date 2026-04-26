@@ -979,4 +979,132 @@ mod tests {
             StatusCode::UNPROCESSABLE_ENTITY
         );
     }
+
+    #[tokio::test]
+    async fn ingest_with_request_context_returns_202() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "ev_req_ctx@example.com").await;
+        let (_, api_key) = create_project_with_key(&app, &token).await;
+
+        let payload = r#"{
+            "event_id":"req-ctx-001","timestamp":"2024-01-01T00:00:00Z","level":"error",
+            "exception":{"type":"Error","value":"test","stacktrace":[]},
+            "request":{"url":"https://example.com/page","method":"POST",
+                "headers":{"content-type":"application/json"},"query_string":"foo=bar"},
+            "user":{"id":"u-1","email":"user@example.com","username":"testuser"}
+        }"#;
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/events")
+            .header("content-type", "application/json")
+            .header("x-api-key", &api_key)
+            .body(Body::from(payload))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::ACCEPTED
+        );
+    }
+
+    #[tokio::test]
+    async fn ingest_with_breadcrumbs_returns_202() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "ev_breadcrumbs@example.com").await;
+        let (_, api_key) = create_project_with_key(&app, &token).await;
+
+        let payload = r#"{
+            "event_id":"breadcrumb-001","timestamp":"2024-01-01T00:00:00Z","level":"warning",
+            "exception":{"type":"Warning","value":"low mem","stacktrace":[]},
+            "breadcrumbs":[
+                {"timestamp":"2024-01-01T00:00:00Z","type":"default","category":"ui.click",
+                 "message":"user clicked button","level":"info"}
+            ]
+        }"#;
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/events")
+            .header("content-type", "application/json")
+            .header("x-api-key", &api_key)
+            .body(Body::from(payload))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::ACCEPTED
+        );
+    }
+
+    #[tokio::test]
+    async fn ingest_with_release_and_tags_returns_202() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "ev_release@example.com").await;
+        let (_, api_key) = create_project_with_key(&app, &token).await;
+
+        let payload = r#"{
+            "event_id":"release-001","timestamp":"2024-01-01T00:00:00Z","level":"info",
+            "message":"app started",
+            "release":"1.2.3","environment":"staging","server_name":"web-01",
+            "tags":{"component":"auth","region":"us-east-1"}
+        }"#;
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/events")
+            .header("content-type", "application/json")
+            .header("x-api-key", &api_key)
+            .body(Body::from(payload))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::ACCEPTED
+        );
+    }
+
+    #[tokio::test]
+    async fn ingest_extra_too_large_returns_422() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "ev_extra_large@example.com").await;
+        let (_, api_key) = create_project_with_key(&app, &token).await;
+
+        let large_value = "x".repeat(70_000);
+        let payload = format!(
+            r#"{{"event_id":"extra-lg-001","timestamp":"2024-01-01T00:00:00Z","level":"error",
+            "exception":{{"type":"E","value":"e","stacktrace":[]}},
+            "extra":{{"big":"{}"}}}}"#,
+            large_value
+        );
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/events")
+            .header("content-type", "application/json")
+            .header("x-api-key", &api_key)
+            .body(Body::from(payload))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+    }
+
+    #[tokio::test]
+    async fn ingest_with_session_id_returns_202() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "ev_session@example.com").await;
+        let (_, api_key) = create_project_with_key(&app, &token).await;
+
+        let payload = r#"{
+            "event_id":"sess-001","timestamp":"2024-01-01T00:00:00Z","level":"error",
+            "exception":{"type":"Error","value":"crash","stacktrace":[]},
+            "session_id":"sess-abc-123"
+        }"#;
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/events")
+            .header("content-type", "application/json")
+            .header("x-api-key", &api_key)
+            .body(Body::from(payload))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::ACCEPTED
+        );
+    }
 }
