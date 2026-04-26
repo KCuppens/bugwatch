@@ -638,4 +638,215 @@ mod tests {
             StatusCode::OK
         );
     }
+
+    // ── list — unknown issue ─────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn list_comments_unknown_issue_returns_404() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "clist-unkissue@example.com").await;
+        let (project_id, _) = create_project(&app, &token).await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!(
+                "/api/v1/projects/{}/issues/nonexistent-issue/comments",
+                project_id
+            ))
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+
+    // ── create — unknown issue ───────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn create_comment_unknown_issue_returns_404() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "ccreate-unkissue@example.com").await;
+        let (project_id, _) = create_project(&app, &token).await;
+
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!(
+                "/api/v1/projects/{}/issues/nonexistent-issue/comments",
+                project_id
+            ))
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::from(r#"{"content":"hello"}"#))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+
+    // ── update — auth / not-found / validation ───────────────────────────────
+
+    #[tokio::test]
+    async fn update_without_auth_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("PATCH")
+            .uri("/api/v1/projects/p1/issues/i1/comments/c1")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"content":"x"}"#))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn update_comment_not_found_returns_404() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "cupdate-404@example.com").await;
+        let (project_id, api_key) = create_project(&app, &token).await;
+        ingest_event(&app, &api_key).await;
+        let issue_id = get_first_issue_id(&app, &token, &project_id).await;
+
+        let req = Request::builder()
+            .method("PATCH")
+            .uri(format!(
+                "/api/v1/projects/{}/issues/{}/comments/nonexistent-comment",
+                project_id, issue_id
+            ))
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::from(r#"{"content":"updated"}"#))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+
+    #[tokio::test]
+    async fn update_comment_wrong_issue_returns_404() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "cupdate-wrongiss@example.com").await;
+        let (project_id, api_key) = create_project(&app, &token).await;
+        ingest_event(&app, &api_key).await;
+        let issue_id = get_first_issue_id(&app, &token, &project_id).await;
+
+        // Create a comment on the real issue
+        let create_req = Request::builder()
+            .method("POST")
+            .uri(format!(
+                "/api/v1/projects/{}/issues/{}/comments",
+                project_id, issue_id
+            ))
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::from(r#"{"content":"original"}"#))
+            .unwrap();
+        let create_resp = app.clone().oneshot(create_req).await.unwrap();
+        let bytes = axum::body::to_bytes(create_resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        let comment_id = json["data"]["id"].as_str().unwrap().to_string();
+
+        // Try to update under a different issue_id
+        let req = Request::builder()
+            .method("PATCH")
+            .uri(format!(
+                "/api/v1/projects/{}/issues/wrong-issue/comments/{}",
+                project_id, comment_id
+            ))
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::from(r#"{"content":"x"}"#))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+
+    #[tokio::test]
+    async fn update_comment_empty_content_rejected() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "cupdate-empty@example.com").await;
+        let (project_id, api_key) = create_project(&app, &token).await;
+        ingest_event(&app, &api_key).await;
+        let issue_id = get_first_issue_id(&app, &token, &project_id).await;
+
+        let create_req = Request::builder()
+            .method("POST")
+            .uri(format!(
+                "/api/v1/projects/{}/issues/{}/comments",
+                project_id, issue_id
+            ))
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::from(r#"{"content":"original text"}"#))
+            .unwrap();
+        let create_resp = app.clone().oneshot(create_req).await.unwrap();
+        let bytes = axum::body::to_bytes(create_resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        let comment_id = json["data"]["id"].as_str().unwrap().to_string();
+
+        let req = Request::builder()
+            .method("PATCH")
+            .uri(format!(
+                "/api/v1/projects/{}/issues/{}/comments/{}",
+                project_id, issue_id, comment_id
+            ))
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::from(r#"{"content":"   "}"#))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+    }
+
+    // ── delete — auth / not-found ────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn delete_without_auth_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("DELETE")
+            .uri("/api/v1/projects/p1/issues/i1/comments/c1")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_comment_not_found_returns_404() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "cdelete-404@example.com").await;
+        let (project_id, api_key) = create_project(&app, &token).await;
+        ingest_event(&app, &api_key).await;
+        let issue_id = get_first_issue_id(&app, &token, &project_id).await;
+
+        let req = Request::builder()
+            .method("DELETE")
+            .uri(format!(
+                "/api/v1/projects/{}/issues/{}/comments/nonexistent-id",
+                project_id, issue_id
+            ))
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::NOT_FOUND
+        );
+    }
 }

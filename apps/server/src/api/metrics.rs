@@ -924,4 +924,219 @@ mod tests {
             StatusCode::BAD_REQUEST
         );
     }
+
+    // ── ingest_metrics validation ─────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn ingest_metrics_hostname_too_long_returns_400() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "metrics_longhost@example.com").await;
+        let (_, api_key) = create_project_with_key(&app, &token).await;
+
+        let long_hostname = "h".repeat(257);
+        let payload = format!(r#"{{"server_id":"srv1","hostname":"{}"}}"#, long_hostname);
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/metrics")
+            .header("content-type", "application/json")
+            .header("x-api-key", &api_key)
+            .body(Body::from(payload))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    #[tokio::test]
+    async fn ingest_metrics_kernel_too_long_returns_400() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "metrics_longkernel@example.com").await;
+        let (_, api_key) = create_project_with_key(&app, &token).await;
+
+        let long_kernel = "k".repeat(129);
+        let payload = format!(
+            r#"{{"server_id":"srv1","hostname":"host1","kernel":"{}"}}"#,
+            long_kernel
+        );
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/metrics")
+            .header("content-type", "application/json")
+            .header("x-api-key", &api_key)
+            .body(Body::from(payload))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    #[tokio::test]
+    async fn ingest_metrics_too_many_disks_returns_400() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "metrics_disks@example.com").await;
+        let (_, api_key) = create_project_with_key(&app, &token).await;
+
+        let disks: Vec<serde_json::Value> = (0..101)
+            .map(|i| {
+                serde_json::json!({
+                    "mount": format!("/mnt/{}", i),
+                    "total_bytes": 1000,
+                    "used_bytes": 500,
+                    "available_bytes": 500,
+                    "usage_percent": 50.0,
+                    "fs_type": "ext4"
+                })
+            })
+            .collect();
+        let payload = serde_json::json!({
+            "server_id": "srv1",
+            "hostname": "host1",
+            "disks": disks,
+        })
+        .to_string();
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/metrics")
+            .header("content-type", "application/json")
+            .header("x-api-key", &api_key)
+            .body(Body::from(payload))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    #[tokio::test]
+    async fn ingest_metrics_too_many_processes_returns_400() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "metrics_procs@example.com").await;
+        let (_, api_key) = create_project_with_key(&app, &token).await;
+
+        let processes: Vec<serde_json::Value> = (0..501)
+            .map(|i| {
+                serde_json::json!({
+                    "pid": i,
+                    "name": format!("proc{}", i),
+                    "cpu_percent": 0.1,
+                    "mem_bytes": 1024
+                })
+            })
+            .collect();
+        let payload = serde_json::json!({
+            "server_id": "srv1",
+            "hostname": "host1",
+            "processes": processes,
+        })
+        .to_string();
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/metrics")
+            .header("content-type", "application/json")
+            .header("x-api-key", &api_key)
+            .body(Body::from(payload))
+            .unwrap();
+        let status = app.oneshot(req).await.unwrap().status();
+        assert!(
+            status == StatusCode::BAD_REQUEST || status == StatusCode::UNPROCESSABLE_ENTITY,
+            "expected 400 or 422, got {}",
+            status
+        );
+    }
+
+    #[tokio::test]
+    async fn ingest_metrics_too_many_docker_containers_returns_400() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "metrics_docker@example.com").await;
+        let (_, api_key) = create_project_with_key(&app, &token).await;
+
+        let docker: Vec<serde_json::Value> = (0..201)
+            .map(|i| {
+                serde_json::json!({
+                    "id": format!("ctr{}", i),
+                    "name": format!("container{}", i),
+                    "image": "nginx",
+                    "status": "running",
+                    "cpu_percent": 0.5,
+                    "mem_bytes": 2048
+                })
+            })
+            .collect();
+        let payload = serde_json::json!({
+            "server_id": "srv1",
+            "hostname": "host1",
+            "docker": docker,
+        })
+        .to_string();
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/metrics")
+            .header("content-type", "application/json")
+            .header("x-api-key", &api_key)
+            .body(Body::from(payload))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    // ── get_latest_metrics not-found paths ────────────────────────────────────
+
+    #[tokio::test]
+    async fn get_latest_metrics_project_not_found_returns_404() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "latest_404proj@example.com").await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/projects/nonexistent-proj/servers/srv1/metrics/latest")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+
+    #[tokio::test]
+    async fn get_latest_metrics_server_not_found_returns_404() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "latest_404srv@example.com").await;
+        let (project_id, _) = create_project_with_key(&app, &token).await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!(
+                "/api/v1/projects/{}/servers/nonexistent-srv/metrics/latest",
+                project_id
+            ))
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+
+    #[tokio::test]
+    async fn list_servers_project_not_found_returns_404() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "servers_list_404@example.com").await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/projects/nonexistent-proj/servers")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::NOT_FOUND
+        );
+    }
 }

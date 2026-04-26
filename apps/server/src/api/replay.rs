@@ -1114,4 +1114,177 @@ mod tests {
         assert_eq!(segs.len(), 1);
         assert_eq!(segs[0]["segment_index"], 0);
     }
+
+    // ── get_issue_replay ─────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn get_issue_replay_without_auth_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/projects/proj1/issues/issue1/replay")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn get_issue_replay_project_not_found_returns_404() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "rpi_404proj@example.com").await;
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/projects/nonexistent-proj/issues/issue1/replay")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+
+    #[tokio::test]
+    async fn get_issue_replay_no_recording_returns_null() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "rpi_null@example.com").await;
+        let (project_id, _) = create_project_with_key(&app, &token).await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!(
+                "/api/v1/projects/{}/issues/nonexistent-issue/replay",
+                project_id
+            ))
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["data"], Value::Null);
+    }
+
+    #[tokio::test]
+    async fn get_issue_replay_wrong_owner_returns_403() {
+        let app = make_app().await;
+        let owner_token = signup_and_get_token(&app, "rpi_owner@example.com").await;
+        let other_token = signup_and_get_token(&app, "rpi_other@example.com").await;
+        let (project_id, _) = create_project_with_key(&app, &owner_token).await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!(
+                "/api/v1/projects/{}/issues/some-issue/replay",
+                project_id
+            ))
+            .header("authorization", format!("Bearer {}", other_token))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::FORBIDDEN
+        );
+    }
+
+    // ── ingest_segment additional validation ─────────────────────────────────
+
+    #[tokio::test]
+    async fn ingest_segment_large_index_returns_400() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "replay_bigidx@example.com").await;
+        let (_, api_key) = create_project_with_key(&app, &token).await;
+        let b64_data = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, b"data");
+        let body = format!(
+            r#"{{"session_id":"sess","segment_index":10001,"data":"{}"}}"#,
+            b64_data
+        );
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/replay/segments")
+            .header("content-type", "application/json")
+            .header("x-api-key", &api_key)
+            .body(Body::from(body))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    #[tokio::test]
+    async fn ingest_segment_user_agent_too_long_returns_validation_error() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "replay_ua@example.com").await;
+        let (_, api_key) = create_project_with_key(&app, &token).await;
+        let b64_data = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, b"data");
+        let long_ua = "x".repeat(513);
+        let body = serde_json::json!({
+            "session_id": "sess",
+            "segment_index": 0,
+            "data": b64_data,
+            "user_agent": long_ua,
+        })
+        .to_string();
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/replay/segments")
+            .header("content-type", "application/json")
+            .header("x-api-key", &api_key)
+            .body(Body::from(body))
+            .unwrap();
+        let status = app.oneshot(req).await.unwrap().status();
+        assert!(
+            status == StatusCode::UNPROCESSABLE_ENTITY || status == StatusCode::BAD_REQUEST,
+            "expected 422 or 400, got {}",
+            status
+        );
+    }
+
+    // ── finish_recording additional validation ────────────────────────────────
+
+    #[tokio::test]
+    async fn finish_recording_duration_too_large_returns_400() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "replay_bigdur@example.com").await;
+        let (_, api_key) = create_project_with_key(&app, &token).await;
+
+        let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, b"data");
+        let seg_body = format!(
+            r#"{{"session_id":"big-dur-sess","segment_index":0,"data":"{}"}}"#,
+            b64
+        );
+        app.clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/replay/segments")
+                    .header("content-type", "application/json")
+                    .header("x-api-key", &api_key)
+                    .body(Body::from(seg_body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/replay/finish")
+            .header("content-type", "application/json")
+            .header("x-api-key", &api_key)
+            .body(Body::from(
+                r#"{"session_id":"big-dur-sess","duration_ms":86400001}"#,
+            ))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
 }
