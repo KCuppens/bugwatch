@@ -255,16 +255,24 @@ impl IssueRepository {
     pub async fn get_facets(pool: &DbPool, project_id: &str) -> Result<Facets> {
         // Cap each facet to a safe number of distinct values — if a column has
         // more than 1000 unique values the UI can't render them usefully anyway.
+        // SQLite does not allow LIMIT on individual arms of a UNION ALL; wrap
+        // each arm in a subquery so the per-facet cap is applied before the union.
         let rows = sqlx::query_as::<_, (String, String, i64)>(
             r#"
-            SELECT 'level' as facet_type, level as facet_value, COUNT(*) as count
-             FROM issues WHERE project_id = $1 GROUP BY level LIMIT 1000
+            SELECT facet_type, facet_value, count FROM (
+                SELECT 'level' AS facet_type, level AS facet_value, COUNT(*) AS count
+                 FROM issues WHERE project_id = $1 GROUP BY level LIMIT 1000
+            ) t1
             UNION ALL
-            SELECT 'status' as facet_type, status as facet_value, COUNT(*) as count
-             FROM issues WHERE project_id = $2 GROUP BY status LIMIT 1000
+            SELECT facet_type, facet_value, count FROM (
+                SELECT 'status' AS facet_type, status AS facet_value, COUNT(*) AS count
+                 FROM issues WHERE project_id = $2 GROUP BY status LIMIT 1000
+            ) t2
             UNION ALL
-            SELECT 'environment' as facet_type, environment as facet_value, COUNT(*) as count
-             FROM issues WHERE project_id = $3 GROUP BY environment LIMIT 1000
+            SELECT facet_type, facet_value, count FROM (
+                SELECT 'environment' AS facet_type, environment AS facet_value, COUNT(*) AS count
+                 FROM issues WHERE project_id = $3 GROUP BY environment LIMIT 1000
+            ) t3
             "#,
         )
         .bind(project_id)

@@ -1880,4 +1880,646 @@ mod tests {
         };
         assert!(validate_search_filters(&f).is_ok());
     }
+
+    // ── Integration tests ─────────────────────────────────────────────────────
+
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+    };
+    use serde_json::Value;
+    use tower::ServiceExt;
+
+    async fn make_app() -> axum::Router {
+        let state = crate::db::test_helpers::test_app_state().await;
+        axum::Router::new()
+            .nest("/api/v1", crate::api::router())
+            .with_state(state)
+    }
+
+    fn peer() -> std::net::SocketAddr {
+        "127.0.0.1:1234".parse().unwrap()
+    }
+
+    async fn signup_and_get_token(app: &axum::Router, email: &str) -> String {
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/auth/signup")
+            .header("content-type", "application/json")
+            .extension(axum::extract::ConnectInfo(peer()))
+            .body(Body::from(format!(
+                r#"{{"email":"{}","password":"StrongPass1!"}}"#,
+                email
+            )))
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        for v in resp.headers().get_all("set-cookie") {
+            let s = v.to_str().unwrap_or("");
+            if let Some(rest) = s.strip_prefix("access_token=") {
+                return rest.split(';').next().unwrap_or("").to_string();
+            }
+        }
+        panic!("no access_token in signup response");
+    }
+
+    async fn create_project_with_key(app: &axum::Router, token: &str) -> (String, String) {
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/projects")
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::from(r#"{"name":"Issues Test Project"}"#))
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        let id = json["data"]["id"].as_str().unwrap().to_string();
+        let key = json["data"]["api_key"].as_str().unwrap().to_string();
+        (id, key)
+    }
+
+    async fn ingest_event(app: &axum::Router, api_key: &str, event_id: &str) {
+        let payload = format!(
+            r#"{{"event_id":"{}","timestamp":"2024-01-01T00:00:00Z","level":"error","exception":{{"type":"TestError","value":"test error","stacktrace":[]}}}}"#,
+            event_id
+        );
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/events")
+            .header("content-type", "application/json")
+            .header("x-api-key", api_key)
+            .body(Body::from(payload))
+            .unwrap();
+        app.clone().oneshot(req).await.unwrap();
+    }
+
+    async fn list_first_issue_id(app: &axum::Router, token: &str, project_id: &str) -> String {
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!("/api/v1/projects/{}/issues", project_id))
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        json["data"][0]["id"].as_str().unwrap().to_string()
+    }
+
+    // ── auth guards ───────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn list_issues_without_auth_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/projects/p1/issues")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn search_issues_without_auth_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/projects/p1/issues/_search")
+            .header("content-type", "application/json")
+            .extension(axum::extract::ConnectInfo(peer()))
+            .body(Body::from("{}"))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn get_facets_without_auth_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/projects/p1/issues/facets")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn get_issue_without_auth_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/projects/p1/issues/i1")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn update_issue_without_auth_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("PATCH")
+            .uri("/api/v1/projects/p1/issues/i1")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"status":"resolved"}"#))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_issue_without_auth_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("DELETE")
+            .uri("/api/v1/projects/p1/issues/i1")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn get_issue_event_without_auth_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/projects/p1/issues/i1/events/e1")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn get_frequency_without_auth_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/projects/p1/issues/i1/frequency")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn get_impact_without_auth_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/projects/p1/issues/i1/impact")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn list_across_projects_without_auth_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/issues/across-projects")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn get_stats_by_project_without_auth_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/issues/stats/by-project")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    // ── happy path ────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn list_issues_empty_initially() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "issues_empty@example.com").await;
+        let (project_id, _) = create_project_with_key(&app, &token).await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!("/api/v1/projects/{}/issues", project_id))
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["data"].as_array().unwrap().len(), 0);
+        assert_eq!(json["pagination"]["total"], 0);
+    }
+
+    #[tokio::test]
+    async fn list_issues_after_ingest_returns_issue() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "issues_list@example.com").await;
+        let (project_id, api_key) = create_project_with_key(&app, &token).await;
+        ingest_event(&app, &api_key, "evt-list-001").await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!("/api/v1/projects/{}/issues", project_id))
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["pagination"]["total"], 1);
+        assert_eq!(json["data"][0]["level"].as_str(), Some("error"));
+    }
+
+    #[tokio::test]
+    async fn get_issue_not_found_returns_404() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "issues_404@example.com").await;
+        let (project_id, _) = create_project_with_key(&app, &token).await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!(
+                "/api/v1/projects/{}/issues/nonexistent",
+                project_id
+            ))
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+
+    #[tokio::test]
+    async fn get_issue_after_ingest_returns_200() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "issues_get@example.com").await;
+        let (project_id, api_key) = create_project_with_key(&app, &token).await;
+        ingest_event(&app, &api_key, "evt-get-001").await;
+        let issue_id = list_first_issue_id(&app, &token, &project_id).await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!(
+                "/api/v1/projects/{}/issues/{}",
+                project_id, issue_id
+            ))
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["data"]["id"].as_str(), Some(issue_id.as_str()));
+        assert_eq!(json["data"]["level"].as_str(), Some("error"));
+    }
+
+    #[tokio::test]
+    async fn update_issue_status_resolved_succeeds() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "issues_update@example.com").await;
+        let (project_id, api_key) = create_project_with_key(&app, &token).await;
+        ingest_event(&app, &api_key, "evt-update-001").await;
+        let issue_id = list_first_issue_id(&app, &token, &project_id).await;
+
+        let req = Request::builder()
+            .method("PATCH")
+            .uri(format!(
+                "/api/v1/projects/{}/issues/{}",
+                project_id, issue_id
+            ))
+            .header("authorization", format!("Bearer {}", token))
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"status":"resolved"}"#))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["data"]["status"].as_str(), Some("resolved"));
+    }
+
+    #[tokio::test]
+    async fn update_issue_invalid_status_returns_422() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "issues_badstatus@example.com").await;
+        let (project_id, api_key) = create_project_with_key(&app, &token).await;
+        ingest_event(&app, &api_key, "evt-badst-001").await;
+        let issue_id = list_first_issue_id(&app, &token, &project_id).await;
+
+        let req = Request::builder()
+            .method("PATCH")
+            .uri(format!(
+                "/api/v1/projects/{}/issues/{}",
+                project_id, issue_id
+            ))
+            .header("authorization", format!("Bearer {}", token))
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"status":"deleted"}"#))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_issue_not_found_returns_404() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "issues_del404@example.com").await;
+        let (project_id, _) = create_project_with_key(&app, &token).await;
+
+        let req = Request::builder()
+            .method("DELETE")
+            .uri(format!(
+                "/api/v1/projects/{}/issues/nonexistent",
+                project_id
+            ))
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_issue_succeeds() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "issues_delete@example.com").await;
+        let (project_id, api_key) = create_project_with_key(&app, &token).await;
+        ingest_event(&app, &api_key, "evt-del-001").await;
+        let issue_id = list_first_issue_id(&app, &token, &project_id).await;
+
+        let req = Request::builder()
+            .method("DELETE")
+            .uri(format!(
+                "/api/v1/projects/{}/issues/{}",
+                project_id, issue_id
+            ))
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.clone().oneshot(req).await.unwrap().status(),
+            StatusCode::OK
+        );
+
+        // Verify issue is gone
+        let req2 = Request::builder()
+            .method("GET")
+            .uri(format!(
+                "/api/v1/projects/{}/issues/{}",
+                project_id, issue_id
+            ))
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req2).await.unwrap().status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+
+    #[tokio::test]
+    async fn search_issues_returns_results() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "issues_search@example.com").await;
+        let (project_id, api_key) = create_project_with_key(&app, &token).await;
+        ingest_event(&app, &api_key, "evt-srch-001").await;
+
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("/api/v1/projects/{}/issues/_search", project_id))
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .extension(axum::extract::ConnectInfo(peer()))
+            .body(Body::from(r#"{}"#))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(json["data"].is_array());
+        assert_eq!(json["pagination"]["total"], 1);
+    }
+
+    #[tokio::test]
+    async fn get_facets_after_ingest_returns_200() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "issues_facets@example.com").await;
+        let (project_id, api_key) = create_project_with_key(&app, &token).await;
+        ingest_event(&app, &api_key, "evt-facets-001").await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!("/api/v1/projects/{}/issues/facets", project_id))
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(json["level"].is_object());
+        assert_eq!(json["level"]["error"], 1);
+    }
+
+    #[tokio::test]
+    async fn list_across_projects_returns_200() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "issues_across@example.com").await;
+        let (project_id, api_key) = create_project_with_key(&app, &token).await;
+        ingest_event(&app, &api_key, "evt-across-001").await;
+        drop(project_id);
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/issues/across-projects")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(json["data"].is_array());
+        assert_eq!(json["pagination"]["total"], 1);
+    }
+
+    #[tokio::test]
+    async fn get_stats_by_project_returns_200() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "issues_stats@example.com").await;
+        let _ = create_project_with_key(&app, &token).await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/issues/stats/by-project")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(json["data"].is_array());
+        assert_eq!(json["data"].as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn get_impact_after_ingest_returns_200() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "issues_impact@example.com").await;
+        let (project_id, api_key) = create_project_with_key(&app, &token).await;
+        ingest_event(&app, &api_key, "evt-impact-001").await;
+        let issue_id = list_first_issue_id(&app, &token, &project_id).await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!(
+                "/api/v1/projects/{}/issues/{}/impact",
+                project_id, issue_id
+            ))
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["data"]["total_events"], 1);
+    }
+
+    #[tokio::test]
+    async fn get_event_not_found_returns_404() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "issues_evnt404@example.com").await;
+        let (project_id, api_key) = create_project_with_key(&app, &token).await;
+        ingest_event(&app, &api_key, "evt-evnt404-001").await;
+        let issue_id = list_first_issue_id(&app, &token, &project_id).await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!(
+                "/api/v1/projects/{}/issues/{}/events/nonexistent-event-db-id",
+                project_id, issue_id
+            ))
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+
+    #[tokio::test]
+    async fn get_event_after_ingest_returns_200() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "issues_event@example.com").await;
+        let (project_id, api_key) = create_project_with_key(&app, &token).await;
+        ingest_event(&app, &api_key, "evt-event-001").await;
+        let issue_id = list_first_issue_id(&app, &token, &project_id).await;
+
+        // Get the event DB id from issue detail
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!(
+                "/api/v1/projects/{}/issues/{}",
+                project_id, issue_id
+            ))
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        let event_db_id = json["data"]["recent_events"][0]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!(
+                "/api/v1/projects/{}/issues/{}/events/{}",
+                project_id, issue_id, event_db_id
+            ))
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["data"]["event_id"].as_str(), Some("evt-event-001"));
+    }
 }
