@@ -861,3 +861,347 @@ pub async fn list_checks(
 pub struct ChecksParams {
     pub limit: Option<u32>,
 }
+
+#[cfg(test)]
+mod tests {
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+    };
+    use serde_json::Value;
+    use tower::ServiceExt;
+
+    async fn make_app() -> axum::Router {
+        let state = crate::db::test_helpers::test_app_state().await;
+        axum::Router::new()
+            .nest("/api/v1", crate::api::router())
+            .with_state(state)
+    }
+
+    fn peer() -> std::net::SocketAddr {
+        "127.0.0.1:1234".parse().unwrap()
+    }
+
+    async fn signup_and_get_token(app: &axum::Router, email: &str) -> String {
+        let body = format!(r#"{{"email":"{}","password":"StrongPass1!"}}"#, email);
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/auth/signup")
+            .header("content-type", "application/json")
+            .extension(axum::extract::ConnectInfo(peer()))
+            .body(Body::from(body))
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        for v in resp.headers().get_all("set-cookie") {
+            let s = v.to_str().unwrap_or("");
+            if let Some(rest) = s.strip_prefix("access_token=") {
+                return rest.split(';').next().unwrap_or("").to_string();
+            }
+        }
+        panic!("no access_token cookie in signup response");
+    }
+
+    async fn create_project(app: &axum::Router, token: &str) -> String {
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/projects")
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::from(r#"{"name":"Monitor Test Project"}"#))
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        json["data"]["id"].as_str().unwrap().to_string()
+    }
+
+    async fn create_monitor_for_project(
+        app: &axum::Router,
+        token: &str,
+        project_id: &str,
+    ) -> String {
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("/api/v1/projects/{}/monitors", project_id))
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::from(
+                r#"{"name":"My Monitor","url":"https://example.com/healthz"}"#,
+            ))
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        json["id"].as_str().unwrap().to_string()
+    }
+
+    // ── unauthenticated guards ──────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn list_without_auth_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/projects/proj1/monitors")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn create_without_auth_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/projects/proj1/monitors")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"name":"M","url":"https://example.com"}"#))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn across_projects_without_auth_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/monitors/across-projects")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    // ── list monitors ──────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn list_monitors_returns_empty_initially() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "mlist@example.com").await;
+        let project_id = create_project(&app, &token).await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!("/api/v1/projects/{}/monitors", project_id))
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["data"], Value::Array(vec![]));
+    }
+
+    #[tokio::test]
+    async fn list_across_projects_returns_200() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "macross@example.com").await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/monitors/across-projects")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    // ── create monitor ─────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn create_monitor_succeeds() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "mcreate@example.com").await;
+        let project_id = create_project(&app, &token).await;
+
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("/api/v1/projects/{}/monitors", project_id))
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::from(
+                r#"{"name":"Health Check","url":"https://example.com/healthz"}"#,
+            ))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["name"], "Health Check");
+        assert_eq!(json["url"], "https://example.com/healthz");
+    }
+
+    #[tokio::test]
+    async fn create_monitor_private_ip_url_rejected() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "mprivip@example.com").await;
+        let project_id = create_project(&app, &token).await;
+
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("/api/v1/projects/{}/monitors", project_id))
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::from(
+                r#"{"name":"Internal","url":"http://192.168.1.1/health"}"#,
+            ))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn create_monitor_nonexistent_project_returns_404() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "m404@example.com").await;
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/projects/nonexistent/monitors")
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::from(r#"{"name":"M","url":"https://example.com"}"#))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+
+    // ── get monitor ────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn get_monitor_succeeds() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "mget@example.com").await;
+        let project_id = create_project(&app, &token).await;
+        let monitor_id = create_monitor_for_project(&app, &token, &project_id).await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!(
+                "/api/v1/projects/{}/monitors/{}",
+                project_id, monitor_id
+            ))
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["id"], monitor_id.as_str());
+    }
+
+    #[tokio::test]
+    async fn get_monitor_not_found_returns_404() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "mget404@example.com").await;
+        let project_id = create_project(&app, &token).await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!(
+                "/api/v1/projects/{}/monitors/nonexistent",
+                project_id
+            ))
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+
+    // ── update monitor ─────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn update_monitor_name_succeeds() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "mupdate@example.com").await;
+        let project_id = create_project(&app, &token).await;
+        let monitor_id = create_monitor_for_project(&app, &token, &project_id).await;
+
+        let req = Request::builder()
+            .method("PATCH")
+            .uri(format!(
+                "/api/v1/projects/{}/monitors/{}",
+                project_id, monitor_id
+            ))
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::from(r#"{"name":"Renamed Monitor"}"#))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["name"], "Renamed Monitor");
+    }
+
+    // ── delete monitor ─────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn delete_monitor_succeeds() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "mdelete@example.com").await;
+        let project_id = create_project(&app, &token).await;
+        let monitor_id = create_monitor_for_project(&app, &token, &project_id).await;
+
+        let req = Request::builder()
+            .method("DELETE")
+            .uri(format!(
+                "/api/v1/projects/{}/monitors/{}",
+                project_id, monitor_id
+            ))
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(app.oneshot(req).await.unwrap().status(), StatusCode::OK);
+    }
+
+    // ── list monitor checks ────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn list_checks_returns_empty() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "mchecks@example.com").await;
+        let project_id = create_project(&app, &token).await;
+        let monitor_id = create_monitor_for_project(&app, &token, &project_id).await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!(
+                "/api/v1/projects/{}/monitors/{}/checks",
+                project_id, monitor_id
+            ))
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+}
