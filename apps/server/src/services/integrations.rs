@@ -510,3 +510,105 @@ impl LinearService {
         Ok((id, name))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── markdown_escape ──────────────────────────────────────────────────────
+
+    #[test]
+    fn markdown_escape_plain_text_unchanged() {
+        assert_eq!(markdown_escape("hello world"), "hello world");
+    }
+
+    #[test]
+    fn markdown_escape_empty_string() {
+        assert_eq!(markdown_escape(""), "");
+    }
+
+    #[test]
+    fn markdown_escape_special_chars() {
+        let special = r#"#[]()*_`!\<"#;
+        let escaped = markdown_escape(special);
+        // Every special char should be preceded by backslash
+        assert!(escaped.contains("\\#"));
+        assert!(escaped.contains("\\["));
+        assert!(escaped.contains("\\]"));
+        assert!(escaped.contains("\\("));
+        assert!(escaped.contains("\\)"));
+        assert!(escaped.contains("\\*"));
+        assert!(escaped.contains("\\_"));
+        assert!(escaped.contains("\\`"));
+        assert!(escaped.contains("\\!"));
+    }
+
+    #[test]
+    fn markdown_escape_backslash() {
+        assert_eq!(markdown_escape("\\"), "\\\\");
+    }
+
+    // ── sanitize_for_adf ─────────────────────────────────────────────────────
+
+    #[test]
+    fn sanitize_for_adf_passes_normal_text() {
+        let s = "Hello World";
+        assert_eq!(sanitize_for_adf(s), s);
+    }
+
+    #[test]
+    fn sanitize_for_adf_preserves_newline_and_tab() {
+        let s = "line1\nline2\ttab";
+        assert_eq!(sanitize_for_adf(s), s);
+    }
+
+    #[test]
+    fn sanitize_for_adf_removes_control_chars() {
+        let result = sanitize_for_adf("Hello\x00World\x01\x1FEnd");
+        assert_eq!(result, "HelloWorldEnd");
+    }
+
+    #[test]
+    fn sanitize_for_adf_truncates_at_30000_bytes() {
+        let long = "a".repeat(40_000);
+        let result = sanitize_for_adf(&long);
+        assert_eq!(result.len(), 30_000);
+    }
+
+    #[test]
+    fn sanitize_for_adf_short_string_not_truncated() {
+        let s = "short";
+        assert_eq!(sanitize_for_adf(s), s);
+    }
+
+    // ── format_issue_body ─────────────────────────────────────────────────────
+
+    #[test]
+    fn format_issue_body_contains_required_fields() {
+        let body = format_issue_body("Test Error", "iss-123", "https://bugwatch.dev/1", None);
+        assert!(body.contains("Test Error"));
+        assert!(body.contains("iss-123"));
+        assert!(body.contains("https://bugwatch.dev/1"));
+        assert!(body.contains("Bugwatch Issue"));
+        assert!(body.contains("View in Bugwatch"));
+    }
+
+    #[test]
+    fn format_issue_body_with_extra_context() {
+        let body = format_issue_body("Err", "i1", "https://x.com", Some("Extra context here"));
+        assert!(body.contains("Additional Context"));
+        assert!(body.contains("Extra context here"));
+    }
+
+    #[test]
+    fn format_issue_body_without_extra_context_no_section() {
+        let body = format_issue_body("Err", "i1", "https://x.com", None);
+        assert!(!body.contains("Additional Context"));
+    }
+
+    #[test]
+    fn format_issue_body_escapes_markdown_in_title() {
+        let body = format_issue_body("[critical] Error", "i1", "https://x.com", None);
+        assert!(body.contains("\\[critical\\]"));
+    }
+}

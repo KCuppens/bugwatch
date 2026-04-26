@@ -304,3 +304,338 @@ pub async fn delete(
         data: serde_json::json!({ "message": "Comment deleted successfully" }),
     }))
 }
+
+#[cfg(test)]
+mod tests {
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+    };
+    use serde_json::Value;
+    use tower::ServiceExt;
+
+    async fn make_app() -> axum::Router {
+        let state = crate::db::test_helpers::test_app_state().await;
+        axum::Router::new()
+            .nest("/api/v1", crate::api::router())
+            .with_state(state)
+    }
+
+    fn peer() -> std::net::SocketAddr {
+        "127.0.0.1:1234".parse().unwrap()
+    }
+
+    async fn signup_and_get_token(app: &axum::Router, email: &str) -> String {
+        let body = format!(r#"{{"email":"{}","password":"StrongPass1!"}}"#, email);
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/auth/signup")
+            .header("content-type", "application/json")
+            .extension(axum::extract::ConnectInfo(peer()))
+            .body(Body::from(body))
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        for v in resp.headers().get_all("set-cookie") {
+            let s = v.to_str().unwrap_or("");
+            if let Some(rest) = s.strip_prefix("access_token=") {
+                return rest.split(';').next().unwrap_or("").to_string();
+            }
+        }
+        panic!("no access_token cookie in signup response");
+    }
+
+    async fn create_project(app: &axum::Router, token: &str) -> (String, String) {
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/projects")
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::from(r#"{"name":"Test Project"}"#))
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        (
+            json["data"]["id"].as_str().unwrap().to_string(),
+            json["data"]["api_key"].as_str().unwrap().to_string(),
+        )
+    }
+
+    async fn ingest_event(app: &axum::Router, api_key: &str) {
+        let event = serde_json::json!({
+            "event_id": "aabbccdd11223344aabbccdd11223344",
+            "timestamp": "2024-01-01T00:00:00Z",
+            "level": "error",
+            "exception": {
+                "type": "RuntimeError",
+                "value": "test error",
+                "stacktrace": []
+            }
+        });
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/events")
+            .header("content-type", "application/json")
+            .header("x-api-key", api_key)
+            .body(Body::from(event.to_string()))
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert!(resp.status().is_success(), "event ingest failed");
+    }
+
+    async fn get_first_issue_id(app: &axum::Router, token: &str, project_id: &str) -> String {
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!("/api/v1/projects/{}/issues", project_id))
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        json["data"][0]["id"].as_str().unwrap().to_string()
+    }
+
+    // ── GET comments ────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn list_without_auth_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/projects/proj1/issues/issue1/comments")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn list_unknown_project_returns_404() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "clist-404@example.com").await;
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/projects/nonexistent/issues/issue1/comments")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+
+    #[tokio::test]
+    async fn list_comments_returns_empty_initially() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "clist-empty@example.com").await;
+        let (project_id, api_key) = create_project(&app, &token).await;
+        ingest_event(&app, &api_key).await;
+        let issue_id = get_first_issue_id(&app, &token, &project_id).await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!(
+                "/api/v1/projects/{}/issues/{}/comments",
+                project_id, issue_id
+            ))
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["data"], Value::Array(vec![]));
+    }
+
+    // ── POST comment ─────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn create_without_auth_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/projects/proj1/issues/issue1/comments")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"content":"hello"}"#))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn create_comment_succeeds() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "ccreate@example.com").await;
+        let (project_id, api_key) = create_project(&app, &token).await;
+        ingest_event(&app, &api_key).await;
+        let issue_id = get_first_issue_id(&app, &token, &project_id).await;
+
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!(
+                "/api/v1/projects/{}/issues/{}/comments",
+                project_id, issue_id
+            ))
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::from(r#"{"content":"This is a test comment"}"#))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["data"]["content"], "This is a test comment");
+    }
+
+    #[tokio::test]
+    async fn create_empty_content_rejected() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "cempty@example.com").await;
+        let (project_id, api_key) = create_project(&app, &token).await;
+        ingest_event(&app, &api_key).await;
+        let issue_id = get_first_issue_id(&app, &token, &project_id).await;
+
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!(
+                "/api/v1/projects/{}/issues/{}/comments",
+                project_id, issue_id
+            ))
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::from(r#"{"content":"   "}"#))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+    }
+
+    #[tokio::test]
+    async fn create_too_long_content_rejected() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "clong@example.com").await;
+        let (project_id, api_key) = create_project(&app, &token).await;
+        ingest_event(&app, &api_key).await;
+        let issue_id = get_first_issue_id(&app, &token, &project_id).await;
+
+        let body = serde_json::json!({"content": "x".repeat(10001)}).to_string();
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!(
+                "/api/v1/projects/{}/issues/{}/comments",
+                project_id, issue_id
+            ))
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::from(body))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+    }
+
+    // ── PATCH comment ────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn update_comment_succeeds() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "cupdate@example.com").await;
+        let (project_id, api_key) = create_project(&app, &token).await;
+        ingest_event(&app, &api_key).await;
+        let issue_id = get_first_issue_id(&app, &token, &project_id).await;
+
+        let create_req = Request::builder()
+            .method("POST")
+            .uri(format!(
+                "/api/v1/projects/{}/issues/{}/comments",
+                project_id, issue_id
+            ))
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::from(r#"{"content":"original"}"#))
+            .unwrap();
+        let create_resp = app.clone().oneshot(create_req).await.unwrap();
+        let bytes = axum::body::to_bytes(create_resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        let comment_id = json["data"]["id"].as_str().unwrap().to_string();
+
+        let update_req = Request::builder()
+            .method("PATCH")
+            .uri(format!(
+                "/api/v1/projects/{}/issues/{}/comments/{}",
+                project_id, issue_id, comment_id
+            ))
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::from(r#"{"content":"updated content"}"#))
+            .unwrap();
+        let resp = app.oneshot(update_req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["data"]["content"], "updated content");
+    }
+
+    // ── DELETE comment ────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn delete_comment_succeeds() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "cdelete@example.com").await;
+        let (project_id, api_key) = create_project(&app, &token).await;
+        ingest_event(&app, &api_key).await;
+        let issue_id = get_first_issue_id(&app, &token, &project_id).await;
+
+        let create_req = Request::builder()
+            .method("POST")
+            .uri(format!(
+                "/api/v1/projects/{}/issues/{}/comments",
+                project_id, issue_id
+            ))
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::from(r#"{"content":"to be deleted"}"#))
+            .unwrap();
+        let create_resp = app.clone().oneshot(create_req).await.unwrap();
+        let bytes = axum::body::to_bytes(create_resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        let comment_id = json["data"]["id"].as_str().unwrap().to_string();
+
+        let delete_req = Request::builder()
+            .method("DELETE")
+            .uri(format!(
+                "/api/v1/projects/{}/issues/{}/comments/{}",
+                project_id, issue_id, comment_id
+            ))
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(delete_req).await.unwrap().status(),
+            StatusCode::OK
+        );
+    }
+}

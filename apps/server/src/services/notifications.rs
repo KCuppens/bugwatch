@@ -1213,3 +1213,255 @@ pub(crate) fn compute_hmac_signature(payload: &str, secret: &str) -> Result<Stri
     // Return as hex string
     Ok(hex::encode(bytes))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::IpAddr;
+
+    // ── is_ssrf_risk ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn ssrf_risk_loopback_v4() {
+        let ip: IpAddr = "127.0.0.1".parse().unwrap();
+        assert!(is_ssrf_risk(ip));
+    }
+
+    #[test]
+    fn ssrf_risk_private_v4_10() {
+        let ip: IpAddr = "10.0.0.1".parse().unwrap();
+        assert!(is_ssrf_risk(ip));
+    }
+
+    #[test]
+    fn ssrf_risk_private_v4_192_168() {
+        let ip: IpAddr = "192.168.1.1".parse().unwrap();
+        assert!(is_ssrf_risk(ip));
+    }
+
+    #[test]
+    fn ssrf_risk_private_v4_172_16() {
+        let ip: IpAddr = "172.16.0.1".parse().unwrap();
+        assert!(is_ssrf_risk(ip));
+    }
+
+    #[test]
+    fn ssrf_risk_link_local_v4() {
+        let ip: IpAddr = "169.254.0.1".parse().unwrap();
+        assert!(is_ssrf_risk(ip));
+    }
+
+    #[test]
+    fn ssrf_risk_unspecified_v4() {
+        let ip: IpAddr = "0.0.0.0".parse().unwrap();
+        assert!(is_ssrf_risk(ip));
+    }
+
+    #[test]
+    fn ssrf_risk_public_v4_is_safe() {
+        let ip: IpAddr = "8.8.8.8".parse().unwrap();
+        assert!(!is_ssrf_risk(ip));
+    }
+
+    #[test]
+    fn ssrf_risk_loopback_v6() {
+        let ip: IpAddr = "::1".parse().unwrap();
+        assert!(is_ssrf_risk(ip));
+    }
+
+    #[test]
+    fn ssrf_risk_unspecified_v6() {
+        let ip: IpAddr = "::".parse().unwrap();
+        assert!(is_ssrf_risk(ip));
+    }
+
+    #[test]
+    fn ssrf_risk_link_local_v6() {
+        let ip: IpAddr = "fe80::1".parse().unwrap();
+        assert!(is_ssrf_risk(ip));
+    }
+
+    #[test]
+    fn ssrf_risk_unique_local_v6() {
+        let ip: IpAddr = "fd00::1".parse().unwrap();
+        assert!(is_ssrf_risk(ip));
+    }
+
+    #[test]
+    fn ssrf_risk_ipv4_mapped_private() {
+        // ::ffff:10.0.0.1 — IPv4-mapped IPv6 of a private address
+        let ip: IpAddr = "::ffff:10.0.0.1".parse().unwrap();
+        assert!(is_ssrf_risk(ip));
+    }
+
+    #[test]
+    fn ssrf_risk_public_v6_is_safe() {
+        let ip: IpAddr = "2001:4860:4860::8888".parse().unwrap();
+        assert!(!is_ssrf_risk(ip));
+    }
+
+    // ── floor_char_boundary ───────────────────────────────────────────────────
+
+    #[test]
+    fn floor_char_boundary_ascii_within_bounds() {
+        assert_eq!(floor_char_boundary("hello", 3), 3);
+    }
+
+    #[test]
+    fn floor_char_boundary_at_end() {
+        assert_eq!(floor_char_boundary("hello", 5), 5);
+    }
+
+    #[test]
+    fn floor_char_boundary_beyond_end() {
+        assert_eq!(floor_char_boundary("hello", 100), 5);
+    }
+
+    #[test]
+    fn floor_char_boundary_multibyte_char() {
+        // "é" is 2 bytes (0xC3 0xA9); index 1 is inside the char
+        let s = "éx";
+        assert_eq!(floor_char_boundary(s, 1), 0); // falls back to char boundary at 0
+        assert_eq!(floor_char_boundary(s, 2), 2); // 2 is the start of 'x'
+    }
+
+    // ── truncate_str ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn truncate_str_short_string_unchanged() {
+        assert_eq!(truncate_str("hello", 10), "hello");
+    }
+
+    #[test]
+    fn truncate_str_exact_length_unchanged() {
+        assert_eq!(truncate_str("hello", 5), "hello");
+    }
+
+    #[test]
+    fn truncate_str_long_string_gets_ellipsis() {
+        let result = truncate_str("hello world", 8);
+        assert!(result.ends_with("..."));
+        assert!(result.len() <= 8);
+    }
+
+    // ── slack_escape ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn slack_escape_ampersand() {
+        assert_eq!(slack_escape("a & b"), "a &amp; b");
+    }
+
+    #[test]
+    fn slack_escape_angle_brackets() {
+        assert_eq!(slack_escape("<script>"), "&lt;script&gt;");
+    }
+
+    #[test]
+    fn slack_escape_backtick() {
+        assert_eq!(slack_escape("`code`"), "'code'");
+    }
+
+    #[test]
+    fn slack_escape_asterisk() {
+        assert_eq!(slack_escape("*bold*"), "\\*bold\\*");
+    }
+
+    #[test]
+    fn slack_escape_plain_text_unchanged() {
+        assert_eq!(slack_escape("plain text"), "plain text");
+    }
+
+    // ── html_escape ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn html_escape_ampersand() {
+        assert_eq!(html_escape("a & b"), "a &amp; b");
+    }
+
+    #[test]
+    fn html_escape_angle_brackets() {
+        assert_eq!(html_escape("<div>"), "&lt;div&gt;");
+    }
+
+    #[test]
+    fn html_escape_quotes() {
+        assert_eq!(html_escape(r#""hi""#), "&quot;hi&quot;");
+    }
+
+    #[test]
+    fn html_escape_single_quote() {
+        assert_eq!(html_escape("it's"), "it&#x27;s");
+    }
+
+    // ── compute_hmac_signature ────────────────────────────────────────────────
+
+    #[test]
+    fn hmac_signature_is_deterministic() {
+        let s1 = compute_hmac_signature("payload", "secret").unwrap();
+        let s2 = compute_hmac_signature("payload", "secret").unwrap();
+        assert_eq!(s1, s2);
+    }
+
+    #[test]
+    fn hmac_signature_different_payloads_differ() {
+        let s1 = compute_hmac_signature("payload1", "secret").unwrap();
+        let s2 = compute_hmac_signature("payload2", "secret").unwrap();
+        assert_ne!(s1, s2);
+    }
+
+    #[test]
+    fn hmac_signature_is_64_hex_chars() {
+        let sig = compute_hmac_signature("test", "key").unwrap();
+        assert_eq!(sig.len(), 64);
+        assert!(sig.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    // ── NotificationService::map_to_pd_severity ───────────────────────────────
+
+    #[test]
+    fn pd_severity_fatal_maps_to_critical() {
+        assert_eq!(NotificationService::map_to_pd_severity("fatal"), "critical");
+    }
+
+    #[test]
+    fn pd_severity_error_maps_to_error() {
+        assert_eq!(NotificationService::map_to_pd_severity("error"), "error");
+    }
+
+    #[test]
+    fn pd_severity_warning_maps_to_warning() {
+        assert_eq!(
+            NotificationService::map_to_pd_severity("warning"),
+            "warning"
+        );
+    }
+
+    #[test]
+    fn pd_severity_other_maps_to_info() {
+        assert_eq!(NotificationService::map_to_pd_severity("debug"), "info");
+        assert_eq!(NotificationService::map_to_pd_severity("unknown"), "info");
+    }
+
+    // ── NotificationService::map_to_og_priority ───────────────────────────────
+
+    #[test]
+    fn og_priority_fatal_maps_to_p1() {
+        assert_eq!(NotificationService::map_to_og_priority("fatal"), "P1");
+    }
+
+    #[test]
+    fn og_priority_error_maps_to_p2() {
+        assert_eq!(NotificationService::map_to_og_priority("error"), "P2");
+    }
+
+    #[test]
+    fn og_priority_warning_maps_to_p3() {
+        assert_eq!(NotificationService::map_to_og_priority("warning"), "P3");
+    }
+
+    #[test]
+    fn og_priority_other_maps_to_p5() {
+        assert_eq!(NotificationService::map_to_og_priority("info"), "P5");
+        assert_eq!(NotificationService::map_to_og_priority("unknown"), "P5");
+    }
+}

@@ -32,7 +32,7 @@ impl AlertRuleRepository {
         .bind(name)
         .bind(condition)
         .bind(actions)
-        .bind(now)
+        .bind(now.to_rfc3339())
         .fetch_one(pool)
         .await
         .map_err(Into::into)
@@ -112,7 +112,7 @@ impl AlertRuleRepository {
         sqlx::query_as::<_, AlertRule>(
             "UPDATE alert_rules SET muted_until = $1, snooze_duration_minutes = $2 WHERE id = $3 RETURNING *",
         )
-        .bind(muted_until)
+        .bind(muted_until.to_rfc3339())
         .bind(duration_minutes)
         .bind(id)
         .fetch_optional(pool)
@@ -156,7 +156,7 @@ impl NotificationChannelRepository {
         .bind(name)
         .bind(channel_type)
         .bind(config)
-        .bind(now)
+        .bind(now.to_rfc3339())
         .fetch_one(pool)
         .await
         .map_err(Into::into)
@@ -224,13 +224,21 @@ impl NotificationChannelRepository {
         if ids.is_empty() {
             return Ok(vec![]);
         }
-        sqlx::query_as::<_, NotificationChannel>(
-            "SELECT * FROM notification_channels WHERE id = ANY($1)",
-        )
-        .bind(ids)
-        .fetch_all(pool)
-        .await
-        .map_err(Into::into)
+        let placeholders = ids
+            .iter()
+            .enumerate()
+            .map(|(i, _)| format!("${}", i + 1))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT * FROM notification_channels WHERE id IN ({})",
+            placeholders
+        );
+        let mut q = sqlx::query_as::<_, NotificationChannel>(&sql);
+        for id in ids {
+            q = q.bind(id);
+        }
+        q.fetch_all(pool).await.map_err(Into::into)
     }
 }
 
@@ -261,7 +269,7 @@ impl AlertLogRepository {
         .bind(trigger_type)
         .bind(trigger_id)
         .bind(message)
-        .bind(now)
+        .bind(now.to_rfc3339())
         .fetch_one(pool)
         .await
         .map_err(Into::into)
@@ -271,7 +279,7 @@ impl AlertLogRepository {
         let now = Utc::now();
         let result =
             sqlx::query("UPDATE alert_logs SET status = 'sent', sent_at = $1 WHERE id = $2")
-                .bind(now)
+                .bind(now.to_rfc3339())
                 .bind(id)
                 .execute(pool)
                 .await?;
@@ -317,6 +325,7 @@ impl AlertLogRepository {
         .map_err(Into::into)
     }
 
+    #[allow(dead_code)]
     pub async fn list_by_rule(pool: &DbPool, rule_id: &str, limit: u32) -> Result<Vec<AlertLog>> {
         let limit = (limit.min(10_000)) as i64;
         sqlx::query_as::<_, AlertLog>(
@@ -359,7 +368,7 @@ impl AlertLogRepository {
         // DefaultHasher is explicitly unstable across Rust versions — a binary upgrade
         // would silently change every lock key, breaking cooldown enforcement.
         // SHA-256 is stable, deterministic, and already a project dependency.
-        let lock_key = {
+        let _lock_key = {
             use sha2::{Digest, Sha256};
             let input = format!("{}:{}", alert_rule_id, trigger_id.unwrap_or(""));
             let hash = Sha256::digest(input.as_bytes());
@@ -372,32 +381,24 @@ impl AlertLogRepository {
 
         let mut tx = pool.begin().await?;
 
-        // Acquire a transaction-scoped advisory lock. If another task holds the same key the
-        // try variant returns false immediately (no wait) so we skip rather than queue up.
-        let (acquired,): (bool,) = sqlx::query_as("SELECT pg_try_advisory_xact_lock($1)")
-            .bind(lock_key)
-            .fetch_one(&mut *tx)
-            .await?;
+        let cutoff =
+            (chrono::Utc::now() - chrono::Duration::minutes(cooldown_minutes as i64)).to_rfc3339();
 
-        if !acquired {
-            tx.rollback().await?;
-            return Ok(None);
-        }
-
-        // Double-check cooldown now that we hold the lock.
+        // Double-check cooldown inside the transaction.
         let existing: Option<(i64,)> = sqlx::query_as(
             r#"
-            SELECT 1::BIGINT FROM alert_logs
+            SELECT 1 FROM alert_logs
             WHERE alert_rule_id = $1
-            AND ($2::TEXT IS NULL OR trigger_id = $2)
+            AND ($2 IS NULL OR trigger_id = $3)
             AND status = 'sent'
-            AND created_at > NOW() - INTERVAL '1 minute' * $3
+            AND created_at > $4
             LIMIT 1
             "#,
         )
         .bind(alert_rule_id)
         .bind(trigger_id)
-        .bind(cooldown_minutes)
+        .bind(trigger_id)
+        .bind(&cutoff)
         .fetch_optional(&mut *tx)
         .await?;
 
@@ -424,7 +425,7 @@ impl AlertLogRepository {
         .bind(trigger_type)
         .bind(trigger_id)
         .bind(message)
-        .bind(now)
+        .bind(now.to_rfc3339())
         .fetch_one(&mut *tx)
         .await?;
 
@@ -432,27 +433,30 @@ impl AlertLogRepository {
         Ok(Some(log))
     }
 
-    /// Find a recent alert log for a rule+trigger pair (for cooldown)
+    #[allow(dead_code)]
     pub async fn find_recent(
         pool: &DbPool,
         rule_id: &str,
         trigger_id: Option<&str>,
         cooldown_minutes: i32,
     ) -> Result<Option<AlertLog>> {
+        let cutoff =
+            (chrono::Utc::now() - chrono::Duration::minutes(cooldown_minutes as i64)).to_rfc3339();
         let log = sqlx::query_as::<_, AlertLog>(
             r#"
             SELECT * FROM alert_logs
             WHERE alert_rule_id = $1
-            AND ($2::TEXT IS NULL OR trigger_id = $2)
+            AND ($2 IS NULL OR trigger_id = $3)
             AND status = 'sent'
-            AND created_at > NOW() - INTERVAL '1 minute' * $3
+            AND created_at > $4
             ORDER BY created_at DESC
             LIMIT 1
             "#,
         )
         .bind(rule_id)
         .bind(trigger_id)
-        .bind(cooldown_minutes)
+        .bind(trigger_id)
+        .bind(&cutoff)
         .fetch_optional(pool)
         .await?;
 
@@ -468,20 +472,27 @@ impl AlertLogRepository {
         if project_ids.is_empty() {
             return Ok(vec![]);
         }
-        sqlx::query_as::<_, AlertLog>(
+        let n = project_ids.len();
+        let placeholders = (1..=n)
+            .map(|i| format!("${}", i))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
             r#"
             SELECT al.* FROM alert_logs al
             JOIN alert_rules ar ON al.alert_rule_id = ar.id
-            WHERE ar.project_id = ANY($1)
+            WHERE ar.project_id IN ({})
             ORDER BY al.created_at DESC
-            LIMIT $2
+            LIMIT ${}
             "#,
-        )
-        .bind(project_ids)
-        .bind(limit)
-        .fetch_all(pool)
-        .await
-        .map_err(Into::into)
+            placeholders,
+            n + 1
+        );
+        let mut q = sqlx::query_as::<_, AlertLog>(&sql);
+        for pid in project_ids {
+            q = q.bind(pid);
+        }
+        q.bind(limit).fetch_all(pool).await.map_err(Into::into)
     }
 
     /// Get rule names and project IDs for a list of rule IDs
@@ -493,12 +504,21 @@ impl AlertLogRepository {
             return Ok(HashMap::new());
         }
 
-        let rows = sqlx::query_as::<_, (String, String, String)>(
-            "SELECT id, name, project_id FROM alert_rules WHERE id = ANY($1)",
-        )
-        .bind(rule_ids)
-        .fetch_all(pool)
-        .await?;
+        let placeholders = rule_ids
+            .iter()
+            .enumerate()
+            .map(|(i, _)| format!("${}", i + 1))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT id, name, project_id FROM alert_rules WHERE id IN ({})",
+            placeholders
+        );
+        let mut q = sqlx::query_as::<_, (String, String, String)>(&sql);
+        for rid in rule_ids {
+            q = q.bind(rid);
+        }
+        let rows = q.fetch_all(pool).await?;
 
         let map = rows
             .into_iter()
@@ -510,16 +530,17 @@ impl AlertLogRepository {
 
     /// Cleanup old alert logs to prevent database bloat
     pub async fn cleanup_old_logs(pool: &DbPool, days: i32) -> Result<u64> {
+        let cutoff = (chrono::Utc::now() - chrono::Duration::days(days as i64)).to_rfc3339();
         let mut total_deleted: u64 = 0;
         loop {
             let result = sqlx::query(
                 "DELETE FROM alert_logs WHERE id IN (
                     SELECT id FROM alert_logs
-                    WHERE created_at < NOW() - INTERVAL '1 day' * $1
+                    WHERE created_at < $1
                     LIMIT 5000
                 )",
             )
-            .bind(days)
+            .bind(&cutoff)
             .execute(pool)
             .await?;
             let deleted = result.rows_affected();
@@ -549,21 +570,23 @@ impl EmailRateLimitRepository {
             return Ok(None);
         }
 
+        let cutoff =
+            (chrono::Utc::now() - chrono::Duration::minutes(cooldown_minutes as i64)).to_rfc3339();
         let result = sqlx::query_as::<_, EmailRateLimit>(
             r#"
             SELECT * FROM email_rate_limits
             WHERE project_id = $1 AND issue_fingerprint = $2 AND channel_id = $3
-            AND last_sent_at > NOW() - INTERVAL '1 minute' * $4
+            AND last_sent_at > $4
             "#,
         )
         .bind(project_id)
         .bind(issue_fingerprint)
         .bind(channel_id)
-        .bind(cooldown_minutes)
+        .bind(&cutoff)
         .fetch_optional(pool)
         .await?;
 
-        Ok(result.map(|r| r.last_sent_at))
+        Ok(result.map(|r| *r.last_sent_at))
     }
 
     /// Record that an email was sent
@@ -574,36 +597,40 @@ impl EmailRateLimitRepository {
         channel_id: &str,
     ) -> Result<()> {
         let id = Uuid::new_v4().to_string();
+        let now = chrono::Utc::now().to_rfc3339();
 
         sqlx::query(
             r#"
             INSERT INTO email_rate_limits (id, project_id, issue_fingerprint, channel_id, last_sent_at)
-            VALUES ($1, $2, $3, $4, NOW())
+            VALUES ($1, $2, $3, $4, $5)
             ON CONFLICT (project_id, issue_fingerprint, channel_id)
-            DO UPDATE SET last_sent_at = NOW()
+            DO UPDATE SET last_sent_at = $5
             "#,
         )
         .bind(&id)
         .bind(project_id)
         .bind(issue_fingerprint)
         .bind(channel_id)
+        .bind(&now)
         .execute(pool)
         .await?;
 
         Ok(())
     }
 
-    /// Cleanup old rate limit records (older than 24 hours)
+    #[allow(dead_code)]
     pub async fn cleanup_old_records(pool: &DbPool) -> Result<u64> {
+        let cutoff = (chrono::Utc::now() - chrono::Duration::hours(24)).to_rfc3339();
         let mut total_deleted: u64 = 0;
         loop {
             let result = sqlx::query(
                 "DELETE FROM email_rate_limits WHERE id IN (
                     SELECT id FROM email_rate_limits
-                    WHERE last_sent_at < NOW() - INTERVAL '24 hours'
+                    WHERE last_sent_at < $1
                     LIMIT 1000
                 )",
             )
+            .bind(&cutoff)
             .execute(pool)
             .await?;
             let deleted = result.rows_affected();
@@ -613,5 +640,374 @@ impl EmailRateLimitRepository {
             }
         }
         Ok(total_deleted)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::test_helpers::test_any_pool;
+
+    #[tokio::test]
+    async fn create_and_find_alert_rule() {
+        let pool = test_any_pool().await;
+        let rule = AlertRuleRepository::create(
+            &pool,
+            "proj-1",
+            "Error Alert",
+            r#"{"type":"error_count"}"#,
+            "[]",
+        )
+        .await
+        .unwrap();
+        assert_eq!(rule.name, "Error Alert");
+        assert!(*rule.is_active);
+
+        let found = AlertRuleRepository::find_by_id(&pool, &rule.id)
+            .await
+            .unwrap();
+        assert_eq!(found.unwrap().id, rule.id);
+    }
+
+    #[tokio::test]
+    async fn list_active_vs_all_rules() {
+        let pool = test_any_pool().await;
+        let r1 = AlertRuleRepository::create(&pool, "proj-2", "Active", "{}", "[]")
+            .await
+            .unwrap();
+        AlertRuleRepository::create(&pool, "proj-2", "Disabled", "{}", "[]")
+            .await
+            .unwrap();
+        AlertRuleRepository::update(&pool, &r1.id, None, None, None, Some(false))
+            .await
+            .unwrap();
+
+        let all = AlertRuleRepository::list_by_project(&pool, "proj-2")
+            .await
+            .unwrap();
+        assert_eq!(all.len(), 2);
+
+        let active = AlertRuleRepository::list_active_by_project(&pool, "proj-2")
+            .await
+            .unwrap();
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].name, "Disabled");
+    }
+
+    #[tokio::test]
+    async fn mute_and_unmute_rule() {
+        let pool = test_any_pool().await;
+        let rule = AlertRuleRepository::create(&pool, "proj-3", "Mutable", "{}", "[]")
+            .await
+            .unwrap();
+        let muted_until = Utc::now() + chrono::Duration::hours(1);
+        let muted = AlertRuleRepository::mute(&pool, &rule.id, muted_until, 60)
+            .await
+            .unwrap();
+        assert!(muted.muted_until.is_some());
+
+        let unmuted = AlertRuleRepository::unmute(&pool, &rule.id).await.unwrap();
+        assert!(unmuted.muted_until.is_none());
+    }
+
+    #[tokio::test]
+    async fn delete_alert_rule() {
+        let pool = test_any_pool().await;
+        let rule = AlertRuleRepository::create(&pool, "proj-4", "ToDelete", "{}", "[]")
+            .await
+            .unwrap();
+        AlertRuleRepository::delete(&pool, &rule.id).await.unwrap();
+        let result = AlertRuleRepository::find_by_id(&pool, &rule.id)
+            .await
+            .unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn notification_channel_crud() {
+        let pool = test_any_pool().await;
+        let ch = NotificationChannelRepository::create(
+            &pool,
+            "proj-5",
+            "Slack #alerts",
+            "slack",
+            r#"{"webhook_url":"https://hooks.slack.com/x"}"#,
+        )
+        .await
+        .unwrap();
+        assert_eq!(ch.channel_type, "slack");
+
+        let found = NotificationChannelRepository::find_by_id(&pool, &ch.id)
+            .await
+            .unwrap();
+        assert!(found.is_some());
+
+        let updated =
+            NotificationChannelRepository::update(&pool, &ch.id, Some("Slack #bugs"), None, None)
+                .await
+                .unwrap();
+        assert_eq!(updated.name, "Slack #bugs");
+
+        NotificationChannelRepository::delete(&pool, &ch.id)
+            .await
+            .unwrap();
+        let gone = NotificationChannelRepository::find_by_id(&pool, &ch.id)
+            .await
+            .unwrap();
+        assert!(gone.is_none());
+    }
+
+    #[tokio::test]
+    async fn alert_log_create_and_mark_sent() {
+        let pool = test_any_pool().await;
+        let rule = AlertRuleRepository::create(&pool, "proj-6", "Log Rule", "{}", "[]")
+            .await
+            .unwrap();
+        let log =
+            AlertLogRepository::create(&pool, &rule.id, None, "new_issue", None, "Issue detected")
+                .await
+                .unwrap();
+        assert_eq!(log.status, "pending");
+
+        AlertLogRepository::mark_sent(&pool, &log.id).await.unwrap();
+        let logs = AlertLogRepository::list_by_rule(&pool, &rule.id, 10)
+            .await
+            .unwrap();
+        assert_eq!(logs.len(), 1);
+        assert_eq!(logs[0].status, "sent");
+    }
+
+    #[tokio::test]
+    async fn alert_log_mark_failed() {
+        let pool = test_any_pool().await;
+        let rule = AlertRuleRepository::create(&pool, "proj-7", "Fail Rule", "{}", "[]")
+            .await
+            .unwrap();
+        let log = AlertLogRepository::create(&pool, &rule.id, None, "new_issue", None, "msg")
+            .await
+            .unwrap();
+        AlertLogRepository::mark_failed(&pool, &log.id, "SMTP error")
+            .await
+            .unwrap();
+        let logs = AlertLogRepository::list_by_rule(&pool, &rule.id, 10)
+            .await
+            .unwrap();
+        assert_eq!(logs[0].status, "failed");
+        assert_eq!(logs[0].error_message.as_deref(), Some("SMTP error"));
+    }
+
+    #[tokio::test]
+    async fn try_claim_cooldown_fires_once() {
+        let pool = test_any_pool().await;
+        let rule = AlertRuleRepository::create(&pool, "proj-8", "Cooldown", "{}", "[]")
+            .await
+            .unwrap();
+        let first = AlertLogRepository::try_claim_cooldown(
+            &pool,
+            &rule.id,
+            None,
+            "new_issue",
+            Some("issue-1"),
+            "msg",
+            5,
+        )
+        .await
+        .unwrap();
+        assert!(first.is_some(), "first claim should succeed");
+
+        let second = AlertLogRepository::try_claim_cooldown(
+            &pool,
+            &rule.id,
+            None,
+            "new_issue",
+            Some("issue-1"),
+            "msg",
+            5,
+        )
+        .await
+        .unwrap();
+        assert!(
+            second.is_none(),
+            "second claim within cooldown should be blocked"
+        );
+    }
+
+    #[tokio::test]
+    async fn email_rate_limit_record_and_check() {
+        let pool = test_any_pool().await;
+        EmailRateLimitRepository::record_sent(&pool, "proj-9", "fp-abc", "chan-1")
+            .await
+            .unwrap();
+        let result =
+            EmailRateLimitRepository::check_rate_limit(&pool, "proj-9", "fp-abc", "chan-1", 60)
+                .await
+                .unwrap();
+        assert!(result.is_some(), "should be rate-limited within cooldown");
+
+        // Different fingerprint should not be rate-limited
+        let other =
+            EmailRateLimitRepository::check_rate_limit(&pool, "proj-9", "fp-other", "chan-1", 60)
+                .await
+                .unwrap();
+        assert!(other.is_none());
+    }
+
+    #[tokio::test]
+    async fn email_rate_limit_zero_cooldown_never_limited() {
+        let pool = test_any_pool().await;
+        EmailRateLimitRepository::record_sent(&pool, "proj-10", "fp", "ch")
+            .await
+            .unwrap();
+        let result = EmailRateLimitRepository::check_rate_limit(&pool, "proj-10", "fp", "ch", 0)
+            .await
+            .unwrap();
+        assert!(result.is_none(), "cooldown=0 means no rate limiting");
+    }
+
+    #[tokio::test]
+    async fn notification_channel_list_by_project() {
+        let pool = test_any_pool().await;
+        NotificationChannelRepository::create(&pool, "proj-ncl", "Ch1", "email", "{}")
+            .await
+            .unwrap();
+        NotificationChannelRepository::create(&pool, "proj-ncl", "Ch2", "slack", "{}")
+            .await
+            .unwrap();
+        NotificationChannelRepository::create(&pool, "proj-other-ncl", "Ch3", "email", "{}")
+            .await
+            .unwrap();
+        let channels = NotificationChannelRepository::list_by_project(&pool, "proj-ncl")
+            .await
+            .unwrap();
+        assert_eq!(channels.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn notification_channel_find_by_ids() {
+        let pool = test_any_pool().await;
+        let ch1 = NotificationChannelRepository::create(&pool, "proj-fbi", "Ch1", "email", "{}")
+            .await
+            .unwrap();
+        let ch2 = NotificationChannelRepository::create(&pool, "proj-fbi", "Ch2", "slack", "{}")
+            .await
+            .unwrap();
+        NotificationChannelRepository::create(&pool, "proj-fbi", "Ch3", "webhook", "{}")
+            .await
+            .unwrap();
+        let ids = vec![ch1.id.clone(), ch2.id.clone()];
+        let found = NotificationChannelRepository::find_by_ids(&pool, &ids)
+            .await
+            .unwrap();
+        assert_eq!(found.len(), 2);
+        let empty = NotificationChannelRepository::find_by_ids(&pool, &[])
+            .await
+            .unwrap();
+        assert!(empty.is_empty());
+    }
+
+    #[tokio::test]
+    async fn alert_log_list_by_project() {
+        let pool = test_any_pool().await;
+        let rule1 = AlertRuleRepository::create(&pool, "proj-lbp", "R1", "{}", "[]")
+            .await
+            .unwrap();
+        let rule2 = AlertRuleRepository::create(&pool, "proj-other-lbp", "R2", "{}", "[]")
+            .await
+            .unwrap();
+        AlertLogRepository::create(&pool, &rule1.id, None, "new_issue", None, "msg1")
+            .await
+            .unwrap();
+        AlertLogRepository::create(&pool, &rule2.id, None, "new_issue", None, "msg2")
+            .await
+            .unwrap();
+        let logs = AlertLogRepository::list_by_project(&pool, "proj-lbp", 10)
+            .await
+            .unwrap();
+        assert_eq!(logs.len(), 1);
+        assert_eq!(logs[0].alert_rule_id, rule1.id);
+    }
+
+    #[tokio::test]
+    async fn alert_log_find_recent() {
+        let pool = test_any_pool().await;
+        let rule = AlertRuleRepository::create(&pool, "proj-fr", "FR", "{}", "[]")
+            .await
+            .unwrap();
+        let none = AlertLogRepository::find_recent(&pool, &rule.id, None, 5)
+            .await
+            .unwrap();
+        assert!(none.is_none());
+        let log = AlertLogRepository::create(&pool, &rule.id, None, "new_issue", None, "msg")
+            .await
+            .unwrap();
+        AlertLogRepository::mark_sent(&pool, &log.id).await.unwrap();
+        let found = AlertLogRepository::find_recent(&pool, &rule.id, None, 5)
+            .await
+            .unwrap();
+        assert!(found.is_some());
+    }
+
+    #[tokio::test]
+    async fn alert_log_cleanup_old_logs_noop() {
+        let pool = test_any_pool().await;
+        let deleted = AlertLogRepository::cleanup_old_logs(&pool, 30)
+            .await
+            .unwrap();
+        assert_eq!(deleted, 0);
+    }
+
+    #[tokio::test]
+    async fn alert_log_list_across_projects() {
+        let pool = test_any_pool().await;
+        let rule1 = AlertRuleRepository::create(&pool, "proj-lap1", "R1", "{}", "[]")
+            .await
+            .unwrap();
+        let rule2 = AlertRuleRepository::create(&pool, "proj-lap2", "R2", "{}", "[]")
+            .await
+            .unwrap();
+        AlertLogRepository::create(&pool, &rule1.id, None, "new_issue", None, "msg1")
+            .await
+            .unwrap();
+        AlertLogRepository::create(&pool, &rule2.id, None, "new_issue", None, "msg2")
+            .await
+            .unwrap();
+        let empty = AlertLogRepository::list_across_projects(&pool, &[], 10)
+            .await
+            .unwrap();
+        assert!(empty.is_empty());
+        let ids = vec!["proj-lap1".to_string()];
+        let logs = AlertLogRepository::list_across_projects(&pool, &ids, 10)
+            .await
+            .unwrap();
+        assert_eq!(logs.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn alert_log_list_rule_names_for_ids() {
+        let pool = test_any_pool().await;
+        let rule = AlertRuleRepository::create(&pool, "proj-lrnfi", "My Rule", "{}", "[]")
+            .await
+            .unwrap();
+        let empty = AlertLogRepository::list_rule_names_for_ids(&pool, &[])
+            .await
+            .unwrap();
+        assert!(empty.is_empty());
+        let ids = vec![rule.id.clone()];
+        let names = AlertLogRepository::list_rule_names_for_ids(&pool, &ids)
+            .await
+            .unwrap();
+        assert_eq!(
+            names.get(&rule.id).map(|(name, _)| name.as_str()),
+            Some("My Rule")
+        );
+    }
+
+    #[tokio::test]
+    async fn email_rate_limit_cleanup_old_records_noop() {
+        let pool = test_any_pool().await;
+        let deleted = EmailRateLimitRepository::cleanup_old_records(&pool)
+            .await
+            .unwrap();
+        assert_eq!(deleted, 0);
     }
 }

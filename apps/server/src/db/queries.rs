@@ -187,25 +187,21 @@ pub async fn count_projects_by_owner(pool: &DbPool, owner_id: &str) -> Result<i6
 }
 
 pub async fn update_project(pool: &DbPool, id: &str, name: &str) -> Result<Project> {
-    sqlx::query_as::<_, Project>(
-        "UPDATE projects SET name = $1 WHERE id = $2 RETURNING *",
-    )
-    .bind(name)
-    .bind(id)
-    .fetch_one(pool)
-    .await
-    .map_err(Into::into)
+    sqlx::query_as::<_, Project>("UPDATE projects SET name = $1 WHERE id = $2 RETURNING *")
+        .bind(name)
+        .bind(id)
+        .fetch_one(pool)
+        .await
+        .map_err(Into::into)
 }
 
 pub async fn update_project_api_key(pool: &DbPool, id: &str, api_key: &str) -> Result<Project> {
-    sqlx::query_as::<_, Project>(
-        "UPDATE projects SET api_key = $1 WHERE id = $2 RETURNING *",
-    )
-    .bind(api_key)
-    .bind(id)
-    .fetch_one(pool)
-    .await
-    .map_err(Into::into)
+    sqlx::query_as::<_, Project>("UPDATE projects SET api_key = $1 WHERE id = $2 RETURNING *")
+        .bind(api_key)
+        .bind(id)
+        .fetch_one(pool)
+        .await
+        .map_err(Into::into)
 }
 
 pub async fn delete_project(pool: &DbPool, id: &str) -> Result<()> {
@@ -261,14 +257,12 @@ pub async fn get_issue_by_fingerprint(
     project_id: &str,
     fingerprint: &str,
 ) -> Result<Option<Issue>> {
-    sqlx::query_as::<_, Issue>(
-        "SELECT * FROM issues WHERE project_id = $1 AND fingerprint = $2",
-    )
-    .bind(project_id)
-    .bind(fingerprint)
-    .fetch_optional(pool)
-    .await
-    .map_err(Into::into)
+    sqlx::query_as::<_, Issue>("SELECT * FROM issues WHERE project_id = $1 AND fingerprint = $2")
+        .bind(project_id)
+        .bind(fingerprint)
+        .fetch_optional(pool)
+        .await
+        .map_err(Into::into)
 }
 
 pub async fn get_issues_by_project(
@@ -279,9 +273,9 @@ pub async fn get_issues_by_project(
     limit: i64,
     offset: i64,
 ) -> Result<Vec<Issue>> {
-    // Build query with proper PostgreSQL placeholders
-    let mut param_idx = 2;
-    let mut query = String::from("SELECT * FROM issues WHERE project_id = $1");
+    let mut param_idx: u32 = 1;
+    let mut query = format!("SELECT * FROM issues WHERE project_id = ${}", param_idx);
+    param_idx += 1;
 
     if status.is_some() {
         query.push_str(&format!(" AND status = ${}", param_idx));
@@ -292,7 +286,11 @@ pub async fn get_issues_by_project(
         param_idx += 1;
     }
 
-    query.push_str(&format!(" ORDER BY last_seen DESC LIMIT ${} OFFSET ${}", param_idx, param_idx + 1));
+    query.push_str(&format!(
+        " ORDER BY last_seen DESC LIMIT ${} OFFSET ${}",
+        param_idx,
+        param_idx + 1
+    ));
 
     let mut q = sqlx::query_as::<_, Issue>(&query).bind(project_id);
 
@@ -303,7 +301,11 @@ pub async fn get_issues_by_project(
         q = q.bind(l);
     }
 
-    q.bind(limit).bind(offset).fetch_all(pool).await.map_err(Into::into)
+    q.bind(limit)
+        .bind(offset)
+        .fetch_all(pool)
+        .await
+        .map_err(Into::into)
 }
 
 pub async fn count_issues_by_project(
@@ -312,9 +314,12 @@ pub async fn count_issues_by_project(
     status: Option<&str>,
     level: Option<&str>,
 ) -> Result<i64> {
-    // Build query with proper PostgreSQL placeholders
-    let mut param_idx = 2;
-    let mut query = String::from("SELECT COUNT(*) as count FROM issues WHERE project_id = $1");
+    let mut param_idx: u32 = 1;
+    let mut query = format!(
+        "SELECT COUNT(*) as count FROM issues WHERE project_id = ${}",
+        param_idx
+    );
+    param_idx += 1;
 
     if status.is_some() {
         query.push_str(&format!(" AND status = ${}", param_idx));
@@ -322,7 +327,9 @@ pub async fn count_issues_by_project(
     }
     if level.is_some() {
         query.push_str(&format!(" AND level = ${}", param_idx));
+        param_idx += 1;
     }
+    let _ = param_idx; // suppress unused warning
 
     let mut q = sqlx::query(&query).bind(project_id);
 
@@ -337,11 +344,7 @@ pub async fn count_issues_by_project(
     Ok(row.get("count"))
 }
 
-pub async fn update_issue_on_new_event(
-    pool: &DbPool,
-    id: &str,
-    timestamp: &str,
-) -> Result<Issue> {
+pub async fn update_issue_on_new_event(pool: &DbPool, id: &str, timestamp: &str) -> Result<Issue> {
     sqlx::query_as::<_, Issue>(
         "UPDATE issues SET count = count + 1, last_seen = $1 WHERE id = $2 RETURNING *",
     )
@@ -353,14 +356,12 @@ pub async fn update_issue_on_new_event(
 }
 
 pub async fn update_issue_status(pool: &DbPool, id: &str, status: &str) -> Result<Issue> {
-    sqlx::query_as::<_, Issue>(
-        "UPDATE issues SET status = $1 WHERE id = $2 RETURNING *",
-    )
-    .bind(status)
-    .bind(id)
-    .fetch_one(pool)
-    .await
-    .map_err(Into::into)
+    sqlx::query_as::<_, Issue>("UPDATE issues SET status = $1 WHERE id = $2 RETURNING *")
+        .bind(status)
+        .bind(id)
+        .fetch_one(pool)
+        .await
+        .map_err(Into::into)
 }
 
 pub async fn delete_issue(pool: &DbPool, id: &str) -> Result<()> {

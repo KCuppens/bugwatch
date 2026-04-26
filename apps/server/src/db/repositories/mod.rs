@@ -20,9 +20,7 @@ pub use events::EventRepository;
 pub use integrations::{IntegrationRepository, IssueLinkRepository};
 pub use issues::IssueRepository;
 pub use monitors::{MonitorCheckRepository, MonitorIncidentRepository, MonitorRepository};
-pub use organizations::{
-    BillingEventRepository, OrganizationMemberRepository, OrganizationRepository, UsageRepository,
-};
+pub use organizations::{OrganizationMemberRepository, OrganizationRepository};
 pub use performance::PerformanceRepository;
 pub use projects::ProjectRepository;
 pub use replay::ReplayRepository;

@@ -162,3 +162,144 @@ pub fn validate_refresh_token(token: &str, secret: &str) -> AppResult<Claims> {
 
     Ok(claims)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use jsonwebtoken::{encode, EncodingKey, Header};
+
+    const SECRET: &str = "test-secret-key-at-least-32-bytes-long";
+
+    fn make_claims(
+        token_type: &str,
+        exp_offset_secs: i64,
+        iat_offset_secs: i64,
+        jti: Option<&str>,
+    ) -> Claims {
+        let now = chrono::Utc::now();
+        Claims {
+            sub: "user-1".to_string(),
+            exp: (now + chrono::Duration::seconds(exp_offset_secs)).timestamp(),
+            iat: (now + chrono::Duration::seconds(iat_offset_secs)).timestamp(),
+            token_type: token_type.to_string(),
+            jti: jti.map(str::to_string),
+            iss: Some("bugwatch-server".to_string()),
+            aud: Some("bugwatch".to_string()),
+        }
+    }
+
+    fn encode_claims(claims: &Claims) -> String {
+        encode(
+            &Header::new(jsonwebtoken::Algorithm::HS256),
+            claims,
+            &EncodingKey::from_secret(SECRET.as_bytes()),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn generate_tokens_produces_non_empty_pair() {
+        let pair = generate_tokens("user-1", "session-1", SECRET, 900, 604800).unwrap();
+        assert!(!pair.access_token.is_empty());
+        assert!(!pair.refresh_token.is_empty());
+        assert_eq!(pair.token_type, "Bearer");
+        assert_eq!(pair.expires_in, 900);
+    }
+
+    #[test]
+    fn access_token_roundtrip() {
+        let pair = generate_tokens("user-42", "sess-abc", SECRET, 900, 604800).unwrap();
+        let claims = validate_access_token(&pair.access_token, SECRET).unwrap();
+        assert_eq!(claims.sub, "user-42");
+        assert_eq!(claims.token_type, "access");
+        assert_eq!(claims.jti.as_deref(), Some("sess-abc"));
+    }
+
+    #[test]
+    fn refresh_token_roundtrip() {
+        let pair = generate_tokens("user-7", "sess-xyz", SECRET, 900, 604800).unwrap();
+        let claims = validate_refresh_token(&pair.refresh_token, SECRET).unwrap();
+        assert_eq!(claims.sub, "user-7");
+        assert_eq!(claims.token_type, "refresh");
+    }
+
+    #[test]
+    fn issuer_and_audience_propagated() {
+        let pair = generate_tokens("u", "s", SECRET, 900, 604800).unwrap();
+        let claims = validate_token(&pair.access_token, SECRET).unwrap();
+        assert_eq!(claims.iss.as_deref(), Some("bugwatch-server"));
+        assert_eq!(claims.aud.as_deref(), Some("bugwatch"));
+    }
+
+    #[test]
+    fn validate_token_rejects_wrong_secret() {
+        let pair = generate_tokens("u", "s", SECRET, 900, 604800).unwrap();
+        assert!(validate_token(&pair.access_token, "wrong-secret-key-at-least-32").is_err());
+    }
+
+    #[test]
+    fn validate_token_rejects_garbage() {
+        assert!(validate_token("not.a.jwt", SECRET).is_err());
+        assert!(validate_token("", SECRET).is_err());
+    }
+
+    #[test]
+    fn validate_token_rejects_expired() {
+        let claims = make_claims("access", -3600, -7200, Some("s"));
+        let token = encode_claims(&claims);
+        let err = validate_token(&token, SECRET).unwrap_err().to_string();
+        assert!(
+            err.to_lowercase().contains("expired"),
+            "expected 'expired' in: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_token_rejects_future_iat() {
+        let claims = make_claims("access", 3600, 3600, Some("s"));
+        let token = encode_claims(&claims);
+        let err = validate_token(&token, SECRET).unwrap_err().to_string();
+        assert!(
+            err.to_lowercase().contains("future"),
+            "expected 'future' in: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_access_token_rejects_refresh() {
+        let pair = generate_tokens("u", "s", SECRET, 900, 604800).unwrap();
+        let result = validate_access_token(&pair.refresh_token, SECRET);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.to_lowercase().contains("type"),
+            "expected 'type' in: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_refresh_token_rejects_access() {
+        let pair = generate_tokens("u", "s", SECRET, 900, 604800).unwrap();
+        let result = validate_refresh_token(&pair.access_token, SECRET);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn validate_access_token_missing_jti_is_rejected() {
+        let claims = make_claims("access", 3600, 0, None);
+        let token = encode_claims(&claims);
+        let result = validate_access_token(&token, SECRET);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.to_lowercase().contains("session"),
+            "expected 'session' in: {err}"
+        );
+    }
+
+    #[test]
+    fn access_and_refresh_tokens_differ() {
+        let pair = generate_tokens("u", "s", SECRET, 900, 604800).unwrap();
+        assert_ne!(pair.access_token, pair.refresh_token);
+    }
+}

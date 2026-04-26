@@ -27,7 +27,7 @@ impl MonitorRepository {
         sqlx::query_as::<_, Monitor>(
             r#"
             INSERT INTO monitors (id, project_id, name, url, method, interval_seconds, timeout_ms, expected_status, headers, body, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
             RETURNING *
             "#,
         )
@@ -48,7 +48,7 @@ impl MonitorRepository {
     }
 
     pub async fn find_by_id(pool: &DbPool, id: &str) -> Result<Option<Monitor>> {
-        sqlx::query_as::<_, Monitor>("SELECT * FROM monitors WHERE id = ?")
+        sqlx::query_as::<_, Monitor>("SELECT * FROM monitors WHERE id = $1")
             .bind(id)
             .fetch_optional(pool)
             .await
@@ -57,7 +57,7 @@ impl MonitorRepository {
 
     #[allow(dead_code)]
     pub async fn count_by_project(pool: &DbPool, project_id: &str) -> Result<i64> {
-        let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM monitors WHERE project_id = ?")
+        let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM monitors WHERE project_id = $1")
             .bind(project_id)
             .fetch_one(pool)
             .await?;
@@ -70,7 +70,7 @@ impl MonitorRepository {
             r#"
             SELECT COUNT(*) FROM monitors m
             JOIN projects p ON m.project_id = p.id
-            WHERE p.owner_id = ?
+            WHERE p.owner_id = $1
             "#,
         )
         .bind(owner_id)
@@ -87,7 +87,7 @@ impl MonitorRepository {
             r#"
             SELECT COUNT(*) FROM monitors m
             JOIN projects p ON m.project_id = p.id
-            WHERE p.organization_id = ?
+            WHERE p.organization_id = $1
             "#,
         )
         .bind(organization_id)
@@ -107,9 +107,9 @@ impl MonitorRepository {
         let monitors = sqlx::query_as::<_, Monitor>(
             r#"
             SELECT * FROM monitors
-            WHERE project_id = ?
+            WHERE project_id = $1
             ORDER BY created_at DESC
-            LIMIT ? OFFSET ?
+            LIMIT $2 OFFSET $3
             "#,
         )
         .bind(project_id)
@@ -118,7 +118,7 @@ impl MonitorRepository {
         .fetch_all(pool)
         .await?;
 
-        let total: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM monitors WHERE project_id = ?")
+        let total: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM monitors WHERE project_id = $1")
             .bind(project_id)
             .fetch_one(pool)
             .await?;
@@ -136,21 +136,21 @@ impl MonitorRepository {
     }
 
     /// Atomically claim up to `batch_size` monitors that are due for a health check.
-    /// Sets `last_checked_at = NOW()` so concurrent workers skip claimed rows.
+    /// Sets `last_checked_at = CURRENT_TIMESTAMP` so concurrent workers skip claimed rows.
     pub async fn claim_due_monitors(pool: &DbPool, batch_size: i32) -> Result<Vec<Monitor>> {
         sqlx::query_as::<_, Monitor>(
             r#"
             UPDATE monitors
-            SET last_checked_at = NOW()
+            SET last_checked_at = CURRENT_TIMESTAMP
             WHERE id IN (
                 SELECT id FROM monitors
                 WHERE is_active = TRUE
                   AND (
                       last_checked_at IS NULL
-                      OR datetime(last_checked_at, '+' || interval_seconds || ' seconds') <= datetime('now')
+                      OR (julianday(CURRENT_TIMESTAMP) - julianday(last_checked_at)) * 86400.0 >= interval_seconds
                   )
                 ORDER BY last_checked_at ASC
-                LIMIT ?
+                LIMIT $1
             )
             RETURNING *
             "#,
@@ -171,7 +171,8 @@ impl MonitorRepository {
 
         let placeholders = project_ids
             .iter()
-            .map(|_| "?")
+            .enumerate()
+            .map(|(i, _)| format!("${}", i + 1))
             .collect::<Vec<_>>()
             .join(", ");
         let sql = format!(
@@ -200,16 +201,16 @@ impl MonitorRepository {
     ) -> Result<Monitor> {
         sqlx::query_as::<_, Monitor>(
             "UPDATE monitors
-             SET name = COALESCE(?, name),
-                 url = COALESCE(?, url),
-                 method = COALESCE(?, method),
-                 interval_seconds = COALESCE(?, interval_seconds),
-                 timeout_ms = COALESCE(?, timeout_ms),
-                 expected_status = COALESCE(?, expected_status),
-                 headers = COALESCE(?, headers),
-                 body = COALESCE(?, body),
-                 is_active = COALESCE(?, is_active)
-             WHERE id = ?
+             SET name = COALESCE($1, name),
+                 url = COALESCE($2, url),
+                 method = COALESCE($3, method),
+                 interval_seconds = COALESCE($4, interval_seconds),
+                 timeout_ms = COALESCE($5, timeout_ms),
+                 expected_status = COALESCE($6, expected_status),
+                 headers = COALESCE($7, headers),
+                 body = COALESCE($8, body),
+                 is_active = COALESCE($9, is_active)
+             WHERE id = $10
              RETURNING *",
         )
         .bind(name)
@@ -228,7 +229,7 @@ impl MonitorRepository {
     }
 
     pub async fn delete(pool: &DbPool, id: &str) -> Result<()> {
-        sqlx::query("DELETE FROM monitors WHERE id = ?")
+        sqlx::query("DELETE FROM monitors WHERE id = $1")
             .bind(id)
             .execute(pool)
             .await?;
@@ -241,7 +242,7 @@ impl MonitorRepository {
         status: &str,
         checked_at: DateTime<Utc>,
     ) -> Result<()> {
-        sqlx::query("UPDATE monitors SET current_status = ?, last_checked_at = ? WHERE id = ?")
+        sqlx::query("UPDATE monitors SET current_status = $1, last_checked_at = $2 WHERE id = $3")
             .bind(status)
             .bind(checked_at.to_rfc3339())
             .bind(id)
@@ -268,7 +269,7 @@ impl MonitorCheckRepository {
         sqlx::query_as::<_, MonitorCheck>(
             r#"
             INSERT INTO monitor_checks (id, monitor_id, status, response_time_ms, status_code, error_message, checked_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
             RETURNING *
             "#,
         )
@@ -292,9 +293,9 @@ impl MonitorCheckRepository {
         sqlx::query_as::<_, MonitorCheck>(
             r#"
             SELECT * FROM monitor_checks
-            WHERE monitor_id = ?
+            WHERE monitor_id = $1
             ORDER BY checked_at DESC
-            LIMIT ?
+            LIMIT $2
             "#,
         )
         .bind(monitor_id)
@@ -311,6 +312,7 @@ impl MonitorCheckRepository {
     ) -> Result<(i64, i64, Option<f64>)> {
         // Get total checks and up checks in the time window
         // Use COALESCE to ensure SUM never returns NULL (which can't deserialize to i64)
+        let cutoff = (chrono::Utc::now() - chrono::Duration::hours(hours as i64)).to_rfc3339();
         let stats: (i64, i64, Option<f64>) = sqlx::query_as(
             r#"
             SELECT
@@ -318,12 +320,12 @@ impl MonitorCheckRepository {
                 COALESCE(SUM(CASE WHEN status = 'up' THEN 1 ELSE 0 END), 0) as up_count,
                 AVG(response_time_ms) as avg_response
             FROM monitor_checks
-            WHERE monitor_id = ?
-            AND checked_at >= datetime('now', '-' || ? || ' hours')
+            WHERE monitor_id = $1
+            AND checked_at >= $2
             "#,
         )
         .bind(monitor_id)
-        .bind(hours)
+        .bind(&cutoff)
         .fetch_one(pool)
         .await?;
 
@@ -341,9 +343,10 @@ impl MonitorCheckRepository {
             return Ok(std::collections::HashMap::new());
         }
 
-        let placeholders = monitor_ids
-            .iter()
-            .map(|_| "?")
+        let cutoff = (chrono::Utc::now() - chrono::Duration::hours(hours as i64)).to_rfc3339();
+        let n = monitor_ids.len();
+        let placeholders = (1..=n)
+            .map(|i| format!("${}", i))
             .collect::<Vec<_>>()
             .join(", ");
         let sql = format!(
@@ -355,16 +358,17 @@ impl MonitorCheckRepository {
                 AVG(response_time_ms) as avg_response
             FROM monitor_checks
             WHERE monitor_id IN ({})
-              AND checked_at >= datetime('now', '-' || ? || ' hours')
+              AND checked_at >= ${}
             GROUP BY monitor_id
             "#,
-            placeholders
+            placeholders,
+            n + 1
         );
         let mut q = sqlx::query_as::<_, (String, i64, i64, Option<f64>)>(&sql);
         for mid in monitor_ids {
             q = q.bind(mid);
         }
-        let rows = q.bind(hours).fetch_all(pool).await?;
+        let rows = q.bind(&cutoff).fetch_all(pool).await?;
 
         Ok(rows
             .into_iter()
@@ -381,9 +385,9 @@ impl MonitorCheckRepository {
             return Ok(std::collections::HashMap::new());
         }
 
-        let placeholders = monitor_ids
-            .iter()
-            .map(|_| "?")
+        let n = monitor_ids.len();
+        let placeholders = (1..=n)
+            .map(|i| format!("${}", i))
             .collect::<Vec<_>>()
             .join(", ");
         let sql = format!(
@@ -410,12 +414,11 @@ impl MonitorCheckRepository {
     }
 
     pub async fn cleanup_old_checks(pool: &DbPool, days: i32) -> Result<u64> {
-        let result = sqlx::query(
-            "DELETE FROM monitor_checks WHERE checked_at < datetime('now', '-' || ? || ' days')",
-        )
-        .bind(days)
-        .execute(pool)
-        .await?;
+        let cutoff = (chrono::Utc::now() - chrono::Duration::days(days as i64)).to_rfc3339();
+        let result = sqlx::query("DELETE FROM monitor_checks WHERE checked_at < $1")
+            .bind(&cutoff)
+            .execute(pool)
+            .await?;
 
         Ok(result.rows_affected())
     }
@@ -425,7 +428,7 @@ impl MonitorCheckRepository {
         let result: Option<(Option<String>,)> = sqlx::query_as(
             r#"
             SELECT error_message FROM monitor_checks
-            WHERE monitor_id = ? AND status = 'down' AND error_message IS NOT NULL
+            WHERE monitor_id = $1 AND status = 'down' AND error_message IS NOT NULL
             ORDER BY checked_at DESC
             LIMIT 1
             "#,
@@ -452,7 +455,7 @@ impl MonitorIncidentRepository {
         sqlx::query_as::<_, MonitorIncident>(
             r#"
             INSERT INTO monitor_incidents (id, monitor_id, started_at, cause, created_at)
-            VALUES (?, ?, ?, ?, ?)
+            VALUES ($1, $2, $3, $4, $5)
             RETURNING *
             "#,
         )
@@ -472,8 +475,8 @@ impl MonitorIncidentRepository {
         sqlx::query_as::<_, MonitorIncident>(
             r#"
             UPDATE monitor_incidents
-            SET resolved_at = ?
-            WHERE id = ?
+            SET resolved_at = $1
+            WHERE id = $2
             RETURNING *
             "#,
         )
@@ -489,7 +492,7 @@ impl MonitorIncidentRepository {
         monitor_id: &str,
     ) -> Result<Option<MonitorIncident>> {
         sqlx::query_as::<_, MonitorIncident>(
-            "SELECT * FROM monitor_incidents WHERE monitor_id = ? AND resolved_at IS NULL ORDER BY started_at DESC LIMIT 1",
+            "SELECT * FROM monitor_incidents WHERE monitor_id = $1 AND resolved_at IS NULL ORDER BY started_at DESC LIMIT 1",
         )
         .bind(monitor_id)
         .fetch_optional(pool)
@@ -505,9 +508,9 @@ impl MonitorIncidentRepository {
         sqlx::query_as::<_, MonitorIncident>(
             r#"
             SELECT * FROM monitor_incidents
-            WHERE monitor_id = ?
+            WHERE monitor_id = $1
             ORDER BY started_at DESC
-            LIMIT ?
+            LIMIT $2
             "#,
         )
         .bind(monitor_id)

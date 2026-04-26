@@ -10,6 +10,7 @@ pub enum Tier {
     Enterprise,
 }
 
+#[allow(dead_code)]
 impl Tier {
     pub fn from_str(s: &str) -> Self {
         match s.to_lowercase().as_str() {
@@ -17,15 +18,6 @@ impl Tier {
             "team" => Tier::Team,
             "enterprise" => Tier::Enterprise,
             _ => Tier::Free,
-        }
-    }
-
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Tier::Free => "free",
-            Tier::Pro => "pro",
-            Tier::Team => "team",
-            Tier::Enterprise => "enterprise",
         }
     }
 
@@ -178,36 +170,6 @@ pub fn get_tier_limits(tier: Tier) -> TierLimits {
     }
 }
 
-/// Get limits for self-hosted mode — everything unlocked, no artificial limits.
-/// Rate limit and retention are configurable via environment variables.
-pub fn self_hosted_limits(retention_days: i32, rate_limit_per_minute: u32) -> TierLimits {
-    TierLimits {
-        tier: Tier::Team, // Self-hosted gets Team-level features
-        retention_days,
-        project_limit: None, // Unlimited
-        monitor_limit: -1,   // Unlimited
-        rate_limit_per_minute,
-        max_seats: None,           // Unlimited
-        email_cooldown_minutes: 0, // Real-time
-        replay_storage_bytes: -1,  // Unlimited for self-hosted
-        features: TierFeatures {
-            webhooks: true,
-            pagerduty: true,
-            opsgenie: true,
-            session_replay: true,
-            performance_monitoring: true,
-            server_monitoring: true,
-            email_notifications: true,
-            jira: true,
-            linear: true,
-            github_issues: true,
-            sso: false,           // Enterprise/SaaS only
-            audit_logs: false,    // Enterprise/SaaS only
-            custom_domain: false, // SaaS only
-        },
-    }
-}
-
 /// Check if a tier can access a specific feature
 pub fn can_access_feature(tier: &str, feature: &str) -> bool {
     let tier = Tier::from_str(tier);
@@ -237,46 +199,11 @@ pub fn can_access_feature(tier: &str, feature: &str) -> bool {
     }
 }
 
-/// Check if tier A includes all features of tier B (A >= B)
+#[allow(dead_code)]
 pub fn tier_includes(tier_a: &str, tier_b: &str) -> bool {
     let a = Tier::from_str(tier_a);
     let b = Tier::from_str(tier_b);
     a.level() >= b.level()
-}
-
-/// Get price per seat in cents (monthly)
-pub fn get_price_per_seat(tier: Tier) -> i32 {
-    match tier {
-        Tier::Free => 0,
-        Tier::Pro => 1200,     // $12.00
-        Tier::Team => 2500,    // $25.00
-        Tier::Enterprise => 0, // custom pricing
-    }
-}
-
-/// Get minimum seats required for a tier
-pub fn get_min_seats(tier: Tier) -> i32 {
-    match tier {
-        Tier::Free => 1,
-        Tier::Pro => 1,
-        Tier::Team => 1,
-        Tier::Enterprise => 1,
-    }
-}
-
-/// Calculate total price for a subscription
-pub fn calculate_price(tier: Tier, seats: i32, annual: bool) -> i32 {
-    let price_per_seat = get_price_per_seat(tier);
-    let effective_seats = seats.max(get_min_seats(tier));
-    let monthly_total = price_per_seat * effective_seats;
-
-    if annual {
-        // 30% discount for annual billing
-        let annual_total = monthly_total * 12;
-        (annual_total as f64 * 0.70) as i32
-    } else {
-        monthly_total
-    }
 }
 
 #[cfg(test)]
@@ -317,25 +244,6 @@ mod tests {
     }
 
     #[test]
-    fn test_pricing() {
-        // Free tier
-        assert_eq!(calculate_price(Tier::Free, 1, false), 0);
-
-        // Pro tier monthly - 5 seats
-        assert_eq!(calculate_price(Tier::Pro, 5, false), 6000); // $60
-
-        // Pro tier annual - 5 seats (30% off)
-        assert_eq!(calculate_price(Tier::Pro, 5, true), 50400); // $504/year = $42/mo
-
-        // Team tier monthly - 10 seats
-        assert_eq!(calculate_price(Tier::Team, 10, false), 25000); // $250
-
-        // Minimum seats: 1 for all paid tiers
-        assert_eq!(calculate_price(Tier::Pro, 1, false), 1200); // 1 seat = $12
-        assert_eq!(calculate_price(Tier::Team, 1, false), 2500); // 1 seat = $25
-    }
-
-    #[test]
     fn test_tier_limits() {
         // Free tier limits
         let free = get_tier_limits(Tier::Free);
@@ -363,5 +271,30 @@ mod tests {
         let enterprise = get_tier_limits(Tier::Enterprise);
         assert_eq!(enterprise.monitor_limit, -1); // Unlimited
         assert_eq!(enterprise.email_cooldown_minutes, 0);
+    }
+
+    #[test]
+    fn tier_level_ordering() {
+        assert!(Tier::Free.level() < Tier::Pro.level());
+        assert!(Tier::Pro.level() < Tier::Team.level());
+        assert!(Tier::Team.level() < Tier::Enterprise.level());
+    }
+
+    #[test]
+    fn can_access_feature_advanced_alerting_requires_team() {
+        assert!(!can_access_feature("free", "advanced_alerting"));
+        assert!(!can_access_feature("pro", "advanced_alerting"));
+        assert!(can_access_feature("team", "advanced_alerting"));
+    }
+
+    #[test]
+    fn can_access_feature_api_access_requires_pro() {
+        assert!(!can_access_feature("free", "api_access"));
+        assert!(can_access_feature("pro", "api_access"));
+    }
+
+    #[test]
+    fn can_access_feature_unknown_returns_false() {
+        assert!(!can_access_feature("enterprise", "nonexistent_feature"));
     }
 }

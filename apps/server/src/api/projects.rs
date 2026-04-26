@@ -188,11 +188,12 @@ pub async fn create(
         .map_err(|e| AppError::Internal(format!("Failed to start transaction: {}", e)))?;
 
     // Re-count within the transaction to get a consistent view
-    let current_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM projects WHERE owner_id = ?")
-        .bind(&owner_id)
-        .fetch_one(&mut *tx)
-        .await
-        .map_err(|e| AppError::Internal(format!("Failed to count projects: {}", e)))?;
+    let current_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM projects WHERE owner_id = $1")
+            .bind(&owner_id)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|e| AppError::Internal(format!("Failed to count projects: {}", e)))?;
 
     if let Some(project_limit) = limits.project_limit {
         let x402_extra = org
@@ -265,7 +266,7 @@ pub async fn create(
     }
 
     let project = ProjectRepository::create_in_tx(
-        &mut tx,
+        &mut *tx,
         &req.name,
         &slug,
         &owner_id,
@@ -495,7 +496,7 @@ pub async fn verify_events(
     }
 
     // Count issues for this project (events are grouped into issues)
-    let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM issues WHERE project_id = ?")
+    let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM issues WHERE project_id = $1")
         .bind(&id)
         .fetch_one(&state.db)
         .await?;

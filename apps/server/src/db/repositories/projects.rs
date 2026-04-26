@@ -22,6 +22,7 @@ fn hash_api_key(api_key: &str) -> String {
 
 pub struct ProjectRepository;
 
+#[allow(dead_code)]
 impl ProjectRepository {
     pub async fn create(
         pool: &DbPool,
@@ -58,7 +59,7 @@ impl ProjectRepository {
     /// Insert a new project using an existing connection (e.g., inside a transaction).
     /// Callers are responsible for committing or rolling back the transaction.
     pub async fn create_in_tx(
-        conn: &mut sqlx::PgConnection,
+        conn: &mut sqlx::AnyConnection,
         name: &str,
         slug: &str,
         owner_id: &str,
@@ -221,11 +222,164 @@ impl ProjectRepository {
     }
 
     pub async fn complete_onboarding(pool: &DbPool, id: &str) -> Result<()> {
-        sqlx::query("UPDATE projects SET onboarding_completed_at = NOW() WHERE id = $1")
-            .bind(id)
-            .execute(pool)
-            .await?;
+        sqlx::query(
+            "UPDATE projects SET onboarding_completed_at = CURRENT_TIMESTAMP WHERE id = $1",
+        )
+        .bind(id)
+        .execute(pool)
+        .await?;
         project_cache().remove(id);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::test_helpers::test_any_pool;
+
+    #[tokio::test]
+    async fn create_and_find_by_id() {
+        let pool = test_any_pool().await;
+        let p = ProjectRepository::create(
+            &pool,
+            "My App",
+            "my-app",
+            "owner-1",
+            Some("web"),
+            Some("nextjs"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(p.name, "My App");
+        assert_eq!(p.slug, "my-app");
+        assert_eq!(p.owner_id, "owner-1");
+        assert!(p.api_key.starts_with("bw_live_"));
+
+        let found = ProjectRepository::find_by_id(&pool, &p.id).await.unwrap();
+        assert_eq!(found.unwrap().id, p.id);
+    }
+
+    #[tokio::test]
+    async fn find_by_id_missing_returns_none() {
+        let pool = test_any_pool().await;
+        let result = ProjectRepository::find_by_id(&pool, "no-such-id")
+            .await
+            .unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn find_by_api_key() {
+        let pool = test_any_pool().await;
+        let p = ProjectRepository::create(&pool, "App", "app-slug", "owner-2", None, None)
+            .await
+            .unwrap();
+        let found = ProjectRepository::find_by_api_key(&pool, &p.api_key)
+            .await
+            .unwrap();
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().id, p.id);
+    }
+
+    #[tokio::test]
+    async fn find_by_api_key_wrong_key_returns_none() {
+        let pool = test_any_pool().await;
+        let result = ProjectRepository::find_by_api_key(&pool, "bw_live_bogus")
+            .await
+            .unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn find_by_owner_and_count() {
+        let pool = test_any_pool().await;
+        ProjectRepository::create(&pool, "P1", "p1", "owner-3", None, None)
+            .await
+            .unwrap();
+        ProjectRepository::create(&pool, "P2", "p2", "owner-3", None, None)
+            .await
+            .unwrap();
+        ProjectRepository::create(&pool, "Other", "other", "owner-4", None, None)
+            .await
+            .unwrap();
+
+        let projects = ProjectRepository::find_by_owner(&pool, "owner-3", 10, 0)
+            .await
+            .unwrap();
+        assert_eq!(projects.len(), 2);
+
+        let count = ProjectRepository::count_by_owner(&pool, "owner-3")
+            .await
+            .unwrap();
+        assert_eq!(count, 2);
+    }
+
+    #[tokio::test]
+    async fn update_name() {
+        let pool = test_any_pool().await;
+        let p = ProjectRepository::create(&pool, "Old Name", "update-slug", "owner-5", None, None)
+            .await
+            .unwrap();
+        ProjectRepository::update_name(&pool, &p.id, "New Name")
+            .await
+            .unwrap();
+        let updated = ProjectRepository::find_by_id(&pool, &p.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(updated.name, "New Name");
+    }
+
+    #[tokio::test]
+    async fn rotate_api_key() {
+        let pool = test_any_pool().await;
+        let p = ProjectRepository::create(&pool, "App", "rotate-slug", "owner-6", None, None)
+            .await
+            .unwrap();
+        let old_key = p.api_key.clone();
+        let new_key = ProjectRepository::rotate_api_key(&pool, &p.id)
+            .await
+            .unwrap();
+        assert_ne!(new_key, old_key);
+        assert!(new_key.starts_with("bw_live_"));
+        // Old key should no longer work
+        let found = ProjectRepository::find_by_api_key(&pool, &old_key)
+            .await
+            .unwrap();
+        assert!(found.is_none());
+        // New key should work
+        let found_new = ProjectRepository::find_by_api_key(&pool, &new_key)
+            .await
+            .unwrap();
+        assert!(found_new.is_some());
+    }
+
+    #[tokio::test]
+    async fn delete() {
+        let pool = test_any_pool().await;
+        let p = ProjectRepository::create(&pool, "To Delete", "del-slug", "owner-7", None, None)
+            .await
+            .unwrap();
+        ProjectRepository::delete(&pool, &p.id).await.unwrap();
+        let result = ProjectRepository::find_by_id(&pool, &p.id).await.unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn update_sdk() {
+        let pool = test_any_pool().await;
+        let p = ProjectRepository::create(&pool, "App", "sdk-slug", "owner-8", None, None)
+            .await
+            .unwrap();
+        ProjectRepository::update_sdk(&pool, &p.id, Some("mobile"), Some("flutter"))
+            .await
+            .unwrap();
+        let updated = ProjectRepository::find_by_id(&pool, &p.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(updated.platform.as_deref(), Some("mobile"));
+        assert_eq!(updated.framework.as_deref(), Some("flutter"));
     }
 }

@@ -202,3 +202,72 @@ impl RetentionService {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::test_helpers::test_any_pool;
+
+    #[tokio::test]
+    async fn new_has_default_retention_days() {
+        let pool = test_any_pool().await;
+        let svc = RetentionService::new(pool);
+        assert_eq!(svc.event_retention_days, 90);
+        assert_eq!(svc.monitor_check_retention_days, 30);
+        assert_eq!(svc.alert_log_retention_days, 30);
+        assert_eq!(svc.server_metrics_retention_days, 7);
+        assert_eq!(svc.transaction_retention_days, 30);
+        assert_eq!(svc.recording_retention_days, 30);
+    }
+
+    #[tokio::test]
+    async fn with_retention_days_caps_at_type_limits() {
+        let pool = test_any_pool().await;
+        let svc = RetentionService::with_retention_days(pool, 50);
+        assert_eq!(svc.event_retention_days, 50);
+        assert_eq!(svc.monitor_check_retention_days, 30);
+        assert_eq!(svc.alert_log_retention_days, 30);
+        assert_eq!(svc.server_metrics_retention_days, 7);
+        assert_eq!(svc.transaction_retention_days, 30);
+        assert_eq!(svc.recording_retention_days, 30);
+    }
+
+    #[tokio::test]
+    async fn with_retention_days_below_cap_uses_value() {
+        let pool = test_any_pool().await;
+        let svc = RetentionService::with_retention_days(pool, 5);
+        assert_eq!(svc.event_retention_days, 5);
+        assert_eq!(svc.monitor_check_retention_days, 5);
+        assert_eq!(svc.alert_log_retention_days, 5);
+        assert_eq!(svc.server_metrics_retention_days, 5);
+        assert_eq!(svc.transaction_retention_days, 5);
+        assert_eq!(svc.recording_retention_days, 5);
+    }
+
+    #[tokio::test]
+    async fn with_retention_days_minus_one_disables_all() {
+        let pool = test_any_pool().await;
+        let svc = RetentionService::with_retention_days(pool, -1);
+        assert_eq!(svc.event_retention_days, -1);
+        assert_eq!(svc.monitor_check_retention_days, -1);
+        assert_eq!(svc.alert_log_retention_days, -1);
+        assert_eq!(svc.server_metrics_retention_days, -1);
+        assert_eq!(svc.transaction_retention_days, -1);
+        assert_eq!(svc.recording_retention_days, -1);
+    }
+
+    #[tokio::test]
+    #[ignore = "cleanup_old_events uses Postgres-specific INTERVAL with per-org column; tested against real DB"]
+    async fn run_cleanup_on_empty_db() {
+        let pool = test_any_pool().await;
+        let svc = RetentionService::new(pool);
+        svc.run_cleanup().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn run_cleanup_disabled_skips_all() {
+        let pool = test_any_pool().await;
+        let svc = RetentionService::with_retention_days(pool, -1);
+        svc.run_cleanup().await.unwrap();
+    }
+}

@@ -341,7 +341,7 @@ pub async fn login(
     // observable via timing when the password is wrong.
     // Intentional: lock after MAX_FAILED_ATTEMPTS consecutive failures; threshold is 5.
     if let Some(locked_until) = &user.locked_until {
-        if *locked_until > Utc::now() {
+        if locked_until.0 > Utc::now() {
             return Err(AppError::Unauthorized(
                 "Account is temporarily locked. Try again later.".to_string(),
             ));
@@ -572,8 +572,8 @@ pub async fn me(user: AuthUser, State(state): State<AppState>) -> AppResult<Json
         tier: org.tier,
         seats: org.seats,
         subscription_status: org.subscription_status,
-        current_period_end: org.current_period_end,
-        cancel_at_period_end: org.cancel_at_period_end,
+        current_period_end: org.current_period_end.map(|t| t.0),
+        cancel_at_period_end: *org.cancel_at_period_end,
     });
 
     Ok(Json(MeResponse {
@@ -767,7 +767,7 @@ pub async fn forgot_password(
     sqlx::query(
         r#"
         INSERT INTO password_reset_tokens (id, user_id, token_hash, expires_at)
-        VALUES ($1, $2, $3, $4)
+        VALUES (?, ?, ?, ?)
         ON CONFLICT (user_id) DO UPDATE
             SET id = EXCLUDED.id,
                 token_hash = EXCLUDED.token_hash,
@@ -778,7 +778,7 @@ pub async fn forgot_password(
     .bind(&id)
     .bind(&user.id)
     .bind(&token_hash)
-    .bind(expires_at)
+    .bind(expires_at.to_rfc3339())
     .execute(&state.db)
     .await
     .map_err(|e| AppError::Internal(format!("Failed to create reset token: {}", e)))?;
@@ -847,7 +847,7 @@ pub async fn reset_password(
         r#"
         UPDATE password_reset_tokens
         SET used_at = NOW()
-        WHERE token_hash = $1 AND used_at IS NULL AND expires_at > NOW()
+        WHERE token_hash = ? AND used_at IS NULL AND expires_at > NOW()
         RETURNING user_id
         "#,
     )
@@ -958,4 +958,342 @@ async fn send_reset_email(
         .map_err(|_| anyhow::anyhow!("SMTP send timed out after 15s"))?
         .map_err(Into::into)
         .map(|_| ())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::{HeaderMap, HeaderValue};
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+
+    // ── extract_client_ip ────────────────────────────────────────────────────
+
+    #[test]
+    fn trust_proxy_uses_x_forwarded_for() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-forwarded-for",
+            HeaderValue::from_static("203.0.113.1, 10.0.0.1"),
+        );
+        let ip = extract_client_ip(&headers, true, None);
+        assert_eq!(ip, "203.0.113.1");
+    }
+
+    #[test]
+    fn trust_proxy_falls_back_to_x_real_ip() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-real-ip", HeaderValue::from_static("203.0.113.42"));
+        let ip = extract_client_ip(&headers, true, None);
+        assert_eq!(ip, "203.0.113.42");
+    }
+
+    #[test]
+    fn no_trust_proxy_uses_peer_addr() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", HeaderValue::from_static("1.2.3.4"));
+        let peer = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 99)), 12345);
+        let ip = extract_client_ip(&headers, false, Some(peer));
+        assert_eq!(ip, "10.0.0.99");
+    }
+
+    #[test]
+    fn no_peer_addr_and_no_headers_returns_unknown() {
+        let headers = HeaderMap::new();
+        let ip = extract_client_ip(&headers, false, None);
+        assert_eq!(ip, "unknown");
+    }
+
+    #[test]
+    fn invalid_x_forwarded_for_falls_back_to_peer() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", HeaderValue::from_static("not-an-ip"));
+        let peer = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(5, 6, 7, 8)), 8080);
+        let ip = extract_client_ip(&headers, true, Some(peer));
+        assert_eq!(ip, "5.6.7.8");
+    }
+
+    // ── build_auth_cookies ───────────────────────────────────────────────────
+
+    #[test]
+    fn build_auth_cookies_returns_two_headers() {
+        let cookies = build_auth_cookies("access-tok", "refresh-tok", 900, 604800, false).unwrap();
+        assert_eq!(cookies.len(), 2);
+        let access_str = cookies[0].to_str().unwrap();
+        let refresh_str = cookies[1].to_str().unwrap();
+        assert!(access_str.contains("access_token=access-tok"));
+        assert!(access_str.contains("HttpOnly"));
+        assert!(access_str.contains("SameSite=Strict"));
+        assert!(access_str.contains("Max-Age=900"));
+        assert!(refresh_str.contains("refresh_token=refresh-tok"));
+        assert!(refresh_str.contains("Max-Age=604800"));
+    }
+
+    #[test]
+    fn build_auth_cookies_includes_secure_flag_when_enabled() {
+        let cookies = build_auth_cookies("a", "r", 900, 604800, true).unwrap();
+        assert!(cookies[0].to_str().unwrap().contains("Secure"));
+        assert!(cookies[1].to_str().unwrap().contains("Secure"));
+    }
+
+    #[test]
+    fn build_auth_cookies_omits_secure_flag_when_disabled() {
+        let cookies = build_auth_cookies("a", "r", 900, 604800, false).unwrap();
+        assert!(!cookies[0].to_str().unwrap().contains("Secure"));
+        assert!(!cookies[1].to_str().unwrap().contains("Secure"));
+    }
+
+    // ── build_clear_cookies ──────────────────────────────────────────────────
+
+    #[test]
+    fn build_clear_cookies_returns_two_expired_headers() {
+        let cookies = build_clear_cookies(false);
+        assert_eq!(cookies.len(), 2);
+        let access_str = cookies[0].to_str().unwrap();
+        let refresh_str = cookies[1].to_str().unwrap();
+        assert!(access_str.contains("access_token="));
+        assert!(access_str.contains("Max-Age=0"));
+        assert!(refresh_str.contains("refresh_token="));
+        assert!(refresh_str.contains("Max-Age=0"));
+    }
+
+    #[test]
+    fn build_clear_cookies_includes_secure_flag() {
+        let cookies = build_clear_cookies(true);
+        assert!(cookies[0].to_str().unwrap().contains("Secure"));
+    }
+
+    // ── extract_user_agent ───────────────────────────────────────────────────
+
+    #[test]
+    fn extract_user_agent_present() {
+        let mut headers = HeaderMap::new();
+        headers.insert("user-agent", HeaderValue::from_static("Mozilla/5.0"));
+        assert_eq!(extract_user_agent(&headers).as_deref(), Some("Mozilla/5.0"));
+    }
+
+    #[test]
+    fn extract_user_agent_absent() {
+        assert!(extract_user_agent(&HeaderMap::new()).is_none());
+    }
+
+    // ── hash_reset_token / generate_reset_token ──────────────────────────────
+
+    #[test]
+    fn hash_reset_token_deterministic() {
+        let h1 = hash_reset_token("tok", b"secret");
+        let h2 = hash_reset_token("tok", b"secret");
+        assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn hash_reset_token_different_inputs_differ() {
+        let h1 = hash_reset_token("tok1", b"secret");
+        let h2 = hash_reset_token("tok2", b"secret");
+        assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn generate_reset_token_is_64_hex_chars() {
+        let token = generate_reset_token();
+        assert_eq!(token.len(), 64);
+        assert!(token.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn generate_reset_token_produces_unique_values() {
+        assert_ne!(generate_reset_token(), generate_reset_token());
+    }
+
+    // ── handler integration tests ────────────────────────────────────────────
+
+    async fn make_test_app() -> axum::Router {
+        let state = crate::db::test_helpers::test_app_state().await;
+        axum::Router::new()
+            .nest("/api/v1", crate::api::router())
+            .with_state(state)
+    }
+
+    #[tokio::test]
+    async fn signup_valid_request_returns_200() {
+        use axum::body::Body;
+        use axum::http::{Request, StatusCode};
+        use tower::ServiceExt;
+
+        let app = make_test_app().await;
+        let addr: std::net::SocketAddr = "127.0.0.1:1234".parse().unwrap();
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/v1/auth/signup")
+            .header("content-type", "application/json")
+            .extension(axum::extract::ConnectInfo(addr))
+            .body(Body::from(
+                r#"{"email":"new@example.com","password":"StrongPass1!"}"#,
+            ))
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn signup_invalid_email_returns_422() {
+        use axum::body::Body;
+        use axum::http::{Request, StatusCode};
+        use tower::ServiceExt;
+
+        let app = make_test_app().await;
+        let addr: std::net::SocketAddr = "127.0.0.1:1234".parse().unwrap();
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/v1/auth/signup")
+            .header("content-type", "application/json")
+            .extension(axum::extract::ConnectInfo(addr))
+            .body(Body::from(
+                r#"{"email":"not-an-email","password":"StrongPass1!"}"#,
+            ))
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    #[tokio::test]
+    async fn signup_weak_password_returns_422() {
+        use axum::body::Body;
+        use axum::http::{Request, StatusCode};
+        use tower::ServiceExt;
+
+        let app = make_test_app().await;
+        let addr: std::net::SocketAddr = "127.0.0.1:1234".parse().unwrap();
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/v1/auth/signup")
+            .header("content-type", "application/json")
+            .extension(axum::extract::ConnectInfo(addr))
+            .body(Body::from(
+                r#"{"email":"user@example.com","password":"weak"}"#,
+            ))
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    #[tokio::test]
+    async fn signup_duplicate_email_returns_409() {
+        use axum::body::Body;
+        use axum::http::{Request, StatusCode};
+        use tower::ServiceExt;
+
+        let state = crate::db::test_helpers::test_app_state().await;
+        let app = axum::Router::new()
+            .nest("/api/v1", crate::api::router())
+            .with_state(state);
+        let addr: std::net::SocketAddr = "127.0.0.1:1234".parse().unwrap();
+        let body = r#"{"email":"dup@example.com","password":"StrongPass1!"}"#;
+
+        let r1 = Request::builder()
+            .method("POST")
+            .uri("/api/v1/auth/signup")
+            .header("content-type", "application/json")
+            .extension(axum::extract::ConnectInfo(addr))
+            .body(Body::from(body))
+            .unwrap();
+        let _ = app.clone().oneshot(r1).await.unwrap();
+
+        let r2 = Request::builder()
+            .method("POST")
+            .uri("/api/v1/auth/signup")
+            .header("content-type", "application/json")
+            .extension(axum::extract::ConnectInfo(addr))
+            .body(Body::from(body))
+            .unwrap();
+        let response = app.oneshot(r2).await.unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn login_after_signup_returns_200() {
+        use axum::body::Body;
+        use axum::http::{Request, StatusCode};
+        use tower::ServiceExt;
+
+        let state = crate::db::test_helpers::test_app_state().await;
+        let app = axum::Router::new()
+            .nest("/api/v1", crate::api::router())
+            .with_state(state);
+        let addr: std::net::SocketAddr = "127.0.0.1:1234".parse().unwrap();
+
+        let signup_req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/auth/signup")
+            .header("content-type", "application/json")
+            .extension(axum::extract::ConnectInfo(addr))
+            .body(Body::from(
+                r#"{"email":"login@example.com","password":"StrongPass1!"}"#,
+            ))
+            .unwrap();
+        let _ = app.clone().oneshot(signup_req).await.unwrap();
+
+        let login_req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/auth/login")
+            .header("content-type", "application/json")
+            .extension(axum::extract::ConnectInfo(addr))
+            .body(Body::from(
+                r#"{"email":"login@example.com","password":"StrongPass1!"}"#,
+            ))
+            .unwrap();
+        let response = app.oneshot(login_req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn login_wrong_password_returns_401() {
+        use axum::body::Body;
+        use axum::http::{Request, StatusCode};
+        use tower::ServiceExt;
+
+        let state = crate::db::test_helpers::test_app_state().await;
+        let app = axum::Router::new()
+            .nest("/api/v1", crate::api::router())
+            .with_state(state);
+        let addr: std::net::SocketAddr = "127.0.0.1:1234".parse().unwrap();
+
+        let signup_req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/auth/signup")
+            .header("content-type", "application/json")
+            .extension(axum::extract::ConnectInfo(addr))
+            .body(Body::from(
+                r#"{"email":"wrongpw@example.com","password":"StrongPass1!"}"#,
+            ))
+            .unwrap();
+        let _ = app.clone().oneshot(signup_req).await.unwrap();
+
+        let login_req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/auth/login")
+            .header("content-type", "application/json")
+            .extension(axum::extract::ConnectInfo(addr))
+            .body(Body::from(
+                r#"{"email":"wrongpw@example.com","password":"BadPass1!"}"#,
+            ))
+            .unwrap();
+        let response = app.oneshot(login_req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn me_without_auth_returns_401() {
+        use axum::body::Body;
+        use axum::http::{Request, StatusCode};
+        use tower::ServiceExt;
+
+        let app = make_test_app().await;
+        let request = Request::builder()
+            .method("GET")
+            .uri("/api/v1/auth/me")
+            .body(Body::empty())
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
 }

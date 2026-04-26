@@ -580,3 +580,77 @@ fn sha256_fingerprint(input: &str) -> String {
     let hash = Sha256::digest(input.as_bytes());
     hex::encode(&hash[..8]) // 8 bytes → 16 hex chars
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::{HeaderMap, HeaderValue};
+
+    fn headers_with_x_api_key(key: &str) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        h.insert("x-api-key", HeaderValue::from_str(key).unwrap());
+        h
+    }
+
+    fn headers_with_bearer(token: &str) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        h.insert(
+            "Authorization",
+            HeaderValue::from_str(&format!("Bearer {}", token)).unwrap(),
+        );
+        h
+    }
+
+    #[test]
+    fn x_api_key_header_preferred() {
+        let result = extract_api_key(&headers_with_x_api_key("my-key")).unwrap();
+        assert_eq!(result, "my-key");
+    }
+
+    #[test]
+    fn bearer_fallback_works() {
+        let result = extract_api_key(&headers_with_bearer("my-token")).unwrap();
+        assert_eq!(result, "my-token");
+    }
+
+    #[test]
+    fn missing_auth_returns_error() {
+        assert!(extract_api_key(&HeaderMap::new()).is_err());
+    }
+
+    #[test]
+    fn non_bearer_prefix_returns_error() {
+        let mut h = HeaderMap::new();
+        h.insert("Authorization", HeaderValue::from_static("Basic abc123"));
+        assert!(extract_api_key(&h).is_err());
+    }
+
+    #[test]
+    fn api_key_too_long_rejected_via_x_api_key() {
+        let long_key = "a".repeat(513);
+        assert!(extract_api_key(&headers_with_x_api_key(&long_key)).is_err());
+    }
+
+    #[test]
+    fn api_key_too_long_rejected_via_bearer() {
+        let long_key = "a".repeat(513);
+        assert!(extract_api_key(&headers_with_bearer(&long_key)).is_err());
+    }
+
+    #[test]
+    fn fingerprint_is_16_hex_chars() {
+        let fp = sha256_fingerprint("some-input");
+        assert_eq!(fp.len(), 16);
+        assert!(fp.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn fingerprint_is_deterministic() {
+        assert_eq!(sha256_fingerprint("hello"), sha256_fingerprint("hello"));
+    }
+
+    #[test]
+    fn fingerprint_differs_for_different_inputs() {
+        assert_ne!(sha256_fingerprint("foo"), sha256_fingerprint("bar"));
+    }
+}

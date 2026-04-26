@@ -266,7 +266,7 @@ async fn check_monitor(
     Ok(())
 }
 
-/// Cleanup old monitor checks to prevent database bloat
+#[allow(dead_code)]
 pub async fn cleanup_old_checks(pool: &DbPool, retention_days: i32) -> Result<u64> {
     let deleted = MonitorCheckRepository::cleanup_old_checks(pool, retention_days).await?;
     if deleted > 0 {

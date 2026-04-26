@@ -133,7 +133,7 @@ pub async fn ingest_segment(
         let limits = crate::billing::tiers::get_tier_limits(tier);
         if limits.replay_storage_bytes > 0 {
             let current_usage: (i64,) = sqlx::query_as(
-                "SELECT COALESCE(SUM(total_size_bytes), 0) FROM session_recordings WHERE project_id = ?"
+                "SELECT COALESCE(SUM(total_size_bytes), 0) FROM session_recordings WHERE project_id = $1"
             )
             .bind(&project.id)
             .fetch_one(&state.db)
@@ -283,7 +283,7 @@ pub async fn ingest_segment(
             .await?;
 
     // 8. Update recording stats (atomic increment to avoid race conditions)
-    sqlx::query("UPDATE session_recordings SET segment_count = segment_count + 1, total_size_bytes = total_size_bytes + ? WHERE id = ?")
+    sqlx::query("UPDATE session_recordings SET segment_count = segment_count + 1, total_size_bytes = total_size_bytes + $1 WHERE id = $2")
         .bind(decoded.len() as i64)
         .bind(&recording.id)
         .execute(&state.db)

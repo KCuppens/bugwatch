@@ -31,7 +31,7 @@ impl OrganizationRepository {
     ) -> Result<Organization> {
         let id = Uuid::new_v4().to_string();
         sqlx::query_as::<_, Organization>(
-            "INSERT INTO organizations (id, name, slug, owner_id, created_at, updated_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) RETURNING *",
+            "INSERT INTO organizations (id, name, slug, owner_id, created_at, updated_at) VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) RETURNING *",
         )
         .bind(&id)
         .bind(name)
@@ -44,7 +44,7 @@ impl OrganizationRepository {
 
     /// Find an organization by its slug.
     pub async fn find_by_slug(pool: &DbPool, slug: &str) -> Result<Option<Organization>> {
-        sqlx::query_as::<_, Organization>("SELECT * FROM organizations WHERE slug = ?")
+        sqlx::query_as::<_, Organization>("SELECT * FROM organizations WHERE slug = $1")
             .bind(slug)
             .fetch_optional(pool)
             .await
@@ -65,9 +65,9 @@ impl OrganizationRepository {
         let result = sqlx::query_as::<_, Organization>(
             r#"
             INSERT INTO organizations (id, name, slug, owner_id, created_at, updated_at)
-            SELECT ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+            SELECT $1, $2, $3, $4, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
             WHERE NOT EXISTS (
-                SELECT 1 FROM organizations WHERE owner_id = ?
+                SELECT 1 FROM organizations WHERE owner_id = $5
             )
             RETURNING *
             "#,
@@ -86,7 +86,7 @@ impl OrganizationRepository {
 
     /// Find organization by ID
     pub async fn find_by_id(pool: &DbPool, id: &str) -> Result<Option<Organization>> {
-        sqlx::query_as::<_, Organization>("SELECT * FROM organizations WHERE id = ?")
+        sqlx::query_as::<_, Organization>("SELECT * FROM organizations WHERE id = $1")
             .bind(id)
             .fetch_optional(pool)
             .await
@@ -110,11 +110,11 @@ impl OrganizationRepository {
         let result = sqlx::query_as::<_, Organization>(
             r#"
             SELECT * FROM (
-                SELECT o.* FROM organizations o WHERE o.owner_id = ?
+                SELECT o.* FROM organizations o WHERE o.owner_id = $1
                 UNION ALL
                 SELECT o.* FROM organizations o
                 JOIN organization_members om ON om.organization_id = o.id
-                WHERE om.user_id = ?
+                WHERE om.user_id = $2
             ) combined
             LIMIT 1
             "#,
@@ -145,7 +145,7 @@ impl OrganizationRepository {
     pub async fn update_name(pool: &DbPool, id: &str, name: &str) -> Result<Organization> {
         let now = chrono::Utc::now();
         let result = sqlx::query_as::<_, Organization>(
-            "UPDATE organizations SET name = ?, updated_at = ? WHERE id = ? RETURNING *",
+            "UPDATE organizations SET name = $1, updated_at = $2 WHERE id = $3 RETURNING *",
         )
         .bind(name)
         .bind(now.to_rfc3339())
@@ -173,16 +173,16 @@ impl OrganizationRepository {
         let result = sqlx::query_as::<_, Organization>(
             r#"
             UPDATE organizations SET
-                tier = ?,
-                seats = ?,
-                stripe_subscription_id = ?,
-                subscription_status = ?,
-                billing_interval = ?,
-                current_period_start = ?,
-                current_period_end = ?,
-                cancel_at_period_end = ?,
-                updated_at = ?
-            WHERE id = ?
+                tier = $1,
+                seats = $2,
+                stripe_subscription_id = $3,
+                subscription_status = $4,
+                billing_interval = $5,
+                current_period_start = $6,
+                current_period_end = $7,
+                cancel_at_period_end = $8,
+                updated_at = $9
+            WHERE id = $10
             RETURNING *
             "#,
         )
@@ -191,8 +191,8 @@ impl OrganizationRepository {
         .bind(stripe_subscription_id)
         .bind(subscription_status)
         .bind(billing_interval)
-        .bind(current_period_start.map(|d| d.to_rfc3339()))
-        .bind(current_period_end.map(|d| d.to_rfc3339()))
+        .bind(current_period_start.map(|dt| dt.to_rfc3339()))
+        .bind(current_period_end.map(|dt| dt.to_rfc3339()))
         .bind(cancel_at_period_end)
         .bind(now.to_rfc3339())
         .bind(id)
@@ -221,17 +221,17 @@ impl OrganizationRepository {
         let result = sqlx::query(
             r#"
             UPDATE organizations SET
-                tier = ?,
-                seats = ?,
-                stripe_subscription_id = ?,
-                subscription_status = ?,
-                billing_interval = ?,
-                current_period_start = ?,
-                current_period_end = ?,
-                cancel_at_period_end = ?,
-                updated_at = ?
-            WHERE id = ?
-              AND (stripe_subscription_id IS NULL OR stripe_subscription_id != ?)
+                tier = $1,
+                seats = $2,
+                stripe_subscription_id = $3,
+                subscription_status = $4,
+                billing_interval = $5,
+                current_period_start = $6,
+                current_period_end = $7,
+                cancel_at_period_end = $8,
+                updated_at = $9
+            WHERE id = $10
+              AND (stripe_subscription_id IS NULL OR stripe_subscription_id != $11)
             "#,
         )
         .bind(tier)
@@ -239,8 +239,8 @@ impl OrganizationRepository {
         .bind(subscription_id)
         .bind(subscription_status)
         .bind(billing_interval)
-        .bind(current_period_start.map(|d| d.to_rfc3339()))
-        .bind(current_period_end.map(|d| d.to_rfc3339()))
+        .bind(current_period_start.map(|dt| dt.to_rfc3339()))
+        .bind(current_period_end.map(|dt| dt.to_rfc3339()))
         .bind(cancel_at_period_end)
         .bind(now.to_rfc3339())
         .bind(id)
@@ -260,7 +260,7 @@ impl OrganizationRepository {
     ) -> Result<()> {
         let now = chrono::Utc::now();
         sqlx::query(
-            "UPDATE organizations SET stripe_customer_id = ?, updated_at = ? WHERE id = ? AND stripe_customer_id IS NULL",
+            "UPDATE organizations SET stripe_customer_id = $1, updated_at = $2 WHERE id = $3 AND stripe_customer_id IS NULL",
         )
         .bind(stripe_customer_id)
         .bind(now.to_rfc3339())
@@ -277,7 +277,7 @@ impl OrganizationRepository {
         stripe_customer_id: &str,
     ) -> Result<Option<Organization>> {
         sqlx::query_as::<_, Organization>(
-            "SELECT * FROM organizations WHERE stripe_customer_id = ?",
+            "SELECT * FROM organizations WHERE stripe_customer_id = $1",
         )
         .bind(stripe_customer_id)
         .fetch_optional(pool)
@@ -294,7 +294,7 @@ impl OrganizationRepository {
             r#"
             SELECT o.* FROM organizations o
             JOIN projects p ON p.organization_id = o.id
-            WHERE p.id = ?
+            WHERE p.id = $1
             "#,
         )
         .bind(project_id)
@@ -309,7 +309,7 @@ impl OrganizationRepository {
             r#"
             SELECT o.tier FROM organizations o
             JOIN projects p ON p.organization_id = o.id
-            WHERE p.id = ?
+            WHERE p.id = $1
             "#,
         )
         .bind(project_id)
@@ -325,7 +325,7 @@ impl OrganizationRepository {
             r#"
             SELECT o.tier FROM organizations o
             JOIN projects p ON p.organization_id = o.id
-            WHERE p.api_key = ?
+            WHERE p.api_key = $1
             "#,
         )
         .bind(api_key)
@@ -343,10 +343,10 @@ impl OrganizationRepository {
         // preventing a race where add_member slips in between a guard check and this write.
         let result = sqlx::query_as::<_, Organization>(
             r#"
-            UPDATE organizations SET seats = ?, updated_at = ?
-            WHERE id = ?
-              AND ? >= (
-                  SELECT COUNT(*) FROM organization_members WHERE organization_id = ?
+            UPDATE organizations SET seats = $1, updated_at = $2
+            WHERE id = $3
+              AND $4 >= (
+                  SELECT COUNT(*) FROM organization_members WHERE organization_id = $5
               )
             RETURNING *
             "#,
@@ -377,11 +377,11 @@ impl OrganizationRepository {
         sqlx::query_as::<_, Organization>(
             r#"
             UPDATE organizations SET
-                tax_id = COALESCE(?, tax_id),
-                billing_country = COALESCE(?, billing_country),
-                billing_address = COALESCE(?, billing_address),
-                updated_at = ?
-            WHERE id = ?
+                tax_id = COALESCE($1, tax_id),
+                billing_country = COALESCE($2, billing_country),
+                billing_address = COALESCE($3, billing_address),
+                updated_at = $4
+            WHERE id = $5
             RETURNING *
             "#,
         )
@@ -406,15 +406,15 @@ impl OrganizationRepository {
         let result = sqlx::query_as::<_, Organization>(
             r#"
             UPDATE organizations SET
-                payment_failed_at = ?,
-                grace_period_ends = ?,
-                updated_at = ?
-            WHERE id = ?
+                payment_failed_at = $1,
+                grace_period_ends = $2,
+                updated_at = $3
+            WHERE id = $4
             RETURNING *
             "#,
         )
-        .bind(payment_failed_at.map(|d| d.to_rfc3339()))
-        .bind(grace_period_ends.map(|d| d.to_rfc3339()))
+        .bind(payment_failed_at.map(|dt| dt.to_rfc3339()))
+        .bind(grace_period_ends.map(|dt| dt.to_rfc3339()))
         .bind(now.to_rfc3339())
         .bind(id)
         .fetch_one(pool)
@@ -438,7 +438,7 @@ impl OrganizationMemberRepository {
         let id = Uuid::new_v4().to_string();
         let now = chrono::Utc::now();
         sqlx::query_as::<_, OrganizationMember>(
-            "INSERT INTO organization_members (id, organization_id, user_id, role, created_at) VALUES (?, ?, ?, ?, ?) RETURNING *",
+            "INSERT INTO organization_members (id, organization_id, user_id, role, created_at) VALUES ($1, $2, $3, $4, $5) RETURNING *",
         )
         .bind(&id)
         .bind(organization_id)
@@ -470,8 +470,8 @@ impl OrganizationMemberRepository {
         let result = sqlx::query_as::<_, OrganizationMember>(
             r#"
             INSERT INTO organization_members (id, organization_id, user_id, role, created_at)
-            SELECT ?, ?, ?, ?, ?
-            WHERE (SELECT COUNT(*) FROM organization_members WHERE organization_id = ?) < ?
+            SELECT $1, $2, $3, $4, $5
+            WHERE (SELECT COUNT(*) FROM organization_members WHERE organization_id = $6) < $7
             RETURNING *
             "#,
         )
@@ -491,7 +491,7 @@ impl OrganizationMemberRepository {
 
     /// Remove a member from an organization
     pub async fn remove(pool: &DbPool, organization_id: &str, user_id: &str) -> Result<()> {
-        sqlx::query("DELETE FROM organization_members WHERE organization_id = ? AND user_id = ?")
+        sqlx::query("DELETE FROM organization_members WHERE organization_id = $1 AND user_id = $2")
             .bind(organization_id)
             .bind(user_id)
             .execute(pool)
@@ -503,7 +503,7 @@ impl OrganizationMemberRepository {
     pub async fn list(pool: &DbPool, organization_id: &str) -> Result<Vec<OrganizationMember>> {
         // Hard cap — no organization should ever need more than 10k members in one page.
         sqlx::query_as::<_, OrganizationMember>(
-            "SELECT * FROM organization_members WHERE organization_id = ? ORDER BY created_at LIMIT 10000",
+            "SELECT * FROM organization_members WHERE organization_id = $1 ORDER BY created_at LIMIT 10000",
         )
         .bind(organization_id)
         .fetch_all(pool)
@@ -514,7 +514,7 @@ impl OrganizationMemberRepository {
     /// Count members in an organization
     pub async fn count(pool: &DbPool, organization_id: &str) -> Result<i32> {
         let row: (i64,) =
-            sqlx::query_as("SELECT COUNT(*) FROM organization_members WHERE organization_id = ?")
+            sqlx::query_as("SELECT COUNT(*) FROM organization_members WHERE organization_id = $1")
                 .bind(organization_id)
                 .fetch_one(pool)
                 .await?;
@@ -528,7 +528,7 @@ impl OrganizationMemberRepository {
         user_id: &str,
     ) -> Result<Option<OrganizationMember>> {
         sqlx::query_as::<_, OrganizationMember>(
-            "SELECT * FROM organization_members WHERE organization_id = ? AND user_id = ? LIMIT 1",
+            "SELECT * FROM organization_members WHERE organization_id = $1 AND user_id = $2 LIMIT 1",
         )
         .bind(organization_id)
         .bind(user_id)
@@ -540,7 +540,7 @@ impl OrganizationMemberRepository {
     /// Check if user is member of organization
     pub async fn is_member(pool: &DbPool, organization_id: &str, user_id: &str) -> Result<bool> {
         let row: (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM organization_members WHERE organization_id = ? AND user_id = ?",
+            "SELECT COUNT(*) FROM organization_members WHERE organization_id = $1 AND user_id = $2",
         )
         .bind(organization_id)
         .bind(user_id)
@@ -557,7 +557,7 @@ impl OrganizationMemberRepository {
         role: &str,
     ) -> Result<()> {
         sqlx::query(
-            "UPDATE organization_members SET role = ? WHERE organization_id = ? AND user_id = ?",
+            "UPDATE organization_members SET role = $1 WHERE organization_id = $2 AND user_id = $3",
         )
         .bind(role)
         .bind(organization_id)
@@ -591,7 +591,7 @@ impl UsageRepository {
         let record = sqlx::query_as::<_, UsageRecord>(
             r#"
             INSERT INTO usage_records (id, organization_id, metric, count, period_start, period_end, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
             ON CONFLICT (organization_id, metric, period_start) DO UPDATE
             SET count = usage_records.count + excluded.count
             RETURNING *
@@ -617,7 +617,7 @@ impl UsageRepository {
         period_start: &str,
     ) -> Result<i32> {
         let row: Option<(i32,)> = sqlx::query_as(
-            "SELECT count FROM usage_records WHERE organization_id = ? AND metric = ? AND period_start = ?",
+            "SELECT count FROM usage_records WHERE organization_id = $1 AND metric = $2 AND period_start = $3",
         )
         .bind(organization_id)
         .bind(metric)
@@ -634,7 +634,7 @@ impl UsageRepository {
         period_start: chrono::DateTime<chrono::Utc>,
     ) -> Result<Vec<UsageRecord>> {
         sqlx::query_as::<_, UsageRecord>(
-            "SELECT * FROM usage_records WHERE organization_id = ? AND period_start = ?",
+            "SELECT * FROM usage_records WHERE organization_id = $1 AND period_start = $2",
         )
         .bind(organization_id)
         .bind(period_start.to_rfc3339())
@@ -646,7 +646,7 @@ impl UsageRepository {
     /// List all usage records for an organization across all periods.
     pub async fn list_all(pool: &DbPool, organization_id: &str) -> Result<Vec<UsageRecord>> {
         sqlx::query_as::<_, UsageRecord>(
-            "SELECT * FROM usage_records WHERE organization_id = ? ORDER BY created_at DESC",
+            "SELECT * FROM usage_records WHERE organization_id = $1 ORDER BY created_at DESC",
         )
         .bind(organization_id)
         .fetch_all(pool)
@@ -676,7 +676,7 @@ impl BillingEventRepository {
         sqlx::query_as::<_, BillingEvent>(
             r#"
             INSERT INTO billing_events (id, organization_id, event_type, stripe_event_id, amount_cents, currency, metadata, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             RETURNING *
             "#,
         )
@@ -708,7 +708,7 @@ impl BillingEventRepository {
         let result = sqlx::query(
             r#"
             INSERT INTO billing_events (id, organization_id, event_type, stripe_event_id, created_at)
-            VALUES (?, ?, ?, ?, ?)
+            VALUES ($1, $2, $3, $4, $5)
             ON CONFLICT (stripe_event_id) DO NOTHING
             "#,
         )
@@ -725,7 +725,7 @@ impl BillingEventRepository {
     /// Check if an event has already been processed (idempotency)
     pub async fn exists_by_stripe_event(pool: &DbPool, stripe_event_id: &str) -> Result<bool> {
         let row: (i64,) =
-            sqlx::query_as("SELECT COUNT(*) FROM billing_events WHERE stripe_event_id = ?")
+            sqlx::query_as("SELECT COUNT(*) FROM billing_events WHERE stripe_event_id = $1")
                 .bind(stripe_event_id)
                 .fetch_one(pool)
                 .await?;
@@ -740,7 +740,7 @@ impl BillingEventRepository {
     ) -> Result<Vec<BillingEvent>> {
         let limit = limit.max(1).min(1000);
         sqlx::query_as::<_, BillingEvent>(
-            "SELECT * FROM billing_events WHERE organization_id = ? ORDER BY created_at DESC LIMIT ?",
+            "SELECT * FROM billing_events WHERE organization_id = $1 ORDER BY created_at DESC LIMIT $2",
         )
         .bind(organization_id)
         .bind(limit)
@@ -1099,7 +1099,7 @@ mod tests {
         let org = OrganizationRepository::create(&pool, "u-fbpi", "FBPI Org", "fbpi-org-slug")
             .await
             .unwrap();
-        sqlx::query("INSERT INTO projects (id, name, slug, api_key, api_key_hash, owner_id, organization_id) VALUES (?, 'P', ?, ?, '', ?, ?)")
+        sqlx::query("INSERT INTO projects (id, name, slug, api_key, api_key_hash, owner_id, organization_id) VALUES ($1, 'P', $2, $3, '', $4, $5)")
             .bind("proj-fbpi").bind("slug-fbpi").bind("key-fbpi-999").bind("u-fbpi").bind(&org.id)
             .execute(&pool).await.unwrap();
         let found = OrganizationRepository::find_by_project_id(&pool, "proj-fbpi")

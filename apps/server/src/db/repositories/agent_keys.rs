@@ -78,7 +78,7 @@ impl AgentKeyRepository {
     pub async fn revoke(pool: &DbPool, id: &str) -> Result<()> {
         let now = chrono::Utc::now();
         sqlx::query("UPDATE agent_keys SET revoked_at = $1 WHERE id = $2")
-            .bind(&now)
+            .bind(now.to_rfc3339())
             .bind(id)
             .execute(pool)
             .await?;
@@ -89,7 +89,7 @@ impl AgentKeyRepository {
     pub async fn touch(pool: &DbPool, id: &str) -> Result<()> {
         let now = chrono::Utc::now();
         sqlx::query("UPDATE agent_keys SET last_used_at = $1 WHERE id = $2")
-            .bind(&now)
+            .bind(now.to_rfc3339())
             .bind(id)
             .execute(pool)
             .await?;
@@ -148,7 +148,7 @@ impl AgentAuditLogRepository {
         .map_err(Into::into)
     }
 
-    /// List audit logs for an organization (across all keys)
+    #[allow(dead_code)]
     pub async fn list_by_organization(
         pool: &DbPool,
         organization_id: &str,
@@ -169,5 +169,150 @@ impl AgentAuditLogRepository {
         .fetch_all(pool)
         .await
         .map_err(Into::into)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::{
+        models::{AgentAuditLog, AgentKey},
+        test_helpers::test_any_pool,
+    };
+
+    async fn make_key(pool: &DbPool, org_id: &str, key_hash: &str) -> AgentKey {
+        AgentKeyRepository::create(
+            pool,
+            org_id,
+            "Test Key",
+            key_hash,
+            "bw_tst_abc",
+            r#"["read"]"#,
+            "user-1",
+        )
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn create_and_find_by_id() {
+        let pool = test_any_pool().await;
+        let key = make_key(&pool, "org-1", "hash-1").await;
+        assert_eq!(key.organization_id, "org-1");
+        assert_eq!(key.name, "Test Key");
+        let found = AgentKeyRepository::find_by_id(&pool, &key.id)
+            .await
+            .unwrap();
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().id, key.id);
+    }
+
+    #[tokio::test]
+    async fn find_by_id_missing_returns_none() {
+        let pool = test_any_pool().await;
+        let result = AgentKeyRepository::find_by_id(&pool, "nonexistent")
+            .await
+            .unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn find_by_hash_returns_active_key() {
+        let pool = test_any_pool().await;
+        let key = make_key(&pool, "org-2", "hash-fh").await;
+        let found = AgentKeyRepository::find_by_hash(&pool, "hash-fh")
+            .await
+            .unwrap();
+        assert_eq!(found.unwrap().id, key.id);
+    }
+
+    #[tokio::test]
+    async fn find_by_hash_revoked_returns_none() {
+        let pool = test_any_pool().await;
+        let key = make_key(&pool, "org-3", "hash-rev").await;
+        AgentKeyRepository::revoke(&pool, &key.id).await.unwrap();
+        let found = AgentKeyRepository::find_by_hash(&pool, "hash-rev")
+            .await
+            .unwrap();
+        assert!(found.is_none());
+    }
+
+    #[tokio::test]
+    async fn list_by_organization_scoped() {
+        let pool = test_any_pool().await;
+        make_key(&pool, "org-list", "h-l-1").await;
+        make_key(&pool, "org-list", "h-l-2").await;
+        make_key(&pool, "org-other", "h-l-3").await;
+        let keys = AgentKeyRepository::list_by_organization(&pool, "org-list")
+            .await
+            .unwrap();
+        assert_eq!(keys.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn revoke_sets_revoked_at() {
+        let pool = test_any_pool().await;
+        let key = make_key(&pool, "org-rev", "hash-r2").await;
+        assert!(key.revoked_at.is_none());
+        AgentKeyRepository::revoke(&pool, &key.id).await.unwrap();
+        let updated = AgentKeyRepository::find_by_id(&pool, &key.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(updated.revoked_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn touch_sets_last_used_at() {
+        let pool = test_any_pool().await;
+        let key = make_key(&pool, "org-touch", "hash-touch").await;
+        assert!(key.last_used_at.is_none());
+        AgentKeyRepository::touch(&pool, &key.id).await.unwrap();
+        let updated = AgentKeyRepository::find_by_id(&pool, &key.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(updated.last_used_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn audit_log_create_and_list_by_key() {
+        let pool = test_any_pool().await;
+        let key = make_key(&pool, "org-al", "hash-al").await;
+        let log: AgentAuditLog = AgentAuditLogRepository::create(
+            &pool,
+            &key.id,
+            "create_issue",
+            Some("issue"),
+            Some("issue-1"),
+            None,
+            Some("1.2.3.4"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(log.action, "create_issue");
+        assert_eq!(log.ip_address.as_deref(), Some("1.2.3.4"));
+        let logs = AgentAuditLogRepository::list_by_key(&pool, &key.id, 10)
+            .await
+            .unwrap();
+        assert_eq!(logs.len(), 1);
+        assert_eq!(logs[0].agent_key_id, key.id);
+    }
+
+    #[tokio::test]
+    async fn audit_log_list_by_organization_across_keys() {
+        let pool = test_any_pool().await;
+        let k1 = make_key(&pool, "org-al2", "h-al2-1").await;
+        let k2 = make_key(&pool, "org-al2", "h-al2-2").await;
+        AgentAuditLogRepository::create(&pool, &k1.id, "action_a", None, None, None, None)
+            .await
+            .unwrap();
+        AgentAuditLogRepository::create(&pool, &k2.id, "action_b", None, None, None, None)
+            .await
+            .unwrap();
+        let logs = AgentAuditLogRepository::list_by_organization(&pool, "org-al2", 10)
+            .await
+            .unwrap();
+        assert_eq!(logs.len(), 2);
     }
 }

@@ -577,7 +577,8 @@ fn create_app(state: AppState) -> Router {
         // Request-wide timeout — prevents slow/hung upstreams from pinning a
         // worker indefinitely. 60s is generous relative to normal p99 latency
         // and still short enough that orphaned requests are recycled.
-        .layer(tower_http::timeout::TimeoutLayer::new(
+        .layer(tower_http::timeout::TimeoutLayer::with_status_code(
+            StatusCode::REQUEST_TIMEOUT,
             std::time::Duration::from_secs(60),
         ))
         // Security headers — prevent clickjacking, MIME sniffing, and control referrer

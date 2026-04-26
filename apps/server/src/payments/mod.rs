@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 pub mod challenge;
 pub mod store;
 pub mod verify;
@@ -182,7 +184,7 @@ pub async fn verify_and_apply_payment(
 
 /// Atomically increments org's x402 capacity column inside an existing sqlx transaction.
 pub async fn apply_capacity_grant_in_tx(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    tx: &mut sqlx::Transaction<'_, sqlx::Any>,
     org_id: &str,
     grant_type: &str,
     quantity: i64,
@@ -357,6 +359,42 @@ pub async fn x402_feature_response(
             );
             crate::AppError::PaymentRequired(error_msg.to_string())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use base64::{engine::general_purpose::STANDARD, Engine};
+
+    fn b64(s: &str) -> String {
+        STANDARD.encode(s.as_bytes())
+    }
+
+    #[test]
+    fn valid_proof_decoded() {
+        let encoded = b64(r#"{"nonce":"abc-123","tx_hash":"0xdeadbeef"}"#);
+        let proof = decode_payment_proof(&encoded).unwrap();
+        assert_eq!(proof.nonce, "abc-123");
+        assert_eq!(proof.tx_hash, "0xdeadbeef");
+    }
+
+    #[test]
+    fn invalid_base64_returns_error() {
+        let err = decode_payment_proof("not!valid!base64!!!").unwrap_err();
+        assert!(err.contains("Base64 decode failed"), "got: {}", err);
+    }
+
+    #[test]
+    fn valid_base64_invalid_json_returns_error() {
+        let err = decode_payment_proof(&b64("not json")).unwrap_err();
+        assert!(err.contains("JSON parse failed"), "got: {}", err);
+    }
+
+    #[test]
+    fn missing_tx_hash_field_returns_error() {
+        let err = decode_payment_proof(&b64(r#"{"nonce":"only-nonce"}"#)).unwrap_err();
+        assert!(err.contains("JSON parse failed"), "got: {}", err);
     }
 }
 

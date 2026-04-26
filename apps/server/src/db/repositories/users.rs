@@ -42,11 +42,18 @@ impl UserRepository {
         if ids.is_empty() {
             return Ok(vec![]);
         }
-        sqlx::query_as::<_, User>("SELECT * FROM users WHERE id = ANY($1)")
-            .bind(ids)
-            .fetch_all(pool)
-            .await
-            .map_err(Into::into)
+        let placeholders = ids
+            .iter()
+            .enumerate()
+            .map(|(i, _)| format!("${}", i + 1))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let query = format!("SELECT * FROM users WHERE id IN ({})", placeholders);
+        let mut q = sqlx::query_as::<_, User>(&query);
+        for id in ids {
+            q = q.bind(id);
+        }
+        q.fetch_all(pool).await.map_err(Into::into)
     }
 
     pub async fn find_by_email(pool: &DbPool, email: &str) -> Result<Option<User>> {
@@ -58,30 +65,10 @@ impl UserRepository {
     }
 
     pub async fn increment_failed_attempts(pool: &DbPool, id: &str) -> Result<()> {
-        // H5: Acquire a PostgreSQL advisory transaction lock on the user ID before
-        // the UPDATE to serialize concurrent increment_failed_attempts calls for the
-        // same user.  Without this lock, two simultaneous failed login attempts could
-        // both read `failed_login_attempts = 4` and both fail to trigger the lockout
-        // (or both double-count).  The lock is released automatically when the
-        // transaction commits or rolls back.
-        //
-        // Lock key: first 8 bytes of the user ID string, folded into an i64.
-        // Collisions are extremely unlikely (UUIDs are high-entropy) and harmless
-        // (they only cause two unrelated users to briefly serialize on lock acquire).
-        let lock_key: i64 = {
-            let b = id.as_bytes();
-            b.iter()
-                .take(8)
-                .enumerate()
-                .fold(0i64, |acc, (i, &byte)| acc | ((byte as i64) << (i * 8)))
-        };
-
         let mut tx = pool.begin().await?;
 
-        sqlx::query("SELECT pg_advisory_xact_lock($1)")
-            .bind(lock_key)
-            .execute(&mut *tx)
-            .await?;
+        // Calculate lockout time in Rust to avoid DB-specific interval syntax
+        let locked_until_str = (chrono::Utc::now() + chrono::Duration::minutes(15)).to_rfc3339();
 
         sqlx::query(
             r#"
@@ -91,12 +78,13 @@ impl UserRepository {
                 locked_until = CASE
                     -- Lock after 5th failed attempt (pre-increment value >= 4 ≡ post-increment >= 5)
                     WHEN failed_login_attempts >= 4
-                    THEN NOW() + INTERVAL '15 minutes'
+                    THEN $1
                     ELSE locked_until
                 END
-            WHERE id = $1
+            WHERE id = $2
             "#,
         )
+        .bind(&locked_until_str)
         .bind(id)
         .execute(&mut *tx)
         .await?;
@@ -131,5 +119,159 @@ impl UserRepository {
             .execute(pool)
             .await?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::test_helpers::test_any_pool;
+
+    #[tokio::test]
+    async fn create_and_find_by_id() {
+        let pool = test_any_pool().await;
+        let user = UserRepository::create(&pool, "a@example.com", "hash1", Some("Alice"))
+            .await
+            .unwrap();
+        assert_eq!(user.email, "a@example.com");
+        assert_eq!(user.name.as_deref(), Some("Alice"));
+        assert!(!*user.email_verified);
+
+        let found = UserRepository::find_by_id(&pool, &user.id).await.unwrap();
+        assert_eq!(found.unwrap().id, user.id);
+    }
+
+    #[tokio::test]
+    async fn find_by_id_missing_returns_none() {
+        let pool = test_any_pool().await;
+        let result = UserRepository::find_by_id(&pool, "nonexistent")
+            .await
+            .unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn find_by_email() {
+        let pool = test_any_pool().await;
+        UserRepository::create(&pool, "b@example.com", "hash2", None)
+            .await
+            .unwrap();
+        let found = UserRepository::find_by_email(&pool, "b@example.com")
+            .await
+            .unwrap();
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().email, "b@example.com");
+    }
+
+    #[tokio::test]
+    async fn find_by_email_missing_returns_none() {
+        let pool = test_any_pool().await;
+        let result = UserRepository::find_by_email(&pool, "nobody@example.com")
+            .await
+            .unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn find_by_ids_batch() {
+        let pool = test_any_pool().await;
+        let u1 = UserRepository::create(&pool, "c1@example.com", "h", None)
+            .await
+            .unwrap();
+        let u2 = UserRepository::create(&pool, "c2@example.com", "h", None)
+            .await
+            .unwrap();
+        let ids = vec![u1.id.clone(), u2.id.clone()];
+        let users = UserRepository::find_by_ids(&pool, &ids).await.unwrap();
+        assert_eq!(users.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn find_by_ids_empty_returns_empty() {
+        let pool = test_any_pool().await;
+        let users = UserRepository::find_by_ids(&pool, &[]).await.unwrap();
+        assert!(users.is_empty());
+    }
+
+    #[tokio::test]
+    async fn update_name() {
+        let pool = test_any_pool().await;
+        let user = UserRepository::create(&pool, "d@example.com", "h", Some("Old"))
+            .await
+            .unwrap();
+        UserRepository::update_name(&pool, &user.id, "New Name")
+            .await
+            .unwrap();
+        let updated = UserRepository::find_by_id(&pool, &user.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(updated.name.as_deref(), Some("New Name"));
+    }
+
+    #[tokio::test]
+    async fn update_password() {
+        let pool = test_any_pool().await;
+        let user = UserRepository::create(&pool, "e@example.com", "old_hash", None)
+            .await
+            .unwrap();
+        UserRepository::update_password(&pool, &user.id, "new_hash")
+            .await
+            .unwrap();
+        let updated = UserRepository::find_by_id(&pool, &user.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(updated.password_hash, "new_hash");
+    }
+
+    #[tokio::test]
+    async fn increment_and_reset_failed_attempts() {
+        let pool = test_any_pool().await;
+        let user = UserRepository::create(&pool, "f@example.com", "h", None)
+            .await
+            .unwrap();
+        assert_eq!(user.failed_login_attempts, 0);
+
+        UserRepository::increment_failed_attempts(&pool, &user.id)
+            .await
+            .unwrap();
+        let after = UserRepository::find_by_id(&pool, &user.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(after.failed_login_attempts, 1);
+
+        UserRepository::reset_failed_attempts(&pool, &user.id)
+            .await
+            .unwrap();
+        let reset = UserRepository::find_by_id(&pool, &user.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(reset.failed_login_attempts, 0);
+        assert!(reset.locked_until.is_none());
+    }
+
+    #[tokio::test]
+    async fn lockout_after_five_failed_attempts() {
+        let pool = test_any_pool().await;
+        let user = UserRepository::create(&pool, "g@example.com", "h", None)
+            .await
+            .unwrap();
+        for _ in 0..5 {
+            UserRepository::increment_failed_attempts(&pool, &user.id)
+                .await
+                .unwrap();
+        }
+        let locked = UserRepository::find_by_id(&pool, &user.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(locked.failed_login_attempts, 5);
+        assert!(
+            locked.locked_until.is_some(),
+            "user should be locked after 5 failed attempts"
+        );
     }
 }

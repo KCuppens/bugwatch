@@ -204,6 +204,11 @@ pub async fn create_organization(
             "User already has an organization".to_string(),
         ))?;
 
+    // Add the owner to organization_members so list_members/seat counts are consistent
+    let _ = OrganizationMemberRepository::add(&state.db, &org.id, &user.id, "owner")
+        .await
+        .map_err(db_err)?;
+
     tracing::info!(org_id = %org.id, owner_id = %user.id, org_name = %name, "Organization created");
 
     Ok(Json(OrganizationResponse {
@@ -369,12 +374,18 @@ pub async fn add_member(
 
     // Atomically insert only if the seat limit has not been reached — prevents TOCTOU
     // where two concurrent add_member calls both pass a separate count check.
+    // SelfHosted mode has no seat limits.
+    let seat_limit = if state.config.deployment_mode.is_self_hosted() {
+        i32::MAX
+    } else {
+        org.seats
+    };
     let member = OrganizationMemberRepository::add_if_seat_available(
         &state.db,
         &org.id,
         &target_user.id,
         &role,
-        org.seats,
+        seat_limit,
     )
     .await
     .map_err(db_err)?
@@ -2217,5 +2228,326 @@ mod tests {
         let slug = generate_org_slug("test");
         let suffix = slug.split('-').last().unwrap();
         assert_eq!(suffix.len(), 8);
+    }
+
+    // ── integration helpers ───────────────────────────────────────────────────
+
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+    };
+    use serde_json::Value;
+    use tower::ServiceExt;
+
+    async fn make_app() -> axum::Router {
+        let state = crate::db::test_helpers::test_app_state().await;
+        axum::Router::new()
+            .nest("/api/v1", crate::api::router())
+            .with_state(state)
+    }
+
+    fn peer() -> std::net::SocketAddr {
+        "127.0.0.1:1234".parse().unwrap()
+    }
+
+    async fn signup_and_token(app: &axum::Router, email: &str) -> String {
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/auth/signup")
+            .header("content-type", "application/json")
+            .extension(axum::extract::ConnectInfo(peer()))
+            .body(Body::from(format!(
+                r#"{{"email":"{}","password":"StrongPass1!"}}"#,
+                email
+            )))
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        for v in resp.headers().get_all("set-cookie") {
+            let s = v.to_str().unwrap_or("");
+            if let Some(rest) = s.strip_prefix("access_token=") {
+                return rest.split(';').next().unwrap_or("").to_string();
+            }
+        }
+        panic!("no access_token in signup response");
+    }
+
+    async fn create_org(app: &axum::Router, token: &str, name: &str) -> Value {
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/organization")
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::from(format!(r#"{{"name":"{}"}}"#, name)))
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
+    // ── auth guards ───────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn get_organization_without_auth_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/organization")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn create_organization_without_auth_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/organization")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"name":"test"}"#))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn list_members_without_auth_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/organization/members")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn add_member_without_auth_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/organization/members")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"email":"a@b.com"}"#))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn remove_member_without_auth_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("DELETE")
+            .uri("/api/v1/organization/members/some-user-id")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    // ── organization CRUD ─────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn get_organization_without_org_returns_404() {
+        let app = make_app().await;
+        let token = signup_and_token(&app, "billing_noorg@example.com").await;
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/organization")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+
+    #[tokio::test]
+    async fn create_organization_succeeds() {
+        let app = make_app().await;
+        let token = signup_and_token(&app, "billing_createorg@example.com").await;
+        let json = create_org(&app, &token, "My Company").await;
+        assert_eq!(json["organization"]["name"], "My Company");
+        assert_eq!(json["is_owner"], true);
+        assert_eq!(json["members_count"], 1);
+    }
+
+    #[tokio::test]
+    async fn create_organization_duplicate_returns_conflict() {
+        let app = make_app().await;
+        let token = signup_and_token(&app, "billing_duporg@example.com").await;
+        create_org(&app, &token, "First Org").await;
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/organization")
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::from(r#"{"name":"Second Org"}"#))
+            .unwrap();
+        let status = app.oneshot(req).await.unwrap().status();
+        assert_eq!(status, StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn create_organization_empty_name_returns_400() {
+        let app = make_app().await;
+        let token = signup_and_token(&app, "billing_emptyorg@example.com").await;
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/organization")
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::from(r#"{"name":"   "}"#))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    #[tokio::test]
+    async fn get_organization_returns_org_after_create() {
+        let app = make_app().await;
+        let token = signup_and_token(&app, "billing_getorg@example.com").await;
+        create_org(&app, &token, "Get Org Test").await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/organization")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["organization"]["name"], "Get Org Test");
+        assert_eq!(json["is_owner"], true);
+    }
+
+    #[tokio::test]
+    async fn update_organization_name_succeeds() {
+        let app = make_app().await;
+        let token = signup_and_token(&app, "billing_updateorg@example.com").await;
+        create_org(&app, &token, "Old Name").await;
+
+        let req = Request::builder()
+            .method("PATCH")
+            .uri("/api/v1/organization")
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::from(r#"{"name":"New Name"}"#))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["organization"]["name"], "New Name");
+    }
+
+    // ── member management ─────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn list_members_returns_members_after_create() {
+        let app = make_app().await;
+        let token = signup_and_token(&app, "billing_listmembers@example.com").await;
+        create_org(&app, &token, "Members Org").await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/organization/members")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(json.as_array().is_some());
+        assert!(!json.as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn add_member_nonexistent_user_returns_404() {
+        let app = make_app().await;
+        let token = signup_and_token(&app, "billing_addmember@example.com").await;
+        create_org(&app, &token, "Add Member Org").await;
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/organization/members")
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::from(r#"{"email":"nobody@notexist.example"}"#))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+
+    #[tokio::test]
+    async fn add_and_remove_member_succeeds() {
+        let app = make_app().await;
+        let owner_token = signup_and_token(&app, "billing_owner_ar@example.com").await;
+        let member_token = signup_and_token(&app, "billing_member_ar@example.com").await;
+        let _ = member_token; // member just needs to exist in DB
+
+        let org_json = create_org(&app, &owner_token, "AR Org").await;
+        let _org_id = org_json["organization"]["id"].as_str().unwrap().to_string();
+
+        // Add the member
+        let add_req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/organization/members")
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", owner_token))
+            .body(Body::from(r#"{"email":"billing_member_ar@example.com"}"#))
+            .unwrap();
+        let add_resp = app.clone().oneshot(add_req).await.unwrap();
+        assert_eq!(add_resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(add_resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let member_json: Value = serde_json::from_slice(&bytes).unwrap();
+        let member_user_id = member_json["member"]["user_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        // Remove the member
+        let del_req = Request::builder()
+            .method("DELETE")
+            .uri(format!("/api/v1/organization/members/{}", member_user_id))
+            .header("authorization", format!("Bearer {}", owner_token))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(del_req).await.unwrap().status(),
+            StatusCode::NO_CONTENT
+        );
     }
 }

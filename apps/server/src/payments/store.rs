@@ -1,6 +1,5 @@
-use chrono::{DateTime, Utc};
+use crate::db::{types::Timestamp, DbPool};
 use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
@@ -17,18 +16,18 @@ pub struct AgentPayment {
     pub amount_usdc: i64,
     pub tx_hash: Option<String>,
     pub status: String,
-    pub expires_at: DateTime<Utc>,
-    pub created_at: DateTime<Utc>,
-    pub verified_at: Option<DateTime<Utc>>,
-    pub consumed_at: Option<DateTime<Utc>>,
+    pub expires_at: Timestamp,
+    pub created_at: Timestamp,
+    pub verified_at: Option<Timestamp>,
+    pub consumed_at: Option<Timestamp>,
 }
 
 pub struct PaymentStore {
-    pub pool: PgPool,
+    pub pool: DbPool,
 }
 
 impl PaymentStore {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: DbPool) -> Self {
         Self { pool }
     }
 
@@ -43,7 +42,7 @@ impl PaymentStore {
         ttl_secs: i64,
     ) -> Result<AgentPayment, sqlx::Error> {
         let id = Uuid::new_v4().to_string();
-        let expires_at = Utc::now() + chrono::Duration::seconds(ttl_secs);
+        let expires_at = chrono::Utc::now() + chrono::Duration::seconds(ttl_secs);
         sqlx::query_as::<_, AgentPayment>(
             r#"INSERT INTO agent_payments
                (id, nonce, organization_id, agent_key_id, resource, payment_type, feature, amount_usdc, expires_at)
@@ -59,7 +58,7 @@ impl PaymentStore {
         .bind(resource)
         .bind(feature)
         .bind(amount_usdc)
-        .bind(expires_at)
+        .bind(expires_at.to_rfc3339())
         .fetch_one(&self.pool)
         .await
     }
@@ -76,7 +75,7 @@ impl PaymentStore {
         ttl_secs: i64,
     ) -> Result<AgentPayment, sqlx::Error> {
         let id = Uuid::new_v4().to_string();
-        let expires_at = Utc::now() + chrono::Duration::seconds(ttl_secs);
+        let expires_at = chrono::Utc::now() + chrono::Duration::seconds(ttl_secs);
         sqlx::query_as::<_, AgentPayment>(
             r#"INSERT INTO agent_payments
                (id, nonce, organization_id, agent_key_id, resource, payment_type, grant_type, grant_quantity, amount_usdc, expires_at)
@@ -93,7 +92,7 @@ impl PaymentStore {
         .bind(grant_type)
         .bind(grant_quantity)
         .bind(amount_usdc)
-        .bind(expires_at)
+        .bind(expires_at.to_rfc3339())
         .fetch_one(&self.pool)
         .await
     }
@@ -113,8 +112,8 @@ impl PaymentStore {
     /// Atomically claims a pending payment nonce. Returns None if nonce not found or already used/expired.
     pub async fn claim_pending(&self, nonce: &str) -> Result<Option<AgentPayment>, sqlx::Error> {
         sqlx::query_as::<_, AgentPayment>(
-            "UPDATE agent_payments SET status = 'verified', verified_at = NOW()
-             WHERE nonce = $1 AND status = 'pending' AND expires_at > NOW()
+            "UPDATE agent_payments SET status = 'verified', verified_at = CURRENT_TIMESTAMP
+             WHERE nonce = $1 AND status = 'pending' AND expires_at > CURRENT_TIMESTAMP
              RETURNING *",
         )
         .bind(nonce)
@@ -137,7 +136,7 @@ impl PaymentStore {
 
     pub async fn expire_old(&self) -> Result<u64, sqlx::Error> {
         let result = sqlx::query(
-            "UPDATE agent_payments SET status = 'expired' WHERE status IN ('pending', 'verified') AND expires_at < NOW()",
+            "UPDATE agent_payments SET status = 'expired' WHERE status IN ('pending', 'verified') AND expires_at < CURRENT_TIMESTAMP",
         )
         .execute(&self.pool)
         .await?;

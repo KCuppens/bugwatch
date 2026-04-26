@@ -8,91 +8,6 @@ use crate::{
     AppState,
 };
 
-/// Check if user has the required tier or higher.
-/// Returns the tier name if access is granted, or an error if not.
-/// In self-hosted mode, all tier checks are bypassed.
-/// Note: does not check for x402 payment bypass — use inline `x402_verified` checks in handlers.
-pub async fn require_tier(
-    required_tier: &str,
-    user: &AuthUser,
-    state: &AppState,
-) -> Result<String, (StatusCode, String)> {
-    // Self-hosted mode: all tiers are unlocked
-    if state.config.deployment_mode.is_self_hosted() {
-        return Ok("team".to_string());
-    }
-
-    let org = OrganizationRepository::find_by_user(&state.db, &user.id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or((
-            StatusCode::FORBIDDEN,
-            "No organization found. Please set up your account.".to_string(),
-        ))?;
-
-    // Block access for canceled/unpaid subscriptions regardless of tier.
-    if matches!(org.subscription_status.as_str(), "canceled" | "unpaid") {
-        return Err((
-            StatusCode::PAYMENT_REQUIRED,
-            "Your subscription has ended. Please renew to continue using this feature.".to_string(),
-        ));
-    }
-
-    if !tier_includes(&org.tier, required_tier) {
-        return Err((
-            StatusCode::PAYMENT_REQUIRED,
-            format!(
-                "This feature requires {} tier or higher. You are currently on {} tier.",
-                required_tier, org.tier
-            ),
-        ));
-    }
-
-    Ok(org.tier)
-}
-
-/// Check if user has access to a specific feature.
-/// In self-hosted mode, all features are unlocked.
-/// Note: does not check for x402 payment bypass — use inline `x402_verified` checks in handlers.
-pub async fn require_feature(
-    feature: &str,
-    user: &AuthUser,
-    state: &AppState,
-) -> Result<String, (StatusCode, String)> {
-    // Self-hosted mode: all features are unlocked
-    if state.config.deployment_mode.is_self_hosted() {
-        return Ok("team".to_string());
-    }
-
-    let org = OrganizationRepository::find_by_user(&state.db, &user.id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or((
-            StatusCode::FORBIDDEN,
-            "No organization found. Please set up your account.".to_string(),
-        ))?;
-
-    // Block access for canceled/unpaid subscriptions regardless of tier.
-    if matches!(org.subscription_status.as_str(), "canceled" | "unpaid") {
-        return Err((
-            StatusCode::PAYMENT_REQUIRED,
-            "Your subscription has ended. Please renew to continue using this feature.".to_string(),
-        ));
-    }
-
-    if !can_access_feature(&org.tier, feature) {
-        return Err((
-            StatusCode::PAYMENT_REQUIRED,
-            format!(
-                "The '{}' feature is not available on your current plan ({}). Please upgrade to access this feature.",
-                feature, org.tier
-            ),
-        ));
-    }
-
-    Ok(org.tier)
-}
-
 /// Guard struct for easy tier checks in handlers
 pub struct TierGuard {
     pub tier: String,
@@ -139,8 +54,7 @@ impl TierGuard {
         })
     }
 
-    /// Create a tier guard for a user with request extensions, detecting x402 payment bypass.
-    /// Checks for `X402PaymentVerified` in request extensions and sets `x402_bypass` accordingly.
+    #[allow(dead_code)]
     pub async fn for_user_with_parts(
         user: &AuthUser,
         state: &AppState,
@@ -152,7 +66,7 @@ impl TierGuard {
         Ok(guard)
     }
 
-    /// Check if user has access to the required tier
+    #[allow(dead_code)]
     pub fn has_tier(&self, required: &str) -> bool {
         self.x402_bypass || tier_includes(&self.tier, required)
     }
@@ -162,7 +76,7 @@ impl TierGuard {
         self.x402_bypass || can_access_feature(&self.tier, feature)
     }
 
-    /// Require a specific tier, returning error if not met
+    #[allow(dead_code)]
     pub fn require_tier(&self, required: &str) -> Result<(), (StatusCode, String)> {
         // If a valid x402 feature_access payment was already verified by middleware, bypass this check
         if self.x402_bypass {
@@ -180,7 +94,7 @@ impl TierGuard {
         Ok(())
     }
 
-    /// Require a specific feature, returning error if not available
+    #[allow(dead_code)]
     pub fn require_feature(&self, feature: &str) -> Result<(), (StatusCode, String)> {
         // If a valid x402 feature_access payment was already verified by middleware, bypass this check
         if self.x402_bypass {
@@ -198,25 +112,114 @@ impl TierGuard {
         Ok(())
     }
 
-    /// Get the tier enum
+    #[allow(dead_code)]
     pub fn tier_enum(&self) -> Tier {
         Tier::from_str(&self.tier)
     }
 }
 
-/// Feature names that can be gated
-pub mod features {
-    pub const WEBHOOKS: &str = "webhooks";
-    pub const PAGERDUTY: &str = "pagerduty";
-    pub const OPSGENIE: &str = "opsgenie";
-    pub const SESSION_REPLAY: &str = "session_replay";
-    pub const PERFORMANCE_MONITORING: &str = "performance_monitoring";
-    pub const SERVER_MONITORING: &str = "server_monitoring";
-    pub const EMAIL_NOTIFICATIONS: &str = "email_notifications";
-    pub const JIRA_INTEGRATION: &str = "jira";
-    pub const LINEAR_INTEGRATION: &str = "linear";
-    pub const GITHUB_INTEGRATION: &str = "github";
-    pub const SSO: &str = "sso";
-    pub const ADVANCED_ALERTING: &str = "advanced_alerting";
-    pub const API_ACCESS: &str = "api_access";
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_guard(tier: &str, x402: bool) -> TierGuard {
+        TierGuard {
+            tier: tier.to_string(),
+            organization_id: "org-1".to_string(),
+            x402_bypass: x402,
+        }
+    }
+
+    // ── has_tier ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn has_tier_pro_satisfies_free_requirement() {
+        assert!(make_guard("pro", false).has_tier("free"));
+    }
+
+    #[test]
+    fn has_tier_free_does_not_satisfy_pro() {
+        assert!(!make_guard("free", false).has_tier("pro"));
+    }
+
+    #[test]
+    fn has_tier_x402_bypass_always_true() {
+        assert!(make_guard("free", true).has_tier("enterprise"));
+    }
+
+    // ── has_feature ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn has_feature_pro_includes_webhooks() {
+        assert!(make_guard("pro", false).has_feature("webhooks"));
+    }
+
+    #[test]
+    fn has_feature_free_excludes_webhooks() {
+        assert!(!make_guard("free", false).has_feature("webhooks"));
+    }
+
+    #[test]
+    fn has_feature_x402_bypass_always_true() {
+        assert!(make_guard("free", true).has_feature("sso"));
+    }
+
+    // ── require_tier ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn require_tier_passes_when_sufficient() {
+        assert!(make_guard("team", false).require_tier("pro").is_ok());
+    }
+
+    #[test]
+    fn require_tier_fails_when_insufficient() {
+        let result = make_guard("free", false).require_tier("pro");
+        assert!(result.is_err());
+        let (status, msg) = result.unwrap_err();
+        assert_eq!(status, axum::http::StatusCode::PAYMENT_REQUIRED);
+        assert!(msg.contains("pro"));
+    }
+
+    #[test]
+    fn require_tier_x402_bypass_always_ok() {
+        assert!(make_guard("free", true).require_tier("enterprise").is_ok());
+    }
+
+    // ── require_feature ──────────────────────────────────────────────────────
+
+    #[test]
+    fn require_feature_passes_for_available_feature() {
+        assert!(make_guard("team", false)
+            .require_feature("session_replay")
+            .is_ok());
+    }
+
+    #[test]
+    fn require_feature_fails_for_unavailable_feature() {
+        let result = make_guard("free", false).require_feature("session_replay");
+        assert!(result.is_err());
+        let (status, msg) = result.unwrap_err();
+        assert_eq!(status, axum::http::StatusCode::PAYMENT_REQUIRED);
+        assert!(msg.contains("session_replay"));
+    }
+
+    #[test]
+    fn require_feature_x402_bypass_always_ok() {
+        assert!(make_guard("free", true).require_feature("sso").is_ok());
+    }
+
+    // ── tier_enum ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn tier_enum_parses_correctly() {
+        use crate::billing::tiers::Tier;
+        assert_eq!(make_guard("pro", false).tier_enum(), Tier::Pro);
+        assert_eq!(make_guard("team", false).tier_enum(), Tier::Team);
+        assert_eq!(
+            make_guard("enterprise", false).tier_enum(),
+            Tier::Enterprise
+        );
+        assert_eq!(make_guard("free", false).tier_enum(), Tier::Free);
+        assert_eq!(make_guard("unknown", false).tier_enum(), Tier::Free);
+    }
 }

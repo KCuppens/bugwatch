@@ -1,45 +1,49 @@
 use anyhow::Result;
-use sqlx::{postgres::PgPoolOptions, PgPool};
+use sqlx::{any::AnyPoolOptions, postgres::PgPoolOptions, AnyPool};
 use std::time::Duration;
 use tracing::info;
 
 pub mod models;
 pub mod repositories;
+#[cfg(test)]
+pub mod test_helpers;
+pub mod types;
 
-pub type DbPool = PgPool;
-
-/// Initialize the database connection pool and run migrations
-pub async fn init(database_url: &str) -> Result<DbPool> {
-    init_with_pool_size(database_url, 100).await
-}
+pub type DbPool = AnyPool;
 
 /// Initialize the database connection pool with a configurable max size
 pub async fn init_with_pool_size(database_url: &str, max_connections: u32) -> Result<DbPool> {
+    sqlx::any::install_default_drivers();
+
     // Keep a warm floor of connections so bursty traffic doesn't pay the
     // full handshake cost on the first few requests. ~15% of max, clamped.
-    let min_connections = max_connections.saturating_div(7).clamp(10, 25);
+    let min_connections = max_connections.saturating_div(7).clamp(2, 25);
     info!(
         "Connecting to database (max_connections={}, min_connections={}): {}",
         max_connections, min_connections, database_url
     );
 
-    let pool = PgPoolOptions::new()
+    let pool = AnyPoolOptions::new()
         .max_connections(max_connections)
         .min_connections(min_connections)
-        .acquire_timeout(Duration::from_secs(5))
+        .acquire_timeout(Duration::from_secs(30))
         .idle_timeout(Duration::from_secs(600))
         .max_lifetime(Duration::from_secs(1800))
         .connect(database_url)
         .await?;
 
-    // Run migrations
-    run_migrations(&pool).await?;
+    // Run migrations using a direct PgPool for Postgres-specific migration SQL
+    let pg_pool = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(database_url)
+        .await?;
+    run_migrations(&pg_pool).await?;
 
     info!("Database initialized successfully");
     Ok(pool)
 }
 
-async fn run_migrations(pool: &PgPool) -> Result<()> {
+pub(crate) async fn run_migrations(pool: &sqlx::PgPool) -> Result<()> {
     info!("Running database migrations...");
 
     // Create migrations tracking table if not exists

@@ -178,3 +178,162 @@ impl CircuitBreaker {
         self.state.load(Ordering::Relaxed) == CB_OPEN
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── validate_monitor_url ─────────────────────────────────────────────────
+
+    #[test]
+    fn valid_https_url_passes() {
+        assert!(validate_monitor_url("https://api.example.com/health").is_ok());
+    }
+
+    #[test]
+    fn valid_http_url_passes() {
+        assert!(validate_monitor_url("http://example.com").is_ok());
+    }
+
+    #[test]
+    fn localhost_is_blocked() {
+        assert!(validate_monitor_url("http://localhost:8080").is_err());
+    }
+
+    #[test]
+    fn loopback_ip_is_blocked() {
+        assert!(validate_monitor_url("http://127.0.0.1:5432").is_err());
+    }
+
+    #[test]
+    fn all_zeros_is_blocked() {
+        assert!(validate_monitor_url("http://0.0.0.0").is_err());
+    }
+
+    #[test]
+    fn private_10_network_is_blocked() {
+        assert!(validate_monitor_url("http://10.0.0.1/internal").is_err());
+    }
+
+    #[test]
+    fn private_192_168_is_blocked() {
+        assert!(validate_monitor_url("http://192.168.1.100").is_err());
+    }
+
+    #[test]
+    fn private_172_16_is_blocked() {
+        assert!(validate_monitor_url("http://172.16.0.1").is_err());
+    }
+
+    #[test]
+    fn link_local_metadata_ip_is_blocked() {
+        assert!(validate_monitor_url("http://169.254.169.254/latest/meta-data").is_err());
+    }
+
+    #[test]
+    fn google_metadata_host_is_blocked() {
+        assert!(validate_monitor_url("http://metadata.google.internal").is_err());
+    }
+
+    #[test]
+    fn ipv6_loopback_is_blocked() {
+        assert!(validate_monitor_url("http://[::1]/").is_err());
+    }
+
+    #[test]
+    fn ftp_scheme_is_rejected() {
+        assert!(validate_monitor_url("ftp://example.com/file").is_err());
+    }
+
+    #[test]
+    fn file_scheme_is_rejected() {
+        assert!(validate_monitor_url("file:///etc/passwd").is_err());
+    }
+
+    #[test]
+    fn invalid_url_returns_error() {
+        assert!(validate_monitor_url("not-a-url").is_err());
+        assert!(validate_monitor_url("://bad").is_err());
+    }
+
+    #[test]
+    fn url_with_no_scheme_is_rejected() {
+        // Plain hostnames without scheme are not valid URLs
+        assert!(validate_monitor_url("example.com/path").is_err());
+    }
+
+    // ── CircuitBreaker ───────────────────────────────────────────────────────
+
+    #[test]
+    fn new_circuit_starts_closed() {
+        let cb = CircuitBreaker::new("test", 3, 60);
+        assert!(cb.allow_request());
+        assert!(!cb.is_open());
+    }
+
+    #[test]
+    fn success_keeps_circuit_closed() {
+        let cb = CircuitBreaker::new("test", 3, 60);
+        cb.record_success();
+        assert!(cb.allow_request());
+        assert!(!cb.is_open());
+    }
+
+    #[test]
+    fn failures_below_threshold_keep_circuit_closed() {
+        let cb = CircuitBreaker::new("test", 3, 60);
+        cb.record_failure();
+        cb.record_failure();
+        assert!(cb.allow_request());
+        assert!(!cb.is_open());
+    }
+
+    #[test]
+    fn failures_at_threshold_open_circuit() {
+        let cb = CircuitBreaker::new("test", 3, 60);
+        cb.record_failure();
+        cb.record_failure();
+        cb.record_failure();
+        assert!(cb.is_open());
+        assert!(!cb.allow_request());
+    }
+
+    #[test]
+    fn success_after_open_resets_to_closed() {
+        let cb = CircuitBreaker::new("test", 2, 0);
+        cb.record_failure();
+        cb.record_failure();
+        assert!(cb.is_open());
+        // Force half-open by draining the timeout (timeout=0)
+        // allow_request will CAS to half-open when timeout elapsed
+        let _ = cb.allow_request(); // may flip to half-open
+        cb.record_success();
+        assert!(cb.allow_request());
+        assert!(!cb.is_open());
+    }
+
+    #[test]
+    fn success_immediately_resets_failure_count() {
+        let cb = CircuitBreaker::new("test", 5, 60);
+        cb.record_failure();
+        cb.record_failure();
+        cb.record_success(); // reset
+        cb.record_failure();
+        cb.record_failure();
+        // Only 2 failures after reset — still below threshold of 5
+        assert!(cb.allow_request());
+        assert!(!cb.is_open());
+    }
+
+    #[test]
+    fn half_open_allows_request_without_rejection() {
+        // Force circuit directly to HalfOpen state (CB_HALF_OPEN = 2)
+        let cb = CircuitBreaker::new("test-half", 5, 60);
+        cb.state
+            .store(super::CB_HALF_OPEN, std::sync::atomic::Ordering::Relaxed);
+        assert!(
+            cb.allow_request(),
+            "HalfOpen state should allow probe request"
+        );
+    }
+}

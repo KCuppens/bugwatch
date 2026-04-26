@@ -177,3 +177,131 @@ impl IntoResponse for AppError {
         (status, Json(body)).into_response()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::StatusCode;
+    use axum::response::IntoResponse;
+
+    #[test]
+    fn not_found_is_404() {
+        let r = AppError::NotFound("item".to_string()).into_response();
+        assert_eq!(r.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn bad_request_is_400() {
+        let r = AppError::BadRequest("bad".to_string()).into_response();
+        assert_eq!(r.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn unauthorized_is_401() {
+        let r = AppError::Unauthorized("unauth".to_string()).into_response();
+        assert_eq!(r.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[test]
+    fn forbidden_is_403() {
+        let r = AppError::Forbidden("forbidden".to_string()).into_response();
+        assert_eq!(r.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[test]
+    fn conflict_is_409() {
+        let r = AppError::Conflict("dup".to_string()).into_response();
+        assert_eq!(r.status(), StatusCode::CONFLICT);
+    }
+
+    #[test]
+    fn payment_required_is_402() {
+        let r = AppError::PaymentRequired("pay".to_string()).into_response();
+        assert_eq!(r.status(), StatusCode::PAYMENT_REQUIRED);
+    }
+
+    #[test]
+    fn internal_is_500() {
+        let r = AppError::Internal("oops".to_string()).into_response();
+        assert_eq!(r.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[test]
+    fn validation_is_422() {
+        let r = AppError::Validation("invalid field".to_string()).into_response();
+        assert_eq!(r.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    #[test]
+    fn anyhow_is_500() {
+        let r = AppError::Anyhow(anyhow::anyhow!("internal")).into_response();
+        assert_eq!(r.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[test]
+    fn database_error_is_500() {
+        let r = AppError::Database(sqlx::Error::RowNotFound).into_response();
+        assert_eq!(r.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[test]
+    fn rate_limit_exceeded_is_429_with_retry_after_header() {
+        let r = AppError::RateLimitExceeded {
+            retry_after_secs: 30,
+            limit: 100,
+            remaining: 0,
+        }
+        .into_response();
+        assert_eq!(r.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert!(
+            r.headers().contains_key("retry-after"),
+            "must have Retry-After header"
+        );
+        assert!(
+            r.headers().contains_key("x-ratelimit-limit"),
+            "must have X-RateLimit-Limit header"
+        );
+        assert!(
+            r.headers().contains_key("x-ratelimit-remaining"),
+            "must have X-RateLimit-Remaining header"
+        );
+    }
+
+    #[test]
+    fn payment_required_with_challenge_is_402() {
+        let r = AppError::PaymentRequiredWithChallenge {
+            message: "pay".to_string(),
+            challenge: serde_json::json!({"amount": "1.00"}),
+        }
+        .into_response();
+        assert_eq!(r.status(), StatusCode::PAYMENT_REQUIRED);
+    }
+
+    #[test]
+    fn app_error_display_messages() {
+        assert!(AppError::NotFound("x".to_string())
+            .to_string()
+            .contains("Not found"));
+        assert!(AppError::BadRequest("x".to_string())
+            .to_string()
+            .contains("Bad request"));
+        assert!(AppError::Unauthorized("x".to_string())
+            .to_string()
+            .contains("Unauthorized"));
+        assert!(AppError::Forbidden("x".to_string())
+            .to_string()
+            .contains("Forbidden"));
+        assert!(AppError::Conflict("x".to_string())
+            .to_string()
+            .contains("Conflict"));
+        assert!(AppError::PaymentRequired("x".to_string())
+            .to_string()
+            .contains("Payment required"));
+        assert!(AppError::Internal("x".to_string())
+            .to_string()
+            .contains("Internal"));
+        assert!(AppError::Validation("x".to_string())
+            .to_string()
+            .contains("Validation"));
+    }
+}

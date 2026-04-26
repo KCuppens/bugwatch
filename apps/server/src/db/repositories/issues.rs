@@ -24,7 +24,7 @@ impl IssueRepository {
         let issue = sqlx::query_as::<_, Issue>(
             r#"
             INSERT INTO issues (id, project_id, fingerprint, title, level, first_seen, last_seen, environment, count)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 1)
             ON CONFLICT (project_id, fingerprint) DO UPDATE
             SET last_seen = excluded.last_seen, count = issues.count + 1, environment = excluded.environment
             RETURNING *
@@ -47,7 +47,7 @@ impl IssueRepository {
     }
 
     pub async fn find_by_id(pool: &DbPool, id: &str) -> Result<Option<Issue>> {
-        sqlx::query_as::<_, Issue>("SELECT * FROM issues WHERE id = ?")
+        sqlx::query_as::<_, Issue>("SELECT * FROM issues WHERE id = $1")
             .bind(id)
             .fetch_optional(pool)
             .await
@@ -59,16 +59,18 @@ impl IssueRepository {
         project_id: &str,
         fingerprint: &str,
     ) -> Result<Option<Issue>> {
-        sqlx::query_as::<_, Issue>("SELECT * FROM issues WHERE project_id = ? AND fingerprint = ?")
-            .bind(project_id)
-            .bind(fingerprint)
-            .fetch_optional(pool)
-            .await
-            .map_err(Into::into)
+        sqlx::query_as::<_, Issue>(
+            "SELECT * FROM issues WHERE project_id = $1 AND fingerprint = $2",
+        )
+        .bind(project_id)
+        .bind(fingerprint)
+        .fetch_optional(pool)
+        .await
+        .map_err(Into::into)
     }
 
     pub async fn update_status(pool: &DbPool, id: &str, status: &str) -> Result<()> {
-        sqlx::query("UPDATE issues SET status = ? WHERE id = ?")
+        sqlx::query("UPDATE issues SET status = $1 WHERE id = $2")
             .bind(status)
             .bind(id)
             .execute(pool)
@@ -122,13 +124,13 @@ impl IssueRepository {
         status: Option<&str>,
     ) -> Result<i64> {
         let (count,): (i64,) = if let Some(s) = status {
-            sqlx::query_as("SELECT COUNT(*) FROM issues WHERE project_id = ? AND status = ?")
+            sqlx::query_as("SELECT COUNT(*) FROM issues WHERE project_id = $1 AND status = $2")
                 .bind(project_id)
                 .bind(s)
                 .fetch_one(pool)
                 .await?
         } else {
-            sqlx::query_as("SELECT COUNT(*) FROM issues WHERE project_id = ?")
+            sqlx::query_as("SELECT COUNT(*) FROM issues WHERE project_id = $1")
                 .bind(project_id)
                 .fetch_one(pool)
                 .await?
@@ -142,7 +144,7 @@ impl IssueRepository {
         status: &str,
     ) -> Result<Option<Issue>> {
         let issue =
-            sqlx::query_as::<_, Issue>("UPDATE issues SET status = ? WHERE id = ? RETURNING *")
+            sqlx::query_as::<_, Issue>("UPDATE issues SET status = $1 WHERE id = $2 RETURNING *")
                 .bind(status)
                 .bind(id)
                 .fetch_optional(pool)
@@ -158,7 +160,7 @@ impl IssueRepository {
         project_id: &str,
         status: &str,
     ) -> Result<()> {
-        let result = sqlx::query("UPDATE issues SET status = ? WHERE id = ? AND project_id = ?")
+        let result = sqlx::query("UPDATE issues SET status = $1 WHERE id = $2 AND project_id = $3")
             .bind(status)
             .bind(id)
             .bind(project_id)
@@ -171,7 +173,7 @@ impl IssueRepository {
     }
 
     pub async fn delete(pool: &DbPool, id: &str) -> Result<()> {
-        sqlx::query("DELETE FROM issues WHERE id = ?")
+        sqlx::query("DELETE FROM issues WHERE id = $1")
             .bind(id)
             .execute(pool)
             .await?;
@@ -189,10 +191,12 @@ impl IssueRepository {
         offset: i64,
     ) -> Result<Vec<Issue>> {
         let limit = limit.min(1000);
-        let mut query = String::from("SELECT * FROM issues WHERE project_id = ?");
+        let mut param_idx: u32 = 1;
+        let mut query = format!("SELECT * FROM issues WHERE project_id = ${}", param_idx);
+        param_idx += 1;
         let mut params: Vec<String> = vec![project_id.to_string()];
 
-        build_filter_clauses(filters, &mut query, &mut params);
+        build_filter_clauses(filters, &mut query, &mut params, &mut param_idx);
 
         // Sorting
         let sort_col = match sort_field {
@@ -206,8 +210,11 @@ impl IssueRepository {
             _ => "DESC",
         };
         query.push_str(&format!(
-            " ORDER BY {} {} LIMIT ? OFFSET ?",
-            sort_col, sort_dir,
+            " ORDER BY {} {} LIMIT ${} OFFSET ${}",
+            sort_col,
+            sort_dir,
+            param_idx,
+            param_idx + 1,
         ));
 
         let mut q = sqlx::query_as::<_, Issue>(&query);
@@ -225,10 +232,15 @@ impl IssueRepository {
         project_id: &str,
         filters: &SearchFilters,
     ) -> Result<i64> {
-        let mut query = String::from("SELECT COUNT(*) FROM issues WHERE project_id = ?");
+        let mut param_idx: u32 = 1;
+        let mut query = format!(
+            "SELECT COUNT(*) FROM issues WHERE project_id = ${}",
+            param_idx
+        );
+        param_idx += 1;
         let mut params: Vec<String> = vec![project_id.to_string()];
 
-        build_filter_clauses(filters, &mut query, &mut params);
+        build_filter_clauses(filters, &mut query, &mut params, &mut param_idx);
 
         let mut q = sqlx::query_as::<_, (i64,)>(&query);
         for p in &params {
@@ -246,13 +258,13 @@ impl IssueRepository {
         let rows = sqlx::query_as::<_, (String, String, i64)>(
             r#"
             SELECT 'level' as facet_type, level as facet_value, COUNT(*) as count
-             FROM issues WHERE project_id = ? GROUP BY level LIMIT 1000
+             FROM issues WHERE project_id = $1 GROUP BY level LIMIT 1000
             UNION ALL
             SELECT 'status' as facet_type, status as facet_value, COUNT(*) as count
-             FROM issues WHERE project_id = ? GROUP BY status LIMIT 1000
+             FROM issues WHERE project_id = $2 GROUP BY status LIMIT 1000
             UNION ALL
             SELECT 'environment' as facet_type, environment as facet_value, COUNT(*) as count
-             FROM issues WHERE project_id = ? GROUP BY environment LIMIT 1000
+             FROM issues WHERE project_id = $3 GROUP BY environment LIMIT 1000
             "#,
         )
         .bind(project_id)
@@ -290,8 +302,13 @@ impl IssueRepository {
 }
 
 /// Append WHERE clause conditions for all search filters to the query builder.
-/// Mutates `query` and `params` in-place. Uses `?` positional placeholders.
-fn build_filter_clauses(filters: &SearchFilters, query: &mut String, params: &mut Vec<String>) {
+/// Mutates `query`, `params`, and `param_idx` in-place. Uses `$N` positional placeholders.
+fn build_filter_clauses(
+    filters: &SearchFilters,
+    query: &mut String,
+    params: &mut Vec<String>,
+    param_idx: &mut u32,
+) {
     for (field, values) in [
         ("status", &filters.status),
         ("level", &filters.level),
@@ -307,7 +324,14 @@ fn build_filter_clauses(filters: &SearchFilters, query: &mut String, params: &mu
         };
         if let Some(vals) = values {
             if !vals.is_empty() {
-                let placeholders: Vec<&str> = vals.iter().map(|_| "?").collect();
+                let placeholders: Vec<String> = vals
+                    .iter()
+                    .map(|_| {
+                        let p = format!("${}", *param_idx);
+                        *param_idx += 1;
+                        p
+                    })
+                    .collect();
                 query.push_str(&format!(
                     " AND {} IN ({})",
                     safe_col,
@@ -327,7 +351,8 @@ fn build_filter_clauses(filters: &SearchFilters, query: &mut String, params: &mu
         (filters.users_lt, "user_count <"),
     ] {
         if let Some(v) = opt_val {
-            query.push_str(&format!(" AND {} ?", clause));
+            query.push_str(&format!(" AND {} ${}", clause, *param_idx));
+            *param_idx += 1;
             params.push(v.to_string());
         }
     }
@@ -339,7 +364,8 @@ fn build_filter_clauses(filters: &SearchFilters, query: &mut String, params: &mu
         (&filters.last_seen_before, "last_seen <"),
     ] {
         if let Some(v) = opt_val {
-            query.push_str(&format!(" AND {} ?", clause));
+            query.push_str(&format!(" AND {} ${}", clause, *param_idx));
+            *param_idx += 1;
             params.push(v.clone());
         }
     }
@@ -349,7 +375,12 @@ fn build_filter_clauses(filters: &SearchFilters, query: &mut String, params: &mu
             .replace('\\', "\\\\")
             .replace('%', "\\%")
             .replace('_', "\\_");
-        query.push_str(" AND (title LIKE ? ESCAPE '\\' OR fingerprint LIKE ? ESCAPE '\\')");
+        query.push_str(&format!(
+            " AND (title LIKE ${} ESCAPE '\\' OR fingerprint LIKE ${} ESCAPE '\\')",
+            *param_idx,
+            *param_idx + 1
+        ));
+        *param_idx += 2;
         params.push(format!("%{}%", escaped));
         params.push(format!("%{}%", escaped));
     }
@@ -406,16 +437,19 @@ impl IssueRepository {
             return Ok(vec![]);
         }
 
-        let placeholders = project_ids
-            .iter()
-            .map(|_| "?")
+        let n = project_ids.len();
+        let placeholders = (1..=n)
+            .map(|i| format!("${}", i))
             .collect::<Vec<_>>()
             .join(", ");
         let issues = if let Some(s) = status {
             let sql = format!(
-                "SELECT * FROM issues WHERE project_id IN ({}) AND status = ?
-                 ORDER BY last_seen DESC LIMIT ? OFFSET ?",
-                placeholders
+                "SELECT * FROM issues WHERE project_id IN ({}) AND status = ${}
+                 ORDER BY last_seen DESC LIMIT ${} OFFSET ${}",
+                placeholders,
+                n + 1,
+                n + 2,
+                n + 3
             );
             let mut q = sqlx::query_as::<_, Issue>(&sql);
             for pid in project_ids {
@@ -425,8 +459,10 @@ impl IssueRepository {
         } else {
             let sql = format!(
                 "SELECT * FROM issues WHERE project_id IN ({})
-                 ORDER BY last_seen DESC LIMIT ? OFFSET ?",
-                placeholders
+                 ORDER BY last_seen DESC LIMIT ${} OFFSET ${}",
+                placeholders,
+                n + 1,
+                n + 2
             );
             let mut q = sqlx::query_as::<_, Issue>(&sql);
             for pid in project_ids {
@@ -448,15 +484,16 @@ impl IssueRepository {
             return Ok(0);
         }
 
-        let placeholders = project_ids
-            .iter()
-            .map(|_| "?")
+        let n = project_ids.len();
+        let placeholders = (1..=n)
+            .map(|i| format!("${}", i))
             .collect::<Vec<_>>()
             .join(", ");
         let (count,): (i64,) = if let Some(s) = status {
             let sql = format!(
-                "SELECT COUNT(*) FROM issues WHERE project_id IN ({}) AND status = ?",
-                placeholders
+                "SELECT COUNT(*) FROM issues WHERE project_id IN ({}) AND status = ${}",
+                placeholders,
+                n + 1
             );
             let mut q = sqlx::query_as::<_, (i64,)>(&sql);
             for pid in project_ids {
@@ -487,9 +524,9 @@ impl IssueRepository {
             return Ok(vec![]);
         }
 
-        let placeholders = project_ids
-            .iter()
-            .map(|_| "?")
+        let n = project_ids.len();
+        let placeholders = (1..=n)
+            .map(|i| format!("${}", i))
             .collect::<Vec<_>>()
             .join(", ");
         let sql = format!(

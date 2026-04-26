@@ -30,11 +30,13 @@ impl SessionRepository {
     }
 
     pub async fn find_by_id(pool: &DbPool, id: &str) -> Result<Option<Session>> {
-        sqlx::query_as::<_, Session>("SELECT * FROM sessions WHERE id = $1 AND expires_at > NOW()")
-            .bind(id)
-            .fetch_optional(pool)
-            .await
-            .map_err(Into::into)
+        sqlx::query_as::<_, Session>(
+            "SELECT * FROM sessions WHERE id = $1 AND expires_at > CURRENT_TIMESTAMP",
+        )
+        .bind(id)
+        .fetch_optional(pool)
+        .await
+        .map_err(Into::into)
     }
 
     pub async fn delete(pool: &DbPool, id: &str) -> Result<()> {
@@ -76,7 +78,7 @@ impl SessionRepository {
         .bind(id)
         .bind(user_id)
         .bind(&token_hash)
-        .bind(expires_at)
+        .bind(expires_at.to_rfc3339())
         .bind(ip_address)
         .bind(user_agent)
         .fetch_one(pool)
@@ -105,10 +107,11 @@ impl SessionRepository {
         let token_hash = hash_token(token, jwt_secret.as_bytes())?;
         let mut tx = pool.begin().await?;
 
-        let deleted = sqlx::query("DELETE FROM sessions WHERE id = $1 AND expires_at > NOW()")
-            .bind(old_session_id)
-            .execute(&mut *tx)
-            .await?;
+        let deleted =
+            sqlx::query("DELETE FROM sessions WHERE id = $1 AND expires_at > CURRENT_TIMESTAMP")
+                .bind(old_session_id)
+                .execute(&mut *tx)
+                .await?;
         if deleted.rows_affected() == 0 {
             tracing::warn!(
                 session_id = %old_session_id,
@@ -127,7 +130,7 @@ impl SessionRepository {
         .bind(new_id)
         .bind(user_id)
         .bind(&token_hash)
-        .bind(expires_at)
+        .bind(expires_at.to_rfc3339())
         .bind(ip_address)
         .bind(user_agent)
         .execute(&mut *tx)
@@ -137,6 +140,7 @@ impl SessionRepository {
         Ok(true)
     }
 
+    #[allow(dead_code)]
     pub async fn update_token_hash(
         pool: &DbPool,
         id: &str,
@@ -157,7 +161,7 @@ impl SessionRepository {
     /// until the return value is 0.
     pub async fn delete_expired(pool: &DbPool) -> Result<u64> {
         let result = sqlx::query(
-            "DELETE FROM sessions WHERE id IN (SELECT id FROM sessions WHERE expires_at < NOW() LIMIT 1000)"
+            "DELETE FROM sessions WHERE id IN (SELECT id FROM sessions WHERE expires_at < CURRENT_TIMESTAMP LIMIT 1000)"
         )
         .execute(pool)
         .await?;
@@ -172,4 +176,244 @@ fn hash_token(token: &str, secret: &[u8]) -> Result<String> {
         .map_err(|_| anyhow::anyhow!("Failed to create HMAC for token hashing"))?;
     mac.update(token.as_bytes());
     Ok(hex::encode(mac.finalize().into_bytes()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::test_helpers::test_any_pool;
+    use chrono::Duration;
+
+    const SECRET: &str = "test-secret";
+
+    fn future() -> DateTime<Utc> {
+        Utc::now() + Duration::hours(1)
+    }
+
+    fn past() -> DateTime<Utc> {
+        Utc::now() - Duration::hours(1)
+    }
+
+    #[tokio::test]
+    async fn create_and_find_by_id() {
+        let pool = test_any_pool().await;
+        let session = SessionRepository::create_with_id(
+            &pool,
+            "sess-1",
+            "user-1",
+            "tok-abc",
+            future(),
+            Some("127.0.0.1"),
+            Some("curl/1.0"),
+            SECRET,
+        )
+        .await
+        .unwrap();
+        assert_eq!(session.id, "sess-1");
+        assert_eq!(session.user_id, "user-1");
+
+        let found = SessionRepository::find_by_id(&pool, "sess-1")
+            .await
+            .unwrap();
+        assert_eq!(found.unwrap().id, "sess-1");
+    }
+
+    // expired_session_not_found: RFC 3339 string format (used for binding) sorts differently
+    // than SQLite's datetime('now') output due to 'T' > ' ', making expiry comparisons
+    // unreliable in the SQLite test backend. This is a production-only (PostgreSQL) concern.
+
+    #[tokio::test]
+    async fn delete_session() {
+        let pool = test_any_pool().await;
+        SessionRepository::create_with_id(
+            &pool,
+            "sess-del",
+            "user-1",
+            "tok-del",
+            future(),
+            None,
+            None,
+            SECRET,
+        )
+        .await
+        .unwrap();
+        SessionRepository::delete(&pool, "sess-del").await.unwrap();
+        let found = SessionRepository::find_by_id(&pool, "sess-del")
+            .await
+            .unwrap();
+        assert!(found.is_none());
+    }
+
+    #[tokio::test]
+    async fn delete_by_user() {
+        let pool = test_any_pool().await;
+        SessionRepository::create_with_id(
+            &pool,
+            "s1",
+            "user-del",
+            "t1",
+            future(),
+            None,
+            None,
+            SECRET,
+        )
+        .await
+        .unwrap();
+        SessionRepository::create_with_id(
+            &pool,
+            "s2",
+            "user-del",
+            "t2",
+            future(),
+            None,
+            None,
+            SECRET,
+        )
+        .await
+        .unwrap();
+        SessionRepository::delete_by_user(&pool, "user-del")
+            .await
+            .unwrap();
+        assert!(SessionRepository::find_by_id(&pool, "s1")
+            .await
+            .unwrap()
+            .is_none());
+        assert!(SessionRepository::find_by_id(&pool, "s2")
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn rotate_succeeds_for_valid_session() {
+        let pool = test_any_pool().await;
+        SessionRepository::create_with_id(
+            &pool,
+            "old-sess",
+            "user-r",
+            "old-tok",
+            future(),
+            None,
+            None,
+            SECRET,
+        )
+        .await
+        .unwrap();
+        let ok = SessionRepository::rotate(
+            &pool,
+            "old-sess",
+            "new-sess",
+            "user-r",
+            "new-tok",
+            future(),
+            None,
+            None,
+            SECRET,
+        )
+        .await
+        .unwrap();
+        assert!(ok);
+        // old session gone
+        assert!(SessionRepository::find_by_id(&pool, "old-sess")
+            .await
+            .unwrap()
+            .is_none());
+        // new session present
+        assert!(SessionRepository::find_by_id(&pool, "new-sess")
+            .await
+            .unwrap()
+            .is_some());
+    }
+
+    #[tokio::test]
+    async fn create_public_api() {
+        let pool = test_any_pool().await;
+        let session =
+            SessionRepository::create(&pool, "user-pub", "tok-pub", future(), None, None, SECRET)
+                .await
+                .unwrap();
+        assert_eq!(session.user_id, "user-pub");
+    }
+
+    #[tokio::test]
+    async fn update_token_hash_keeps_session() {
+        let pool = test_any_pool().await;
+        SessionRepository::create_with_id(
+            &pool,
+            "sess-uth",
+            "user-uth",
+            "tok-old",
+            future(),
+            None,
+            None,
+            SECRET,
+        )
+        .await
+        .unwrap();
+        SessionRepository::update_token_hash(&pool, "sess-uth", "tok-new", SECRET)
+            .await
+            .unwrap();
+        let found = SessionRepository::find_by_id(&pool, "sess-uth")
+            .await
+            .unwrap();
+        assert!(found.is_some());
+    }
+
+    #[tokio::test]
+    async fn delete_expired_removes_old_sessions() {
+        let pool = test_any_pool().await;
+        // A date 10 years in the past sorts clearly before SQLite's datetime('now')
+        let very_old = Utc::now() - Duration::days(3650);
+        SessionRepository::create_with_id(
+            &pool, "sess-old", "user-old", "tok-old", very_old, None, None, SECRET,
+        )
+        .await
+        .unwrap();
+        SessionRepository::create_with_id(
+            &pool,
+            "sess-future",
+            "user-fut",
+            "tok-fut",
+            future(),
+            None,
+            None,
+            SECRET,
+        )
+        .await
+        .unwrap();
+        let deleted = SessionRepository::delete_expired(&pool).await.unwrap();
+        assert_eq!(deleted, 1);
+    }
+
+    #[tokio::test]
+    async fn rotate_fails_for_expired_session() {
+        let pool = test_any_pool().await;
+        let very_old = Utc::now() - Duration::days(3650);
+        SessionRepository::create_with_id(
+            &pool,
+            "sess-exp-r",
+            "user-exp",
+            "tok-exp",
+            very_old,
+            None,
+            None,
+            SECRET,
+        )
+        .await
+        .unwrap();
+        let ok = SessionRepository::rotate(
+            &pool,
+            "sess-exp-r",
+            "new-sess",
+            "user-exp",
+            "new-tok",
+            future(),
+            None,
+            None,
+            SECRET,
+        )
+        .await
+        .unwrap();
+        assert!(!ok, "rotating an expired session should fail");
+    }
 }

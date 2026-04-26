@@ -342,12 +342,6 @@ pub struct ApiResponse<T> {
     pub data: T,
 }
 
-impl<T> ApiResponse<T> {
-    pub fn new(data: T) -> Json<Self> {
-        Json(Self { data })
-    }
-}
-
 /// Pagination parameters
 #[derive(Debug, Deserialize)]
 pub struct PaginationParams {
@@ -384,4 +378,99 @@ pub struct PaginationMeta {
     pub per_page: u32,
     pub total: u32,
     pub total_pages: u32,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::types::{Bool, Timestamp};
+    use crate::{
+        auth::{agent::AgentAuth, AuthIdentity},
+        db::models::{AgentKey, User},
+    };
+
+    fn make_user(id: &str) -> User {
+        User {
+            id: id.to_string(),
+            email: "t@example.com".to_string(),
+            password_hash: "h".to_string(),
+            name: None,
+            created_at: Timestamp::now(),
+            email_verified: Bool(true),
+            failed_login_attempts: 0,
+            locked_until: None,
+        }
+    }
+
+    fn make_agent(org_id: &str, key_id: &str) -> AgentAuth {
+        AgentAuth {
+            agent_key: AgentKey {
+                id: key_id.to_string(),
+                organization_id: org_id.to_string(),
+                name: "Agent".to_string(),
+                key_hash: "hash".to_string(),
+                key_prefix: "bw_agent_abc".to_string(),
+                permissions: "[]".to_string(),
+                created_by: "user-1".to_string(),
+                last_used_at: None,
+                created_at: Timestamp::now(),
+                revoked_at: None,
+            },
+            organization_id: org_id.to_string(),
+            permissions: vec![],
+        }
+    }
+
+    #[test]
+    fn rate_limit_key_user_format() {
+        let auth = AuthIdentity::User(make_user("user-42"));
+        assert_eq!(
+            rate_limit_key_for_auth("ingest", &auth),
+            "ingest:user:user-42"
+        );
+    }
+
+    #[test]
+    fn rate_limit_key_agent_format() {
+        let auth = AuthIdentity::Agent(make_agent("org-99", "ak-7"));
+        assert_eq!(
+            rate_limit_key_for_auth("ingest", &auth),
+            "ingest:agent:org-99:ak-7"
+        );
+    }
+
+    #[test]
+    fn rate_limit_user_and_agent_never_collide() {
+        let user = AuthIdentity::User(make_user("id"));
+        let agent = AuthIdentity::Agent(make_agent("id", "id"));
+        assert_ne!(
+            rate_limit_key_for_auth("p", &user),
+            rate_limit_key_for_auth("p", &agent)
+        );
+    }
+
+    #[test]
+    fn pagination_defaults() {
+        let p: PaginationParams = serde_json::from_str("{}").unwrap();
+        assert_eq!(p.page, 1);
+        assert_eq!(p.per_page, 20);
+    }
+
+    #[test]
+    fn per_page_clamped_to_100() {
+        let p: PaginationParams = serde_json::from_str(r#"{"per_page":999}"#).unwrap();
+        assert_eq!(p.per_page, 100);
+    }
+
+    #[test]
+    fn per_page_zero_clamped_to_1() {
+        let p: PaginationParams = serde_json::from_str(r#"{"per_page":0}"#).unwrap();
+        assert_eq!(p.per_page, 1);
+    }
+
+    #[test]
+    fn per_page_in_range_unchanged() {
+        let p: PaginationParams = serde_json::from_str(r#"{"per_page":50}"#).unwrap();
+        assert_eq!(p.per_page, 50);
+    }
 }

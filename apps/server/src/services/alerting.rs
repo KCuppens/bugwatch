@@ -580,12 +580,12 @@ impl AlertingService {
         // Check mute status before claiming the cooldown slot so muted alerts
         // do not consume the cooldown window.
         if let Some(muted_until) = rule.muted_until {
-            if muted_until > chrono::Utc::now() {
+            if muted_until.0 > chrono::Utc::now() {
                 info!(
                     rule_id = %rule_id,
                     "Alert rule '{}' is muted until {}, skipping",
                     rule.name,
-                    muted_until
+                    muted_until.0
                 );
                 return Ok(());
             }
@@ -661,7 +661,7 @@ impl AlertingService {
         let mut channel_log_pairs: Vec<(NotificationChannel, String)> = Vec::new();
         for channel_id in &channel_ids {
             let channel = match channel_map.remove(channel_id) {
-                Some(c) if c.is_active => c,
+                Some(c) if *c.is_active => c,
                 Some(c) => {
                     info!("Channel '{}' is inactive, skipping", c.name);
                     continue;
@@ -808,5 +808,227 @@ impl AlertingService {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::{
+        models::{AlertCondition, AlertRule, ServerMetric},
+        types::{Bool, Timestamp},
+    };
+    use chrono::Utc;
+
+    fn make_metric(cpu: Option<f64>, mem: Option<f64>) -> ServerMetric {
+        ServerMetric {
+            id: "m1".to_string(),
+            server_db_id: "srv-1".to_string(),
+            cpu_usage_percent: cpu,
+            load_avg_1: None,
+            load_avg_5: None,
+            load_avg_15: None,
+            mem_total_bytes: None,
+            mem_used_bytes: None,
+            mem_available_bytes: None,
+            mem_usage_percent: mem,
+            swap_total_bytes: None,
+            swap_used_bytes: None,
+            net_rx_bytes_per_sec: None,
+            net_tx_bytes_per_sec: None,
+            uptime_seconds: None,
+            disks_json: None,
+            processes_json: None,
+            docker_json: None,
+            recorded_at: Timestamp(Utc::now()),
+        }
+    }
+
+    fn make_rule(condition_json: &str) -> AlertRule {
+        AlertRule {
+            id: "rule-1".to_string(),
+            project_id: "proj-1".to_string(),
+            name: "Test Rule".to_string(),
+            condition: condition_json.to_string(),
+            actions: "[]".to_string(),
+            is_active: Bool(true),
+            created_at: Timestamp(Utc::now()),
+            muted_until: None,
+            snooze_duration_minutes: None,
+        }
+    }
+
+    // ── evaluate_metric_condition ─────────────────────────────────────────────
+
+    #[test]
+    fn cpu_high_above_threshold_returns_message() {
+        let condition = AlertCondition::ServerCpuHigh {
+            threshold_percent: 80.0,
+            server_id: None,
+        };
+        let metric = make_metric(Some(90.0), None);
+        let result = evaluate_metric_condition(&condition, "srv-1", &metric, "host-1", &[]);
+        assert!(result.is_some());
+        let msg = result.unwrap();
+        assert!(msg.contains("CPU"));
+        assert!(msg.contains("host-1"));
+    }
+
+    #[test]
+    fn cpu_high_below_threshold_returns_none() {
+        let condition = AlertCondition::ServerCpuHigh {
+            threshold_percent: 80.0,
+            server_id: None,
+        };
+        let metric = make_metric(Some(70.0), None);
+        assert!(evaluate_metric_condition(&condition, "srv-1", &metric, "host-1", &[]).is_none());
+    }
+
+    #[test]
+    fn cpu_high_no_cpu_reading_returns_none() {
+        let condition = AlertCondition::ServerCpuHigh {
+            threshold_percent: 80.0,
+            server_id: None,
+        };
+        let metric = make_metric(None, None);
+        assert!(evaluate_metric_condition(&condition, "srv-1", &metric, "host-1", &[]).is_none());
+    }
+
+    #[test]
+    fn cpu_high_server_id_filter_matches() {
+        let condition = AlertCondition::ServerCpuHigh {
+            threshold_percent: 50.0,
+            server_id: Some("srv-1".to_string()),
+        };
+        let metric = make_metric(Some(90.0), None);
+        assert!(evaluate_metric_condition(&condition, "srv-1", &metric, "host-1", &[]).is_some());
+    }
+
+    #[test]
+    fn cpu_high_server_id_filter_no_match_returns_none() {
+        let condition = AlertCondition::ServerCpuHigh {
+            threshold_percent: 50.0,
+            server_id: Some("srv-other".to_string()),
+        };
+        let metric = make_metric(Some(90.0), None);
+        assert!(evaluate_metric_condition(&condition, "srv-1", &metric, "host-1", &[]).is_none());
+    }
+
+    #[test]
+    fn memory_high_above_threshold_returns_message() {
+        let condition = AlertCondition::ServerMemoryHigh {
+            threshold_percent: 70.0,
+            server_id: None,
+        };
+        let metric = make_metric(None, Some(85.0));
+        let result = evaluate_metric_condition(&condition, "srv-1", &metric, "host-1", &[]);
+        assert!(result.is_some());
+        assert!(result.unwrap().contains("Memory"));
+    }
+
+    #[test]
+    fn memory_high_below_threshold_returns_none() {
+        let condition = AlertCondition::ServerMemoryHigh {
+            threshold_percent: 90.0,
+            server_id: None,
+        };
+        let metric = make_metric(None, Some(50.0));
+        assert!(evaluate_metric_condition(&condition, "srv-1", &metric, "host-1", &[]).is_none());
+    }
+
+    #[test]
+    fn disk_high_above_threshold_returns_message() {
+        let condition = AlertCondition::ServerDiskHigh {
+            threshold_percent: 80.0,
+            mount: None,
+            server_id: None,
+        };
+        let disks = vec![serde_json::json!({"mount": "/", "usage_percent": 90.0})];
+        let metric = make_metric(None, None);
+        let result = evaluate_metric_condition(&condition, "srv-1", &metric, "host-1", &disks);
+        assert!(result.is_some());
+        assert!(result.unwrap().contains("Disk"));
+    }
+
+    #[test]
+    fn disk_high_below_threshold_returns_none() {
+        let condition = AlertCondition::ServerDiskHigh {
+            threshold_percent: 80.0,
+            mount: None,
+            server_id: None,
+        };
+        let disks = vec![serde_json::json!({"mount": "/", "usage_percent": 50.0})];
+        let metric = make_metric(None, None);
+        assert!(
+            evaluate_metric_condition(&condition, "srv-1", &metric, "host-1", &disks).is_none()
+        );
+    }
+
+    #[test]
+    fn disk_high_mount_filter_matches() {
+        let condition = AlertCondition::ServerDiskHigh {
+            threshold_percent: 80.0,
+            mount: Some("/var".to_string()),
+            server_id: None,
+        };
+        let disks = vec![
+            serde_json::json!({"mount": "/", "usage_percent": 90.0}),
+            serde_json::json!({"mount": "/var", "usage_percent": 95.0}),
+        ];
+        let metric = make_metric(None, None);
+        let result = evaluate_metric_condition(&condition, "srv-1", &metric, "host-1", &disks);
+        assert!(result.is_some());
+        assert!(result.unwrap().contains("/var"));
+    }
+
+    #[test]
+    fn disk_high_server_id_no_match_returns_none() {
+        let condition = AlertCondition::ServerDiskHigh {
+            threshold_percent: 80.0,
+            mount: None,
+            server_id: Some("srv-other".to_string()),
+        };
+        let disks = vec![serde_json::json!({"mount": "/", "usage_percent": 90.0})];
+        let metric = make_metric(None, None);
+        assert!(
+            evaluate_metric_condition(&condition, "srv-1", &metric, "host-1", &disks).is_none()
+        );
+    }
+
+    #[test]
+    fn other_condition_returns_none() {
+        let condition = AlertCondition::NewIssue { level: None };
+        let metric = make_metric(Some(99.0), Some(99.0));
+        assert!(evaluate_metric_condition(&condition, "srv-1", &metric, "host-1", &[]).is_none());
+    }
+
+    // ── parse_alert_condition ─────────────────────────────────────────────────
+
+    #[test]
+    fn parse_valid_condition_returns_some() {
+        let rule = make_rule(r#"{"type":"server_cpu_high","threshold_percent":80.0}"#);
+        let condition = parse_alert_condition(&rule);
+        assert!(condition.is_some());
+        assert!(matches!(
+            condition.unwrap(),
+            AlertCondition::ServerCpuHigh { .. }
+        ));
+    }
+
+    #[test]
+    fn parse_invalid_json_returns_none() {
+        let rule = make_rule("not-valid-json");
+        assert!(parse_alert_condition(&rule).is_none());
+    }
+
+    #[test]
+    fn parse_new_issue_condition() {
+        let rule = make_rule(r#"{"type":"new_issue"}"#);
+        let condition = parse_alert_condition(&rule);
+        assert!(condition.is_some());
+        assert!(matches!(
+            condition.unwrap(),
+            AlertCondition::NewIssue { .. }
+        ));
     }
 }

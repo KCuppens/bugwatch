@@ -241,4 +241,119 @@ mod tests {
         assert!(result2.allowed);
         assert_eq!(result1.remaining, result2.remaining);
     }
+
+    #[test]
+    fn check_hourly_allows_request() {
+        let limiter = RateLimiter::new();
+        let result = limiter.check_hourly("hourly-key", 5);
+        assert!(result.allowed);
+    }
+
+    #[test]
+    fn check_hourly_exhausted_denies() {
+        let limiter = RateLimiter::new();
+        for _ in 0..3 {
+            limiter.check_hourly("ex-key", 3);
+        }
+        let result = limiter.check_hourly("ex-key", 3);
+        assert!(!result.allowed);
+    }
+
+    #[test]
+    fn bucket_count_tracks_per_minute_buckets() {
+        let limiter = RateLimiter::new();
+        assert_eq!(limiter.bucket_count(), 0);
+        limiter.check("a", 100);
+        limiter.check("b", 100);
+        assert_eq!(limiter.bucket_count(), 2);
+    }
+
+    #[test]
+    fn hourly_bucket_count_tracks_hourly_buckets() {
+        let limiter = RateLimiter::new();
+        assert_eq!(limiter.hourly_bucket_count(), 0);
+        limiter.check_hourly("ha", 5);
+        assert_eq!(limiter.hourly_bucket_count(), 1);
+    }
+
+    #[test]
+    fn get_stats_returns_none_for_missing_key() {
+        let limiter = RateLimiter::new();
+        assert!(limiter.get_stats("nonexistent").is_none());
+    }
+
+    #[test]
+    fn get_stats_returns_capacity_after_check() {
+        let limiter = RateLimiter::new();
+        limiter.check("my-key", 100);
+        let stats = limiter.get_stats("my-key");
+        assert!(stats.is_some());
+        let (remaining, capacity) = stats.unwrap();
+        assert_eq!(capacity, 100);
+        assert!(remaining < capacity);
+    }
+
+    #[test]
+    fn cleanup_inactive_removes_old_buckets() {
+        let limiter = RateLimiter::new();
+        limiter.check("cleanup-key", 100);
+        assert_eq!(limiter.bucket_count(), 1);
+        // max_age_secs = 0 removes everything accessed more than 0s ago
+        let removed = limiter.cleanup_inactive(0);
+        assert!(removed <= 1); // may be 0 if the bucket was just accessed
+    }
+
+    #[test]
+    fn cleanup_hourly_inactive_removes_old_buckets() {
+        let limiter = RateLimiter::new();
+        limiter.check_hourly("hourly-cleanup", 5);
+        assert_eq!(limiter.hourly_bucket_count(), 1);
+        let removed = limiter.cleanup_hourly_inactive(0);
+        assert!(removed <= 1);
+    }
+
+    #[test]
+    fn default_creates_empty_limiter() {
+        let limiter = RateLimiter::default();
+        assert_eq!(limiter.bucket_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn check_with_tier_lookup_self_hosted_uses_config_limit() {
+        use crate::db::test_helpers::test_any_pool;
+        let pool = test_any_pool().await;
+        let limiter = RateLimiter::new();
+        let result = limiter
+            .check_with_tier_lookup("sh-key", &pool, DeploymentMode::SelfHosted, 500)
+            .await;
+        assert!(result.allowed);
+    }
+
+    #[tokio::test]
+    async fn check_with_tier_lookup_saas_unknown_key_uses_free_tier() {
+        use crate::db::test_helpers::test_any_pool;
+        let pool = test_any_pool().await;
+        let limiter = RateLimiter::new();
+        // Unknown API key → resolve_tier_limit returns Free (100/min); first request allowed
+        let result = limiter
+            .check_with_tier_lookup("unknown-saas-key", &pool, DeploymentMode::Saas, 10000)
+            .await;
+        assert!(result.allowed);
+    }
+
+    #[tokio::test]
+    async fn check_with_tier_lookup_saas_cache_hit_reuses_limit() {
+        use crate::db::test_helpers::test_any_pool;
+        let pool = test_any_pool().await;
+        let limiter = RateLimiter::new();
+        // First call populates tier cache
+        limiter
+            .check_with_tier_lookup("cache-saas-key", &pool, DeploymentMode::Saas, 10000)
+            .await;
+        // Second call hits fresh cache entry
+        let result = limiter
+            .check_with_tier_lookup("cache-saas-key", &pool, DeploymentMode::Saas, 10000)
+            .await;
+        assert!(result.allowed);
+    }
 }

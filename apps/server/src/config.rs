@@ -466,3 +466,498 @@ impl Config {
         self.bugwatch_enabled && self.bugwatch_api_key.is_some()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Serialize all tests that read/write environment variables so that parallel
+    /// test threads don't observe each other's mid-test env var state.
+    fn env_lock() -> &'static std::sync::Mutex<()> {
+        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| std::sync::Mutex::new(()))
+    }
+
+    fn make_config() -> Config {
+        Config {
+            server_addr: "0.0.0.0:3000".to_string(),
+            database_url: "postgres://test:test@localhost/test".to_string(),
+            jwt_secret: "a-sufficiently-long-secret-key-32+chars".to_string(),
+            jwt_access_expiration: 900,
+            jwt_refresh_expiration: 604800,
+            deployment_mode: DeploymentMode::SelfHosted,
+            environment: "development".to_string(),
+            app_url: "http://localhost:3001".to_string(),
+            allowed_origins: vec![],
+            retention_days: 90,
+            rate_limit_per_minute: 10000,
+            smtp_host: None,
+            smtp_port: None,
+            smtp_user: None,
+            smtp_password: None,
+            smtp_from: None,
+            stripe_secret_key: None,
+            stripe_webhook_secret: None,
+            stripe_price_id_pro_monthly: None,
+            stripe_price_id_pro_annual: None,
+            stripe_price_id_team_monthly: None,
+            stripe_price_id_team_annual: None,
+            bugwatch_api_key: None,
+            bugwatch_endpoint: None,
+            bugwatch_enabled: false,
+            github_client_id: None,
+            github_client_secret: None,
+            jira_client_id: None,
+            jira_client_secret: None,
+            linear_client_id: None,
+            linear_client_secret: None,
+            trust_proxy: false,
+            cookie_secure: false,
+            encryption_key: None,
+            password_reset_secret: "a-sufficiently-long-secret-key-32+chars".to_string(),
+            oauth_state_secret: "a-sufficiently-long-secret-key-32+chars".to_string(),
+            github_webhook_secret: None,
+            jira_webhook_secret: None,
+            linear_webhook_secret: None,
+            database_max_connections: 50,
+            shutdown_grace_secs: 120,
+            x402_enabled: false,
+            x402_wallet_address: "".to_string(),
+            x402_rpc_url: "https://mainnet.base.org".to_string(),
+            x402_usdc_address: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913".to_string(),
+        }
+    }
+
+    // ── DeploymentMode ───────────────────────────────────────────────────────
+
+    #[test]
+    fn deployment_mode_from_env_saas() {
+        let _g = env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        std::env::set_var("BUGWATCH_MODE", "saas");
+        assert_eq!(DeploymentMode::from_env(), DeploymentMode::Saas);
+        std::env::remove_var("BUGWATCH_MODE");
+    }
+
+    #[test]
+    fn deployment_mode_from_env_default_self_hosted() {
+        let _g = env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        std::env::remove_var("BUGWATCH_MODE");
+        assert_eq!(DeploymentMode::from_env(), DeploymentMode::SelfHosted);
+    }
+
+    #[test]
+    fn deployment_mode_from_env_unrecognized_defaults_self_hosted() {
+        let _g = env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        std::env::set_var("BUGWATCH_MODE", "cloud");
+        assert_eq!(DeploymentMode::from_env(), DeploymentMode::SelfHosted);
+        std::env::remove_var("BUGWATCH_MODE");
+    }
+
+    #[test]
+    fn is_self_hosted_and_is_saas_are_mutually_exclusive() {
+        let sh = DeploymentMode::SelfHosted;
+        assert!(sh.is_self_hosted());
+        assert!(!sh.is_saas());
+        let s = DeploymentMode::Saas;
+        assert!(s.is_saas());
+        assert!(!s.is_self_hosted());
+    }
+
+    // ── Config helpers ───────────────────────────────────────────────────────
+
+    #[test]
+    fn is_self_hosted_matches_deployment_mode() {
+        let mut c = make_config();
+        c.deployment_mode = DeploymentMode::SelfHosted;
+        assert!(c.is_self_hosted());
+        c.deployment_mode = DeploymentMode::Saas;
+        assert!(!c.is_self_hosted());
+    }
+
+    #[test]
+    fn is_smtp_configured_when_host_is_set() {
+        let mut c = make_config();
+        assert!(!c.is_smtp_configured());
+        c.smtp_host = Some("smtp.example.com".to_string());
+        assert!(c.is_smtp_configured());
+    }
+
+    #[test]
+    fn is_stripe_configured_when_key_is_set() {
+        let mut c = make_config();
+        assert!(!c.is_stripe_configured());
+        c.stripe_secret_key = Some("sk_test_xxx".to_string());
+        assert!(c.is_stripe_configured());
+    }
+
+    #[test]
+    fn is_production_checks_environment() {
+        let mut c = make_config();
+        assert!(!c.is_production());
+        c.environment = "production".to_string();
+        assert!(c.is_production());
+    }
+
+    #[test]
+    fn is_bugwatch_enabled_requires_both_flag_and_key() {
+        let mut c = make_config();
+        assert!(!c.is_bugwatch_enabled());
+        c.bugwatch_enabled = true;
+        assert!(!c.is_bugwatch_enabled()); // key not set
+        c.bugwatch_api_key = Some("bw_key".to_string());
+        assert!(c.is_bugwatch_enabled());
+    }
+
+    // ── Config::validate ─────────────────────────────────────────────────────
+
+    #[test]
+    fn validate_passes_for_valid_development_config() {
+        let c = make_config();
+        c.validate(); // must not panic
+    }
+
+    #[test]
+    #[should_panic(expected = "JWT_SECRET must be at least 32")]
+    fn validate_panics_on_short_jwt_secret() {
+        let mut c = make_config();
+        c.jwt_secret = "short".to_string();
+        c.validate();
+    }
+
+    #[test]
+    #[should_panic(expected = "SMTP_FROM must be set")]
+    fn validate_panics_when_smtp_host_without_from() {
+        let mut c = make_config();
+        c.smtp_host = Some("smtp.example.com".to_string());
+        c.smtp_from = None;
+        c.validate();
+    }
+
+    #[test]
+    fn validate_passes_when_smtp_fully_configured() {
+        let mut c = make_config();
+        c.smtp_host = Some("smtp.example.com".to_string());
+        c.smtp_from = Some("noreply@example.com".to_string());
+        c.validate(); // must not panic
+    }
+
+    #[test]
+    #[should_panic(expected = "SMTP_USER and SMTP_PASSWORD must both be set")]
+    fn validate_panics_when_smtp_user_without_password() {
+        let mut c = make_config();
+        c.smtp_user = Some("user".to_string());
+        c.smtp_password = None;
+        c.validate();
+    }
+
+    #[test]
+    fn validate_passes_when_smtp_credentials_both_set() {
+        let mut c = make_config();
+        c.smtp_host = Some("smtp.example.com".to_string());
+        c.smtp_from = Some("noreply@example.com".to_string());
+        c.smtp_user = Some("user".to_string());
+        c.smtp_password = Some("pass".to_string());
+        c.validate();
+    }
+
+    #[test]
+    #[should_panic(expected = "X402_WALLET_ADDRESS must be set")]
+    fn validate_panics_when_x402_enabled_without_wallet() {
+        let mut c = make_config();
+        c.x402_enabled = true;
+        c.x402_wallet_address = "".to_string();
+        c.validate();
+    }
+
+    #[test]
+    #[should_panic(expected = "valid Ethereum address")]
+    fn validate_panics_when_wallet_address_invalid_format() {
+        let mut c = make_config();
+        c.x402_enabled = true;
+        c.x402_wallet_address = "not-an-eth-address".to_string();
+        c.validate();
+    }
+
+    #[test]
+    fn validate_passes_with_valid_x402_config() {
+        let mut c = make_config();
+        c.x402_enabled = true;
+        c.x402_wallet_address = "0x1234567890123456789012345678901234567890".to_string();
+        c.x402_usdc_address = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913".to_string();
+        c.x402_rpc_url = "https://mainnet.base.org".to_string();
+        c.validate(); // must not panic
+    }
+
+    // ── Config::from_env ─────────────────────────────────────────────────────
+
+    const TEST_SECRET: &str = "test-secret-that-is-long-enough-32chars";
+
+    #[test]
+    fn from_env_defaults() {
+        let _g = env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        env::set_var("JWT_SECRET", TEST_SECRET);
+        env::remove_var("SERVER_ADDR");
+        env::remove_var("JWT_ACCESS_EXPIRATION");
+        env::remove_var("JWT_REFRESH_EXPIRATION");
+        env::remove_var("BUGWATCH_RETENTION_DAYS");
+        env::remove_var("BUGWATCH_RATE_LIMIT");
+        env::remove_var("BUGWATCH_ENABLED");
+        env::remove_var("TRUST_PROXY");
+        env::remove_var("X402_ENABLED");
+        env::remove_var("PASSWORD_RESET_SECRET");
+        env::remove_var("OAUTH_STATE_SECRET");
+        let cfg = Config::from_env().unwrap();
+        env::remove_var("JWT_SECRET");
+
+        assert_eq!(cfg.server_addr, "0.0.0.0:3000");
+        assert_eq!(cfg.jwt_access_expiration, 900);
+        assert_eq!(cfg.jwt_refresh_expiration, 604800);
+        assert_eq!(cfg.retention_days, 90);
+        assert_eq!(cfg.rate_limit_per_minute, 10000);
+        assert!(!cfg.bugwatch_enabled);
+        assert!(!cfg.trust_proxy);
+        assert!(!cfg.x402_enabled);
+    }
+
+    #[test]
+    fn from_env_missing_jwt_secret_returns_error() {
+        let _g = env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        env::remove_var("JWT_SECRET");
+        env::remove_var("PASSWORD_RESET_SECRET");
+        env::remove_var("OAUTH_STATE_SECRET");
+        assert!(Config::from_env().is_err());
+    }
+
+    #[test]
+    fn from_env_allowed_origins_parsed_and_empty_filtered() {
+        let _g = env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        env::set_var("JWT_SECRET", TEST_SECRET);
+        env::remove_var("PASSWORD_RESET_SECRET");
+        env::remove_var("OAUTH_STATE_SECRET");
+        env::set_var(
+            "ALLOWED_ORIGINS",
+            "http://localhost:3000, https://example.com, ",
+        );
+        let cfg = Config::from_env().unwrap();
+        env::remove_var("JWT_SECRET");
+        env::remove_var("ALLOWED_ORIGINS");
+
+        assert_eq!(cfg.allowed_origins.len(), 2);
+        assert!(cfg
+            .allowed_origins
+            .contains(&"http://localhost:3000".to_string()));
+        assert!(cfg
+            .allowed_origins
+            .contains(&"https://example.com".to_string()));
+    }
+
+    #[test]
+    fn from_env_cookie_secure_from_https_app_url() {
+        let _g = env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        env::set_var("JWT_SECRET", TEST_SECRET);
+        env::remove_var("PASSWORD_RESET_SECRET");
+        env::remove_var("OAUTH_STATE_SECRET");
+        env::set_var("APP_URL", "https://app.example.com");
+        env::remove_var("COOKIE_SECURE");
+        let cfg = Config::from_env().unwrap();
+        env::remove_var("JWT_SECRET");
+        env::remove_var("APP_URL");
+
+        assert!(cfg.cookie_secure);
+    }
+
+    #[test]
+    fn from_env_cookie_secure_explicit_true() {
+        let _g = env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        env::set_var("JWT_SECRET", TEST_SECRET);
+        env::remove_var("PASSWORD_RESET_SECRET");
+        env::remove_var("OAUTH_STATE_SECRET");
+        env::set_var("COOKIE_SECURE", "true");
+        let cfg = Config::from_env().unwrap();
+        env::remove_var("JWT_SECRET");
+        env::remove_var("COOKIE_SECURE");
+
+        assert!(cfg.cookie_secure);
+    }
+
+    #[test]
+    fn from_env_cookie_secure_false_for_http_url() {
+        let _g = env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        env::set_var("JWT_SECRET", TEST_SECRET);
+        env::remove_var("PASSWORD_RESET_SECRET");
+        env::remove_var("OAUTH_STATE_SECRET");
+        env::set_var("APP_URL", "http://localhost:3001");
+        env::remove_var("COOKIE_SECURE");
+        let cfg = Config::from_env().unwrap();
+        env::remove_var("JWT_SECRET");
+        env::remove_var("APP_URL");
+
+        assert!(!cfg.cookie_secure);
+    }
+
+    #[test]
+    fn from_env_bugwatch_enabled_from_string_one() {
+        let _g = env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        env::set_var("JWT_SECRET", TEST_SECRET);
+        env::remove_var("PASSWORD_RESET_SECRET");
+        env::remove_var("OAUTH_STATE_SECRET");
+        env::set_var("BUGWATCH_ENABLED", "1");
+        let cfg = Config::from_env().unwrap();
+        env::remove_var("JWT_SECRET");
+        env::remove_var("BUGWATCH_ENABLED");
+
+        assert!(cfg.bugwatch_enabled);
+    }
+
+    #[test]
+    fn from_env_bugwatch_enabled_from_true_string() {
+        let _g = env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        env::set_var("JWT_SECRET", TEST_SECRET);
+        env::remove_var("PASSWORD_RESET_SECRET");
+        env::remove_var("OAUTH_STATE_SECRET");
+        env::set_var("BUGWATCH_ENABLED", "true");
+        let cfg = Config::from_env().unwrap();
+        env::remove_var("JWT_SECRET");
+        env::remove_var("BUGWATCH_ENABLED");
+
+        assert!(cfg.bugwatch_enabled);
+    }
+
+    #[test]
+    fn from_env_trust_proxy_from_string_true() {
+        let _g = env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        env::set_var("JWT_SECRET", TEST_SECRET);
+        env::remove_var("PASSWORD_RESET_SECRET");
+        env::remove_var("OAUTH_STATE_SECRET");
+        env::set_var("TRUST_PROXY", "true");
+        let cfg = Config::from_env().unwrap();
+        env::remove_var("JWT_SECRET");
+        env::remove_var("TRUST_PROXY");
+
+        assert!(cfg.trust_proxy);
+    }
+
+    #[test]
+    fn from_env_trust_proxy_from_string_one() {
+        let _g = env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        env::set_var("JWT_SECRET", TEST_SECRET);
+        env::remove_var("PASSWORD_RESET_SECRET");
+        env::remove_var("OAUTH_STATE_SECRET");
+        env::set_var("TRUST_PROXY", "1");
+        let cfg = Config::from_env().unwrap();
+        env::remove_var("JWT_SECRET");
+        env::remove_var("TRUST_PROXY");
+
+        assert!(cfg.trust_proxy);
+    }
+
+    #[test]
+    fn from_env_jwt_access_expiration_custom() {
+        let _g = env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        env::set_var("JWT_SECRET", TEST_SECRET);
+        env::remove_var("PASSWORD_RESET_SECRET");
+        env::remove_var("OAUTH_STATE_SECRET");
+        env::set_var("JWT_ACCESS_EXPIRATION", "300");
+        let cfg = Config::from_env().unwrap();
+        env::remove_var("JWT_SECRET");
+        env::remove_var("JWT_ACCESS_EXPIRATION");
+
+        assert_eq!(cfg.jwt_access_expiration, 300);
+    }
+
+    #[test]
+    fn from_env_jwt_access_expiration_invalid_uses_default() {
+        let _g = env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        env::set_var("JWT_SECRET", TEST_SECRET);
+        env::remove_var("PASSWORD_RESET_SECRET");
+        env::remove_var("OAUTH_STATE_SECRET");
+        env::set_var("JWT_ACCESS_EXPIRATION", "not-a-number");
+        let cfg = Config::from_env().unwrap();
+        env::remove_var("JWT_SECRET");
+        env::remove_var("JWT_ACCESS_EXPIRATION");
+
+        assert_eq!(cfg.jwt_access_expiration, 900);
+    }
+
+    #[test]
+    fn from_env_password_reset_secret_falls_back_to_jwt_secret() {
+        let _g = env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        env::set_var("JWT_SECRET", TEST_SECRET);
+        env::remove_var("PASSWORD_RESET_SECRET");
+        env::remove_var("OAUTH_STATE_SECRET");
+        let cfg = Config::from_env().unwrap();
+        env::remove_var("JWT_SECRET");
+
+        assert_eq!(cfg.password_reset_secret, TEST_SECRET);
+    }
+
+    #[test]
+    fn from_env_password_reset_secret_explicit_value() {
+        let _g = env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        env::set_var("JWT_SECRET", TEST_SECRET);
+        env::remove_var("OAUTH_STATE_SECRET");
+        env::set_var("PASSWORD_RESET_SECRET", "dedicated-reset-secret-32+chars!!");
+        let cfg = Config::from_env().unwrap();
+        env::remove_var("JWT_SECRET");
+        env::remove_var("PASSWORD_RESET_SECRET");
+
+        assert_eq!(
+            cfg.password_reset_secret,
+            "dedicated-reset-secret-32+chars!!"
+        );
+    }
+
+    #[test]
+    fn from_env_oauth_state_secret_falls_back_to_jwt_secret() {
+        let _g = env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        env::set_var("JWT_SECRET", TEST_SECRET);
+        env::remove_var("OAUTH_STATE_SECRET");
+        env::remove_var("PASSWORD_RESET_SECRET");
+        let cfg = Config::from_env().unwrap();
+        env::remove_var("JWT_SECRET");
+
+        assert_eq!(cfg.oauth_state_secret, TEST_SECRET);
+    }
+
+    #[test]
+    fn from_env_x402_enabled_from_true() {
+        let _g = env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        env::set_var("JWT_SECRET", TEST_SECRET);
+        env::remove_var("PASSWORD_RESET_SECRET");
+        env::remove_var("OAUTH_STATE_SECRET");
+        env::set_var("X402_ENABLED", "true");
+        let cfg = Config::from_env().unwrap();
+        env::remove_var("JWT_SECRET");
+        env::remove_var("X402_ENABLED");
+
+        assert!(cfg.x402_enabled);
+    }
+
+    #[test]
+    fn from_env_custom_server_addr() {
+        let _g = env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        env::set_var("JWT_SECRET", TEST_SECRET);
+        env::remove_var("PASSWORD_RESET_SECRET");
+        env::remove_var("OAUTH_STATE_SECRET");
+        env::set_var("SERVER_ADDR", "127.0.0.1:8080");
+        let cfg = Config::from_env().unwrap();
+        env::remove_var("JWT_SECRET");
+        env::remove_var("SERVER_ADDR");
+
+        assert_eq!(cfg.server_addr, "127.0.0.1:8080");
+    }
+
+    #[test]
+    fn from_env_database_max_connections_custom() {
+        let _g = env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        env::set_var("JWT_SECRET", TEST_SECRET);
+        env::remove_var("PASSWORD_RESET_SECRET");
+        env::remove_var("OAUTH_STATE_SECRET");
+        env::set_var("DATABASE_MAX_CONNECTIONS", "25");
+        let cfg = Config::from_env().unwrap();
+        env::remove_var("JWT_SECRET");
+        env::remove_var("DATABASE_MAX_CONNECTIONS");
+
+        assert_eq!(cfg.database_max_connections, 25);
+    }
+}
