@@ -74,10 +74,6 @@ impl LogRepository {
             let id = Uuid::new_v4().to_string();
             let now = Utc::now();
 
-            let tags_str = entry.tags.as_ref().map(|v| v.to_string());
-            let extra_str = entry.extra.as_ref().map(|v| v.to_string());
-            let attrs_str = entry.attributes.as_ref().map(|v| v.to_string());
-
             let result = sqlx::query(
                 r#"
                 INSERT INTO logs
@@ -85,23 +81,23 @@ impl LogRepository {
                      logger_name, service_name, environment, release,
                      tags, extra, attributes, created_at)
                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
-                ON CONFLICT (log_id, created_at) DO NOTHING
+                ON CONFLICT DO NOTHING
                 "#,
             )
             .bind(&id)
             .bind(project_id)
             .bind(&entry.log_id)
-            .bind(entry.timestamp.to_rfc3339())
+            .bind(entry.timestamp)
             .bind(&entry.level)
             .bind(&entry.message)
             .bind(&entry.logger_name)
             .bind(&entry.service_name)
             .bind(&entry.environment)
             .bind(&entry.release)
-            .bind(&tags_str)
-            .bind(&extra_str)
-            .bind(&attrs_str)
-            .bind(now.to_rfc3339())
+            .bind(&entry.tags)
+            .bind(&entry.extra)
+            .bind(&entry.attributes)
+            .bind(now)
             .execute(&mut *tx)
             .await?;
 
@@ -136,6 +132,7 @@ impl LogRepository {
         for b in &bindings {
             match b {
                 BindingValue::Str(s) => q = q.bind(s.clone()),
+                BindingValue::Int(n) => q = q.bind(*n),
             }
         }
         q.fetch_all(pool).await.map_err(Into::into)
@@ -154,6 +151,7 @@ impl LogRepository {
         for b in &bindings {
             match b {
                 BindingValue::Str(s) => q = q.bind(s.clone()),
+                BindingValue::Int(n) => q = q.bind(*n),
             }
         }
         let (count,) = q.fetch_one(pool).await?;
@@ -191,11 +189,11 @@ impl LogRepository {
             ORDER BY bucket_idx ASC
             "#,
         )
-        .bind(start.to_rfc3339())
+        .bind(start)
         .bind(bucket_size_secs)
         .bind(project_id)
-        .bind(start.to_rfc3339())
-        .bind(end.to_rfc3339())
+        .bind(start)
+        .bind(end)
         .fetch_all(pool)
         .await?;
         Ok(rows)
@@ -276,14 +274,17 @@ impl LogRepository {
     /// Returns `true` if at least one row was updated.
     pub async fn set_issue_link(
         pool: &DbPool,
+        project_id: &str,
         log_id_field: &str,
         issue_id: Option<&str>,
     ) -> Result<bool> {
-        let result = sqlx::query("UPDATE logs SET issue_id = $1 WHERE log_id = $2")
-            .bind(issue_id)
-            .bind(log_id_field)
-            .execute(pool)
-            .await?;
+        let result =
+            sqlx::query("UPDATE logs SET issue_id = $1 WHERE log_id = $2 AND project_id = $3")
+                .bind(issue_id)
+                .bind(log_id_field)
+                .bind(project_id)
+                .execute(pool)
+                .await?;
         Ok(result.rows_affected() > 0)
     }
 
@@ -306,7 +307,7 @@ impl LogRepository {
             "#,
         )
         .bind(project_id)
-        .bind(since.to_rfc3339())
+        .bind(since)
         .bind(limit)
         .fetch_all(pool)
         .await
@@ -342,6 +343,11 @@ impl LogRepository {
         let mut dropped: u64 = 0;
 
         for (part_name,) in rows {
+            // Validate name matches logs_YYYY_MM before using in DDL (fp5-001).
+            if !is_valid_partition_name(&part_name) {
+                tracing::warn!("Skipping unexpected partition name: {}", part_name);
+                continue;
+            }
             // Parse YYYY_MM from tail of name (e.g. "logs_2024_01")
             if let Some(suffix) = part_name.strip_prefix("logs_") {
                 let parts: Vec<&str> = suffix.split('_').collect();
@@ -406,6 +412,16 @@ impl LogRepository {
         .await?;
 
         if !exists.0 {
+            // Validate all three values before interpolating into DDL (fp5-002).
+            if !is_valid_partition_name(&part_name.0) {
+                return Err(anyhow::anyhow!(
+                    "Computed partition name is not safe for DDL: {}",
+                    part_name.0
+                ));
+            }
+            validate_date_string(&next_month_start.0)?;
+            validate_date_string(&next_month_end.0)?;
+
             let ddl = format!(
                 "CREATE TABLE {} PARTITION OF logs FOR VALUES FROM ('{}') TO ('{}')",
                 part_name.0, next_month_start.0, next_month_end.0
@@ -458,9 +474,9 @@ impl LogRepository {
 // Query builder helpers (private)
 // ============================================================================
 
-/// Binding labels used to track how many `$N` params have been emitted.
 enum BindingValue {
     Str(String),
+    Int(i64),
 }
 
 fn build_filter_query(
@@ -501,13 +517,13 @@ fn build_filter_query(
     }
 
     if let Some(start) = params.start {
-        conditions.push(format!("timestamp >= ${}", idx));
+        conditions.push(format!("timestamp >= ${}::timestamptz", idx));
         bindings.push(BindingValue::Str(start.to_rfc3339()));
         idx += 1;
     }
 
     if let Some(end) = params.end {
-        conditions.push(format!("timestamp < ${}", idx));
+        conditions.push(format!("timestamp < ${}::timestamptz", idx));
         bindings.push(BindingValue::Str(end.to_rfc3339()));
         idx += 1;
     }
@@ -535,12 +551,12 @@ fn build_filter_query(
         sql.push_str(" ORDER BY timestamp DESC, id DESC");
         if let Some(lim) = limit {
             sql.push_str(&format!(" LIMIT ${}", idx));
-            bindings.push(BindingValue::Str(lim.to_string()));
+            bindings.push(BindingValue::Int(lim));
             idx += 1;
         }
         if let Some(off) = offset {
             sql.push_str(&format!(" OFFSET ${}", idx));
-            bindings.push(BindingValue::Str(off.to_string()));
+            bindings.push(BindingValue::Int(off));
             // idx would increment here but it's the last binding
         }
     }
@@ -565,9 +581,35 @@ where
             BindingValue::Str(s) => {
                 q = q.bind(s.as_str());
             }
+            BindingValue::Int(n) => {
+                q = q.bind(*n);
+            }
         }
     }
     q
+}
+
+// ============================================================================
+// DDL safety helpers
+// ============================================================================
+
+/// Returns true only if `name` matches the expected `logs_YYYY_MM` pattern.
+/// Used to guard all DDL that interpolates partition names (fp5-001, fp5-002).
+fn is_valid_partition_name(name: &str) -> bool {
+    let re = regex::Regex::new(r"^logs_\d{4}_\d{2}$").expect("static regex");
+    re.is_match(name)
+}
+
+/// Returns Err if `s` does not look like a YYYY-MM-DD date string.
+fn validate_date_string(s: &str) -> Result<()> {
+    let re = regex::Regex::new(r"^\d{4}-\d{2}-\d{2}$").expect("static regex");
+    if !re.is_match(s) {
+        return Err(anyhow::anyhow!(
+            "Unexpected date string in partition DDL: {}",
+            s
+        ));
+    }
+    Ok(())
 }
 
 // ============================================================================
@@ -741,9 +783,10 @@ mod tests {
     #[tokio::test]
     async fn set_issue_link_returns_false_for_unknown_log_id() {
         let pool = test_any_pool().await;
-        let updated = LogRepository::set_issue_link(&pool, "nonexistent-log-id", Some("issue-1"))
-            .await
-            .unwrap();
+        let updated =
+            LogRepository::set_issue_link(&pool, "proj-any", "nonexistent-log-id", Some("issue-1"))
+                .await
+                .unwrap();
         assert!(!updated);
     }
 

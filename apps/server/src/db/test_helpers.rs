@@ -535,7 +535,7 @@ CREATE TABLE IF NOT EXISTS password_reset_tokens (
 CREATE TABLE IF NOT EXISTS logs (
     id TEXT NOT NULL,
     project_id TEXT NOT NULL,
-    log_id TEXT NOT NULL,
+    log_id TEXT NOT NULL UNIQUE,
     timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     level TEXT NOT NULL,
     message TEXT NOT NULL,
@@ -543,13 +543,12 @@ CREATE TABLE IF NOT EXISTS logs (
     service_name TEXT,
     environment TEXT,
     release TEXT,
-    tags TEXT,
-    extra TEXT,
-    attributes TEXT,
+    tags JSONB,
+    extra JSONB,
+    attributes JSONB,
     issue_id TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (id, created_at),
-    UNIQUE (log_id, created_at)
+    PRIMARY KEY (id)
 );
 
 CREATE TABLE IF NOT EXISTS log_saved_searches (

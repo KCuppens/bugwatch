@@ -180,7 +180,7 @@ impl LogAlertRuleRepository {
 
         let mut conditions = vec![
             "project_id = $1".to_string(),
-            "created_at >= $2".to_string(),
+            "created_at >= $2::timestamptz".to_string(),
         ];
         let mut extra_str_bindings: Vec<String> = vec![];
         let mut param_idx: usize = 3;

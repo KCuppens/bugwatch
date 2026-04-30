@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useProject } from '@/lib/project-context';
 import { useFeature } from '@/hooks/use-feature';
@@ -129,7 +129,10 @@ function LogsPageInner({
   queryClient: ReturnType<typeof useQueryClient>;
 }) {
   // ── Queries ─────────────────────────────────────────────────────────────────
-  const combinedParams: LogListParams = { ...filters, ...timeRange };
+  const combinedParams: LogListParams = useMemo(
+    () => ({ ...filters, ...timeRange }),
+    [filters, timeRange]
+  );
 
   const {
     data: logsData,

@@ -476,10 +476,6 @@ pub struct SessionSegment {
 // Log Monitoring
 // ============================================================================
 
-/// A single log entry ingested from an SDK. The JSONB columns (`tags`, `extra`,
-/// `attributes`) are stored as JSON strings so that the same struct works with
-/// both PostgreSQL and the SQLite Any backend used in unit tests. Callers can
-/// parse with `serde_json::from_str`.
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 #[sqlx(rename_all = "snake_case")]
 pub struct LogEntry {
@@ -493,12 +489,9 @@ pub struct LogEntry {
     pub service_name: Option<String>,
     pub environment: Option<String>,
     pub release: Option<String>,
-    /// JSON string — use `serde_json::from_str` to parse.
-    pub tags: Option<String>,
-    /// JSON string — use `serde_json::from_str` to parse.
-    pub extra: Option<String>,
-    /// JSON string — use `serde_json::from_str` to parse.
-    pub attributes: Option<String>,
+    pub tags: Option<serde_json::Value>,
+    pub extra: Option<serde_json::Value>,
+    pub attributes: Option<serde_json::Value>,
     pub issue_id: Option<String>,
     pub created_at: crate::db::types::Timestamp,
 }

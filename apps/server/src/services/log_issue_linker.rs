@@ -40,7 +40,7 @@ impl LogIssueLinker {
              FROM logs \
              WHERE level IN ('error', 'fatal') \
                AND issue_id IS NULL \
-               AND timestamp >= $1 \
+               AND timestamp >= $1::timestamptz \
              LIMIT 500",
         )
         .bind(since.to_rfc3339())
@@ -78,7 +78,8 @@ impl LogIssueLinker {
 
             // ── Step 4: set issue_id if a match was found ──────────────────
             if let Some(issue) = maybe_issue {
-                LogRepository::set_issue_link(&self.db, &row.id, Some(&issue.id)).await?;
+                LogRepository::set_issue_link(&self.db, &row.project_id, &row.id, Some(&issue.id))
+                    .await?;
                 linked += 1;
             }
         }

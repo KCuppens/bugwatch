@@ -142,8 +142,8 @@ impl LogAlertEvaluator {
                 continue;
             }
 
-            // c. No sample_matching_logs method in the repository yet — use empty slice.
-            let samples: Vec<SampleLogEntry> = vec![];
+            // c. Fetch up to 3 sample logs matching the rule's criteria for the webhook payload.
+            let samples = self.fetch_sample_logs(db_rule).await.unwrap_or_default();
 
             // d. Fire notification.
             let result = self.fire_notification(rule, count, &samples, &now).await;
@@ -164,6 +164,59 @@ impl LogAlertEvaluator {
         }
 
         Ok(())
+    }
+
+    /// Query up to 3 log entries matching the rule's criteria — included in webhook payloads.
+    async fn fetch_sample_logs(&self, rule: &LogAlertRule) -> Result<Vec<SampleLogEntry>> {
+        let window_start = Utc::now() - chrono::Duration::seconds(rule.window_seconds as i64);
+
+        let mut conditions = vec![
+            "project_id = $1".to_string(),
+            "created_at >= $2::timestamptz".to_string(),
+        ];
+        let mut extra_bindings: Vec<String> = vec![];
+        let mut param_idx: usize = 3;
+
+        if let Some(ref level) = rule.level_filter {
+            conditions.push(format!("level = ${}", param_idx));
+            extra_bindings.push(level.clone());
+            param_idx += 1;
+        }
+        if let Some(ref search) = rule.search_filter {
+            conditions.push(format!("message ILIKE ${}", param_idx));
+            extra_bindings.push(format!("%{}%", search));
+        }
+
+        let sql = format!(
+            "SELECT id, level, message, timestamp::text FROM logs WHERE {} ORDER BY created_at DESC LIMIT 3",
+            conditions.join(" AND ")
+        );
+
+        #[derive(sqlx::FromRow)]
+        struct SampleRow {
+            id: String,
+            level: String,
+            message: String,
+            timestamp: String,
+        }
+
+        let mut q = sqlx::query_as::<_, SampleRow>(&sql)
+            .bind(&rule.project_id)
+            .bind(window_start.to_rfc3339());
+        for s in &extra_bindings {
+            q = q.bind(s.as_str());
+        }
+
+        let rows = q.fetch_all(&self.db).await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| SampleLogEntry {
+                id: r.id,
+                level: r.level,
+                message: r.message,
+                timestamp: r.timestamp,
+            })
+            .collect())
     }
 
     /// Dispatch the notification (email or webhook) for a fired rule.

@@ -104,13 +104,77 @@ fn validate_notification_type(notification_type: &str) -> AppResult<()> {
     }
 }
 
-fn validate_notification_target(target: &str) -> AppResult<()> {
+fn validate_notification_target(notification_type: &str, target: &str) -> AppResult<()> {
     if target.trim().is_empty() {
         return Err(AppError::Validation(
             "notification_target must not be empty".to_string(),
         ));
     }
+    if notification_type == "webhook" {
+        validate_webhook_url(target)?;
+    }
     Ok(())
+}
+
+/// Reject webhook URLs that could be used for SSRF (fp5-003).
+/// Allows only http/https schemes and blocks private/loopback/link-local hosts.
+fn validate_webhook_url(url: &str) -> AppResult<()> {
+    let parsed = url::Url::parse(url)
+        .map_err(|_| AppError::Validation(format!("webhook URL is not valid: {}", url)))?;
+
+    match parsed.scheme() {
+        "http" | "https" => {}
+        other => {
+            return Err(AppError::Validation(format!(
+                "webhook URL scheme must be http or https, got '{}'",
+                other
+            )));
+        }
+    }
+
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| AppError::Validation("webhook URL must have a host".to_string()))?;
+
+    // Block loopback, link-local, and RFC-1918 private ranges.
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        if ip.is_loopback() || is_private_ip(&ip) {
+            return Err(AppError::Validation(
+                "webhook URL must not point to a private or loopback address".to_string(),
+            ));
+        }
+    }
+
+    // Block common internal hostnames.
+    let lower = host.to_lowercase();
+    if lower == "localhost" || lower.ends_with(".local") || lower.ends_with(".internal") {
+        return Err(AppError::Validation(
+            "webhook URL must not point to a local or internal host".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
+fn is_private_ip(ip: &std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => {
+            let o = v4.octets();
+            // 10.x.x.x
+            o[0] == 10
+            // 172.16-31.x.x
+            || (o[0] == 172 && (16..=31).contains(&o[1]))
+            // 192.168.x.x
+            || (o[0] == 192 && o[1] == 168)
+            // 169.254.x.x (link-local / cloud metadata)
+            || (o[0] == 169 && o[1] == 254)
+        }
+        std::net::IpAddr::V6(v6) => {
+            // fc00::/7 unique-local, fe80::/10 link-local
+            let seg = v6.segments();
+            (seg[0] & 0xfe00) == 0xfc00 || (seg[0] & 0xffc0) == 0xfe80
+        }
+    }
 }
 
 // ============================================================================
@@ -190,7 +254,7 @@ pub async fn create(
     validate_threshold(request.threshold)?;
     validate_window_seconds(request.window_seconds)?;
     validate_notification_type(&request.notification_type)?;
-    validate_notification_target(&request.notification_target)?;
+    validate_notification_target(&request.notification_type, &request.notification_target)?;
 
     // 2. Project access
     let project = ProjectRepository::find_by_id(&state.db, &project_id)
@@ -261,7 +325,9 @@ pub async fn update(
         validate_notification_type(ntype)?;
     }
     if let Some(ref ntarget) = request.notification_target {
-        validate_notification_target(ntarget)?;
+        // Use the new type if provided; otherwise assume webhook (stricter default).
+        let ntype = request.notification_type.as_deref().unwrap_or("webhook");
+        validate_notification_target(ntype, ntarget)?;
     }
 
     // 2. Project access
@@ -427,18 +493,41 @@ mod tests {
 
     #[test]
     fn notification_target_empty_is_invalid() {
-        assert!(validate_notification_target("").is_err());
+        assert!(validate_notification_target("email", "").is_err());
     }
 
     #[test]
     fn notification_target_whitespace_only_is_invalid() {
-        assert!(validate_notification_target("   ").is_err());
+        assert!(validate_notification_target("email", "   ").is_err());
     }
 
     #[test]
     fn notification_target_nonempty_is_valid() {
-        assert!(validate_notification_target("user@example.com").is_ok());
-        assert!(validate_notification_target("https://hooks.example.com/abc").is_ok());
+        assert!(validate_notification_target("email", "user@example.com").is_ok());
+        assert!(validate_notification_target("webhook", "https://hooks.example.com/abc").is_ok());
+    }
+
+    #[test]
+    fn webhook_url_private_ip_is_rejected() {
+        assert!(validate_notification_target("webhook", "http://10.0.0.1/hook").is_err());
+        assert!(
+            validate_notification_target("webhook", "http://169.254.169.254/latest/meta-data")
+                .is_err()
+        );
+        assert!(validate_notification_target("webhook", "http://192.168.1.1/hook").is_err());
+        assert!(validate_notification_target("webhook", "http://localhost/hook").is_err());
+    }
+
+    #[test]
+    fn webhook_url_bad_scheme_is_rejected() {
+        assert!(validate_notification_target("webhook", "file:///etc/passwd").is_err());
+        assert!(validate_notification_target("webhook", "ftp://example.com/hook").is_err());
+    }
+
+    #[test]
+    fn email_target_skips_url_validation() {
+        // Email addresses are not URLs — SSRF check only applies to webhook type.
+        assert!(validate_notification_target("email", "ops@example.com").is_ok());
     }
 
     // ── tier gate ─────────────────────────────────────────────────────────────

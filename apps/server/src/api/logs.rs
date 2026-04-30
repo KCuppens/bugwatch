@@ -367,6 +367,13 @@ pub async fn ingest(
     let (accepted, duplicates) =
         LogRepository::bulk_create(&state.db, &project.id, &inserts).await?;
 
+    tracing::info!(
+        project_id = %project.id,
+        accepted = accepted,
+        duplicates = duplicates,
+        "Log batch ingested"
+    );
+
     Ok((
         StatusCode::ACCEPTED,
         Json(BatchIngestResponse {
@@ -543,9 +550,14 @@ pub async fn tail_logs(
         |(state, project_id, cursor)| async move {
             tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
 
-            let entries = LogRepository::list_since(&state.db, &project_id, cursor, 100)
-                .await
-                .unwrap_or_default();
+            let entries = match LogRepository::list_since(&state.db, &project_id, cursor, 100).await
+            {
+                Ok(rows) => rows,
+                Err(e) => {
+                    tracing::error!(project_id = %project_id, "SSE tail DB error: {}", e);
+                    vec![]
+                }
+            };
             let new_cursor = entries.last().map(|e| e.created_at.0).unwrap_or(cursor);
             let events: Vec<Result<Event, Infallible>> = entries
                 .into_iter()
@@ -605,7 +617,8 @@ pub async fn link_issue(
 ) -> AppResult<(StatusCode, Json<serde_json::Value>)> {
     verify_project_access(&state, &project_id, &user).await?;
 
-    LogRepository::set_issue_link(&state.db, &log_entry_id, Some(&body.issue_id)).await?;
+    LogRepository::set_issue_link(&state.db, &project_id, &log_entry_id, Some(&body.issue_id))
+        .await?;
 
     Ok((
         StatusCode::OK,
@@ -624,7 +637,7 @@ pub async fn unlink_issue(
 ) -> AppResult<(StatusCode, Json<serde_json::Value>)> {
     verify_project_access(&state, &project_id, &user).await?;
 
-    LogRepository::set_issue_link(&state.db, &log_entry_id, None).await?;
+    LogRepository::set_issue_link(&state.db, &project_id, &log_entry_id, None).await?;
 
     Ok((
         StatusCode::OK,
