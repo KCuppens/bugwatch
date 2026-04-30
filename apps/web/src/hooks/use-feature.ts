@@ -1,12 +1,12 @@
-'use client';
+"use client";
 
-import { useAuth } from '@/lib/auth-context';
+import { useAuth } from "@/lib/auth-context";
 
 export function isSelfHosted(): boolean {
-  return process.env.NEXT_PUBLIC_DEPLOYMENT_MODE !== 'saas';
+  return process.env.NEXT_PUBLIC_DEPLOYMENT_MODE !== "saas";
 }
 
-export type Tier = 'free' | 'pro' | 'team' | 'enterprise';
+export type Tier = "free" | "pro" | "team" | "enterprise";
 
 const TIER_LEVELS: Record<Tier, number> = {
   free: 0,
@@ -17,50 +17,52 @@ const TIER_LEVELS: Record<Tier, number> = {
 
 const FEATURE_TIERS: Record<string, Tier> = {
   // Free features
-  slack: 'free',
+  slack: "free",
 
   // Pro features
-  webhooks: 'pro',
-  pagerduty: 'pro',
-  email_notifications: 'pro',
-  server_monitoring: 'pro',
+  webhooks: "pro",
+  pagerduty: "pro",
+  email_notifications: "pro",
+  server_monitoring: "pro",
 
   // Pro features (cont.)
-  performance_monitoring: 'pro',
+  performance_monitoring: "pro",
+  log_monitoring: "pro",
 
   // Team features
-  opsgenie: 'team',
-  session_replay: 'team',
-  jira: 'team',
-  linear: 'team',
-  github: 'team',
-  team_members: 'team',
+  opsgenie: "team",
+  session_replay: "team",
+  jira: "team",
+  linear: "team",
+  github: "team",
+  team_members: "team",
 
   // Enterprise features
-  sso: 'enterprise',
-  audit_logs: 'enterprise',
-  custom_retention: 'enterprise',
+  sso: "enterprise",
+  audit_logs: "enterprise",
+  custom_retention: "enterprise",
 };
 
 /**
  * Human-readable display names for features
  */
 export const FEATURE_DISPLAY_NAMES: Record<string, string> = {
-  slack: 'Slack Notifications',
-  webhooks: 'Webhook Alerts',
-  pagerduty: 'PagerDuty Integration',
-  email_notifications: 'Email Notifications',
-  server_monitoring: 'Server Monitoring',
-  opsgenie: 'OpsGenie Integration',
-  session_replay: 'Session Replay',
-  performance_monitoring: 'Performance Monitoring',
-  jira: 'Jira Integration',
-  linear: 'Linear Integration',
-  github: 'GitHub Integration',
-  team_members: 'Team Members',
-  sso: 'SSO/SAML',
-  audit_logs: 'Audit Logs',
-  custom_retention: 'Custom Retention',
+  slack: "Slack Notifications",
+  webhooks: "Webhook Alerts",
+  pagerduty: "PagerDuty Integration",
+  email_notifications: "Email Notifications",
+  server_monitoring: "Server Monitoring",
+  log_monitoring: "Log Monitoring",
+  opsgenie: "OpsGenie Integration",
+  session_replay: "Session Replay",
+  performance_monitoring: "Performance Monitoring",
+  jira: "Jira Integration",
+  linear: "Linear Integration",
+  github: "GitHub Integration",
+  team_members: "Team Members",
+  sso: "SSO/SAML",
+  audit_logs: "Audit Logs",
+  custom_retention: "Custom Retention",
 };
 
 /**
@@ -76,8 +78,8 @@ export function getFeatureDisplayName(feature: string): string {
 export function useFeature(feature: string): boolean {
   const { user } = useAuth();
   if (isSelfHosted()) return true;
-  const userTier = (user?.organization?.tier || 'free') as Tier;
-  const requiredTier = FEATURE_TIERS[feature] || 'free';
+  const userTier = (user?.organization?.tier || "free") as Tier;
+  const requiredTier = FEATURE_TIERS[feature] || "free";
   return TIER_LEVELS[userTier] >= TIER_LEVELS[requiredTier];
 }
 
@@ -92,11 +94,11 @@ export function useTier(): {
   isEnterprise: boolean;
 } {
   const { user } = useAuth();
-  const tier = (user?.organization?.tier || 'free') as Tier;
+  const tier = (user?.organization?.tier || "free") as Tier;
 
   if (isSelfHosted()) {
     return {
-      tier: 'team' as Tier,
+      tier: "team" as Tier,
       hasAccess: () => true,
       isPro: true,
       isTeam: true,
@@ -107,9 +109,9 @@ export function useTier(): {
   return {
     tier,
     hasAccess: (required: Tier) => TIER_LEVELS[tier] >= TIER_LEVELS[required],
-    isPro: TIER_LEVELS[tier] >= TIER_LEVELS['pro'],
-    isTeam: TIER_LEVELS[tier] >= TIER_LEVELS['team'],
-    isEnterprise: tier === 'enterprise',
+    isPro: TIER_LEVELS[tier] >= TIER_LEVELS["pro"],
+    isTeam: TIER_LEVELS[tier] >= TIER_LEVELS["team"],
+    isEnterprise: tier === "enterprise",
   };
 }
 
@@ -150,5 +152,5 @@ export function getTierRateLimit(tier: Tier): number {
  * Get the required tier for a feature
  */
 export function getFeatureTier(feature: string): Tier {
-  return FEATURE_TIERS[feature] || 'free';
+  return FEATURE_TIERS[feature] || "free";
 }

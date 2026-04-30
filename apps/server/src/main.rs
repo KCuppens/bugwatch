@@ -31,7 +31,10 @@ pub mod utils;
 
 pub use error::{AppError, AppResult};
 pub use rate_limit::RateLimiter;
-pub use services::{AlertingService, HealthCheckWorker, NotificationService, RetentionService};
+pub use services::{
+    AlertingService, HealthCheckWorker, LogAlertEvaluator, LogIssueLinker, NotificationService,
+    RetentionService,
+};
 
 // BugWatch self-monitoring
 use bugwatch::{init as bugwatch_init, install_panic_hook, BugwatchClient, BugwatchOptions};
@@ -185,7 +188,7 @@ async fn main() -> Result<()> {
         #[cfg(feature = "saas")]
         stripe,
         alerting_service: alerting_service.clone(),
-        notification_service,
+        notification_service: notification_service.clone(),
         bugwatch,
         alert_semaphore: Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_ALERTS)),
         payment_store: Arc::new(crate::payments::store::PaymentStore::new(db.clone())),
@@ -425,6 +428,47 @@ async fn main() -> Result<()> {
         }
     });
     info!("x402 payment challenge expiry task started (runs hourly)");
+
+    // Ensure next month's log partition exists (idempotent; PG-only, no-op on error)
+    {
+        let partition_db = db.clone();
+        tokio::spawn(async move {
+            if let Err(e) =
+                crate::db::repositories::LogRepository::ensure_next_partition(&partition_db).await
+            {
+                tracing::warn!("ensure_next_partition (log monitoring): {}", e);
+            }
+        });
+    }
+
+    // Start log alert evaluator (runs every 30s)
+    let log_alert_db = db.clone();
+    let log_alert_notif = notification_service.clone();
+    tokio::spawn(async move {
+        let evaluator = LogAlertEvaluator::new(log_alert_db, log_alert_notif);
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+        loop {
+            interval.tick().await;
+            if let Err(e) = evaluator.run_once().await {
+                tracing::error!("Log alert evaluator failed: {}", e);
+            }
+        }
+    });
+    info!("Log alert evaluator started (runs every 30s)");
+
+    // Start log issue linker (runs every 60s)
+    let log_linker_db = db.clone();
+    tokio::spawn(async move {
+        let linker = LogIssueLinker::new(log_linker_db);
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+        loop {
+            interval.tick().await;
+            if let Err(e) = linker.run_once().await {
+                tracing::error!("Log issue linker failed: {}", e);
+            }
+        }
+    });
+    info!("Log issue linker started (runs every 60s)");
 
     // Start server
     let listener = TcpListener::bind(&config.server_addr).await?;

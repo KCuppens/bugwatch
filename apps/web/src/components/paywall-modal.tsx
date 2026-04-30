@@ -1,45 +1,36 @@
-'use client';
+"use client";
 
-import { useState, useEffect, Fragment } from 'react';
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-} from '@/components/ui/dialog';
-import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
-import { Check, X, Crown, Sparkles, Loader2 } from 'lucide-react';
-import { usePaywall } from '@/lib/paywall-context';
-import { useTier, getTierDisplayName, getFeatureTier, isSelfHosted, type Tier } from '@/hooks/use-feature';
-import {
-  TIER_PRICING,
-  FEATURE_COMPARISON,
-  TIER_ORDER,
-  getAnnualSavings,
-} from '@/lib/pricing-data';
-import { billingApi } from '@/lib/api';
-import { isValidHttpUrl } from '@/lib/url-utils';
-import { cn } from '@/lib/utils';
+import { useState, useEffect, Fragment } from "react";
+import { useRouter } from "next/navigation";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Check, X, Crown, Sparkles, Loader2 } from "lucide-react";
+import { usePaywall } from "@/lib/paywall-context";
+import { useTier, getTierDisplayName, getFeatureTier, isSelfHosted, type Tier } from "@/hooks/use-feature";
+import { TIER_PRICING, FEATURE_COMPARISON, TIER_ORDER, getAnnualSavings } from "@/lib/pricing-data";
+import { billingApi } from "@/lib/api";
+import { isValidHttpUrl } from "@/lib/url-utils";
+import { cn } from "@/lib/utils";
 
 // Feature name mapping for display
 const FEATURE_DISPLAY_NAMES: Record<string, string> = {
-  slack: 'Slack Notifications',
-  webhooks: 'Webhook Alerts',
-  pagerduty: 'PagerDuty Integration',
-  email_notifications: 'Email Notifications',
-  server_monitoring: 'Server Monitoring',
-  opsgenie: 'OpsGenie Integration',
-  session_replay: 'Session Replay',
-  performance_monitoring: 'Performance Monitoring',
-  jira: 'Jira Integration',
-  linear: 'Linear Integration',
-  github: 'GitHub Integration',
-  team_members: 'Team Members',
-  sso: 'SSO/SAML',
-  audit_logs: 'Audit Logs',
-  custom_retention: 'Custom Retention',
+  slack: "Slack Notifications",
+  webhooks: "Webhook Alerts",
+  pagerduty: "PagerDuty Integration",
+  email_notifications: "Email Notifications",
+  server_monitoring: "Server Monitoring",
+  log_monitoring: "Log Monitoring",
+  opsgenie: "OpsGenie Integration",
+  session_replay: "Session Replay",
+  performance_monitoring: "Performance Monitoring",
+  jira: "Jira Integration",
+  linear: "Linear Integration",
+  github: "GitHub Integration",
+  team_members: "Team Members",
+  sso: "SSO/SAML",
+  audit_logs: "Audit Logs",
+  custom_retention: "Custom Retention",
 };
 
 function getFeatureDisplayName(feature: string): string {
@@ -47,6 +38,7 @@ function getFeatureDisplayName(feature: string): string {
 }
 
 export function PaywallModal() {
+  const router = useRouter();
   const { isOpen, triggerFeature, targetTier, closePaywall } = usePaywall();
   const { tier: currentTier } = useTier();
   const [isAnnual, setIsAnnual] = useState(true);
@@ -65,8 +57,8 @@ export function PaywallModal() {
   if (isSelfHosted()) return null;
 
   // Determine which tier to highlight based on trigger
-  const recommendedTier = targetTier || (triggerFeature ? getFeatureTier(triggerFeature) : 'pro');
-  const annualSavings = getAnnualSavings('pro');
+  const recommendedTier = targetTier || (triggerFeature ? getFeatureTier(triggerFeature) : "pro");
+  const annualSavings = getAnnualSavings("pro");
 
   const handleUpgrade = async (tier: Tier) => {
     setLoadingTier(tier);
@@ -82,8 +74,8 @@ export function PaywallModal() {
       if (!isValidHttpUrl(response.checkout_url)) return;
       window.location.href = response.checkout_url;
     } catch (err) {
-      console.error('Failed to create checkout:', err);
-      setError('Failed to start checkout. Please try again.');
+      console.error("Failed to create checkout:", err);
+      setError("Failed to start checkout. Please try again.");
       setLoadingTier(null);
     }
   };
@@ -95,7 +87,7 @@ export function PaywallModal() {
   };
 
   const renderFeatureValue = (value: string | boolean) => {
-    if (typeof value === 'boolean') {
+    if (typeof value === "boolean") {
       return value ? (
         <Check className="h-4 w-4 text-green-500 mx-auto" />
       ) : (
@@ -105,8 +97,7 @@ export function PaywallModal() {
     return <span className="text-sm">{value}</span>;
   };
 
-  // Plans to show in the modal (exclude free, show pro and team)
-  const upgradeTiers: Tier[] = ['pro', 'team'];
+  const upgradeTiers: Tier[] = ["free", "pro", "team"];
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && closePaywall()}>
@@ -118,18 +109,11 @@ export function PaywallModal() {
             </div>
           </div>
           <DialogTitle className="text-2xl">
-            {triggerFeature ? (
-              <>Upgrade to unlock {getFeatureDisplayName(triggerFeature)}</>
-            ) : (
-              <>Upgrade your plan</>
-            )}
+            {triggerFeature ? <>Upgrade to unlock {getFeatureDisplayName(triggerFeature)}</> : <>Upgrade your plan</>}
           </DialogTitle>
           <DialogDescription>
             {triggerFeature ? (
-              <>
-                This feature requires a {getTierDisplayName(recommendedTier)} plan
-                or higher.
-              </>
+              <>This feature requires a {getTierDisplayName(recommendedTier)} plan or higher.</>
             ) : (
               <>Get more features and higher limits with a paid plan.</>
             )}
@@ -155,10 +139,8 @@ export function PaywallModal() {
             <button
               onClick={() => setIsAnnual(false)}
               className={cn(
-                'px-4 py-2 text-sm font-medium rounded-md transition-colors',
-                !isAnnual
-                  ? 'bg-background text-foreground shadow-sm'
-                  : 'text-muted-foreground hover:text-foreground'
+                "px-4 py-2 text-sm font-medium rounded-md transition-colors",
+                !isAnnual ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
               )}
             >
               Monthly
@@ -166,10 +148,8 @@ export function PaywallModal() {
             <button
               onClick={() => setIsAnnual(true)}
               className={cn(
-                'px-4 py-2 text-sm font-medium rounded-md transition-colors flex items-center gap-2',
-                isAnnual
-                  ? 'bg-background text-foreground shadow-sm'
-                  : 'text-muted-foreground hover:text-foreground'
+                "px-4 py-2 text-sm font-medium rounded-md transition-colors flex items-center gap-2",
+                isAnnual ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
               )}
             >
               Annual
@@ -184,7 +164,7 @@ export function PaywallModal() {
         </div>
 
         {/* Plan Cards */}
-        <div className="grid gap-4 md:grid-cols-2 mb-6">
+        <div className="grid gap-4 md:grid-cols-3 mb-6">
           {upgradeTiers.map((tier) => {
             const pricing = TIER_PRICING[tier];
             const price = getPrice(tier);
@@ -195,9 +175,9 @@ export function PaywallModal() {
               <div
                 key={tier}
                 className={cn(
-                  'relative flex flex-col rounded-xl border p-5',
-                  isRecommended && 'ring-2 ring-primary shadow-lg',
-                  isCurrent && 'bg-muted/50'
+                  "relative flex flex-col rounded-xl border p-5",
+                  isRecommended && "ring-2 ring-primary shadow-lg",
+                  isCurrent && "bg-muted/50"
                 )}
               >
                 {isRecommended && (
@@ -209,61 +189,53 @@ export function PaywallModal() {
                   </div>
                 )}
 
-                <div className={cn('mb-4', isRecommended && 'pt-2')}>
-                  <h3 className="text-lg font-semibold">
-                    {getTierDisplayName(tier)}
-                  </h3>
-                  <p className="text-sm text-muted-foreground">
-                    {pricing.description}
-                  </p>
+                <div className={cn("mb-4", isRecommended && "pt-2")}>
+                  <h3 className="text-lg font-semibold">{getTierDisplayName(tier)}</h3>
+                  <p className="text-sm text-muted-foreground">{pricing.description}</p>
                 </div>
 
                 <div className="mb-4">
                   <div className="flex items-baseline gap-1">
                     <span className="font-display text-3xl font-semibold tabular-nums">${price}</span>
-                    <span className="text-muted-foreground text-sm">
-                      /seat/mo
-                    </span>
+                    <span className="text-muted-foreground text-sm">/seat/mo</span>
                   </div>
-                  {isAnnual && price !== null && (
-                    <p className="text-xs text-muted-foreground">
-                      Billed annually (${price * 12}/seat/year)
-                    </p>
+                  {isAnnual && price !== null && price > 0 && (
+                    <p className="text-xs text-muted-foreground">Billed annually (${price * 12}/seat/year)</p>
                   )}
                 </div>
 
                 <ul className="space-y-2 mb-4 flex-1">
-                  {FEATURE_COMPARISON.filter((f) => f.category === 'limits').map(
-                    (feature) => (
-                      <li
-                        key={feature.name}
-                        className="flex items-center gap-2 text-sm"
-                      >
-                        <Check className="h-3.5 w-3.5 text-green-500 shrink-0" />
-                        <span className="text-muted-foreground">
-                          {feature[tier]}
-                        </span>
-                        <span className="text-muted-foreground/60">
-                          {feature.name.toLowerCase()}
-                        </span>
-                      </li>
-                    )
-                  )}
+                  {FEATURE_COMPARISON.filter((f) => f.category === "limits").map((feature) => (
+                    <li key={feature.name} className="flex items-center gap-2 text-sm">
+                      <Check className="h-3.5 w-3.5 text-green-500 shrink-0" />
+                      <span className="text-muted-foreground">{feature[tier]}</span>
+                      <span className="text-muted-foreground/60">{feature.name.toLowerCase()}</span>
+                    </li>
+                  ))}
                 </ul>
 
                 {isCurrent ? (
                   <Button variant="outline" className="w-full" disabled>
                     Current Plan
                   </Button>
+                ) : tier === "free" ? (
+                  <Button
+                    variant="outline"
+                    className="w-full"
+                    onClick={() => {
+                      closePaywall();
+                      router.push("/dashboard/settings?tab=billing");
+                    }}
+                  >
+                    Downgrade to Free
+                  </Button>
                 ) : (
                   <Button
-                    className={cn('w-full', isRecommended && 'bg-primary')}
+                    className={cn("w-full", isRecommended && "bg-primary")}
                     onClick={() => handleUpgrade(tier)}
                     disabled={loadingTier === tier}
                   >
-                    {loadingTier === tier && (
-                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    )}
+                    {loadingTier === tier && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
                     Upgrade to {getTierDisplayName(tier)}
                   </Button>
                 )}
@@ -285,10 +257,7 @@ export function PaywallModal() {
                   {TIER_ORDER.map((tier) => (
                     <th
                       key={tier}
-                      className={cn(
-                        'text-center py-2 px-4 font-medium',
-                        tier === currentTier && 'bg-muted/50'
-                      )}
+                      className={cn("text-center py-2 px-4 font-medium", tier === currentTier && "bg-muted/50")}
                     >
                       {getTierDisplayName(tier)}
                     </th>
@@ -296,39 +265,23 @@ export function PaywallModal() {
                 </tr>
               </thead>
               <tbody>
-                {(['limits', 'features', 'support'] as const).map((category) => (
+                {(["limits", "features", "support"] as const).map((category) => (
                   <Fragment key={category}>
                     <tr className="bg-muted/30">
-                      <td
-                        colSpan={5}
-                        className="py-2 px-4 font-medium capitalize text-muted-foreground text-xs"
-                      >
+                      <td colSpan={5} className="py-2 px-4 font-medium capitalize text-muted-foreground text-xs">
                         {category}
                       </td>
                     </tr>
-                    {FEATURE_COMPARISON.filter((f) => f.category === category).map(
-                      (feature) => (
-                        <tr
-                          key={feature.name}
-                          className="border-b border-muted/50"
-                        >
-                          <td className="py-2 px-4 text-muted-foreground">
-                            {feature.name}
+                    {FEATURE_COMPARISON.filter((f) => f.category === category).map((feature) => (
+                      <tr key={feature.name} className="border-b border-muted/50">
+                        <td className="py-2 px-4 text-muted-foreground">{feature.name}</td>
+                        {TIER_ORDER.map((tier) => (
+                          <td key={tier} className={cn("text-center py-2 px-4", tier === currentTier && "bg-muted/50")}>
+                            {renderFeatureValue(feature[tier])}
                           </td>
-                          {TIER_ORDER.map((tier) => (
-                            <td
-                              key={tier}
-                              className={cn(
-                                'text-center py-2 px-4',
-                                tier === currentTier && 'bg-muted/50'
-                              )}
-                            >
-                              {renderFeatureValue(feature[tier])}
-                            </td>
-                          ))}
-                        </tr>
-                      )
-                    )}
+                        ))}
+                      </tr>
+                    ))}
                   </Fragment>
                 ))}
               </tbody>
@@ -338,13 +291,10 @@ export function PaywallModal() {
 
         {/* Enterprise CTA */}
         <div className="text-center mt-4 text-sm text-muted-foreground">
-          Need more?{' '}
-          <a
-            href="mailto:sales@bugwatch.dev"
-            className="text-primary hover:underline"
-          >
+          Need more?{" "}
+          <a href="mailto:sales@bugwatch.dev" className="text-primary hover:underline">
             Contact sales
-          </a>{' '}
+          </a>{" "}
           for Enterprise pricing.
         </div>
       </DialogContent>

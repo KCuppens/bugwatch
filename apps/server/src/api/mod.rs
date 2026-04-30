@@ -1,4 +1,4 @@
-use axum::{routing::delete, routing::get, routing::patch, routing::post, Json, Router};
+use axum::{routing::delete, routing::get, routing::patch, routing::post, Router};
 use serde::{Deserialize, Serialize};
 
 use crate::{auth::AuthIdentity, AppError, AppResult, AppState};
@@ -35,6 +35,9 @@ pub mod comments;
 pub mod events;
 pub mod integrations;
 pub mod issues;
+pub mod log_alert_rules;
+pub mod log_saved_searches;
+pub mod logs;
 pub mod metrics;
 pub mod monitors;
 pub mod performance;
@@ -69,6 +72,35 @@ pub fn router() -> Router<AppState> {
         .route("/transactions", post(performance::ingest_transaction))
         // Server metrics ingestion (agent pushes here)
         .route("/metrics", post(metrics::ingest_metrics))
+        // Log ingestion (SDK → server, API key auth)
+        .route("/logs", post(logs::ingest))
+        // Log monitoring (dashboard, JWT auth, tier gated)
+        .route("/projects/:project_id/logs", get(logs::list_logs))
+        .route("/projects/:project_id/logs/stats", get(logs::get_stats))
+        .route("/projects/:project_id/logs/tail", get(logs::tail_logs))
+        .route("/projects/:project_id/logs/facets", get(logs::get_facets))
+        .route(
+            "/projects/:project_id/logs/:log_entry_id/issue",
+            post(logs::link_issue).delete(logs::unlink_issue),
+        )
+        // Log saved searches (Pro+)
+        .route(
+            "/projects/:project_id/log-saved-searches",
+            get(log_saved_searches::list).post(log_saved_searches::create),
+        )
+        .route(
+            "/projects/:project_id/log-saved-searches/:search_id",
+            delete(log_saved_searches::delete),
+        )
+        // Log alert rules (Pro+)
+        .route(
+            "/projects/:project_id/log-alert-rules",
+            get(log_alert_rules::list).post(log_alert_rules::create),
+        )
+        .route(
+            "/projects/:project_id/log-alert-rules/:rule_id",
+            patch(log_alert_rules::update).delete(log_alert_rules::delete),
+        )
         // Projects
         .route("/projects", get(projects::list).post(projects::create))
         .route(

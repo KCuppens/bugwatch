@@ -4,7 +4,7 @@ import { useMemo } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
-import { Bug, Activity, Settings, FolderOpen, Bell, LayoutGrid, Server, Gauge, Video } from "lucide-react";
+import { Bug, Activity, Settings, FolderOpen, Bell, LayoutGrid, Server, Gauge, Video, ScrollText } from "lucide-react";
 import { ActivationChecklist } from "@/components/onboarding/ActivationChecklist";
 import { useFeature } from "@/hooks/use-feature";
 import { usePaywall } from "@/lib/paywall-context";
@@ -46,6 +46,7 @@ export function Sidebar() {
   const { unresolvedCount, monitorsDownCount } = useSidebarCounts();
   const hasPerformance = useFeature("performance_monitoring");
   const hasReplay = useFeature("session_replay");
+  const hasLogs = useFeature("log_monitoring");
 
   const issueCount = Math.max(0, Number(unresolvedCount) || 0);
   const monitorDownCount = Math.max(0, Number(monitorsDownCount) || 0);
@@ -92,6 +93,13 @@ export function Sidebar() {
       ...(!hasReplay && { proGated: true }),
     });
 
+    items.push({
+      label: "Logs",
+      href: "/dashboard/logs",
+      icon: <ScrollText className="h-5 w-5" />,
+      ...(!hasLogs && { proGated: true }),
+    });
+
     items.push(
       {
         label: "Alerts",
@@ -106,7 +114,7 @@ export function Sidebar() {
     );
 
     return items;
-  }, [hasPerformance, hasReplay, issueCount, monitorDownCount]);
+  }, [hasPerformance, hasReplay, hasLogs, issueCount, monitorDownCount]);
 
   function isActive(href: string) {
     if (href === "/dashboard") return pathname === "/dashboard";
@@ -181,7 +189,13 @@ export function Sidebar() {
               {itemContent}
             </button>
           ) : (
-            <Link key={item.href} href={item.href} aria-label={item.label} aria-current={active ? "page" : undefined} className={itemClassName}>
+            <Link
+              key={item.href}
+              href={item.href}
+              aria-label={item.label}
+              aria-current={active ? "page" : undefined}
+              className={itemClassName}
+            >
               {itemContent}
             </Link>
           );

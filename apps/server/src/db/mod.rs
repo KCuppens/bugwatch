@@ -1,5 +1,5 @@
 use anyhow::Result;
-use sqlx::{any::AnyPoolOptions, postgres::PgPoolOptions, AnyPool};
+use sqlx::postgres::PgPoolOptions;
 use std::time::Duration;
 use tracing::info;
 
@@ -9,12 +9,10 @@ pub mod repositories;
 pub mod test_helpers;
 pub mod types;
 
-pub type DbPool = AnyPool;
+pub type DbPool = sqlx::PgPool;
 
 /// Initialize the database connection pool with a configurable max size
 pub async fn init_with_pool_size(database_url: &str, max_connections: u32) -> Result<DbPool> {
-    sqlx::any::install_default_drivers();
-
     // Keep a warm floor of connections so bursty traffic doesn't pay the
     // full handshake cost on the first few requests. ~15% of max, clamped.
     let min_connections = max_connections.saturating_div(7).clamp(2, 25);
@@ -23,7 +21,7 @@ pub async fn init_with_pool_size(database_url: &str, max_connections: u32) -> Re
         max_connections, min_connections, database_url
     );
 
-    let pool = AnyPoolOptions::new()
+    let pool = PgPoolOptions::new()
         .max_connections(max_connections)
         .min_connections(min_connections)
         .acquire_timeout(Duration::from_secs(30))
@@ -32,12 +30,7 @@ pub async fn init_with_pool_size(database_url: &str, max_connections: u32) -> Re
         .connect(database_url)
         .await?;
 
-    // Run migrations using a direct PgPool for Postgres-specific migration SQL
-    let pg_pool = PgPoolOptions::new()
-        .max_connections(1)
-        .connect(database_url)
-        .await?;
-    run_migrations(&pg_pool).await?;
+    run_migrations(&pool).await?;
 
     info!("Database initialized successfully");
     Ok(pool)
@@ -146,6 +139,10 @@ pub(crate) async fn run_migrations(pool: &sqlx::PgPool) -> Result<()> {
         (
             "022_perf_indexes",
             include_str!("../../migrations/022_perf_indexes_pg.sql"),
+        ),
+        (
+            "034_log_monitoring",
+            include_str!("../../migrations/034_log_monitoring_pg.sql"),
         ),
     ];
 

@@ -1,7 +1,11 @@
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000";
+// In development, use relative paths so requests go through the Next.js proxy
+// (rewrites in next.config.ts forward /api/v1/** → Rust server). This keeps
+// cookies same-origin (localhost:3001) so the browser always sends them.
+// In production, use the configured API URL for direct cross-origin requests.
+const API_BASE_URL = process.env.NODE_ENV === "development" ? "" : (process.env.NEXT_PUBLIC_API_URL ?? "");
 
 if (process.env.NODE_ENV === "production") {
-  if (!API_BASE_URL || API_BASE_URL === "http://localhost:3000") {
+  if (!API_BASE_URL) {
     throw new Error("[Bugwatch] NEXT_PUBLIC_API_URL must be set in production.");
   }
   if (!API_BASE_URL.startsWith("https://")) {
@@ -157,6 +161,17 @@ async function handleResponse<T>(response: Response): Promise<T> {
 
 const FETCH_MAX_RETRIES = 2;
 
+// Endpoints that are unauthenticated by design — their 401s mean "bad
+// credentials / bad token", not "session expired". Skip the refresh-on-401
+// branch so the real server message ("Invalid email or password", etc.)
+// surfaces to the UI instead of the session-expired sentinel.
+const UNAUTHENTICATED_AUTH_PATHS = [
+  "/api/v1/auth/login",
+  "/api/v1/auth/signup",
+  "/api/v1/auth/forgot-password",
+  "/api/v1/auth/reset-password",
+];
+
 /**
  * Fetch with automatic 401 retry and exponential-backoff retry for 5xx/network errors.
  * Auth is handled via httpOnly cookies (credentials: "include").
@@ -193,8 +208,11 @@ async function fetchWithAuth(url: string, options: RequestInit = {}): Promise<Re
       throw lastNetworkError;
     }
 
-    // 401 on first attempt: attempt token refresh once (5xx retries skip this)
-    if (response.status === 401 && attempt === 0 && typeof window !== "undefined") {
+    // 401 on first attempt: attempt token refresh once (5xx retries skip this).
+    // Skip the refresh dance for unauthenticated auth endpoints — their 401 is
+    // a credential failure, not a session expiry.
+    const isUnauthenticatedAuth = UNAUTHENTICATED_AUTH_PATHS.some((p) => url.includes(p));
+    if (response.status === 401 && attempt === 0 && typeof window !== "undefined" && !isUnauthenticatedAuth) {
       const refreshed = await refreshTokens();
       if (refreshed) {
         response = await fetch(url, { ...options, headers, credentials: "include" });
@@ -1558,4 +1576,129 @@ export const replayApi = {
   async getIssueReplay(projectId: string, issueId: string) {
     return api.get<{ data: SessionRecording | null }>(`/api/v1/projects/${projectId}/issues/${issueId}/replay`);
   },
+};
+
+// ============================================================================
+// Log Monitoring Types & API
+// ============================================================================
+
+export interface LogEntry {
+  id: string;
+  project_id: string;
+  log_id: string;
+  timestamp: string;
+  level: "trace" | "debug" | "info" | "warn" | "error" | "fatal";
+  message: string;
+  logger_name?: string;
+  service_name?: string;
+  environment?: string;
+  release?: string;
+  tags?: Record<string, unknown>;
+  extra?: Record<string, unknown>;
+  attributes?: Record<string, string | number | boolean>;
+  issue_id?: string;
+  created_at: string;
+}
+
+export interface LogTimeBucket {
+  bucket_index: number;
+  count: number;
+  level_counts?: Record<string, number>;
+}
+
+export interface LogStats {
+  buckets: LogTimeBucket[];
+  total: number;
+}
+
+export interface LogListParams {
+  level?: string;
+  search?: string;
+  service_name?: string;
+  environment?: string;
+  start?: string;
+  end?: string;
+  page?: number;
+  per_page?: number;
+  [key: string]: string | number | undefined;
+}
+
+export interface LogSavedSearch {
+  id: string;
+  name: string;
+  filters: LogListParams;
+  created_at: string;
+}
+
+export interface LogAlertRule {
+  id: string;
+  name: string;
+  level_filter?: string;
+  search_filter?: string;
+  threshold: number;
+  window_seconds: number;
+  notification_type: "email" | "webhook";
+  notification_target: string;
+  is_active: boolean;
+  last_fired_at?: string;
+  created_at: string;
+}
+
+export interface BatchIngestResponse {
+  accepted: number;
+  duplicates: number;
+  errors: Array<{ index: number; reason: string }>;
+}
+
+function buildQueryString(params: LogListParams): string {
+  const searchParams = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== null && value !== "") {
+      searchParams.set(key, String(value));
+    }
+  }
+  return searchParams.toString();
+}
+
+export const logsApi = {
+  list: (projectId: string, params: LogListParams) =>
+    api.get<PaginatedResponse<LogEntry>>(`/api/v1/projects/${projectId}/logs?${buildQueryString(params)}`),
+
+  getStats: (projectId: string, start: string, end: string, interval: string) =>
+    api.get<LogStats>(
+      `/api/v1/projects/${projectId}/logs/stats?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}&interval=${encodeURIComponent(interval)}`
+    ),
+
+  getFacets: (projectId: string, key?: string) =>
+    api.get<{ keys: string[]; values: Array<{ value: string; count: number }> }>(
+      `/api/v1/projects/${projectId}/logs/facets${key ? `?key=${encodeURIComponent(key)}` : ""}`
+    ),
+
+  linkToIssue: (projectId: string, logEntryId: string, issueId: string) =>
+    api.post<void>(`/api/v1/projects/${projectId}/logs/${logEntryId}/issue`, { issue_id: issueId }),
+
+  unlinkFromIssue: (projectId: string, logEntryId: string) =>
+    api.delete(`/api/v1/projects/${projectId}/logs/${logEntryId}/issue`),
+};
+
+export const logSavedSearchesApi = {
+  list: (projectId: string) => api.get<{ data: LogSavedSearch[] }>(`/api/v1/projects/${projectId}/log-saved-searches`),
+
+  create: (projectId: string, name: string, filters: LogListParams) =>
+    api.post<{ data: LogSavedSearch }>(`/api/v1/projects/${projectId}/log-saved-searches`, { name, filters }),
+
+  delete: (projectId: string, searchId: string) =>
+    api.delete(`/api/v1/projects/${projectId}/log-saved-searches/${searchId}`),
+};
+
+export const logAlertRulesApi = {
+  list: (projectId: string) => api.get<{ data: LogAlertRule[] }>(`/api/v1/projects/${projectId}/log-alert-rules`),
+
+  create: (projectId: string, rule: Omit<LogAlertRule, "id" | "created_at" | "last_fired_at">) =>
+    api.post<{ data: LogAlertRule }>(`/api/v1/projects/${projectId}/log-alert-rules`, rule),
+
+  update: (projectId: string, ruleId: string, updates: Partial<LogAlertRule>) =>
+    api.patch<{ data: LogAlertRule }>(`/api/v1/projects/${projectId}/log-alert-rules/${ruleId}`, updates),
+
+  delete: (projectId: string, ruleId: string) => api.delete(`/api/v1/projects/${projectId}/log-alert-rules/${ruleId}`),
 };

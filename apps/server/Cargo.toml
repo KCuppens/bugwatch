@@ -48,6 +48,7 @@ dotenvy = "0.15"
 
 # Async utilities
 async-trait = "0.1"
+futures-util = "0.3"
 
 # Cryptography
 hex = "0.4"
