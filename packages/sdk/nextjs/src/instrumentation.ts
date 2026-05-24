@@ -6,7 +6,7 @@
  * export async function register() {
  *   if (process.env.NEXT_RUNTIME === 'nodejs') {
  *     const { registerBugwatch } = await import('@bugwatch/nextjs/instrumentation');
- *     registerBugwatch();
+ *     await registerBugwatch();
  *   }
  * }
  */
@@ -159,6 +159,15 @@ async function initEdge(apiKey: string, endpoint: string | undefined, options: R
  * This hook detects Error objects in the arguments and reports them.
  */
 function setupConsoleErrorCapture(): void {
+  // Import core functions once up-front — avoids require() (CJS) in an ESM context
+  // and prevents repeated dynamic lookups on every console.error call.
+  let coreCapture: {
+    captureException: (err: Error, ctx?: object) => string;
+    captureMessage: (msg: string, level: string) => string;
+    getClient: () => unknown;
+  } | null = null;
+  import("@bugwatch/core").then((m) => { coreCapture = m as typeof coreCapture; }).catch(() => {});
+
   const originalConsoleError = console.error;
   let inCapture = false;
 
@@ -171,7 +180,8 @@ function setupConsoleErrorCapture(): void {
     inCapture = true;
 
     try {
-      const { captureException, captureMessage, getClient } = require("@bugwatch/core");
+      if (!coreCapture) return;
+      const { captureException, captureMessage, getClient } = coreCapture;
       if (!getClient()) return;
 
       // Look for an Error object in the arguments
@@ -253,7 +263,7 @@ export function isRegistered(): boolean {
  * export async function register() {
  *   if (process.env.NEXT_RUNTIME === 'nodejs') {
  *     const { registerBugwatch } = await import('@bugwatch/nextjs/instrumentation');
- *     registerBugwatch();
+ *     await registerBugwatch();
  *   }
  * }
  * ```

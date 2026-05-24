@@ -76,6 +76,10 @@ const SDK_VERSION = "0.1.0";
  * Generate a unique event ID
  */
 function generateEventId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID().replace(/-/g, "");
+  }
+  // Fallback for environments without crypto.randomUUID
   const timestamp = Date.now().toString(36);
   const random = Math.random().toString(36).substring(2, 10);
   return `${timestamp}${random}`;
@@ -118,6 +122,11 @@ export class Bugwatch implements BugwatchClient {
       throw new Error(
         `[Bugwatch] Invalid maxErrorsPerSession: ${mes}. Must be a non-negative integer (use 0 to disable).`
       );
+    }
+
+    const key = this.options.apiKey?.trim();
+    if (key && !key.startsWith("bw_")) {
+      console.warn('[Bugwatch] apiKey does not start with "bw_" — verify the correct project key is being used.');
     }
 
     const ep = this.options.endpoint ?? "";
@@ -471,7 +480,7 @@ export class Bugwatch implements BugwatchClient {
     const mergedContext = getMergedContext(this.user, this.tags, this.extra, this.breadcrumbs.toArray());
 
     // Destructure fields that need merging so ...restPartial doesn't overwrite them
-    const { tags: partialTags, extra: partialExtra, breadcrumbs: _pb, ...restPartial } = partial;
+    const { tags: partialTags, extra: partialExtra, breadcrumbs: partialBreadcrumbs, ...restPartial } = partial;
 
     const event: ErrorEvent = {
       event_id: generateEventId(),
@@ -485,7 +494,9 @@ export class Bugwatch implements BugwatchClient {
       ...(this.options.runtime && { runtime: this.options.runtime }),
       tags: { ...mergedContext.tags, ...partialTags },
       extra: { ...mergedContext.extra, ...partialExtra },
-      breadcrumbs: mergedContext.breadcrumbs,
+      breadcrumbs: partialBreadcrumbs
+        ? [...mergedContext.breadcrumbs, ...partialBreadcrumbs]
+        : mergedContext.breadcrumbs,
       sdk: {
         name: SDK_NAME,
         version: SDK_VERSION,

@@ -1436,13 +1436,14 @@ export default function IssueDetailPage() {
             <CardHeader className="pb-2 px-4 pt-4">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm">Frequency</CardTitle>
-                <div className="flex gap-0.5">
+                <div className="flex gap-0.5" role="group" aria-label="Frequency period">
                   {(["24h", "7d", "30d"] as const).map((period) => (
                     <Button
                       key={period}
                       variant={frequencyPeriod === period ? "secondary" : "ghost"}
                       size="sm"
                       onClick={() => setFrequencyPeriod(period)}
+                      aria-pressed={frequencyPeriod === period}
                       className="h-6 px-2 text-[10px]"
                     >
                       {period}

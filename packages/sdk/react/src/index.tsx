@@ -126,7 +126,7 @@ export function useCaptureMessage(): (message: string, level?: ErrorEvent["level
  * - Capture network errors as exceptions
  * Returns cleanup function to restore original fetch
  */
-function setupFetchInstrumentation(options: { endpoint?: string; debug?: boolean }): () => void {
+function setupFetchInstrumentation(options: { endpoint?: string; debug?: boolean; captureRequestBodies?: boolean; captureResponseBodies?: boolean }): () => void {
   // Prevent double-wrapping from nested providers or StrictMode re-mount
   if (fetchInstrumentationCount > 0) {
     fetchInstrumentationCount++;
@@ -188,7 +188,7 @@ function setupFetchInstrumentation(options: { endpoint?: string; debug?: boolean
       if (response.status >= 400 && response.status !== 401 && response.status !== 403) {
         // Response body capture is opt-in: may contain server stack traces or internal data
         let responseBody: string | undefined;
-        if (mergedOptions.captureResponseBodies) {
+        if (options.captureResponseBodies) {
           try {
             const text = await response.clone().text();
             responseBody = text.length > 2000 ? text.substring(0, 2000) + "...(truncated)" : text;
@@ -199,7 +199,7 @@ function setupFetchInstrumentation(options: { endpoint?: string; debug?: boolean
 
         // Request body capture is opt-in: may contain passwords, PII, or API keys
         let requestBody: string | undefined;
-        if (mergedOptions.captureRequestBodies && init?.body) {
+        if (options.captureRequestBodies && init?.body) {
           try {
             const raw = typeof init.body === "string" ? init.body : JSON.stringify(init.body);
             requestBody = raw.length > 2000 ? raw.substring(0, 2000) + "...(truncated)" : raw;

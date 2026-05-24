@@ -215,6 +215,7 @@ export function IssueSearchBar({
         <div className="flex items-center gap-1 border-l pl-3">
           <button
             type="button"
+            aria-pressed={query.includes("level:error")}
             onClick={() => {
               const newQuery = query + (query ? " " : "") + "level:error";
               triggerSearch(newQuery);
@@ -225,6 +226,7 @@ export function IssueSearchBar({
           </button>
           <button
             type="button"
+            aria-pressed={query.includes("is:unresolved")}
             onClick={() => {
               const newQuery = query + (query ? " " : "") + "is:unresolved";
               triggerSearch(newQuery);
@@ -240,8 +242,8 @@ export function IssueSearchBar({
           <SortDropdown sortBy={sortBy ?? "recent"} onSortChange={onSortChange} />
         </div>
 
-        {/* Keyboard shortcut hint */}
-        <kbd className="hidden sm:inline-flex h-5 items-center gap-1 rounded border bg-muted px-1.5 text-[10px] font-medium text-muted-foreground">
+        {/* Keyboard shortcut hint — decorative, screen readers get hint from placeholder */}
+        <kbd aria-hidden="true" className="hidden sm:inline-flex h-5 items-center gap-1 rounded border bg-muted px-1.5 text-[10px] font-medium text-muted-foreground">
           /
         </kbd>
       </div>

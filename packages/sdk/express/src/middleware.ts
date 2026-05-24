@@ -110,6 +110,11 @@ function extractRequestContext(
   return context;
 }
 
+// Basic IPv4 and IPv6 validation — rejects injected strings from forged headers
+function isValidIp(ip: string): boolean {
+  return /^(\d{1,3}\.){3}\d{1,3}$/.test(ip) || /^[0-9a-fA-F:]+$/.test(ip);
+}
+
 /**
  * Extract client IP from request.
  */
@@ -118,16 +123,16 @@ function extractClientIp(req: Request): string | undefined {
   const forwarded = req.get("x-forwarded-for");
   if (forwarded) {
     const firstIp = forwarded.split(",")[0]?.trim();
-    if (firstIp) return firstIp;
+    if (firstIp && isValidIp(firstIp)) return firstIp;
   }
 
   const realIp = req.get("x-real-ip");
-  if (realIp) return realIp;
+  if (realIp && isValidIp(realIp)) return realIp;
 
   const cfIp = req.get("cf-connecting-ip");
-  if (cfIp) return cfIp;
+  if (cfIp && isValidIp(cfIp)) return cfIp;
 
-  // Fall back to socket address
+  // Fall back to socket address (trusted — not from headers)
   return req.socket.remoteAddress;
 }
 
