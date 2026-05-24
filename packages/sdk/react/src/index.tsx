@@ -44,6 +44,10 @@ export interface ReactOptions extends BugwatchOptions {
   captureConsoleBreadcrumbs?: boolean;
   /** Capture HTTP 4xx/5xx errors from fetch requests */
   captureHttpErrors?: boolean;
+  /** Capture request bodies on HTTP errors (opt-in — may contain passwords/PII) */
+  captureRequestBodies?: boolean;
+  /** Capture response bodies on HTTP errors (opt-in — may contain server internals) */
+  captureResponseBodies?: boolean;
 }
 
 const DEFAULT_REACT_OPTIONS: Partial<ReactOptions> = {
@@ -182,25 +186,23 @@ function setupFetchInstrumentation(options: { endpoint?: string; debug?: boolean
 
       // Capture 4xx/5xx responses as errors (exclude 401/403 — expected auth flow)
       if (response.status >= 400 && response.status !== 401 && response.status !== 403) {
-        // Clone response to read body without consuming the original
-        let responseBody = "";
-        try {
-          responseBody = await response.clone().text();
-          if (responseBody.length > 2000) {
-            responseBody = responseBody.substring(0, 2000) + "...(truncated)";
+        // Response body capture is opt-in: may contain server stack traces or internal data
+        let responseBody: string | undefined;
+        if (mergedOptions.captureResponseBodies) {
+          try {
+            const text = await response.clone().text();
+            responseBody = text.length > 2000 ? text.substring(0, 2000) + "...(truncated)" : text;
+          } catch {
+            // Ignore body read errors
           }
-        } catch {
-          // Ignore body read errors
         }
 
-        // Capture request body if present
-        let requestBody = "";
-        if (init?.body) {
+        // Request body capture is opt-in: may contain passwords, PII, or API keys
+        let requestBody: string | undefined;
+        if (mergedOptions.captureRequestBodies && init?.body) {
           try {
-            requestBody = typeof init.body === "string" ? init.body : JSON.stringify(init.body);
-            if (requestBody.length > 2000) {
-              requestBody = requestBody.substring(0, 2000) + "...(truncated)";
-            }
+            const raw = typeof init.body === "string" ? init.body : JSON.stringify(init.body);
+            requestBody = raw.length > 2000 ? raw.substring(0, 2000) + "...(truncated)" : raw;
           } catch {
             // Ignore serialization errors
           }
@@ -222,8 +224,8 @@ function setupFetchInstrumentation(options: { endpoint?: string; debug?: boolean
               method: method.toUpperCase(),
             },
             extra: {
-              request_body: requestBody || undefined,
-              response_body: responseBody || "(empty response)",
+              ...(requestBody !== undefined && { request_body: requestBody }),
+              ...(responseBody !== undefined && { response_body: responseBody }),
               response_status: response.status,
               duration_ms: duration,
             },

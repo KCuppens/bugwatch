@@ -192,19 +192,23 @@ export function requestHandler(
       // Track response for completion breadcrumb
       const originalEnd = res.end.bind(res);
       res.end = function (...args: Parameters<Response["end"]>) {
+        // Re-enter the request-scoped context so the breadcrumb attaches to the
+        // correct request, not the global scope (res.end fires after runWithContext exits)
         try {
           if (options.addBreadcrumbs !== false) {
             const duration = Date.now() - (req.bugwatch?.startTime || Date.now());
-            addBreadcrumb({
-              category: "http",
-              message: `${req.method} ${req.path} -> ${res.statusCode}`,
-              level: res.statusCode >= 500 ? "error" : res.statusCode >= 400 ? "warning" : "info",
-              data: {
-                method: req.method,
-                url: req.originalUrl,
-                status_code: res.statusCode,
-                duration_ms: duration,
-              },
+            runWithContext(scopedContext, () => {
+              addBreadcrumb({
+                category: "http",
+                message: `${req.method} ${req.path} -> ${res.statusCode}`,
+                level: res.statusCode >= 500 ? "error" : res.statusCode >= 400 ? "warning" : "info",
+                data: {
+                  method: req.method,
+                  url: req.originalUrl,
+                  status_code: res.statusCode,
+                  duration_ms: duration,
+                },
+              });
             });
           }
         } catch {

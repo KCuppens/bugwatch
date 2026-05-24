@@ -52,7 +52,7 @@ export function reset(): void {
  * Call this in your project's instrumentation.ts file
  * to enable server-side error tracking.
  */
-export function registerBugwatch(options: RegisterOptions = {}): void {
+export async function registerBugwatch(options: RegisterOptions = {}): Promise<void> {
   if (registered) {
     return;
   }
@@ -63,7 +63,7 @@ export function registerBugwatch(options: RegisterOptions = {}): void {
   const endpoint = mergedOptions.endpoint || envConfig.endpoint;
 
   if (!apiKey) {
-    if (process.env.NODE_ENV === "development") {
+    if (process.env.NODE_ENV !== "production") {
       console.warn(
         "[Bugwatch] No API key provided. Set NEXT_PUBLIC_BUGWATCH_API_KEY environment variable."
       );
@@ -74,9 +74,9 @@ export function registerBugwatch(options: RegisterOptions = {}): void {
   const runtime = mergedOptions.runtime || detectRuntime();
 
   if (runtime === "edge") {
-    initEdge(apiKey, endpoint, mergedOptions);
+    await initEdge(apiKey, endpoint, mergedOptions);
   } else {
-    initNode(apiKey, endpoint, mergedOptions);
+    await initNode(apiKey, endpoint, mergedOptions);
   }
 
   registered = true;
@@ -104,10 +104,9 @@ declare const EdgeRuntime: string | undefined;
 /**
  * Initialize for Node.js runtime
  */
-function initNode(apiKey: string, endpoint: string | undefined, options: RegisterOptions): void {
-  const { init } = require("./index");
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const os = require("os") as typeof import("os");
+async function initNode(apiKey: string, endpoint: string | undefined, options: RegisterOptions): Promise<void> {
+  const { init } = await import("./index");
+  const os = await import("os");
 
   let hostname: string | undefined;
   try { hostname = os.hostname(); } catch { /* ignore */ }
@@ -137,8 +136,8 @@ function initNode(apiKey: string, endpoint: string | undefined, options: Registe
 /**
  * Initialize for Edge runtime
  */
-function initEdge(apiKey: string, endpoint: string | undefined, options: RegisterOptions): void {
-  const { init } = require("@bugwatch/core");
+async function initEdge(apiKey: string, endpoint: string | undefined, options: RegisterOptions): Promise<void> {
+  const { init } = await import("@bugwatch/core");
 
   init({
     apiKey,
