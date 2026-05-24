@@ -410,6 +410,8 @@ export function BugwatchProvider({ options, children, fallback, onError }: Bugwa
         originalConsoleError = console.error;
         let inBreadcrumb = false;
         console.error = (...args: unknown[]) => {
+          // Always forward to original first so logs are never lost
+          originalConsoleError!(...args);
           if (!inBreadcrumb) {
             inBreadcrumb = true;
             try {
@@ -417,6 +419,7 @@ export function BugwatchProvider({ options, children, fallback, onError }: Bugwa
                 category: "console",
                 message: args.map(String).join(" "),
                 level: "error",
+                data: { arguments: args },
               });
             } catch {
               // Silently ignore breadcrumb failures
@@ -424,7 +427,6 @@ export function BugwatchProvider({ options, children, fallback, onError }: Bugwa
               inBreadcrumb = false;
             }
           }
-          originalConsoleError!(...args);
         };
       }
 

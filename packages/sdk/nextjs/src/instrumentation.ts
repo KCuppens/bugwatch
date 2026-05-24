@@ -106,6 +106,11 @@ declare const EdgeRuntime: string | undefined;
  */
 function initNode(apiKey: string, endpoint: string | undefined, options: RegisterOptions): void {
   const { init } = require("./index");
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const os = require("os") as typeof import("os");
+
+  let hostname: string | undefined;
+  try { hostname = os.hostname(); } catch { /* ignore */ }
 
   init({
     apiKey,
@@ -114,6 +119,8 @@ function initNode(apiKey: string, endpoint: string | undefined, options: Registe
     debug: options.debug || process.env.BUGWATCH_DEBUG === "true",
     captureUncaughtExceptions: options.captureUncaughtExceptions,
     captureUnhandledRejections: options.captureUnhandledRejections,
+    ...(hostname && { serverName: hostname }),
+    runtime: { name: "node", version: process.version },
   });
 
   // Hook console.error to auto-capture server-side errors that are
@@ -272,22 +279,32 @@ export async function onRequestError(
   // Lazy-import to avoid issues if core isn't initialized yet
   const { captureException, getClient } = await import("@bugwatch/core");
 
-  captureException(err, {
-    level: "error",
-    tags: {
-      mechanism: "nextjs.onRequestError",
-      "next.routerKind": context.routerKind,
-      "next.routePath": context.routePath,
-      "next.routeType": context.routeType,
-      ...(context.renderSource && { "next.renderSource": context.renderSource }),
-      ...(err.digest && { "next.digest": err.digest }),
-    },
-    request: {
-      url: request.path,
-      method: request.method,
-      headers: sanitizeHeaders(request.headers),
-    },
-  });
+  const clientIp =
+    request.headers["x-forwarded-for"]?.split(",")[0]?.trim() ||
+    request.headers["x-real-ip"] ||
+    request.headers["cf-connecting-ip"];
+
+  try {
+    captureException(err, {
+      level: "error",
+      tags: {
+        mechanism: "nextjs.onRequestError",
+        "next.routerKind": context.routerKind,
+        "next.routePath": context.routePath,
+        "next.routeType": context.routeType,
+        ...(context.renderSource && { "next.renderSource": context.renderSource }),
+        ...(err.digest && { "next.digest": err.digest }),
+      },
+      request: {
+        url: request.path,
+        method: request.method,
+        headers: sanitizeHeaders(request.headers),
+      },
+      ...(clientIp && { user: { ip_address: clientIp } }),
+    });
+  } catch {
+    // Never let SDK logic interfere with Next.js error handling
+  }
 
   // Best-effort flush so the event is sent before the response completes
   const client = getClient();
@@ -302,9 +319,12 @@ export async function onRequestError(
 const SENSITIVE_HEADER_KEYS = new Set([
   "authorization",
   "cookie",
+  "set-cookie",
   "x-api-key",
   "x-auth-token",
   "x-csrf-token",
+  "x-xsrf-token",
+  "proxy-authorization",
 ]);
 
 function sanitizeHeaders(

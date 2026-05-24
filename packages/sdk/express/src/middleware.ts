@@ -192,19 +192,23 @@ export function requestHandler(
       // Track response for completion breadcrumb
       const originalEnd = res.end.bind(res);
       res.end = function (...args: Parameters<Response["end"]>) {
-        if (options.addBreadcrumbs !== false) {
-          const duration = Date.now() - (req.bugwatch?.startTime || Date.now());
-          addBreadcrumb({
-            category: "http",
-            message: `${req.method} ${req.path} -> ${res.statusCode}`,
-            level: res.statusCode >= 500 ? "error" : res.statusCode >= 400 ? "warning" : "info",
-            data: {
-              method: req.method,
-              url: req.originalUrl,
-              status_code: res.statusCode,
-              duration_ms: duration,
-            },
-          });
+        try {
+          if (options.addBreadcrumbs !== false) {
+            const duration = Date.now() - (req.bugwatch?.startTime || Date.now());
+            addBreadcrumb({
+              category: "http",
+              message: `${req.method} ${req.path} -> ${res.statusCode}`,
+              level: res.statusCode >= 500 ? "error" : res.statusCode >= 400 ? "warning" : "info",
+              data: {
+                method: req.method,
+                url: req.originalUrl,
+                status_code: res.statusCode,
+                duration_ms: duration,
+              },
+            });
+          }
+        } catch {
+          // Never let SDK code break response sending
         }
         return originalEnd(...args);
       } as Response["end"];
@@ -263,29 +267,27 @@ export function errorHandler(
         requestContext = { url: req.originalUrl, method: req.method };
       }
 
-      // Build extra context
-      const extra: Record<string, unknown> = {
-        request: requestContext,
-      };
-
-      try {
-        const clientIp = extractClientIp(req);
-        if (clientIp) {
-          extra.client_ip = clientIp;
-        }
-      } catch {
-        // Ignore IP extraction errors
-      }
+      // Build extra context (request context is already at the top-level, so only include non-error original here)
+      const extra: Record<string, unknown> = {};
 
       // If the original thrown value was not an Error, include it as extra data
       if (!(err instanceof Error)) {
         extra.originalValue = err;
       }
 
+      // Resolve IP into user.ip_address (server field) so it surfaces in the User card
+      let clientIp: string | undefined;
+      try {
+        clientIp = extractClientIp(req);
+      } catch {
+        // Ignore IP extraction errors
+      }
+
       // Capture the error
       const eventId = captureException(error, {
         request: requestContext,
         extra,
+        ...(clientIp && { user: { ip_address: clientIp } }),
         tags: {
           "http.method": req.method,
           "http.url": req.originalUrl,
@@ -362,10 +364,7 @@ export function captureError(
 
   return captureException(error, {
     request: requestContext,
-    extra: {
-      request: requestContext,
-      ...(clientIp && { client_ip: clientIp }),
-    },
+    ...(clientIp && { user: { ip_address: clientIp } }),
     tags: {
       "http.method": req.method,
       "http.url": req.originalUrl,

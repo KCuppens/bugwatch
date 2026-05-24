@@ -1,13 +1,21 @@
 "use client";
 
 import { useRef, useEffect, useCallback } from "react";
-import { Search, X, Loader2, Filter } from "lucide-react";
+import { Search, X, Loader2, Clock, Zap, Users, TrendingUp, ChevronDown, Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useSearch } from "@/hooks/useSearch";
 import { useKeyboardNavigation } from "@/hooks/useKeyboardNavigation";
 import { SearchAutocomplete } from "./SearchAutocomplete";
 import { LEVEL_COLORS, STATUS_COLORS } from "@/lib/search";
 import type { Issue, Facets } from "@/lib/api";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 interface IssueSearchBarProps {
   projectId: string | undefined;
@@ -165,7 +173,7 @@ export function IssueSearchBar({
                     onClick={(e) => {
                       e.stopPropagation();
                       // Remove this filter from query
-                      const newQuery = query.replace(token.raw, "").trim();
+                      const newQuery = query.split(token.raw).join("").trim();
                       setQuery(newQuery);
                     }}
                     className="hover:text-foreground"
@@ -228,19 +236,8 @@ export function IssueSearchBar({
         </div>
 
         {/* Sort dropdown */}
-        <div className="flex items-center gap-2 border-l pl-3">
-          <Filter className="h-3 w-3 text-muted-foreground" />
-          <select
-            value={sortBy}
-            onChange={(e) => onSortChange?.(e.target.value)}
-            aria-label="Sort issues by"
-            className="bg-transparent text-xs outline-none cursor-pointer"
-          >
-            <option value="recent">Recent</option>
-            <option value="frequent">Frequent</option>
-            <option value="users">Users</option>
-            <option value="trending">Trending</option>
-          </select>
+        <div className="border-l pl-3">
+          <SortDropdown sortBy={sortBy ?? "recent"} onSortChange={onSortChange} />
         </div>
 
         {/* Keyboard shortcut hint */}
@@ -260,6 +257,84 @@ export function IssueSearchBar({
         />
       )}
     </div>
+  );
+}
+
+const SORT_OPTIONS = [
+  {
+    value: "recent",
+    label: "Recent",
+    description: "Most recently seen",
+    icon: Clock,
+  },
+  {
+    value: "frequent",
+    label: "Frequent",
+    description: "Most event occurrences",
+    icon: Zap,
+  },
+  {
+    value: "users",
+    label: "Users",
+    description: "Most users affected",
+    icon: Users,
+  },
+  {
+    value: "trending",
+    label: "Trending",
+    description: "Fastest growing rate",
+    icon: TrendingUp,
+  },
+] as const;
+
+function SortDropdown({
+  sortBy,
+  onSortChange,
+}: {
+  sortBy: string;
+  onSortChange?: (sort: string) => void;
+}) {
+  const active = SORT_OPTIONS.find((o) => o.value === sortBy) ?? SORT_OPTIONS[0];
+  const ActiveIcon = active.icon;
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          aria-label={`Sort by: ${active.label}`}
+          className="flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-2/40"
+        >
+          <ActiveIcon className="h-3 w-3" aria-hidden="true" />
+          <span>{active.label}</span>
+          <ChevronDown className="h-3 w-3 opacity-60" aria-hidden="true" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-52">
+        <DropdownMenuLabel className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider px-2 py-1.5">
+          Sort issues by
+        </DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        {SORT_OPTIONS.map((option) => {
+          const Icon = option.icon;
+          const isActive = sortBy === option.value;
+          return (
+            <DropdownMenuItem
+              key={option.value}
+              onSelect={() => onSortChange?.(option.value)}
+              className={cn("gap-3 pr-2", isActive && "text-accent-2 bg-accent-2/8 hover:bg-accent-2/12 focus:bg-accent-2/12 hover:text-accent-2 focus:text-accent-2")}
+            >
+              <Icon className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+              <div className="flex-1 min-w-0">
+                <div className="font-medium">{option.label}</div>
+                <div className="text-[11px] text-muted-foreground">{option.description}</div>
+              </div>
+              {isActive && <Check className="h-3.5 w-3.5 shrink-0 text-accent-2" aria-hidden="true" />}
+            </DropdownMenuItem>
+          );
+        })}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 

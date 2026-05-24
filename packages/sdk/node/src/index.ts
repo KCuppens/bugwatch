@@ -1,3 +1,4 @@
+import os from "os";
 import {
   init as coreInit,
   getClient,
@@ -31,9 +32,10 @@ const DEFAULT_NODE_OPTIONS: Partial<NodeOptions> = {
   captureUnhandledRejections: true,
   exitOnUncaughtException: true,
   shutdownTimeout: 2000,
+  captureConsoleErrors: true,
 };
 
-let uncaughtExceptionHandler: ((err: Error) => void) | null = null;
+let uncaughtExceptionHandler: ((err: unknown) => void) | null = null;
 let unhandledRejectionHandler: ((reason: unknown) => void) | null = null;
 
 // Track cleanup functions for proper teardown
@@ -82,16 +84,17 @@ export function setup(options?: Partial<NodeOptions>): BugwatchClient {
  * Initialize the Bugwatch SDK for Node.js
  */
 export function init(options: NodeOptions): BugwatchClient {
-  const mergedOptions = { ...DEFAULT_NODE_OPTIONS, ...options };
+  const mergedOptions: NodeOptions = {
+    serverName: (() => { try { return os.hostname(); } catch { return undefined; } })(),
+    runtime: { name: "node", version: process.version },
+    ...DEFAULT_NODE_OPTIONS,
+    ...options,
+  };
 
   // Initialize core SDK
   const client = coreInit(mergedOptions);
 
-  // Add runtime info
-  client.setTag("runtime", "node");
-  client.setTag("runtime.version", process.version);
-
-  // Add OS info
+  // Add OS info as tags for filtering/searching
   client.setTag("os.platform", process.platform);
   client.setTag("os.arch", process.arch);
 
@@ -285,6 +288,9 @@ function setupExitHandler(): void {
  * This hook detects Error objects and error-like messages and reports them.
  */
 function setupConsoleErrorCapture(): void {
+  // Guard against double-wrapping (e.g., init() called twice, or ConsoleIntegration also installed)
+  if ((console.error as { __bugwatch_capture?: boolean }).__bugwatch_capture) return;
+
   const originalConsoleError = console.error;
   let inCapture = false;
 
@@ -334,6 +340,7 @@ function setupConsoleErrorCapture(): void {
     }
   };
 
+  (hookedConsoleError as { __bugwatch_capture?: boolean }).__bugwatch_capture = true;
   console.error = hookedConsoleError;
 
   // Track for cleanup
@@ -390,6 +397,7 @@ export function expressRequestHandler() {
         category: "http",
         message: `${req.method} ${req.url}`,
         level: "info",
+        data: { method: req.method, url: req.url },
       });
     }
     next();
@@ -425,8 +433,12 @@ function sanitizeHeaders(
   const sensitiveHeaders = [
     "authorization",
     "cookie",
+    "set-cookie",
     "x-api-key",
     "x-auth-token",
+    "x-csrf-token",
+    "x-xsrf-token",
+    "proxy-authorization",
   ];
 
   const sanitized: Record<string, string> = {};
@@ -477,6 +489,7 @@ export const ConsoleIntegration: Integration = {
           category: "console",
           message: args.map(String).join(" "),
           level,
+          data: { arguments: args },
         });
       } catch {
         // Silently ignore breadcrumb failures

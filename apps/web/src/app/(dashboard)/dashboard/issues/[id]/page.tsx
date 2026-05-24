@@ -71,6 +71,116 @@ function getBreadcrumbIcon(type: string, category: string) {
   return Code;
 }
 
+function BreadcrumbData({
+  type,
+  category,
+  data,
+}: {
+  type: string;
+  category: string;
+  data: Record<string, unknown>;
+}) {
+  const isHttp = type === "http" || category === "xhr" || category === "fetch";
+  const isNav = type === "navigation" || category === "navigation";
+  const isConsole = type === "console" || category === "console";
+
+  if (isHttp) {
+    const status = data.status_code ?? data.status;
+    const method = data.method;
+    const url = data.url;
+    const statusNum = typeof status === "number" ? status : parseInt(String(status ?? ""), 10);
+    const statusColor = !isNaN(statusNum)
+      ? statusNum >= 500
+        ? "text-red-500"
+        : statusNum >= 400
+          ? "text-orange-500"
+          : statusNum >= 300
+            ? "text-yellow-500"
+            : "text-green-500"
+      : "text-muted-foreground";
+    return (
+      <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[11px] font-mono">
+        {status != null && <span className={`font-bold ${statusColor}`}>{String(status)}</span>}
+        {method && <span className="text-muted-foreground">{String(method)}</span>}
+        {url && <span className="text-muted-foreground truncate max-w-xs">{String(url)}</span>}
+      </div>
+    );
+  }
+
+  if (isNav && (data.from || data.to)) {
+    return (
+      <div className="mt-1.5 flex items-center gap-1 text-[11px] font-mono text-muted-foreground">
+        {data.from && <span className="truncate max-w-[120px]">{String(data.from)}</span>}
+        {data.from && data.to && <span>→</span>}
+        {data.to && <span className="truncate max-w-[120px]">{String(data.to)}</span>}
+      </div>
+    );
+  }
+
+  if (isConsole && data.arguments) {
+    const args = Array.isArray(data.arguments) ? data.arguments : [data.arguments];
+    return (
+      <div className="mt-1.5 font-mono text-[11px] text-muted-foreground truncate">
+        {args.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(", ")}
+      </div>
+    );
+  }
+
+  const entries = Object.entries(data).slice(0, 6);
+  if (entries.length === 0) return null;
+  return (
+    <div className="mt-1.5 flex flex-wrap gap-1">
+      {entries.map(([k, v]) => (
+        <span key={k} className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-mono">
+          <span className="text-muted-foreground">{k}:</span>{" "}
+          {typeof v === "string" || typeof v === "number" || typeof v === "boolean"
+            ? String(v)
+            : JSON.stringify(v)}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function DistributionBars({
+  label,
+  items,
+}: {
+  label: string;
+  items: { name: string; count: number; percentage: number }[];
+}) {
+  const top = items.slice(0, 5);
+  const maxPct = Math.max(...top.map((i) => i.percentage), 1);
+  return (
+    <div>
+      <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider mb-1.5">{label}</p>
+      <div className="space-y-1">
+        {top.map((item) => (
+          <div key={item.name} className="flex items-center gap-2">
+            <span className="text-[11px] text-muted-foreground w-24 truncate shrink-0">{item.name}</span>
+            <div
+              className="flex-1 h-1.5 rounded-full bg-muted overflow-hidden"
+              role="meter"
+              aria-label={`${item.name}: ${item.percentage}%`}
+              aria-valuenow={item.percentage}
+              aria-valuemin={0}
+              aria-valuemax={100}
+            >
+              <div
+                className="h-full rounded-full bg-accent-2/60"
+                style={{ width: `${(item.percentage / maxPct) * 100}%` }}
+              />
+            </div>
+            <span className="text-[11px] font-mono text-muted-foreground w-8 text-right shrink-0" aria-hidden="true">
+              {item.percentage}%
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function IssueDetailPage() {
   const params = useParams();
   const searchParams = useSearchParams();
@@ -132,6 +242,8 @@ export default function IssueDetailPage() {
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [eventDetail, setEventDetail] = useState<EventDetail | null>(null);
   const [eventLoading, setEventLoading] = useState(false);
+  const [eventModalTab, setEventModalTab] = useState<"exception" | "request" | "breadcrumbs" | "meta">("exception");
+  const [modalExpandedFrames, setModalExpandedFrames] = useState<Set<number>>(new Set([0]));
   const eventControllerRef = useRef<AbortController | null>(null);
 
   // Breadcrumb filter
@@ -221,6 +333,7 @@ export default function IssueDetailPage() {
             // Guard: bail if the status has already changed to something else
             // (e.g. another action fired while the toast was visible)
             if (issueStatusRef.current !== newStatus) return;
+            if (!projectId) return;
             setIssue((i) => (i ? { ...i, status: prev } : i));
             try {
               await issuesApi.update(projectId, issueId, prev);
@@ -330,23 +443,105 @@ export default function IssueDetailPage() {
 
   function handleCopyForAi() {
     if (!issue) return;
+    const jsonBlock = (v: unknown) => "```json\n" + JSON.stringify(v, null, 2) + "\n```";
+
     const lines: string[] = [
       "# Error Report",
       "",
       `**Error Type:** ${issue.exception?.type || "Unknown"}`,
       `**Message:** ${issue.exception?.value || issue.title}`,
       `**Level:** ${issue.level}`,
+      `**Status:** ${issue.status}`,
+      `**Environment:** ${issue.environment}`,
+      `**First Seen:** ${issue.first_seen}`,
+      `**Last Seen:** ${issue.last_seen}`,
       `**Occurrences:** ${issue.count} events`,
+      `**Affected Users:** ${issue.user_count} users`,
       "",
     ];
+
     if (issue.exception?.stacktrace?.length) {
-      lines.push("## Stack Trace", "```");
-      issue.exception.stacktrace.slice(0, 5).forEach((f) => {
-        lines.push(`${f.function || "(anonymous)"} at ${f.filename}:${f.lineno}${f.in_app ? " [in-app]" : ""}`);
-        if (f.context_line) lines.push(`  > ${f.context_line.trim()}`);
+      lines.push("## Stack Trace", "");
+      issue.exception.stacktrace.forEach((f, i) => {
+        const loc = `${f.filename}:${f.lineno}${f.colno ? `:${f.colno}` : ""}`;
+        const appTag = f.in_app ? "[in-app] " : "";
+        lines.push(`### Frame ${i + 1}: ${appTag}${f.function || "(anonymous)"} at ${loc}`);
+        if (f.pre_context?.length) {
+          lines.push("```");
+          f.pre_context.forEach((l) => lines.push(l));
+          lines.push("```");
+        }
+        if (f.context_line) {
+          lines.push(`> \`${f.context_line.trim()}\``);
+        }
+        if (f.post_context?.length) {
+          lines.push("```");
+          f.post_context.forEach((l) => lines.push(l));
+          lines.push("```");
+        }
+        if (f.vars && Object.keys(f.vars).length > 0) {
+          lines.push("**Local Variables:**", jsonBlock(f.vars));
+        }
+        lines.push("");
       });
-      lines.push("```", "");
     }
+
+    if (issue.breadcrumbs?.length) {
+      const crumbs = issue.breadcrumbs.slice(-20);
+      lines.push("## Breadcrumbs", "");
+      lines.push("| Time | Type | Category | Level | Message |");
+      lines.push("|------|------|----------|-------|---------|");
+      crumbs.forEach((b) => {
+        const msg = (b.message || "").replace(/\|/g, "\\|");
+        lines.push(`| ${b.timestamp} | ${b.type} | ${b.category} | ${b.level} | ${msg} |`);
+        if (b.data && Object.keys(b.data).length > 0) {
+          lines.push(`  - data: ${JSON.stringify(b.data)}`);
+        }
+      });
+      lines.push("");
+    }
+
+    if (issue.request) {
+      lines.push("## HTTP Request", "");
+      if (issue.request.method || issue.request.url) {
+        lines.push(`**URL:** ${issue.request.method || "GET"} ${issue.request.url || ""}`);
+      }
+      if (issue.request.query_string) {
+        lines.push(`**Query:** ${issue.request.query_string}`);
+      }
+      if (issue.request.headers && Object.keys(issue.request.headers).length > 0) {
+        lines.push("**Headers:**", "```");
+        Object.entries(issue.request.headers).forEach(([k, v]) => lines.push(`${k}: ${v}`));
+        lines.push("```");
+      }
+      if (issue.request.data) {
+        lines.push("**Body:**", jsonBlock(issue.request.data));
+      }
+      lines.push("");
+    }
+
+    if (issue.user) {
+      lines.push("## User", "");
+      if (issue.user.id) lines.push(`**ID:** ${issue.user.id}`);
+      if (issue.user.email) lines.push(`**Email:** ${issue.user.email}`);
+      if (issue.user.username) lines.push(`**Username:** ${issue.user.username}`);
+      if (issue.user.ip_address) lines.push(`**IP:** ${issue.user.ip_address}`);
+      if (issue.user.extra && Object.keys(issue.user.extra).length > 0) {
+        lines.push("**Extra:**", jsonBlock(issue.user.extra));
+      }
+      lines.push("");
+    }
+
+    if (issue.tags && Object.keys(issue.tags).length > 0) {
+      lines.push("## Tags", "");
+      Object.entries(issue.tags).forEach(([k, v]) => lines.push(`- **${k}:** ${v}`));
+      lines.push("");
+    }
+
+    if (issue.extra && Object.keys(issue.extra).length > 0) {
+      lines.push("## Extra Data", "", jsonBlock(issue.extra), "");
+    }
+
     navigator.clipboard
       .writeText(lines.join("\n"))
       .then(() => toast.success("Copied for AI assistant"))
@@ -395,6 +590,8 @@ export default function IssueDetailPage() {
     setSelectedEventId(eventId);
     setEventLoading(true);
     setEventDetail(null);
+    setEventModalTab("exception");
+    setModalExpandedFrames(new Set([0]));
     try {
       const response = await issuesApi.getEvent(projectId, issueId, eventId);
       if (controller.signal.aborted) return;
@@ -957,6 +1154,9 @@ export default function IssueDetailPage() {
                                       >
                                         {crumb.message || "(no message)"}
                                       </p>
+                                      {crumb.data && Object.keys(crumb.data).length > 0 && (
+                                        <BreadcrumbData type={crumb.type} category={crumb.category} data={crumb.data} />
+                                      )}
                                     </div>
                                   </div>
                                 </div>
@@ -1056,6 +1256,38 @@ export default function IssueDetailPage() {
                           </div>
                         </details>
                       )}
+                      {issue.request.query_string && (
+                        <details className="group" open>
+                          <summary className="text-xs text-muted-foreground cursor-pointer hover:text-foreground">
+                            Query Parameters
+                          </summary>
+                          <div className="mt-2 rounded border divide-y text-xs">
+                            {issue.request.query_string.split("&").filter(Boolean).map((pair, idx) => {
+                              const eqIdx = pair.indexOf("=");
+                              const key = eqIdx >= 0 ? decodeURIComponent(pair.slice(0, eqIdx).replace(/\+/g, " ")) : pair;
+                              const val = eqIdx >= 0 ? decodeURIComponent(pair.slice(eqIdx + 1).replace(/\+/g, " ")) : "";
+                              return (
+                                <div key={idx} className="flex justify-between p-2">
+                                  <span className="text-muted-foreground">{key}</span>
+                                  <span className="font-mono truncate max-w-xs">{val || <em className="opacity-50">empty</em>}</span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </details>
+                      )}
+                      {issue.request.data != null && (
+                        <details className="group">
+                          <summary className="text-xs text-muted-foreground cursor-pointer hover:text-foreground">
+                            Request Body
+                          </summary>
+                          <pre className="mt-2 bg-zinc-950 text-zinc-100 p-3 rounded-md overflow-x-auto text-xs font-mono max-h-48">
+                            {typeof issue.request.data === "string"
+                              ? issue.request.data
+                              : JSON.stringify(issue.request.data, null, 2)}
+                          </pre>
+                        </details>
+                      )}
                     </div>
                   )}
                 </CardContent>
@@ -1072,32 +1304,51 @@ export default function IssueDetailPage() {
                   {!issue.user ? (
                     <p className="text-sm text-muted-foreground">No user context</p>
                   ) : (
-                    <div className="grid gap-2 sm:grid-cols-2">
-                      {issue.user.id && (
-                        <div className="text-sm">
-                          <span className="text-muted-foreground text-xs">ID:</span>
-                          <span className="ml-2 font-mono">{issue.user.id}</span>
-                        </div>
+                    <>
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        {issue.user.id && (
+                          <div className="text-sm">
+                            <span className="text-muted-foreground text-xs">ID:</span>
+                            <span className="ml-2 font-mono">{issue.user.id}</span>
+                          </div>
+                        )}
+                        {issue.user.email && (
+                          <div className="text-sm">
+                            <span className="text-muted-foreground text-xs">Email:</span>
+                            <span className="ml-2 font-mono">{issue.user.email}</span>
+                          </div>
+                        )}
+                        {issue.user.username && (
+                          <div className="text-sm">
+                            <span className="text-muted-foreground text-xs">Username:</span>
+                            <span className="ml-2 font-mono">{issue.user.username}</span>
+                          </div>
+                        )}
+                        {issue.user.ip_address && (
+                          <div className="text-sm">
+                            <span className="text-muted-foreground text-xs">IP:</span>
+                            <span className="ml-2 font-mono">{issue.user.ip_address}</span>
+                          </div>
+                        )}
+                      </div>
+                      {issue.user.extra && Object.keys(issue.user.extra).length > 0 && (
+                        <details className="mt-3 group">
+                          <summary className="text-xs text-muted-foreground cursor-pointer hover:text-foreground">
+                            Additional Attributes ({Object.keys(issue.user.extra).length})
+                          </summary>
+                          <div className="mt-2 rounded border divide-y text-xs">
+                            {Object.entries(issue.user.extra).map(([key, val]) => (
+                              <div key={key} className="flex justify-between p-2">
+                                <span className="text-muted-foreground">{key}</span>
+                                <span className="font-mono truncate max-w-xs">
+                                  {typeof val === "string" ? val : JSON.stringify(val)}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        </details>
                       )}
-                      {issue.user.email && (
-                        <div className="text-sm">
-                          <span className="text-muted-foreground text-xs">Email:</span>
-                          <span className="ml-2 font-mono">{issue.user.email}</span>
-                        </div>
-                      )}
-                      {issue.user.username && (
-                        <div className="text-sm">
-                          <span className="text-muted-foreground text-xs">Username:</span>
-                          <span className="ml-2 font-mono">{issue.user.username}</span>
-                        </div>
-                      )}
-                      {issue.user.ip_address && (
-                        <div className="text-sm">
-                          <span className="text-muted-foreground text-xs">IP:</span>
-                          <span className="ml-2 font-mono">{issue.user.ip_address}</span>
-                        </div>
-                      )}
-                    </div>
+                    </>
                   )}
                 </CardContent>
               </Card>
@@ -1126,21 +1377,22 @@ export default function IssueDetailPage() {
           {/* Stats */}
           <dl className="grid grid-cols-2 gap-3">
             <div className="rounded-lg border p-3">
-              <div className="flex items-center gap-2">
+              <dt className="text-xs text-muted-foreground">Events</dt>
+              <div className="flex items-center gap-2 mt-1">
                 <TrendingUp className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
                 <dd className="font-display text-2xl font-semibold tabular-nums">{issue.count}</dd>
               </div>
-              <dt className="text-xs text-muted-foreground">Events</dt>
             </div>
             <div className="rounded-lg border p-3">
-              <div className="flex items-center gap-2">
+              <dt className="text-xs text-muted-foreground">Users</dt>
+              <div className="flex items-center gap-2 mt-1">
                 <Users className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
                 <dd className="font-display text-2xl font-semibold tabular-nums">{issue.user_count}</dd>
               </div>
-              <dt className="text-xs text-muted-foreground">Users</dt>
             </div>
             <div className="rounded-lg border p-3">
-              <div className="flex items-center gap-2">
+              <dt className="text-xs text-muted-foreground">First seen</dt>
+              <div className="flex items-center gap-2 mt-1">
                 <Clock className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
                 <dd>
                   <time dateTime={issue.first_seen} className="text-sm font-medium">
@@ -1148,10 +1400,10 @@ export default function IssueDetailPage() {
                   </time>
                 </dd>
               </div>
-              <dt className="text-xs text-muted-foreground">First seen</dt>
             </div>
             <div className="rounded-lg border p-3">
-              <div className="flex items-center gap-2">
+              <dt className="text-xs text-muted-foreground">Last seen</dt>
+              <div className="flex items-center gap-2 mt-1">
                 <Clock className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
                 <dd>
                   <time dateTime={issue.last_seen} className="text-sm font-medium">
@@ -1159,7 +1411,6 @@ export default function IssueDetailPage() {
                   </time>
                 </dd>
               </div>
-              <dt className="text-xs text-muted-foreground">Last seen</dt>
             </div>
             {issue.environment && (
               <div className="col-span-2 rounded-lg border p-3">
@@ -1268,44 +1519,52 @@ export default function IssueDetailPage() {
                   <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
                 </div>
               ) : impactData ? (
-                <div className="grid grid-cols-2 gap-2">
-                  <div className="flex items-center gap-2">
-                    <Users className="h-3.5 w-3.5 text-muted-foreground" />
-                    <div>
-                      <p className="text-base font-semibold">{impactData.unique_users}</p>
-                      <p className="text-[10px] text-muted-foreground">users</p>
+                <div className="space-y-4">
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="flex items-center gap-2">
+                      <Users className="h-3.5 w-3.5 text-muted-foreground" />
+                      <div>
+                        <p className="text-base font-semibold">{impactData.unique_users}</p>
+                        <p className="text-[10px] text-muted-foreground">users</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Monitor className="h-3.5 w-3.5 text-muted-foreground" />
+                      <div>
+                        <p className="text-base font-semibold">{impactData.unique_sessions}</p>
+                        <p className="text-[10px] text-muted-foreground">sessions</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Clock className="h-3.5 w-3.5 text-muted-foreground" />
+                      <div>
+                        <p className="text-base font-semibold">{impactData.last_hour_count}</p>
+                        <p className="text-[10px] text-muted-foreground">last hour</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {impactData.trend_percent >= 0 ? (
+                        <TrendingUp className="h-3.5 w-3.5 text-red-500" />
+                      ) : (
+                        <TrendingDown className="h-3.5 w-3.5 text-green-500" />
+                      )}
+                      <div>
+                        <p
+                          className={`text-base font-semibold ${impactData.trend_percent > 0 ? "text-red-600" : impactData.trend_percent < 0 ? "text-green-600" : ""}`}
+                        >
+                          {impactData.trend_percent > 0 ? "+" : ""}
+                          {impactData.trend_percent}%
+                        </p>
+                        <p className="text-[10px] text-muted-foreground">trend</p>
+                      </div>
                     </div>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <Monitor className="h-3.5 w-3.5 text-muted-foreground" />
-                    <div>
-                      <p className="text-base font-semibold">{impactData.unique_sessions}</p>
-                      <p className="text-[10px] text-muted-foreground">sessions</p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Clock className="h-3.5 w-3.5 text-muted-foreground" />
-                    <div>
-                      <p className="text-base font-semibold">{impactData.last_hour_count}</p>
-                      <p className="text-[10px] text-muted-foreground">last hour</p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {impactData.trend_percent >= 0 ? (
-                      <TrendingUp className="h-3.5 w-3.5 text-red-500" />
-                    ) : (
-                      <TrendingDown className="h-3.5 w-3.5 text-green-500" />
-                    )}
-                    <div>
-                      <p
-                        className={`text-base font-semibold ${impactData.trend_percent > 0 ? "text-red-600" : impactData.trend_percent < 0 ? "text-green-600" : ""}`}
-                      >
-                        {impactData.trend_percent > 0 ? "+" : ""}
-                        {impactData.trend_percent}%
-                      </p>
-                      <p className="text-[10px] text-muted-foreground">trend</p>
-                    </div>
-                  </div>
+                  {impactData.browsers.length > 0 && (
+                    <DistributionBars label="Browsers" items={impactData.browsers} />
+                  )}
+                  {impactData.operating_systems.length > 0 && (
+                    <DistributionBars label="OS" items={impactData.operating_systems} />
+                  )}
                 </div>
               ) : (
                 <p className="text-xs text-muted-foreground py-2">No data</p>
@@ -1524,14 +1783,61 @@ export default function IssueDetailPage() {
       >
         <DialogContent className="max-w-3xl max-h-[85vh] flex flex-col p-0 gap-0">
           <DialogHeader className="border-b p-4 shrink-0">
-            <DialogTitle className="font-display text-heading-sm">Event Details</DialogTitle>
+            <DialogTitle className="font-display text-heading-sm">Event Inspector</DialogTitle>
             {eventDetail && (
-              <p className="text-sm text-muted-foreground">
-                {new Date(eventDetail.timestamp).toLocaleString()}
-                {eventDetail.release && ` • ${eventDetail.release}`}
-              </p>
+              <div className="flex flex-wrap items-center gap-2 mt-1">
+                <span className="text-sm text-muted-foreground">
+                  {new Date(eventDetail.timestamp).toLocaleString()}
+                </span>
+                {eventDetail.release && (
+                  <span className="rounded-full bg-accent-2/10 text-accent-2 px-2 py-0.5 text-[10px] font-medium font-mono">
+                    {eventDetail.release}
+                  </span>
+                )}
+                {eventDetail.environment && (
+                  <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium">
+                    {eventDetail.environment}
+                  </span>
+                )}
+                {eventDetail.server_name && (
+                  <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-mono text-muted-foreground">
+                    {eventDetail.server_name}
+                  </span>
+                )}
+              </div>
             )}
           </DialogHeader>
+          {eventDetail && !eventLoading && (
+            <div className="flex border-b shrink-0" role="tablist" aria-label="Event sections">
+              {(
+                [
+                  { id: "exception", label: "Stack Trace", show: !!eventDetail.exception },
+                  { id: "request", label: "Request", show: !!eventDetail.request },
+                  { id: "breadcrumbs", label: `Breadcrumbs (${eventDetail.breadcrumbs?.length ?? 0})`, show: true },
+                  { id: "meta", label: "Tags & Extra", show: Object.keys(eventDetail.tags ?? {}).length > 0 || !!eventDetail.extra },
+                ] as const
+              )
+                .filter((t) => t.show)
+                .map((t) => (
+                  <button
+                    key={t.id}
+                    id={`modal-tab-${t.id}`}
+                    role="tab"
+                    aria-selected={eventModalTab === t.id}
+                    aria-controls={`modal-tabpanel-${t.id}`}
+                    tabIndex={eventModalTab === t.id ? 0 : -1}
+                    onClick={() => setEventModalTab(t.id)}
+                    className={`px-4 py-2 text-xs font-medium border-b-2 transition-colors ${
+                      eventModalTab === t.id
+                        ? "border-accent-2 text-accent-2"
+                        : "border-transparent text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    {t.label}
+                  </button>
+                ))}
+            </div>
+          )}
           <div className="flex-1 overflow-y-auto p-4">
             {eventLoading && (
               <div className="flex flex-col items-center py-12">
@@ -1540,50 +1846,191 @@ export default function IssueDetailPage() {
               </div>
             )}
             {eventDetail && !eventLoading && (
-              <div className="space-y-6">
-                {eventDetail.exception && (
-                  <div>
-                    <h3 className="text-sm font-semibold mb-2">Exception</h3>
-                    <div className="rounded-md border p-3 bg-muted/30">
-                      <p className="font-mono text-sm text-destructive">
-                        {eventDetail.exception.type}: {eventDetail.exception.value}
+              <>
+                {eventModalTab === "exception" && eventDetail.exception && (
+                  <div
+                    id="modal-tabpanel-exception"
+                    role="tabpanel"
+                    aria-labelledby="modal-tab-exception"
+                    className="space-y-3"
+                  >
+                    <div className="rounded-md border p-3 bg-destructive/5">
+                      <p className="font-mono text-sm text-destructive font-medium">
+                        {eventDetail.exception.type}
+                      </p>
+                      <p className="font-mono text-xs text-muted-foreground mt-1">
+                        {eventDetail.exception.value}
                       </p>
                     </div>
-                  </div>
-                )}
-                {eventDetail.user && (
-                  <div>
-                    <h3 className="text-sm font-semibold mb-2">User</h3>
-                    <div className="grid gap-2 md:grid-cols-2">
-                      {eventDetail.user.id && (
-                        <div className="rounded-md border p-2">
-                          <span className="text-xs text-muted-foreground">ID</span>
-                          <p className="font-mono text-sm">{eventDetail.user.id}</p>
-                        </div>
-                      )}
-                      {eventDetail.user.email && (
-                        <div className="rounded-md border p-2">
-                          <span className="text-xs text-muted-foreground">Email</span>
-                          <p className="font-mono text-sm">{eventDetail.user.email}</p>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
-                {eventDetail.tags && Object.keys(eventDetail.tags).length > 0 && (
-                  <div>
-                    <h3 className="text-sm font-semibold mb-2">Tags</h3>
-                    <div className="flex flex-wrap gap-2">
-                      {Object.entries(eventDetail.tags).map(([key, value]) => (
-                        <div key={key} className="rounded-md border px-2 py-1 text-xs">
-                          <span className="text-muted-foreground">{key}:</span>{" "}
-                          <span className="font-mono">{value}</span>
-                        </div>
+                    <div className="space-y-1">
+                      {eventDetail.exception.stacktrace.map((frame, i) => (
+                        <StackFrame
+                          key={i}
+                          frame={frame}
+                          index={i}
+                          isExpanded={modalExpandedFrames.has(i)}
+                          onToggle={() => setModalExpandedFrames(prev => {
+                            const next = new Set(prev);
+                            next.has(i) ? next.delete(i) : next.add(i);
+                            return next;
+                          })}
+                        />
                       ))}
                     </div>
                   </div>
                 )}
-              </div>
+                {eventModalTab === "request" && (
+                  <div id="modal-tabpanel-request" role="tabpanel" aria-labelledby="modal-tab-request" className="space-y-3">
+                    {!eventDetail.request ? (
+                      <p className="text-sm text-muted-foreground py-4">No request context for this event.</p>
+                    ) : (
+                      <>
+                        {(eventDetail.request.url || eventDetail.request.method) && (
+                          <div className="flex items-center gap-2 text-sm">
+                            {eventDetail.request.method && (
+                              <span className="rounded bg-accent-2/15 px-1.5 py-0.5 text-xs font-medium text-accent-2">
+                                {eventDetail.request.method}
+                              </span>
+                            )}
+                            <span className="font-mono text-xs break-all">{eventDetail.request.url}</span>
+                          </div>
+                        )}
+                        {eventDetail.request.query_string && (
+                          <details open>
+                            <summary className="text-xs text-muted-foreground cursor-pointer hover:text-foreground">
+                              Query Parameters
+                            </summary>
+                            <div className="mt-2 rounded border divide-y text-xs">
+                              {eventDetail.request.query_string.split("&").filter(Boolean).map((pair, idx) => {
+                                const eqIdx = pair.indexOf("=");
+                                const key = eqIdx >= 0 ? decodeURIComponent(pair.slice(0, eqIdx).replace(/\+/g, " ")) : pair;
+                                const val = eqIdx >= 0 ? decodeURIComponent(pair.slice(eqIdx + 1).replace(/\+/g, " ")) : "";
+                                return (
+                                  <div key={idx} className="flex justify-between p-2">
+                                    <span className="text-muted-foreground">{key}</span>
+                                    <span className="font-mono">{val}</span>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </details>
+                        )}
+                        {eventDetail.request.headers && Object.keys(eventDetail.request.headers).length > 0 && (
+                          <details>
+                            <summary className="text-xs text-muted-foreground cursor-pointer hover:text-foreground">
+                              Headers ({Object.keys(eventDetail.request.headers).length})
+                            </summary>
+                            <div className="mt-2 rounded border divide-y text-xs">
+                              {Object.entries(eventDetail.request.headers).map(([k, v]) => (
+                                <div key={k} className="flex justify-between p-2">
+                                  <span className="text-muted-foreground">{k}</span>
+                                  <span className="font-mono truncate max-w-xs">{v}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </details>
+                        )}
+                        {eventDetail.request.data != null && (
+                          <details>
+                            <summary className="text-xs text-muted-foreground cursor-pointer hover:text-foreground">
+                              Request Body
+                            </summary>
+                            <pre className="mt-2 bg-zinc-950 text-zinc-100 p-3 rounded-md overflow-x-auto text-xs font-mono max-h-48">
+                              {typeof eventDetail.request.data === "string"
+                                ? eventDetail.request.data
+                                : JSON.stringify(eventDetail.request.data, null, 2)}
+                            </pre>
+                          </details>
+                        )}
+                        {eventDetail.user && (
+                          <div className="rounded-md border p-3 space-y-1">
+                            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">User</p>
+                            {eventDetail.user.id && <div className="text-xs"><span className="text-muted-foreground">ID: </span><span className="font-mono">{eventDetail.user.id}</span></div>}
+                            {eventDetail.user.email && <div className="text-xs"><span className="text-muted-foreground">Email: </span><span className="font-mono">{eventDetail.user.email}</span></div>}
+                            {eventDetail.user.username && <div className="text-xs"><span className="text-muted-foreground">Username: </span><span className="font-mono">{eventDetail.user.username}</span></div>}
+                            {eventDetail.user.ip_address && <div className="text-xs"><span className="text-muted-foreground">IP: </span><span className="font-mono">{eventDetail.user.ip_address}</span></div>}
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+                )}
+                {eventModalTab === "breadcrumbs" && (
+                  <div id="modal-tabpanel-breadcrumbs" role="tabpanel" aria-labelledby="modal-tab-breadcrumbs">
+                    {!eventDetail.breadcrumbs || eventDetail.breadcrumbs.length === 0 ? (
+                      <p className="text-sm text-muted-foreground py-4">No breadcrumbs for this event.</p>
+                    ) : (
+                      <div className="relative">
+                        <div className="absolute left-3 top-0 bottom-0 w-0.5 bg-border" />
+                        <div className="space-y-2">
+                          {eventDetail.breadcrumbs.map((crumb, index) => {
+                            const isError = crumb.level === "error";
+                            const CrumbIcon = getBreadcrumbIcon(crumb.type, crumb.category);
+                            const dotColor = isError
+                              ? "bg-red-500"
+                              : crumb.type === "http" || crumb.category === "xhr"
+                                ? "bg-blue-500"
+                                : crumb.type === "navigation"
+                                  ? "bg-green-500"
+                                  : "bg-gray-400";
+                            return (
+                              <div key={index} className="relative flex items-start gap-3 pl-8">
+                                <div
+                                  aria-hidden="true"
+                                  className={`absolute left-1.5 top-2 h-3 w-3 rounded-full ${dotColor} ring-2 ring-background flex items-center justify-center`}
+                                >
+                                  <CrumbIcon className="h-1.5 w-1.5 text-white" />
+                                </div>
+                                <div className={`flex-1 rounded-md border p-2 text-sm ${isError ? "border-red-200 dark:border-red-900 bg-red-50/50 dark:bg-red-950/20" : "bg-muted/30"}`}>
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-xs text-muted-foreground font-mono">
+                                      {new Date(crumb.timestamp).toLocaleTimeString()}
+                                    </span>
+                                    <span className={`text-xs px-1 py-0.5 rounded ${isError ? "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300" : "bg-muted"}`}>
+                                      {crumb.category || crumb.type}
+                                    </span>
+                                  </div>
+                                  <p className={`text-xs mt-1 ${isError ? "text-red-700 dark:text-red-300" : "text-muted-foreground"}`}>
+                                    {crumb.message || "(no message)"}
+                                  </p>
+                                  {crumb.data && Object.keys(crumb.data).length > 0 && (
+                                    <BreadcrumbData type={crumb.type} category={crumb.category} data={crumb.data} />
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+                {eventModalTab === "meta" && (
+                  <div id="modal-tabpanel-meta" role="tabpanel" aria-labelledby="modal-tab-meta" className="space-y-4">
+                    {eventDetail.tags && Object.keys(eventDetail.tags).length > 0 && (
+                      <div>
+                        <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">Tags</p>
+                        <div className="flex flex-wrap gap-1.5">
+                          {Object.entries(eventDetail.tags).map(([key, value]) => (
+                            <div key={key} className="rounded-md border px-2 py-1 text-[11px]">
+                              <span className="text-muted-foreground">{key}:</span>{" "}
+                              <span className="font-mono">{value}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {eventDetail.extra && Object.keys(eventDetail.extra).length > 0 && (
+                      <div>
+                        <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">Extra</p>
+                        <pre className="bg-zinc-950 text-zinc-100 p-3 rounded-md overflow-x-auto text-xs font-mono">
+                          {JSON.stringify(eventDetail.extra, null, 2)}
+                        </pre>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </>
             )}
           </div>
           <div className="flex justify-end border-t p-4 shrink-0">

@@ -470,6 +470,9 @@ export class Bugwatch implements BugwatchClient {
     // Request context takes precedence over global context
     const mergedContext = getMergedContext(this.user, this.tags, this.extra, this.breadcrumbs.toArray());
 
+    // Destructure fields that need merging so ...restPartial doesn't overwrite them
+    const { tags: partialTags, extra: partialExtra, breadcrumbs: _pb, ...restPartial } = partial;
+
     const event: ErrorEvent = {
       event_id: generateEventId(),
       timestamp: new Date().toISOString(),
@@ -478,14 +481,16 @@ export class Bugwatch implements BugwatchClient {
       message: partial.message || "",
       environment: this.options.environment,
       release: this.options.release,
-      tags: { ...mergedContext.tags, ...partial.tags },
-      extra: { ...mergedContext.extra, ...partial.extra },
+      ...(this.options.serverName && { server_name: this.options.serverName }),
+      ...(this.options.runtime && { runtime: this.options.runtime }),
+      tags: { ...mergedContext.tags, ...partialTags },
+      extra: { ...mergedContext.extra, ...partialExtra },
       breadcrumbs: mergedContext.breadcrumbs,
       sdk: {
         name: SDK_NAME,
         version: SDK_VERSION,
       },
-      ...partial,
+      ...restPartial,
     };
 
     // Add user context (merged context user + partial user)
@@ -498,10 +503,9 @@ export class Bugwatch implements BugwatchClient {
       event.session_id = this.sessionId;
     }
 
-    // Generate fingerprint if exception exists
+    // Generate fingerprint if exception exists (stored top-level so server uses it for grouping)
     if (event.exception) {
-      const fingerprint = fingerprintFromException(event.exception);
-      event.tags = { ...event.tags, fingerprint };
+      event.fingerprint = fingerprintFromException(event.exception);
     }
 
     return event;
