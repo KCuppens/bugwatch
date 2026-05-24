@@ -67,8 +67,10 @@ impl UserRepository {
     pub async fn increment_failed_attempts(pool: &DbPool, id: &str) -> Result<()> {
         let mut tx = pool.begin().await?;
 
-        // Calculate lockout time in Rust to avoid DB-specific interval syntax
-        let locked_until_str = (chrono::Utc::now() + chrono::Duration::minutes(15)).to_rfc3339();
+        // Calculate lockout time in Rust to avoid DB-specific interval syntax.
+        // Bound as DateTime<Utc> (not a string) so PostgreSQL gets a TIMESTAMPTZ
+        // parameter — a TEXT parameter fails the CASE type-unification check.
+        let locked_until = chrono::Utc::now() + chrono::Duration::minutes(15);
 
         sqlx::query(
             r#"
@@ -84,7 +86,7 @@ impl UserRepository {
             WHERE id = $2
             "#,
         )
-        .bind(&locked_until_str)
+        .bind(locked_until)
         .bind(id)
         .execute(&mut *tx)
         .await?;

@@ -71,6 +71,13 @@ function friendlyResetError(err: unknown): string {
   return "Failed to reset password. The link may have expired.";
 }
 
+const PASSWORD_REQS = [
+  { key: "length", label: "At least 8 characters", test: (p: string) => p.length >= 8 },
+  { key: "upper", label: "One uppercase letter", test: (p: string) => /[A-Z]/.test(p) },
+  { key: "lower", label: "One lowercase letter", test: (p: string) => /[a-z]/.test(p) },
+  { key: "digit", label: "One number", test: (p: string) => /[0-9]/.test(p) },
+];
+
 function ResetPasswordContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -83,6 +90,9 @@ function ResetPasswordContent() {
   const [error, setError] = useState<string | null>(null);
   const redirectTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const mountedRef = useRef(true);
+
+  const reqResults = PASSWORD_REQS.map((r) => ({ ...r, met: r.test(password) }));
+  const isPasswordValid = reqResults.every((r) => r.met);
 
   useEffect(() => {
     return () => {
@@ -98,8 +108,9 @@ function ResetPasswordContent() {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!token) return;
-    if (password.length < 8) {
-      setError("Password must be at least 8 characters.");
+    if (!isPasswordValid) {
+      const first = reqResults.find((r) => !r.met);
+      setError(first ? `Password requirement not met: ${first.label}.` : "Password does not meet requirements.");
       return;
     }
     if (password !== confirm) {
@@ -157,7 +168,7 @@ function ResetPasswordContent() {
           <div>
             <h1 className="font-sans text-2xl font-bold text-[hsl(var(--foreground))]">Choose a new password</h1>
             <p className="text-sm text-[hsl(var(--muted-foreground))] mt-1">
-              {done ? "All done!" : "Must be at least 8 characters"}
+              {done ? "All done!" : "8+ characters, uppercase, lowercase, and a number"}
             </p>
           </div>
 
@@ -196,12 +207,27 @@ function ResetPasswordContent() {
                     type="password"
                     autoComplete="new-password"
                     required
-                    minLength={8}
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    placeholder="At least 8 characters"
+                    placeholder="Create a strong password"
                     className={inputClass}
                   />
+                  {password.length > 0 && (
+                    <ul className="space-y-1 pt-1" aria-label="Password requirements">
+                      {reqResults.map((r) => (
+                        <li key={r.key} className={`flex items-center gap-1.5 text-xs ${r.met ? "text-emerald-400" : "text-[hsl(var(--muted-foreground))]"}`}>
+                          <svg className="h-3 w-3 shrink-0" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+                            {r.met ? (
+                              <path d="M2 6l3 3 5-5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                            ) : (
+                              <circle cx="6" cy="6" r="4" stroke="currentColor" strokeWidth="1.5" />
+                            )}
+                          </svg>
+                          {r.label}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                 </div>
                 <div className="space-y-1.5">
                   <label htmlFor="confirm" className="text-sm font-medium text-[hsl(var(--foreground))]">
@@ -220,7 +246,7 @@ function ResetPasswordContent() {
                 </div>
                 <button
                   type="submit"
-                  disabled={loading || !token || !password || !confirm}
+                  disabled={loading || !token || !isPasswordValid || !confirm}
                   className="w-full h-12 rounded-lg bg-[hsl(var(--accent))] text-[hsl(var(--accent-foreground))] font-sans font-semibold hover:bg-[hsl(var(--accent-2))] transition-all flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
                 >
                   {loading && <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />}
