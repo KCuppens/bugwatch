@@ -344,7 +344,9 @@ function setupConsoleErrorCapture(): void {
     }
   };
 
-  (hookedConsoleError as { __bugwatch_capture?: boolean }).__bugwatch_capture = true;
+  (hookedConsoleError as { __bugwatch_capture?: boolean; __bugwatch_original?: typeof console.error }).__bugwatch_capture = true;
+  // Store original so ConsoleIntegration can find and unwrap it during cleanup
+  (hookedConsoleError as { __bugwatch_capture?: boolean; __bugwatch_original?: typeof console.error }).__bugwatch_original = originalConsoleError;
   console.error = hookedConsoleError;
 
   // Track for cleanup

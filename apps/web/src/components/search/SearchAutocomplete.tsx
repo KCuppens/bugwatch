@@ -57,13 +57,8 @@ export function SearchAutocomplete({ suggestions, selectedIndex, onSelect, onHov
     }
   }, [selectedIndex]);
 
-  if (suggestions.length === 0) {
-    return null;
-  }
-
   // Group suggestions by category and assign stable global indices.
-  // Computed outside render to avoid mutable globalIndex during JSX (unsafe in StrictMode).
-  // eslint-disable-next-line react-hooks/rules-of-hooks
+  // Must be called before any conditional return to satisfy Rules of Hooks.
   const groupedSuggestions = useMemo(() => {
     let idx = 0;
     const groups: Array<{ category: string; items: Array<{ suggestion: Suggestion; globalIndex: number }> }> = [];
@@ -80,6 +75,10 @@ export function SearchAutocomplete({ suggestions, selectedIndex, onSelect, onHov
     }
     return groups;
   }, [suggestions]);
+
+  if (suggestions.length === 0) {
+    return null;
+  }
 
   return (
     <div
