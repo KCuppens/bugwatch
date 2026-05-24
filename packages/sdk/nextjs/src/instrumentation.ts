@@ -125,7 +125,7 @@ async function initNode(apiKey: string, endpoint: string | undefined, options: R
   // Hook console.error to auto-capture server-side errors that are
   // caught by application code (try-catch) and only logged, never thrown.
   if (options.captureConsoleErrors !== false) {
-    setupConsoleErrorCapture();
+    await setupConsoleErrorCapture();
   }
 
   if (options.debug || process.env.BUGWATCH_DEBUG === "true") {
@@ -158,15 +158,20 @@ async function initEdge(apiKey: string, endpoint: string | undefined, options: R
  * via console.error (e.g., API timeouts, cache permission errors).
  * This hook detects Error objects in the arguments and reports them.
  */
-function setupConsoleErrorCapture(): void {
-  // Import core functions once up-front — avoids require() (CJS) in an ESM context
-  // and prevents repeated dynamic lookups on every console.error call.
-  let coreCapture: {
-    captureException: (err: Error, ctx?: object) => string;
-    captureMessage: (msg: string, level: string) => string;
-    getClient: () => unknown;
-  } | null = null;
-  import("@bugwatch/core").then((m) => { coreCapture = m as typeof coreCapture; }).catch(() => {});
+async function setupConsoleErrorCapture(): Promise<void> {
+  // Await the import before patching so no console.error calls are dropped
+  // during the resolution window (eliminates the fire-and-forget race).
+  let captureException: (err: Error, ctx?: object) => string;
+  let captureMessage: (msg: string, level: string) => string;
+  let getClient: () => unknown;
+  try {
+    const core = await import("@bugwatch/core");
+    captureException = core.captureException;
+    captureMessage = core.captureMessage;
+    getClient = core.getClient;
+  } catch {
+    return; // If core can't be imported, don't install the hook
+  }
 
   const originalConsoleError = console.error;
   let inCapture = false;
@@ -180,8 +185,6 @@ function setupConsoleErrorCapture(): void {
     inCapture = true;
 
     try {
-      if (!coreCapture) return;
-      const { captureException, captureMessage, getClient } = coreCapture;
       if (!getClient()) return;
 
       // Look for an Error object in the arguments

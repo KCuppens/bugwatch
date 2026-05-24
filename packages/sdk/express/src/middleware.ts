@@ -1,3 +1,4 @@
+import { isIP } from "net";
 import type { Request, Response, NextFunction, RequestHandler, ErrorRequestHandler } from "express";
 import {
   getClient,
@@ -110,9 +111,9 @@ function extractRequestContext(
   return context;
 }
 
-// Basic IPv4 and IPv6 validation — rejects injected strings from forged headers
+// Validate IP address format — rejects injected strings from forged headers
 function isValidIp(ip: string): boolean {
-  return /^(\d{1,3}\.){3}\d{1,3}$/.test(ip) || /^[0-9a-fA-F:]+$/.test(ip);
+  return isIP(ip) !== 0;
 }
 
 /**

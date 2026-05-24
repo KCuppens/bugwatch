@@ -16,6 +16,12 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import type { SearchToken } from "@/lib/search/types";
+
+interface FieldToken extends SearchToken {
+  type: "field";
+  field: string;
+}
 
 interface IssueSearchBarProps {
   projectId: string | undefined;
@@ -142,7 +148,9 @@ export function IssueSearchBar({
   );
 
   // Extract active filters from parsed query for display
-  const activeFilters = parsedQuery?.tokens.filter((t) => t.type === "field" && t.field && t.value) || [];
+  const activeFilters = (parsedQuery?.tokens.filter(
+    (t): t is FieldToken => t.type === "field" && !!t.field && !!t.value
+  ) ?? []);
 
   return (
     <div className={cn("relative", className)}>
@@ -157,7 +165,7 @@ export function IssueSearchBar({
         {activeFilters.length > 0 && (
           <div className="flex items-center gap-1.5">
             {activeFilters.map((token, index) => {
-              const colorClass = getFilterColorClass(token.field!, token.value);
+              const colorClass = getFilterColorClass(token.field, token.value);
               return (
                 <span
                   key={index}
@@ -189,7 +197,12 @@ export function IssueSearchBar({
         <input
           ref={inputRef}
           type="text"
+          role="combobox"
           aria-label="Search issues"
+          aria-expanded={isAutocompleteOpen && suggestions.length > 0}
+          aria-haspopup="listbox"
+          aria-autocomplete="list"
+          aria-controls="search-autocomplete-listbox"
           placeholder="Search issues... (/)"
           value={query}
           onChange={handleInputChange}

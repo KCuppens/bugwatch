@@ -79,6 +79,7 @@ export function SearchAutocomplete({ suggestions, selectedIndex, onSelect, onHov
   return (
     <div
       ref={listRef}
+      id="search-autocomplete-listbox"
       role="listbox"
       aria-label="Search suggestions"
       aria-live="polite"

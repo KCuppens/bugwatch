@@ -494,9 +494,7 @@ export class Bugwatch implements BugwatchClient {
       ...(this.options.runtime && { runtime: this.options.runtime }),
       tags: { ...mergedContext.tags, ...partialTags },
       extra: { ...mergedContext.extra, ...partialExtra },
-      breadcrumbs: partialBreadcrumbs
-        ? [...mergedContext.breadcrumbs, ...partialBreadcrumbs]
-        : mergedContext.breadcrumbs,
+      breadcrumbs: partialBreadcrumbs ?? mergedContext.breadcrumbs,
       sdk: {
         name: SDK_NAME,
         version: SDK_VERSION,

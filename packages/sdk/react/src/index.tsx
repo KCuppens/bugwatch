@@ -327,7 +327,7 @@ interface BugwatchProviderProps {
  * </BugwatchProvider>
  * ```
  */
-export function BugwatchProvider({ options, children, fallback, onError }: BugwatchProviderProps): JSX.Element {
+export function BugwatchProvider({ options, children, fallback, onError }: BugwatchProviderProps): React.ReactElement {
   // Serialize options to a stable string so useEffect doesn't re-run on every render.
   // Object identity of `options` changes every render if passed inline.
   // serializeOptions handles RegExp values so denyUrls/allowUrls pattern changes are detected.

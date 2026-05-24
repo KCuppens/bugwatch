@@ -1758,14 +1758,14 @@ export default function IssueDetailPage() {
                       </div>
                     </div>
                   ))}
-                  {comments.length > 3 && !showAllComments && (
+                  {comments.length > 3 && (
                     <button
-                      onClick={() => setShowAllComments(true)}
+                      onClick={() => setShowAllComments((v) => !v)}
                       aria-expanded={showAllComments}
                       aria-controls="comment-list"
                       className="text-xs text-accent-2 hover:underline w-full text-center pt-1"
                     >
-                      View all {comments.length} comments
+                      {showAllComments ? "Show fewer comments" : `View all ${comments.length} comments`}
                     </button>
                   )}
                 </div>
