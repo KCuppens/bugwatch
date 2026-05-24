@@ -162,8 +162,8 @@ async function setupConsoleErrorCapture(): Promise<void> {
   // Await the import before patching so no console.error calls are dropped
   // during the resolution window (eliminates the fire-and-forget race).
   let captureException: (err: Error, ctx?: object) => string;
-  let captureMessage: (msg: string, level: string) => string;
-  let getClient: () => unknown;
+  let captureMessage: (msg: string, level?: import("@bugwatch/core").ErrorEvent["level"]) => string;
+  let getClient: () => import("@bugwatch/core").BugwatchClient | null;
   try {
     const core = await import("@bugwatch/core");
     captureException = core.captureException;
@@ -319,9 +319,13 @@ export async function onRequestError(
   }
 
   // Best-effort flush so the event is sent before the response completes
-  const client = getClient();
-  if (client) {
-    await client.flush().catch(() => {});
+  try {
+    const client = getClient();
+    if (client) {
+      await client.flush().catch(() => {});
+    }
+  } catch {
+    // Never let flush errors interfere with Next.js error handling
   }
 }
 

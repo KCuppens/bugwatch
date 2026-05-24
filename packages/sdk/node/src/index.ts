@@ -186,17 +186,21 @@ function setupUnhandledRejectionHandler(client: BugwatchClient): void {
   }
 
   unhandledRejectionHandler = (reason: unknown) => {
-    const error =
-      reason instanceof Error ? reason : new Error(String(reason));
+    try {
+      const error =
+        reason instanceof Error ? reason : new Error(String(reason));
 
-    client.captureException(error, {
-      level: "error",
-      tags: { mechanism: "unhandledRejection" },
-      extra: { reason: String(reason) },
-    });
+      client.captureException(error, {
+        level: "error",
+        tags: { mechanism: "unhandledRejection" },
+        extra: { reason: String(reason) },
+      });
 
-    if (client.getOptions().debug) {
-      console.error("[Bugwatch] Captured unhandled rejection:", reason);
+      if (client.getOptions().debug) {
+        console.error("[Bugwatch] Captured unhandled rejection:", reason);
+      }
+    } catch {
+      // Never let the handler itself crash
     }
 
     // Best-effort flush — don't block, but try to send the event
@@ -427,25 +431,24 @@ export function wrapAsync<T extends (...args: unknown[]) => Promise<unknown>>(
 /**
  * Sanitize headers to remove sensitive information
  */
+const SENSITIVE_HEADERS_SET = new Set([
+  "authorization",
+  "cookie",
+  "set-cookie",
+  "x-api-key",
+  "x-auth-token",
+  "x-csrf-token",
+  "x-xsrf-token",
+  "proxy-authorization",
+]);
+
 function sanitizeHeaders(
   headers: Record<string, string | string[] | undefined>
 ): Record<string, string> {
-  const sensitiveHeaders = [
-    "authorization",
-    "cookie",
-    "set-cookie",
-    "x-api-key",
-    "x-auth-token",
-    "x-csrf-token",
-    "x-xsrf-token",
-    "proxy-authorization",
-  ];
-
   const sanitized: Record<string, string> = {};
 
   for (const [key, value] of Object.entries(headers)) {
-    const lowerKey = key.toLowerCase();
-    if (sensitiveHeaders.includes(lowerKey)) {
+    if (SENSITIVE_HEADERS_SET.has(key.toLowerCase())) {
       sanitized[key] = "[Filtered]";
     } else if (value !== undefined) {
       sanitized[key] = Array.isArray(value) ? value.join(", ") : value;
@@ -469,17 +472,33 @@ let originalConsoleMethods: {
 export const ConsoleIntegration: Integration = {
   name: "Console",
   setup(client: BugwatchClient) {
-    // Store originals for cleanup
+    // If setupConsoleErrorCapture already installed its hook on console.error,
+    // skip storing that hooked version as the "original" to avoid double-wrap.
+    // We unwrap to the real original so cleanup restores the true function.
+    const rawConsoleError = (console.error as { __bugwatch_capture?: boolean }).__bugwatch_capture
+      ? (console.error as unknown as { __bugwatch_original?: typeof console.error }).__bugwatch_original ?? console.error
+      : console.error;
+
+    // Store originals for cleanup (use unwrapped original for error)
     originalConsoleMethods = {
       log: console.log,
       info: console.info,
       warn: console.warn,
-      error: console.error,
+      error: rawConsoleError,
     };
 
     // Guard against recursion: if addBreadcrumb throws, the error would
     // trigger console.error which calls addBreadcrumb again → infinite loop.
     let inBreadcrumb = false;
+
+    // Sanitize args before storing in breadcrumb data — raw objects can contain
+    // passwords or PII (e.g. console.log('login', { password: '...' })).
+    function sanitizeArgs(args: unknown[]): unknown[] {
+      return args.map((a) => {
+        if (typeof a === "object" && a !== null && !(a instanceof Error)) return "[Object]";
+        try { return String(a); } catch { return "[unstringifiable]"; }
+      });
+    }
 
     function safeBreadcrumb(level: "debug" | "info" | "warning" | "error", args: unknown[]): void {
       if (inBreadcrumb) return;
@@ -487,9 +506,9 @@ export const ConsoleIntegration: Integration = {
       try {
         client.addBreadcrumb({
           category: "console",
-          message: args.map(String).join(" "),
+          message: args.map((a) => { try { return String(a); } catch { return ""; } }).join(" "),
           level,
-          data: { arguments: args },
+          data: { arguments: sanitizeArgs(args) },
         });
       } catch {
         // Silently ignore breadcrumb failures

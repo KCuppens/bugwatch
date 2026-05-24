@@ -5,6 +5,7 @@ import React, {
   createContext,
   useContext,
   useEffect,
+  useState,
   useCallback,
   useRef,
   useMemo,
@@ -65,6 +66,35 @@ interface MarkedError extends Error {
 // Tracks active fetch instrumentation to prevent double-wrapping from
 // nested BugwatchProviders or React StrictMode double-mount in dev.
 let fetchInstrumentationCount = 0;
+
+// Keys to scrub from serialized request/response bodies (opt-in body capture)
+const SENSITIVE_BODY_KEYS = new Set([
+  "password", "secret", "token", "api_key", "apiKey",
+  "credit_card", "creditCard", "ssn", "social_security",
+]);
+
+function scrubBody(raw: string): string {
+  try {
+    const parsed = JSON.parse(raw);
+    if (typeof parsed === "object" && parsed !== null) {
+      const scrubbed = scrubObject(parsed);
+      return JSON.stringify(scrubbed);
+    }
+  } catch {
+    // Not JSON — return as-is (truncation happens at call site)
+  }
+  return raw;
+}
+
+function scrubObject(obj: unknown): unknown {
+  if (Array.isArray(obj)) return obj.map(scrubObject);
+  if (typeof obj !== "object" || obj === null) return obj;
+  const result: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(obj as Record<string, unknown>)) {
+    result[k] = SENSITIVE_BODY_KEYS.has(k.toLowerCase()) ? "[Filtered]" : scrubObject(v);
+  }
+  return result;
+}
 
 // Serializes options to a stable change-detection string. Unlike JSON.stringify,
 // converts RegExp values to their string form so denyUrls/allowUrls pattern changes
@@ -197,12 +227,14 @@ function setupFetchInstrumentation(options: { endpoint?: string; debug?: boolean
           }
         }
 
-        // Request body capture is opt-in: may contain passwords, PII, or API keys
+        // Request body capture is opt-in: may contain passwords, PII, or API keys.
+        // Sensitive field values are scrubbed before storage.
         let requestBody: string | undefined;
         if (options.captureRequestBodies && init?.body) {
           try {
             const raw = typeof init.body === "string" ? init.body : JSON.stringify(init.body);
-            requestBody = raw.length > 2000 ? raw.substring(0, 2000) + "...(truncated)" : raw;
+            const scrubbed = scrubBody(raw);
+            requestBody = scrubbed.length > 2000 ? scrubbed.substring(0, 2000) + "...(truncated)" : scrubbed;
           } catch {
             // Ignore serialization errors
           }
@@ -328,6 +360,10 @@ interface BugwatchProviderProps {
  * ```
  */
 export function BugwatchProvider({ options, children, fallback, onError }: BugwatchProviderProps): React.ReactElement {
+  // Track client in state so contextValue re-memoizes after SDK init completes.
+  // getClient() returns null on first render (before useEffect fires).
+  const [client, setClient] = useState<BugwatchClient | null>(() => getClient());
+
   // Serialize options to a stable string so useEffect doesn't re-run on every render.
   // Object identity of `options` changes every render if passed inline.
   // serializeOptions handles RegExp values so denyUrls/allowUrls pattern changes are detected.
@@ -360,10 +396,11 @@ export function BugwatchProvider({ options, children, fallback, onError }: Bugwa
       return;
     }
 
-    // Add React-specific tags
-    const client = getClient();
-    if (client) {
-      client.setTag("framework", "react");
+    // Add React-specific tags and update context client state
+    const initializedClient = getClient();
+    if (initializedClient) {
+      initializedClient.setTag("framework", "react");
+      setClient(initializedClient);
     }
 
     // Store original handlers for cleanup
@@ -417,11 +454,16 @@ export function BugwatchProvider({ options, children, fallback, onError }: Bugwa
           if (!inBreadcrumb) {
             inBreadcrumb = true;
             try {
+              // Sanitize objects in args — raw objects may contain passwords or PII
+              const sanitizedArgs = args.map((a) => {
+                if (typeof a === "object" && a !== null && !(a instanceof Error)) return "[Object]";
+                try { return String(a); } catch { return "[unstringifiable]"; }
+              });
               coreAddBreadcrumb({
                 category: "console",
-                message: args.map(String).join(" "),
+                message: sanitizedArgs.join(" "),
                 level: "error",
-                data: { arguments: args },
+                data: { arguments: sanitizedArgs },
               });
             } catch {
               // Silently ignore breadcrumb failures
@@ -491,10 +533,11 @@ export function BugwatchProvider({ options, children, fallback, onError }: Bugwa
     coreSetExtra(key, value);
   }, []);
 
-  // Memoize context value to prevent unnecessary re-renders
+  // Memoize context value to prevent unnecessary re-renders.
+  // `client` is in state so this updates after SDK init completes.
   const contextValue = useMemo<BugwatchContextValue>(
     () => ({
-      client: getClient(),
+      client,
       captureException,
       captureMessage,
       addBreadcrumb,
@@ -502,7 +545,7 @@ export function BugwatchProvider({ options, children, fallback, onError }: Bugwa
       setTag,
       setExtra,
     }),
-    [captureException, captureMessage, addBreadcrumb, setUser, setTag, setExtra]
+    [client, captureException, captureMessage, addBreadcrumb, setUser, setTag, setExtra]
   );
 
   return (

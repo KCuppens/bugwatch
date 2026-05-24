@@ -96,8 +96,10 @@ function extractRequestContext(
     }
   }
 
+  // Use req.hostname (respects trust proxy) instead of req.get('host') (user-controlled)
+  // to prevent Host header injection into captured event URLs.
   const context: RequestContext = {
-    url: `${req.protocol}://${req.get("host")}${req.originalUrl}`,
+    url: `${req.protocol}://${req.hostname}${req.originalUrl}`,
     method: req.method,
     headers,
     query_string: req.url.includes("?") ? req.url.split("?")[1] : undefined,
@@ -165,8 +167,13 @@ export function requestHandler(
     // Create a request-scoped context for isolation
     const scopedContext: ScopedContext = createScopedContext();
 
-    // Store start time for breadcrumb
-    req.bugwatch = { startTime: Date.now() };
+    // Generate a per-request correlation ID for end-to-end tracing
+    const requestId = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+
+    // Store start time and request ID for downstream access
+    req.bugwatch = { startTime: Date.now(), requestId };
 
     // Extract and set user context in the scoped context
     if (options.extractUser) {
@@ -182,7 +189,7 @@ export function requestHandler(
 
     // Run the rest of the request handling within the isolated context
     runWithContext(scopedContext, () => {
-      // Add request start breadcrumb
+      // Add request start breadcrumb with correlation ID
       if (options.addBreadcrumbs !== false) {
         addBreadcrumb({
           category: "http",
@@ -191,6 +198,7 @@ export function requestHandler(
           data: {
             method: req.method,
             url: req.originalUrl,
+            request_id: requestId,
           },
         });
       }
@@ -213,6 +221,7 @@ export function requestHandler(
                   url: req.originalUrl,
                   status_code: res.statusCode,
                   duration_ms: duration,
+                  request_id: requestId,
                 },
               });
             });
@@ -270,7 +279,7 @@ export function errorHandler(
       }
 
       // Build request context (wrapped to prevent extraction errors from losing the event)
-      let requestContext;
+      let requestContext: RequestContext;
       try {
         requestContext = extractRequestContext(req, options);
       } catch {
@@ -380,4 +389,22 @@ export function captureError(
       "http.url": req.originalUrl,
     },
   });
+}
+
+/**
+ * Get the Bugwatch request ID for the current request.
+ * Include this in response headers (e.g. X-Request-Id) for end-to-end tracing.
+ *
+ * @example
+ * ```typescript
+ * app.use(requestHandler());
+ * app.use((req, res, next) => {
+ *   const id = getRequestId(req);
+ *   if (id) res.setHeader('X-Request-Id', id);
+ *   next();
+ * });
+ * ```
+ */
+export function getRequestId(req: Request): string | undefined {
+  return (req as BugwatchRequest).bugwatch?.requestId;
 }

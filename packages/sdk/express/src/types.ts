@@ -51,6 +51,8 @@ export interface BugwatchRequest extends Request {
   bugwatch?: {
     eventId?: string;
     startTime: number;
+    /** Per-request correlation ID included in all breadcrumbs and error events */
+    requestId?: string;
   };
 }
 

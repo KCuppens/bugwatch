@@ -70,7 +70,7 @@ class RingBuffer<T> {
 }
 
 const SDK_NAME = "@bugwatch/core";
-const SDK_VERSION = "0.1.0";
+const SDK_VERSION = "0.4.1";
 
 /**
  * Generate a unique event ID
@@ -79,7 +79,13 @@ function generateEventId(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
     return crypto.randomUUID().replace(/-/g, "");
   }
-  // Fallback for environments without crypto.randomUUID
+  // Fallback: use getRandomValues if available (cryptographically secure)
+  if (typeof crypto !== "undefined" && typeof crypto.getRandomValues === "function") {
+    const arr = new Uint8Array(16);
+    crypto.getRandomValues(arr);
+    return Array.from(arr, (b) => b.toString(16).padStart(2, "0")).join("");
+  }
+  // Last resort fallback (not cryptographically secure)
   const timestamp = Date.now().toString(36);
   const random = Math.random().toString(36).substring(2, 10);
   return `${timestamp}${random}`;
@@ -173,10 +179,11 @@ export class Bugwatch implements BugwatchClient {
   }
 
   /**
-   * Get SDK options
+   * Get SDK options (apiKey is masked — use only for non-secret config)
    */
   getOptions(): BugwatchOptions {
-    return this.options;
+    const { apiKey, ...rest } = this.options;
+    return { ...rest, apiKey: apiKey ? "[Filtered]" : undefined };
   }
 
   /**
@@ -209,16 +216,18 @@ export class Bugwatch implements BugwatchClient {
       return "";
     }
 
-    this.transport.send(processedEvent).catch((err) => {
+    // Narrow to const so the closure captures the non-null type
+    const sentEvent: ErrorEvent = processedEvent;
+    this.transport.send(sentEvent).catch((err) => {
       if (this.options.debug) console.error("[Bugwatch] transport.send failed:", err);
       try {
-        this.options.onDropped?.(processedEvent.event_id, "network_error");
+        this.options.onDropped?.(sentEvent.event_id, "network_error");
       } catch (e) {
         if (this.options.debug) console.error("[Bugwatch] onDropped callback threw:", e);
       }
     });
 
-    return processedEvent.event_id;
+    return sentEvent.event_id;
   }
 
   /**
@@ -575,8 +584,8 @@ export class Bugwatch implements BugwatchClient {
 
       // Send via transport (sendTransaction is optional on the Transport interface)
       if (this.transport.sendTransaction) {
-        this.transport.sendTransaction(event).catch(() => {
-          // Errors are logged by transport
+        this.transport.sendTransaction(event).catch((err) => {
+          if (this.options.debug) console.error("[Bugwatch] sendTransaction failed:", err);
         });
       }
     };

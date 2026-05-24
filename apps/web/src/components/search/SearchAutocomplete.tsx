@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useEffect } from "react";
+import { useRef, useEffect, useMemo } from "react";
 import {
   Search,
   Clock,
@@ -61,20 +61,25 @@ export function SearchAutocomplete({ suggestions, selectedIndex, onSelect, onHov
     return null;
   }
 
-  // Group suggestions by category
-  const groupedSuggestions = suggestions.reduce(
-    (acc, suggestion) => {
+  // Group suggestions by category and assign stable global indices.
+  // Computed outside render to avoid mutable globalIndex during JSX (unsafe in StrictMode).
+  // eslint-disable-next-line react-hooks/rules-of-hooks
+  const groupedSuggestions = useMemo(() => {
+    let idx = 0;
+    const groups: Array<{ category: string; items: Array<{ suggestion: Suggestion; globalIndex: number }> }> = [];
+    const categoryMap = new Map<string, typeof groups[0]>();
+    for (const suggestion of suggestions) {
       const category = suggestion.category || "Suggestions";
-      if (!acc[category]) {
-        acc[category] = [];
+      let group = categoryMap.get(category);
+      if (!group) {
+        group = { category, items: [] };
+        groups.push(group);
+        categoryMap.set(category, group);
       }
-      acc[category].push(suggestion);
-      return acc;
-    },
-    {} as Record<string, Suggestion[]>
-  );
-
-  let globalIndex = 0;
+      group.items.push({ suggestion, globalIndex: idx++ });
+    }
+    return groups;
+  }, [suggestions]);
 
   return (
     <div
@@ -85,13 +90,12 @@ export function SearchAutocomplete({ suggestions, selectedIndex, onSelect, onHov
       aria-live="polite"
       className="absolute top-full left-0 right-0 mt-2 max-h-80 overflow-y-auto rounded-lg border bg-popover shadow-lg z-50 animate-in fade-in slide-in-from-top-2"
     >
-      {Object.entries(groupedSuggestions).map(([category, items]) => (
+      {groupedSuggestions.map(({ category, items }) => (
         <div key={category}>
           <div className="px-3 py-2 text-xs font-medium text-muted-foreground sticky top-0 bg-popover border-b">
             {category}
           </div>
-          {items.map((suggestion) => {
-            const currentIndex = globalIndex++;
+          {items.map(({ suggestion, globalIndex: currentIndex }) => {
             const isSelected = currentIndex === selectedIndex;
             const Icon = suggestion.icon ? iconMap[suggestion.icon] || Search : Search;
 
@@ -120,6 +124,7 @@ export function SearchAutocomplete({ suggestions, selectedIndex, onSelect, onHov
                         ? "text-primary"
                         : "text-muted-foreground"
                   )}
+                  aria-hidden="true"
                 />
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
@@ -133,7 +138,7 @@ export function SearchAutocomplete({ suggestions, selectedIndex, onSelect, onHov
                   )}
                 </div>
                 {isSelected && (
-                  <kbd className="hidden sm:inline-flex h-5 items-center gap-1 rounded border bg-muted px-1.5 text-[10px] font-medium text-muted-foreground">
+                  <kbd aria-hidden="true" className="hidden sm:inline-flex h-5 items-center gap-1 rounded border bg-muted px-1.5 text-[10px] font-medium text-muted-foreground">
                     Enter
                   </kbd>
                 )}
@@ -143,8 +148,8 @@ export function SearchAutocomplete({ suggestions, selectedIndex, onSelect, onHov
         </div>
       ))}
 
-      {/* Footer with keyboard hints */}
-      <div className="flex items-center justify-between border-t px-3 py-2 text-xs text-muted-foreground bg-muted/50">
+      {/* Footer with keyboard hints — decorative, suppress from accessibility tree */}
+      <div aria-hidden="true" className="flex items-center justify-between border-t px-3 py-2 text-xs text-muted-foreground bg-muted/50">
         <div className="flex items-center gap-4">
           <span className="flex items-center gap-1">
             <kbd className="rounded border bg-background px-1">↑↓</kbd>

@@ -19,7 +19,7 @@ export default function IssueDetailError({
   }, [error]);
 
   return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-4 p-8 text-center">
+    <div role="alert" className="flex flex-1 flex-col items-center justify-center gap-4 p-8 text-center">
       <div className="rounded-full bg-destructive/10 p-4">
         <AlertTriangle className="h-8 w-8 text-destructive" />
       </div>

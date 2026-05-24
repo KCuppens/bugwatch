@@ -422,7 +422,7 @@ export default function IssueDetailPage() {
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [issue, pendingAction, selectedEventId, router, projectId, handleResolve, handleIgnore]);
+  }, [issue, pendingAction, selectedEventId, router, projectId, handleResolve, handleIgnore, handleCopyForAi]);
 
   // Update browser tab title to show which issue is being viewed
   useEffect(() => {
@@ -434,14 +434,16 @@ export default function IssueDetailPage() {
     }
   }, [issue?.title]);
 
-  function toggleFrame(index: number) {
-    const newExpanded = new Set(expandedFrames);
-    if (newExpanded.has(index)) newExpanded.delete(index);
-    else newExpanded.add(index);
-    setExpandedFrames(newExpanded);
-  }
+  const toggleFrame = useCallback((index: number) => {
+    setExpandedFrames((prev) => {
+      const next = new Set(prev);
+      if (next.has(index)) next.delete(index);
+      else next.add(index);
+      return next;
+    });
+  }, []);
 
-  function handleCopyForAi() {
+  const handleCopyForAi = useCallback(() => {
     if (!issue) return;
     const jsonBlock = (v: unknown) => "```json\n" + JSON.stringify(v, null, 2) + "\n```";
 
@@ -544,9 +546,9 @@ export default function IssueDetailPage() {
 
     navigator.clipboard
       .writeText(lines.join("\n"))
-      .then(() => toast.success("Copied for AI assistant"))
+      .then(() => toast.success("Copied for AI assistant — includes user identifiers"))
       .catch(() => toast.error("Copy failed"));
-  }
+  }, [issue]);
 
   function handleCopyLink() {
     navigator.clipboard
@@ -564,7 +566,7 @@ export default function IssueDetailPage() {
     if (method !== "GET") parts.push(`-X ${shellEscape(method)}`);
     let url = issue.request.url || "";
     if (issue.request.query_string && !url.includes("?")) url += `?${issue.request.query_string}`;
-    const sensitive = ["authorization", "cookie", "x-api-key"];
+    const sensitive = ["authorization", "cookie", "set-cookie", "x-api-key", "x-auth-token", "x-csrf-token", "x-xsrf-token", "proxy-authorization"];
     if (issue.request.headers) {
       Object.entries(issue.request.headers).forEach(([key, value]) => {
         const safeKey = shellEscape(key);
@@ -1414,6 +1416,7 @@ export default function IssueDetailPage() {
             </div>
             {issue.environment && (
               <div className="col-span-2 rounded-lg border p-3">
+                <dt className="text-xs text-muted-foreground mb-1">Environment</dt>
                 <div className="flex items-center gap-2">
                   <Globe className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
                   <dd>
@@ -1426,7 +1429,6 @@ export default function IssueDetailPage() {
                     </span>
                   </dd>
                 </div>
-                <dt className="text-xs text-muted-foreground mt-1">Environment</dt>
               </div>
             )}
           </dl>
@@ -1523,21 +1525,21 @@ export default function IssueDetailPage() {
                 <div className="space-y-4">
                   <div className="grid grid-cols-2 gap-2">
                     <div className="flex items-center gap-2">
-                      <Users className="h-3.5 w-3.5 text-muted-foreground" />
+                      <Users className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
                       <div>
                         <p className="text-base font-semibold">{impactData.unique_users}</p>
                         <p className="text-[10px] text-muted-foreground">users</p>
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
-                      <Monitor className="h-3.5 w-3.5 text-muted-foreground" />
+                      <Monitor className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
                       <div>
                         <p className="text-base font-semibold">{impactData.unique_sessions}</p>
                         <p className="text-[10px] text-muted-foreground">sessions</p>
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
-                      <Clock className="h-3.5 w-3.5 text-muted-foreground" />
+                      <Clock className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
                       <div>
                         <p className="text-base font-semibold">{impactData.last_hour_count}</p>
                         <p className="text-[10px] text-muted-foreground">last hour</p>
@@ -1545,9 +1547,9 @@ export default function IssueDetailPage() {
                     </div>
                     <div className="flex items-center gap-2">
                       {impactData.trend_percent >= 0 ? (
-                        <TrendingUp className="h-3.5 w-3.5 text-red-500" />
+                        <TrendingUp className="h-3.5 w-3.5 text-red-500" aria-hidden="true" />
                       ) : (
-                        <TrendingDown className="h-3.5 w-3.5 text-green-500" />
+                        <TrendingDown className="h-3.5 w-3.5 text-green-500" aria-hidden="true" />
                       )}
                       <div>
                         <p
@@ -1675,7 +1677,7 @@ export default function IssueDetailPage() {
                   )}
                 </Button>
               </div>
-              <p className="text-[10px] text-muted-foreground mb-2">
+              <p className="text-[10px] text-muted-foreground mb-2" aria-hidden="true">
                 <kbd className="font-mono">{isMac ? "⌘" : "Ctrl"}</kbd>+<kbd className="font-mono">Enter</kbd> to submit
               </p>
 
@@ -1808,18 +1810,34 @@ export default function IssueDetailPage() {
               </div>
             )}
           </DialogHeader>
-          {eventDetail && !eventLoading && (
-            <div className="flex border-b shrink-0" role="tablist" aria-label="Event sections">
-              {(
-                [
-                  { id: "exception", label: "Stack Trace", show: !!eventDetail.exception },
-                  { id: "request", label: "Request", show: !!eventDetail.request },
-                  { id: "breadcrumbs", label: `Breadcrumbs (${eventDetail.breadcrumbs?.length ?? 0})`, show: true },
-                  { id: "meta", label: "Tags & Extra", show: Object.keys(eventDetail.tags ?? {}).length > 0 || !!eventDetail.extra },
-                ] as const
-              )
-                .filter((t) => t.show)
-                .map((t) => (
+          {eventDetail && !eventLoading && (() => {
+            const visibleModalTabs = (
+              [
+                { id: "exception", label: "Stack Trace", show: !!eventDetail.exception },
+                { id: "request", label: "Request", show: !!eventDetail.request },
+                { id: "breadcrumbs", label: `Breadcrumbs (${eventDetail.breadcrumbs?.length ?? 0})`, show: true },
+                { id: "meta", label: "Tags & Extra", show: Object.keys(eventDetail.tags ?? {}).length > 0 || !!eventDetail.extra },
+              ] as const
+            ).filter((t) => t.show);
+            return (
+              <div
+                className="flex border-b shrink-0"
+                role="tablist"
+                aria-label="Event sections"
+                onKeyDown={(e) => {
+                  const currentIdx = visibleModalTabs.findIndex((t) => t.id === eventModalTab);
+                  if (e.key === "ArrowRight") {
+                    const next = visibleModalTabs[(currentIdx + 1) % visibleModalTabs.length];
+                    setEventModalTab(next.id);
+                    document.getElementById(`modal-tab-${next.id}`)?.focus();
+                  } else if (e.key === "ArrowLeft") {
+                    const prev = visibleModalTabs[(currentIdx - 1 + visibleModalTabs.length) % visibleModalTabs.length];
+                    setEventModalTab(prev.id);
+                    document.getElementById(`modal-tab-${prev.id}`)?.focus();
+                  }
+                }}
+              >
+                {visibleModalTabs.map((t) => (
                   <button
                     key={t.id}
                     id={`modal-tab-${t.id}`}
@@ -1837,12 +1855,13 @@ export default function IssueDetailPage() {
                     {t.label}
                   </button>
                 ))}
-            </div>
-          )}
+              </div>
+            );
+          })()}
           <div className="flex-1 overflow-y-auto p-4">
             {eventLoading && (
-              <div className="flex flex-col items-center py-12">
-                <Loader2 className="h-8 w-8 animate-spin text-accent-2" />
+              <div className="flex flex-col items-center py-12" role="status" aria-label="Loading event details">
+                <Loader2 className="h-8 w-8 animate-spin text-accent-2" aria-hidden="true" />
                 <p className="mt-4 text-sm text-muted-foreground">Loading...</p>
               </div>
             )}
