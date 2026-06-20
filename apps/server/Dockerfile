@@ -16,6 +16,8 @@ RUN cargo build --release 2>/dev/null || true
 # Copy actual source code, migrations (embedded via include_str!), and agent scripts
 COPY apps/server/src ./src/
 COPY apps/server/migrations ./migrations/
+# api/mod.rs embeds this via include_str!("../../openapi.yaml")
+COPY apps/server/openapi.yaml ./openapi.yaml
 COPY apps/agent/ ../../apps/agent/
 
 # Build the real binary
