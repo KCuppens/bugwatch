@@ -76,7 +76,7 @@ class BugwatchFastAPI:
         from starlette.requests import Request
         from starlette.responses import Response
 
-        class BugwatchMiddleware(BaseHTTPMiddleware):
+        class BugwatchMiddleware(BaseHTTPMiddleware):  # type: ignore[misc]  # starlette not type-checked (ignore_missing_imports) → BaseHTTPMiddleware is Any
             async def dispatch(self, request: Request, call_next: Callable[..., Any]) -> Response:
                 client = get_client()
 
