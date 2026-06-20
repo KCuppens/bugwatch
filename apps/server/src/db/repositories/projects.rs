@@ -59,7 +59,7 @@ impl ProjectRepository {
     /// Insert a new project using an existing connection (e.g., inside a transaction).
     /// Callers are responsible for committing or rolling back the transaction.
     pub async fn create_in_tx(
-        conn: &mut sqlx::AnyConnection,
+        conn: &mut sqlx::PgConnection,
         name: &str,
         slug: &str,
         owner_id: &str,
@@ -214,6 +214,16 @@ impl ProjectRepository {
         sqlx::query("UPDATE projects SET platform = $1, framework = $2 WHERE id = $3")
             .bind(platform)
             .bind(framework)
+            .bind(id)
+            .execute(pool)
+            .await?;
+        project_cache().remove(id);
+        Ok(())
+    }
+
+    pub async fn update_logo(pool: &DbPool, id: &str, logo_url: Option<&str>) -> Result<()> {
+        sqlx::query("UPDATE projects SET logo_url = $1 WHERE id = $2")
+            .bind(logo_url)
             .bind(id)
             .execute(pool)
             .await?;

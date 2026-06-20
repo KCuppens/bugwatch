@@ -141,8 +141,56 @@ pub(crate) async fn run_migrations(pool: &sqlx::PgPool) -> Result<()> {
             include_str!("../../migrations/022_perf_indexes_pg.sql"),
         ),
         (
+            "023_server_metrics_chart_index",
+            include_str!("../../migrations/023_server_metrics_chart_index_pg.sql"),
+        ),
+        (
+            "024_password_reset_tokens",
+            include_str!("../../migrations/024_password_reset_tokens_pg.sql"),
+        ),
+        (
+            "025_password_reset_unique_user",
+            include_str!("../../migrations/025_password_reset_unique_user_pg.sql"),
+        ),
+        (
+            "026_nextjs_digest_index",
+            include_str!("../../migrations/026_nextjs_digest_index_pg.sql"),
+        ),
+        (
+            "027_alert_logs_project_index",
+            include_str!("../../migrations/027_alert_logs_project_index_pg.sql"),
+        ),
+        (
+            "028_issues_trgm_index",
+            include_str!("../../migrations/028_issues_trgm_index_pg.sql"),
+        ),
+        (
+            "029_billing_events_stripe_event_unique",
+            include_str!("../../migrations/029_billing_events_stripe_event_unique_pg.sql"),
+        ),
+        (
+            "030_alert_logs_sent_index",
+            include_str!("../../migrations/030_alert_logs_sent_index.sql"),
+        ),
+        (
+            "031_sessions_expires_at_index",
+            include_str!("../../migrations/031_sessions_expires_at_index.sql"),
+        ),
+        (
+            "032_issues_trgm_index",
+            include_str!("../../migrations/032_issues_trgm_index.sql"),
+        ),
+        (
+            "033_server_metrics_composite_index",
+            include_str!("../../migrations/033_server_metrics_composite_index.sql"),
+        ),
+        (
             "034_log_monitoring",
             include_str!("../../migrations/034_log_monitoring_pg.sql"),
+        ),
+        (
+            "035_project_logo_url",
+            include_str!("../../migrations/035_project_logo_url_pg.sql"),
         ),
     ];
 

@@ -20,7 +20,9 @@ services:
 
   server:
     image: rust:latest
-    working_dir: /app
+    # Mount the full repo at /workspace so include_str!("../../../apps/agent/*.sh")
+    # in apps/server/src/main.rs resolves to /workspace/apps/agent/*.sh at build time.
+    working_dir: /workspace/apps/server
     command: >
       bash -c "
         apt-get update && apt-get install -y pkg-config libssl-dev curl &&
@@ -30,9 +32,9 @@ services:
     ports:
       - "3000:3000"
     volumes:
-      - ./apps/server:/app
+      - .:/workspace
       - cargo-cache:/usr/local/cargo/registry
-      - target-cache:/app/target
+      - target-cache:/workspace/apps/server/target
     environment:
       - SERVER_ADDR=0.0.0.0:3000
       - DATABASE_URL=postgres://bugwatch:${POSTGRES_PASSWORD:-bugwatch_dev}@postgres:5432/bugwatch
@@ -50,12 +52,19 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 180s
+      # First-time cargo build of this server takes several minutes; give it room.
+      start_period: 900s
 
   web:
     image: node:20-alpine
     working_dir: /app
-    command: sh -c "npm install && npm run dev --workspace=@bugwatch/web"
+    # next.config.ts imports the @bugwatch/nextjs workspace package, which in turn
+    # requires the compiled dist/ of @bugwatch/core and @bugwatch/node. Build those
+    # once before `next dev` so module resolution succeeds.
+    command: >
+      sh -c "npm install &&
+             npm run build --workspace=@bugwatch/core --workspace=@bugwatch/node --workspace=@bugwatch/nextjs &&
+             npm run dev --workspace=@bugwatch/web"
     ports:
       - "3001:3001"
     volumes:

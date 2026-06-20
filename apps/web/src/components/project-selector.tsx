@@ -20,10 +20,24 @@ function needsSetup(project: Project): boolean {
 interface ProjectAvatarProps {
   name: string;
   size?: "sm" | "md";
+  logoUrl?: string | null;
 }
 
-function ProjectAvatar({ name, size = "md" }: ProjectAvatarProps) {
+function ProjectAvatar({ name, size = "md", logoUrl }: ProjectAvatarProps) {
+  const [imgError, setImgError] = useState(false);
   const sizeClass = size === "sm" ? "h-7 w-7 text-[11px] rounded-md" : "h-8 w-8 text-[13px] rounded-lg";
+
+  if (logoUrl && !imgError) {
+    return (
+      <img
+        src={logoUrl}
+        alt={name}
+        className={cn("shrink-0 object-cover", sizeClass)}
+        onError={() => setImgError(true)}
+      />
+    );
+  }
+
   return (
     <div
       className={cn(
@@ -86,12 +100,12 @@ function ProjectItem({ project, stat, isSelected, onSelect }: ProjectItemProps) 
       onSelect={onSelect}
       className="flex h-12 cursor-pointer items-center gap-3 rounded-lg px-2 aria-selected:bg-accent-2/10 aria-selected:text-accent-2 transition-colors"
     >
-      <ProjectAvatar name={project.name} size="sm" />
+      <ProjectAvatar name={project.name} size="sm" logoUrl={project.logo_url} />
       <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 leading-none">
           <span className="text-body font-medium truncate tracking-tight">{project.name}</span>
         </div>
-        <div className="flex items-center gap-1.5 text-caption text-muted-foreground truncate">
+        <div className="flex items-center gap-1.5 text-caption text-muted-foreground truncate mt-0.5">
           {platform && (
             <>
               <PlatformIcon platform={platform} className="h-3 w-3" />
@@ -203,7 +217,7 @@ export function ProjectSelector() {
         <button
           type="button"
           aria-label="Switch project"
-          className="group flex h-12 w-full items-center gap-3 rounded-lg border border-border-subtle bg-surface-2 px-3 text-left transition-all hover:bg-surface-3 hover:border-border-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-2/60 focus-visible:ring-offset-2 focus-visible:ring-offset-background data-[state=open]:border-accent-2/40"
+          className="group flex h-9 w-full items-center gap-3 rounded-lg border border-border-subtle bg-surface-2 px-3 text-left transition-all hover:bg-surface-3 hover:border-border-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-2/60 focus-visible:ring-offset-2 focus-visible:ring-offset-background data-[state=open]:border-accent-2/40"
         >
           {isLoading ? (
             <>
@@ -214,13 +228,14 @@ export function ProjectSelector() {
               </div>
             </>
           ) : selectedProject ? (
-            <>
-              <ProjectAvatar name={selectedProject.name} />
+            selectedProject.logo_url ? (
+              <ProjectAvatar name={selectedProject.name} logoUrl={selectedProject.logo_url} />
+            ) : (
               <div className="flex-1 min-w-0">
-                <div className="text-body font-medium truncate tracking-tight text-foreground">
+                <div className="text-body font-medium truncate tracking-tight text-foreground leading-none mt-0.5">
                   {selectedProject.name}
                 </div>
-                <div className="flex items-center gap-1.5 text-caption text-muted-foreground truncate">
+                <div className="flex items-center gap-1.5 text-caption text-muted-foreground truncate mt-0.5">
                   {selectedPlatform && (
                     <>
                       <PlatformIcon platform={selectedPlatform} className="h-3 w-3" />
@@ -243,7 +258,7 @@ export function ProjectSelector() {
                   )}
                 </div>
               </div>
-            </>
+            )
           ) : (
             <>
               <div className="h-8 w-8 rounded-lg bg-surface-3 flex items-center justify-center">

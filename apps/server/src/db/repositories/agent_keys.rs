@@ -78,7 +78,7 @@ impl AgentKeyRepository {
     pub async fn revoke(pool: &DbPool, id: &str) -> Result<()> {
         let now = chrono::Utc::now();
         sqlx::query("UPDATE agent_keys SET revoked_at = $1 WHERE id = $2")
-            .bind(now.to_rfc3339())
+            .bind(now)
             .bind(id)
             .execute(pool)
             .await?;
@@ -89,7 +89,7 @@ impl AgentKeyRepository {
     pub async fn touch(pool: &DbPool, id: &str) -> Result<()> {
         let now = chrono::Utc::now();
         sqlx::query("UPDATE agent_keys SET last_used_at = $1 WHERE id = $2")
-            .bind(now.to_rfc3339())
+            .bind(now)
             .bind(id)
             .execute(pool)
             .await?;

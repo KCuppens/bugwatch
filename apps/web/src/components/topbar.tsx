@@ -3,7 +3,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
-import { Search, HelpCircle, LogOut, User, Settings, BookOpen, Keyboard, Bug, Mail, ExternalLink } from "lucide-react";
+import { billingApi, projectsApi, overviewApi, type BillingDashboard } from "@/lib/api";
+import { type Tier } from "@/hooks/use-feature";
+import { Search, HelpCircle, LogOut, User, Settings, BookOpen, Keyboard, Bug, Mail, ExternalLink, CreditCard, Users, FolderOpen, Activity } from "lucide-react";
+import { Progress } from "@/components/ui/progress";
 import { useCommandPalette } from "@/components/command-palette";
 import { NotificationCenter } from "@/components/notification-center";
 import { ProjectSelector } from "@/components/project-selector";
@@ -16,10 +19,36 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 
+const PROJECT_LIMIT: Record<Tier, number | null> = {
+  free: 1,
+  pro: null,
+  team: null,
+  enterprise: null,
+};
+
+const MONITOR_LIMIT: Record<Tier, number | null> = {
+  free: 1,
+  pro: 10,
+  team: 25,
+  enterprise: null,
+};
+
+const TIER_CONFIG: Record<Tier, { label: string; className: string }> = {
+  free: { label: "Free", className: "bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))]" },
+  pro: { label: "Pro", className: "bg-[hsl(var(--accent))] text-[hsl(var(--accent-foreground))]" },
+  team: { label: "Team", className: "bg-purple-500/20 text-purple-400" },
+  enterprise: { label: "Enterprise", className: "bg-amber-500/20 text-amber-400" },
+};
+
 export function Topbar() {
   const router = useRouter();
   const { user, logout } = useAuth();
   const { setOpen: openCommandPalette } = useCommandPalette();
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [dashboard, setDashboard] = useState<BillingDashboard | null>(null);
+  const [projectTotal, setProjectTotal] = useState<number | null>(null);
+  const [monitorTotal, setMonitorTotal] = useState<number | null>(null);
+  const [limitsLoading, setLimitsLoading] = useState(false);
   const [isMac, setIsMac] = useState<boolean>(() => {
     if (typeof navigator === "undefined") return false;
     const platform = navigator.platform || "";
@@ -31,6 +60,36 @@ export function Topbar() {
     const platform = nav.platform || nav.userAgentData?.platform || "";
     setIsMac(/mac|iphone|ipad|ipod/i.test(platform));
   }, []);
+
+  useEffect(() => {
+    if (menuOpen && !dashboard) {
+      setLimitsLoading(true);
+      Promise.all([
+        billingApi.getBillingDashboard(),
+        projectsApi.list(1, 1),
+        overviewApi.getMonitorsAcrossProjects(),
+      ])
+        .then(([dash, proj, monitors]) => {
+          setDashboard(dash);
+          setProjectTotal(proj.pagination.total);
+          setMonitorTotal(monitors.summary.total);
+        })
+        .catch(() => {})
+        .finally(() => setLimitsLoading(false));
+    }
+  }, [menuOpen, dashboard]);
+
+  const tier = (user?.organization?.tier ?? "free") as Tier;
+  const tierConfig = TIER_CONFIG[tier];
+  const projectLimit = PROJECT_LIMIT[tier];
+  const monitorLimit = MONITOR_LIMIT[tier];
+  const seatsUsed = dashboard?.seats_used ?? 0;
+  const seatsTotal = dashboard?.seats_total ?? 1;
+  const seatsPercent = Math.min((seatsUsed / seatsTotal) * 100, 100);
+  const projectsPercent = projectLimit !== null && projectTotal !== null
+    ? Math.min((projectTotal / projectLimit) * 100, 100) : 0;
+  const monitorsPercent = monitorLimit !== null && monitorTotal !== null
+    ? Math.min((monitorTotal / monitorLimit) * 100, 100) : 0;
 
   const handleLogout = useCallback(async () => {
     try {
@@ -44,7 +103,7 @@ export function Topbar() {
   return (
     <header className="fixed left-0 md:left-14 right-0 top-0 z-30 flex h-12 items-center border-b border-[hsl(var(--border-subtle))] bg-[hsl(var(--surface-1))] px-4">
       {/* Left: Project selector */}
-      <div className="flex items-center gap-3 min-w-0">
+      <div className="flex items-center gap-3 min-w-0 py-1.5">
         <ProjectSelector />
       </div>
 
@@ -114,7 +173,7 @@ export function Topbar() {
         </DropdownMenu>
 
         {/* User menu */}
-        <DropdownMenu>
+        <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
           <DropdownMenuTrigger asChild>
             <button
               aria-label="User menu"
@@ -128,11 +187,111 @@ export function Topbar() {
               </span>
             </button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-48">
-            <DropdownMenuLabel>
-              <p className="font-medium font-sans">{user?.name || "User"}</p>
-              <p className="text-xs font-normal text-[hsl(var(--muted-foreground))]">{user?.email}</p>
+          <DropdownMenuContent align="end" className="w-64">
+            {/* Identity */}
+            <DropdownMenuLabel className="pb-2">
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="font-medium font-sans truncate">{user?.name || "User"}</p>
+                  <p className="text-xs font-normal text-[hsl(var(--muted-foreground))] truncate">{user?.email}</p>
+                </div>
+                <span className={`shrink-0 mt-0.5 text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded ${tierConfig.className}`}>
+                  {tierConfig.label}
+                </span>
+              </div>
             </DropdownMenuLabel>
+
+            {/* Usage */}
+            <div className="px-2 pb-2">
+              <div className="rounded-md bg-[hsl(var(--surface-3))] p-2.5 space-y-3">
+                {/* Projects */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="flex items-center gap-1.5 text-[hsl(var(--muted-foreground))]">
+                      <FolderOpen className="h-3 w-3" />
+                      Projects
+                    </span>
+                    {limitsLoading ? (
+                      <span className="text-[hsl(var(--muted-foreground))]">—</span>
+                    ) : projectLimit !== null ? (
+                      <span className="tabular-nums text-[hsl(var(--foreground))]">
+                        {projectTotal ?? 0} <span className="text-[hsl(var(--muted-foreground))]">/ {projectLimit}</span>
+                      </span>
+                    ) : (
+                      <span className="tabular-nums text-[hsl(var(--foreground))]">
+                        {projectTotal ?? 0} <span className="text-[hsl(var(--muted-foreground))]">/ ∞</span>
+                      </span>
+                    )}
+                  </div>
+                  {projectLimit !== null && (
+                    <Progress
+                      value={limitsLoading ? 0 : projectsPercent}
+                      className="h-1"
+                      aria-label={`${projectTotal ?? 0} of ${projectLimit} projects used`}
+                    />
+                  )}
+                </div>
+
+                {/* Monitors */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="flex items-center gap-1.5 text-[hsl(var(--muted-foreground))]">
+                      <Activity className="h-3 w-3" />
+                      Monitors
+                    </span>
+                    {limitsLoading ? (
+                      <span className="text-[hsl(var(--muted-foreground))]">—</span>
+                    ) : monitorLimit !== null ? (
+                      <span className="tabular-nums text-[hsl(var(--foreground))]">
+                        {monitorTotal ?? 0} <span className="text-[hsl(var(--muted-foreground))]">/ {monitorLimit}</span>
+                      </span>
+                    ) : (
+                      <span className="tabular-nums text-[hsl(var(--foreground))]">
+                        {monitorTotal ?? 0} <span className="text-[hsl(var(--muted-foreground))]">/ ∞</span>
+                      </span>
+                    )}
+                  </div>
+                  {monitorLimit !== null && (
+                    <Progress
+                      value={limitsLoading ? 0 : monitorsPercent}
+                      className="h-1"
+                      aria-label={`${monitorTotal ?? 0} of ${monitorLimit} monitors used`}
+                    />
+                  )}
+                </div>
+
+                {/* Seats */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="flex items-center gap-1.5 text-[hsl(var(--muted-foreground))]">
+                      <Users className="h-3 w-3" />
+                      Seats
+                    </span>
+                    {limitsLoading ? (
+                      <span className="text-[hsl(var(--muted-foreground))]">—</span>
+                    ) : (
+                      <span className="tabular-nums text-[hsl(var(--foreground))]">
+                        {seatsUsed} <span className="text-[hsl(var(--muted-foreground))]">/ {seatsTotal}</span>
+                      </span>
+                    )}
+                  </div>
+                  <Progress
+                    value={limitsLoading ? 0 : seatsPercent}
+                    className="h-1"
+                    aria-label={`${seatsUsed} of ${seatsTotal} seats used`}
+                  />
+                </div>
+              </div>
+              {tier === "free" && (
+                <button
+                  onClick={() => { setMenuOpen(false); router.push("/dashboard/settings?tab=billing"); }}
+                  className="mt-1.5 w-full text-xs font-medium text-center py-1.5 rounded-md bg-[hsl(var(--accent))] text-[hsl(var(--accent-foreground))] hover:bg-[hsl(var(--accent-2))] transition-colors"
+                >
+                  Upgrade to Pro
+                </button>
+              )}
+            </div>
+
             <DropdownMenuSeparator />
             <DropdownMenuItem onClick={() => router.push("/dashboard/settings?tab=profile")}>
               <User className="mr-2 h-4 w-4" />
@@ -141,6 +300,10 @@ export function Topbar() {
             <DropdownMenuItem onClick={() => router.push("/dashboard/settings")}>
               <Settings className="mr-2 h-4 w-4" />
               Settings
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => router.push("/dashboard/settings?tab=billing")}>
+              <CreditCard className="mr-2 h-4 w-4" />
+              Billing
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem onClick={handleLogout} className="text-red-400 focus:text-red-400 focus:bg-red-500/10">

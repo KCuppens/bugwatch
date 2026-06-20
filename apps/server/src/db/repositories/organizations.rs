@@ -148,7 +148,7 @@ impl OrganizationRepository {
             "UPDATE organizations SET name = $1, updated_at = $2 WHERE id = $3 RETURNING *",
         )
         .bind(name)
-        .bind(now.to_rfc3339())
+        .bind(now)
         .bind(id)
         .fetch_one(pool)
         .await?;
@@ -191,10 +191,10 @@ impl OrganizationRepository {
         .bind(stripe_subscription_id)
         .bind(subscription_status)
         .bind(billing_interval)
-        .bind(current_period_start.map(|dt| dt.to_rfc3339()))
-        .bind(current_period_end.map(|dt| dt.to_rfc3339()))
+        .bind(current_period_start)
+        .bind(current_period_end)
         .bind(cancel_at_period_end)
-        .bind(now.to_rfc3339())
+        .bind(now)
         .bind(id)
         .fetch_one(pool)
         .await?;
@@ -239,10 +239,10 @@ impl OrganizationRepository {
         .bind(subscription_id)
         .bind(subscription_status)
         .bind(billing_interval)
-        .bind(current_period_start.map(|dt| dt.to_rfc3339()))
-        .bind(current_period_end.map(|dt| dt.to_rfc3339()))
+        .bind(current_period_start)
+        .bind(current_period_end)
         .bind(cancel_at_period_end)
-        .bind(now.to_rfc3339())
+        .bind(now)
         .bind(id)
         .bind(subscription_id)
         .execute(pool)
@@ -263,7 +263,7 @@ impl OrganizationRepository {
             "UPDATE organizations SET stripe_customer_id = $1, updated_at = $2 WHERE id = $3 AND stripe_customer_id IS NULL",
         )
         .bind(stripe_customer_id)
-        .bind(now.to_rfc3339())
+        .bind(now)
         .bind(id)
         .execute(pool)
         .await?;
@@ -352,7 +352,7 @@ impl OrganizationRepository {
             "#,
         )
         .bind(seats)
-        .bind(now.to_rfc3339())
+        .bind(now)
         .bind(id)
         .bind(seats)
         .bind(id)
@@ -388,7 +388,7 @@ impl OrganizationRepository {
         .bind(tax_id)
         .bind(billing_country)
         .bind(billing_address)
-        .bind(now.to_rfc3339())
+        .bind(now)
         .bind(id)
         .fetch_one(pool)
         .await
@@ -413,9 +413,9 @@ impl OrganizationRepository {
             RETURNING *
             "#,
         )
-        .bind(payment_failed_at.map(|dt| dt.to_rfc3339()))
-        .bind(grace_period_ends.map(|dt| dt.to_rfc3339()))
-        .bind(now.to_rfc3339())
+        .bind(payment_failed_at)
+        .bind(grace_period_ends)
+        .bind(now)
         .bind(id)
         .fetch_one(pool)
         .await
@@ -444,7 +444,7 @@ impl OrganizationMemberRepository {
         .bind(organization_id)
         .bind(user_id)
         .bind(role)
-        .bind(now.to_rfc3339())
+        .bind(now)
         .fetch_one(pool)
         .await
         .map_err(Into::into)
@@ -479,7 +479,7 @@ impl OrganizationMemberRepository {
         .bind(organization_id)
         .bind(user_id)
         .bind(role)
-        .bind(now.to_rfc3339())
+        .bind(now)
         .bind(organization_id)
         .bind(seat_limit as i64)
         .fetch_optional(pool)
@@ -601,9 +601,9 @@ impl UsageRepository {
         .bind(organization_id)
         .bind(metric)
         .bind(amount)
-        .bind(period_start.to_rfc3339())
-        .bind(period_end.to_rfc3339())
-        .bind(now.to_rfc3339())
+        .bind(period_start)
+        .bind(period_end)
+        .bind(now)
         .fetch_one(pool)
         .await?;
         Ok(record)
@@ -614,7 +614,7 @@ impl UsageRepository {
         pool: &DbPool,
         organization_id: &str,
         metric: &str,
-        period_start: &str,
+        period_start: chrono::DateTime<chrono::Utc>,
     ) -> Result<i32> {
         let row: Option<(i32,)> = sqlx::query_as(
             "SELECT count FROM usage_records WHERE organization_id = $1 AND metric = $2 AND period_start = $3",
@@ -637,7 +637,7 @@ impl UsageRepository {
             "SELECT * FROM usage_records WHERE organization_id = $1 AND period_start = $2",
         )
         .bind(organization_id)
-        .bind(period_start.to_rfc3339())
+        .bind(period_start)
         .fetch_all(pool)
         .await
         .map_err(Into::into)
@@ -687,7 +687,7 @@ impl BillingEventRepository {
         .bind(amount_cents)
         .bind(currency)
         .bind(metadata)
-        .bind(now.to_rfc3339())
+        .bind(now)
         .fetch_one(pool)
         .await
         .map_err(Into::into)
@@ -716,7 +716,7 @@ impl BillingEventRepository {
         .bind(organization_id)
         .bind(event_type)
         .bind(stripe_event_id)
-        .bind(now.to_rfc3339())
+        .bind(now)
         .execute(pool)
         .await?;
         Ok(result.rows_affected() > 0)
@@ -988,7 +988,7 @@ mod tests {
             .await
             .unwrap();
         let count =
-            UsageRepository::get_current(&pool, "org-usage", "events", &period_start.to_rfc3339())
+            UsageRepository::get_current(&pool, "org-usage", "events", period_start)
                 .await
                 .unwrap();
         assert_eq!(count, 15);

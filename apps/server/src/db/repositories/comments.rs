@@ -71,8 +71,8 @@ impl CommentRepository {
         .bind(issue_id)
         .bind(user_id)
         .bind(content)
-        .bind(now.to_rfc3339())
-        .bind(now.to_rfc3339())
+        .bind(now)
+        .bind(now)
         .fetch_one(db)
         .await?;
 
@@ -90,7 +90,7 @@ impl CommentRepository {
             "#,
         )
         .bind(content)
-        .bind(now.to_rfc3339())
+        .bind(now)
         .bind(id)
         .bind(issue_id)
         .execute(db)

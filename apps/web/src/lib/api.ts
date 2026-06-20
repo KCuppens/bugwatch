@@ -534,6 +534,7 @@ export interface Project {
   platform: string | null;
   framework: string | null;
   onboarding_completed_at: string | null;
+  logo_url: string | null;
 }
 
 export type Platform = "javascript" | "python" | "rust" | "go" | "java" | "ruby" | "php";
@@ -713,7 +714,7 @@ export const projectsApi = {
     });
   },
 
-  async update(id: string, data: { name?: string; platform?: string; framework?: string }) {
+  async update(id: string, data: { name?: string; platform?: string; framework?: string; logo_url?: string }) {
     return api.patch<{ data: Project }>(`/api/v1/projects/${id}`, data);
   },
 

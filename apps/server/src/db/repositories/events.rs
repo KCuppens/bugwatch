@@ -28,9 +28,9 @@ impl EventRepository {
         .bind(&id)
         .bind(issue_id)
         .bind(event_id)
-        .bind(timestamp.to_rfc3339())
+        .bind(timestamp)
         .bind(payload)
-        .bind(now.to_rfc3339())
+        .bind(now)
         .fetch_optional(pool)
         .await
         .map_err(Into::into)
@@ -107,7 +107,7 @@ impl EventRepository {
             "#,
         )
         .bind(project_id)
-        .bind(cutoff.to_rfc3339())
+        .bind(cutoff)
         .bind(digest)
         .fetch_one(pool)
         .await?;
@@ -175,11 +175,11 @@ impl EventRepository {
             ORDER BY bucket_idx ASC
             "#,
         )
-        .bind(start.to_rfc3339())
+        .bind(start)
         .bind(bucket_size_secs)
         .bind(issue_id)
-        .bind(start.to_rfc3339())
-        .bind(end.to_rfc3339())
+        .bind(start)
+        .bind(end)
         .fetch_all(pool)
         .await?;
         Ok(rows)
@@ -196,8 +196,8 @@ impl EventRepository {
             "SELECT COUNT(*) FROM events WHERE issue_id = $1 AND timestamp >= $2 AND timestamp < $3",
         )
         .bind(issue_id)
-        .bind(start.to_rfc3339())
-        .bind(end.to_rfc3339())
+        .bind(start)
+        .bind(end)
         .fetch_one(pool)
         .await?;
         Ok(count)

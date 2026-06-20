@@ -1,0 +1,221 @@
+---
+title: "@bugwatch/replay"
+description: Session replay for web applications. Records and replays real user sessions so you can see exactly what happened before an error.
+---
+
+# @bugwatch/replay
+
+`@bugwatch/replay` records real user sessions using [rrweb](https://github.com/rrweb-io/rrweb) and sends them to Bugwatch for playback. When an error occurs, you can watch exactly what the user did leading up to it.
+
+<Callout type="info">
+Session replay requires the **Team plan** or higher. Recordings are linked automatically to issues when the error was captured during a recorded session.
+</Callout>
+
+## Installation
+
+```bash
+npm install @bugwatch/replay
+```
+
+```bash
+yarn add @bugwatch/replay
+```
+
+```bash
+pnpm add @bugwatch/replay
+```
+
+## Quick Start
+
+```ts
+import { BugwatchReplay } from "@bugwatch/replay";
+
+const replay = new BugwatchReplay({
+  apiKey: "bw_live_xxxxx",
+});
+
+replay.start();
+```
+
+That is all you need. The SDK will immediately start recording DOM events and flush them to Bugwatch in 30-second segments.
+
+## Configuration
+
+```ts
+const replay = new BugwatchReplay({
+  apiKey: "bw_live_xxxxx",
+  environment: "production",
+  release: "1.4.0",
+
+  sessionSampleRate: 1.0,     // record 100% of sessions (default)
+  segmentInterval: 30000,     // flush every 30s (default)
+  maskAllInputs: true,        // redact form field values (default)
+  maskAllText: false,         // redact all text content
+  blockSelector: ".no-record", // CSS selector to exclude elements
+});
+```
+
+### Options Reference
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `apiKey` | `string` | — | Your project API key. |
+| `environment` | `string` | — | Environment tag attached to recordings (e.g. `"production"`). |
+| `release` | `string` | — | Release/version tag attached to recordings. |
+| `sessionSampleRate` | `number` | `1.0` | Fraction of sessions to record. `1.0` records all, `0.5` records half. |
+| `segmentInterval` | `number` | `30000` | How often (ms) to flush buffered events to the server. |
+| `maskAllInputs` | `boolean` | `true` | Redact all input, textarea, and select values. Recommended to leave enabled. |
+| `maskAllText` | `boolean` | `false` | Redact all text content in the DOM. Use when your app shows sensitive data inline. |
+| `blockSelector` | `string` | — | CSS selector for elements to exclude from recording entirely (replaced with a placeholder). |
+
+## Usage with React
+
+Initialize once at the top level of your app and start recording when the user is authenticated:
+
+```tsx
+import { useEffect } from "react";
+import { BugwatchReplay } from "@bugwatch/replay";
+
+const replay = new BugwatchReplay({
+  apiKey: "bw_live_xxxxx",
+  maskAllInputs: true,
+});
+
+export function App() {
+  useEffect(() => {
+    replay.start();
+
+    return () => {
+      replay.stop();
+    };
+  }, []);
+
+  return <YourApp />;
+}
+```
+
+## Usage with Next.js
+
+Add replay to your client-side layout. Do not initialize in `instrumentation.ts` — replay only works in the browser.
+
+```tsx
+// app/layout.tsx
+"use client";
+
+import { useEffect } from "react";
+import { BugwatchReplay } from "@bugwatch/replay";
+
+const replay = new BugwatchReplay({
+  apiKey: process.env.NEXT_PUBLIC_BUGWATCH_API_KEY!,
+  environment: process.env.NODE_ENV,
+});
+
+export default function RootLayout({ children }) {
+  useEffect(() => {
+    replay.start();
+
+    const handleUnload = async () => {
+      await replay.flush();
+    };
+    window.addEventListener("beforeunload", handleUnload);
+
+    return () => {
+      window.removeEventListener("beforeunload", handleUnload);
+      replay.stop();
+    };
+  }, []);
+
+  return <html><body>{children}</body></html>;
+}
+```
+
+## Stopping and Flushing
+
+```ts
+// Pause recording (keeps session alive)
+replay.stop();
+
+// Resume recording in the same session
+replay.start();
+
+// Force-send any buffered events immediately
+await replay.flush();
+
+// Get the current session ID (useful for linking to support tickets)
+const sessionId = replay.getSessionId();
+```
+
+Call `flush()` before the page unloads to ensure the last segment is not lost.
+
+## Privacy & Masking
+
+By default, all input values are masked (replaced with `*`) before being recorded. No raw passwords or form data are ever sent to Bugwatch.
+
+For additional privacy:
+
+```ts
+const replay = new BugwatchReplay({
+  apiKey: "bw_live_xxxxx",
+  maskAllText: true,          // redact all visible text
+  blockSelector: ".pii-data", // block entire elements
+});
+```
+
+Elements matched by `blockSelector` are replaced with a grey placeholder in the recording — their content is never captured.
+
+## Linking Replays to Errors
+
+To link replay recordings to error events, pass the replay session ID to your error tracking client after starting the recording:
+
+```ts
+import { init } from "@bugwatch/core";
+import { BugwatchReplay } from "@bugwatch/replay";
+
+const client = init({ apiKey: "bw_live_xxxxx" });
+
+const replay = new BugwatchReplay({ apiKey: "bw_live_xxxxx" });
+replay.start();
+
+// Wire the session ID so errors are linked to this replay
+client.setSessionId(replay.getSessionId());
+```
+
+Once linked, open any issue in the dashboard and click **"View Replay"** in the sidebar to jump directly to the moment the error occurred.
+
+With the React SDK, access the underlying client via `useBugwatch`:
+
+```tsx
+import { useBugwatch } from "@bugwatch/react";
+import { BugwatchReplay } from "@bugwatch/replay";
+
+const replay = new BugwatchReplay({ apiKey: "bw_live_xxxxx" });
+
+export function App() {
+  const { client } = useBugwatch();
+
+  useEffect(() => {
+    replay.start();
+    client?.setSessionId(replay.getSessionId());
+
+    return () => replay.stop();
+  }, [client]);
+
+  return <YourApp />;
+}
+```
+
+## Limits
+
+| Limit | Value |
+| --- | --- |
+| Max segment size | 1 MB decoded |
+| Max segments per session | 10,000 |
+| Max events per session (viewer) | 50,000 |
+| Max session duration | 24 hours |
+| Storage included | 10 GB (Team), 100 GB (Enterprise) |
+
+## Next Steps
+
+- [React SDK](/docs/sdks/javascript/react) — add error tracking alongside replay
+- [Next.js SDK](/docs/sdks/javascript/nextjs) — full-stack integration
+- [SDK Overview](/docs/sdks) — compare all available SDKs

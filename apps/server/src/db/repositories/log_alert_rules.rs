@@ -46,7 +46,7 @@ impl LogAlertRuleRepository {
         .bind(window_seconds)
         .bind(notification_type)
         .bind(notification_target)
-        .bind(now.to_rfc3339())
+        .bind(now)
         .fetch_one(pool)
         .await
         .map_err(Into::into)
@@ -162,7 +162,7 @@ impl LogAlertRuleRepository {
     pub async fn update_last_fired(pool: &DbPool, id: &str) -> Result<()> {
         let now = Utc::now();
         sqlx::query("UPDATE log_alert_rules SET last_fired_at = $1 WHERE id = $2")
-            .bind(now.to_rfc3339())
+            .bind(now)
             .bind(id)
             .execute(pool)
             .await?;
@@ -204,7 +204,7 @@ impl LogAlertRuleRepository {
 
         let mut q = sqlx::query_as::<_, (i64,)>(&sql)
             .bind(&rule.project_id)
-            .bind(window_start.to_rfc3339());
+            .bind(window_start);
 
         for s in &extra_str_bindings {
             q = q.bind(s.as_str());

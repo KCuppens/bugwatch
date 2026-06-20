@@ -1,0 +1,82 @@
+{
+    # DNS-01 ACME challenge via Cloudflare — avoids needing inbound 80/443
+    # reachability for cert issuance.
+    acme_dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+
+    # Force HTTP/1.1 — preview sites use Next.js HMR WebSocket which requires
+    # standard HTTP/1.1 Upgrade handshake. HTTP/2 (RFC 8441 extended CONNECT)
+    # doesn't bridge correctly through the two-hop Caddy proxy chain.
+    servers :443 {
+        protocols h1
+    }
+}
+
+# Single-origin dev site (mirrors the production Caddyfile). /api/*, /health,
+# /install.sh, /agent/* go to the Rust server; everything else to Next.js.
+# Same-origin keeps cookies and CORS simple in the browser.
+dev.bugwatch.dev {
+    handle /api/* {
+        reverse_proxy server:3000
+    }
+    handle /health {
+        reverse_proxy server:3000
+    }
+    handle /install.sh {
+        reverse_proxy server:3000
+    }
+    handle /agent/* {
+        reverse_proxy server:3000
+    }
+    handle {
+        reverse_proxy web:3001
+    }
+}
+
+# Optional direct passthrough to the server, kept for ad-hoc API testing
+# (curl, Postman, etc.) without going through the web origin.
+api-dev.bugwatch.dev {
+    reverse_proxy server:3000
+}
+
+# webuno dev sites — proxied to the webuno Caddy running on the host.
+# Uses tls internal (self-signed) because the Cloudflare token above is bugwatch.dev-only.
+# Browser will warn on first visit; click Advanced → Proceed to accept once.
+# Switch to dns cloudflare with a webuno.es-scoped token when available.
+ops.dev.webuno.es {
+    tls internal
+    reverse_proxy localhost:3004
+}
+
+portal.dev.webuno.es {
+    tls internal
+    reverse_proxy localhost:3002
+}
+
+sites.dev.webuno.es {
+    tls internal
+    reverse_proxy localhost:3003
+}
+
+marketing.dev.webuno.es {
+    tls internal
+    reverse_proxy localhost:4321
+}
+
+# automotics preview deploys — wildcard reverse-proxies to the per-slug Caddy
+# running on automotics-net. Uses a separate Cloudflare API token scoped to
+# automotics.be (because the global token above is bugwatch.dev-only).
+*.preview.automotics.be {
+    tls {
+        dns cloudflare {env.CLOUDFLARE_AUTOMOTICS_TOKEN}
+    }
+    reverse_proxy automotics-preview-caddy:8080
+}
+
+# White-label staging test — routes to the same preview Caddy which has a
+# wildcard block forwarding to the reseller-whitelabel container.
+*.staging.automotics.be {
+    tls {
+        dns cloudflare {env.CLOUDFLARE_AUTOMOTICS_TOKEN}
+    }
+    reverse_proxy automotics-preview-caddy:8080
+}

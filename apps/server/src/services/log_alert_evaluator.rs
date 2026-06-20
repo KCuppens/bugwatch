@@ -202,7 +202,7 @@ impl LogAlertEvaluator {
 
         let mut q = sqlx::query_as::<_, SampleRow>(&sql)
             .bind(&rule.project_id)
-            .bind(window_start.to_rfc3339());
+            .bind(window_start);
         for s in &extra_bindings {
             q = q.bind(s.as_str());
         }

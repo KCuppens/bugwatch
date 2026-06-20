@@ -43,7 +43,7 @@ impl LogIssueLinker {
                AND timestamp >= $1::timestamptz \
              LIMIT 500",
         )
-        .bind(since.to_rfc3339())
+        .bind(since)
         .fetch_all(&self.db)
         .await?;
 

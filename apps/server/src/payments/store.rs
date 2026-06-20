@@ -58,7 +58,7 @@ impl PaymentStore {
         .bind(resource)
         .bind(feature)
         .bind(amount_usdc)
-        .bind(expires_at.to_rfc3339())
+        .bind(expires_at)
         .fetch_one(&self.pool)
         .await
     }
@@ -92,7 +92,7 @@ impl PaymentStore {
         .bind(grant_type)
         .bind(grant_quantity)
         .bind(amount_usdc)
-        .bind(expires_at.to_rfc3339())
+        .bind(expires_at)
         .fetch_one(&self.pool)
         .await
     }

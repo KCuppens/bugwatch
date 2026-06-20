@@ -32,7 +32,7 @@ impl AlertRuleRepository {
         .bind(name)
         .bind(condition)
         .bind(actions)
-        .bind(now.to_rfc3339())
+        .bind(now)
         .fetch_one(pool)
         .await
         .map_err(Into::into)
@@ -112,7 +112,7 @@ impl AlertRuleRepository {
         sqlx::query_as::<_, AlertRule>(
             "UPDATE alert_rules SET muted_until = $1, snooze_duration_minutes = $2 WHERE id = $3 RETURNING *",
         )
-        .bind(muted_until.to_rfc3339())
+        .bind(muted_until)
         .bind(duration_minutes)
         .bind(id)
         .fetch_optional(pool)
@@ -156,7 +156,7 @@ impl NotificationChannelRepository {
         .bind(name)
         .bind(channel_type)
         .bind(config)
-        .bind(now.to_rfc3339())
+        .bind(now)
         .fetch_one(pool)
         .await
         .map_err(Into::into)
@@ -269,7 +269,7 @@ impl AlertLogRepository {
         .bind(trigger_type)
         .bind(trigger_id)
         .bind(message)
-        .bind(now.to_rfc3339())
+        .bind(now)
         .fetch_one(pool)
         .await
         .map_err(Into::into)
@@ -279,7 +279,7 @@ impl AlertLogRepository {
         let now = Utc::now();
         let result =
             sqlx::query("UPDATE alert_logs SET status = 'sent', sent_at = $1 WHERE id = $2")
-                .bind(now.to_rfc3339())
+                .bind(now)
                 .bind(id)
                 .execute(pool)
                 .await?;
@@ -382,7 +382,7 @@ impl AlertLogRepository {
         let mut tx = pool.begin().await?;
 
         let cutoff =
-            (chrono::Utc::now() - chrono::Duration::minutes(cooldown_minutes as i64)).to_rfc3339();
+            chrono::Utc::now() - chrono::Duration::minutes(cooldown_minutes as i64);
 
         // Double-check cooldown inside the transaction.
         let existing: Option<(i64,)> = sqlx::query_as(
@@ -425,7 +425,7 @@ impl AlertLogRepository {
         .bind(trigger_type)
         .bind(trigger_id)
         .bind(message)
-        .bind(now.to_rfc3339())
+        .bind(now)
         .fetch_one(&mut *tx)
         .await?;
 
@@ -441,7 +441,7 @@ impl AlertLogRepository {
         cooldown_minutes: i32,
     ) -> Result<Option<AlertLog>> {
         let cutoff =
-            (chrono::Utc::now() - chrono::Duration::minutes(cooldown_minutes as i64)).to_rfc3339();
+            chrono::Utc::now() - chrono::Duration::minutes(cooldown_minutes as i64);
         let log = sqlx::query_as::<_, AlertLog>(
             r#"
             SELECT * FROM alert_logs
@@ -530,7 +530,7 @@ impl AlertLogRepository {
 
     /// Cleanup old alert logs to prevent database bloat
     pub async fn cleanup_old_logs(pool: &DbPool, days: i32) -> Result<u64> {
-        let cutoff = (chrono::Utc::now() - chrono::Duration::days(days as i64)).to_rfc3339();
+        let cutoff = chrono::Utc::now() - chrono::Duration::days(days as i64);
         let mut total_deleted: u64 = 0;
         loop {
             let result = sqlx::query(
@@ -571,7 +571,7 @@ impl EmailRateLimitRepository {
         }
 
         let cutoff =
-            (chrono::Utc::now() - chrono::Duration::minutes(cooldown_minutes as i64)).to_rfc3339();
+            chrono::Utc::now() - chrono::Duration::minutes(cooldown_minutes as i64);
         let result = sqlx::query_as::<_, EmailRateLimit>(
             r#"
             SELECT * FROM email_rate_limits
@@ -597,7 +597,7 @@ impl EmailRateLimitRepository {
         channel_id: &str,
     ) -> Result<()> {
         let id = Uuid::new_v4().to_string();
-        let now = chrono::Utc::now().to_rfc3339();
+        let now = chrono::Utc::now();
 
         sqlx::query(
             r#"
@@ -611,7 +611,7 @@ impl EmailRateLimitRepository {
         .bind(project_id)
         .bind(issue_fingerprint)
         .bind(channel_id)
-        .bind(&now)
+        .bind(now)
         .execute(pool)
         .await?;
 
@@ -620,7 +620,7 @@ impl EmailRateLimitRepository {
 
     #[allow(dead_code)]
     pub async fn cleanup_old_records(pool: &DbPool) -> Result<u64> {
-        let cutoff = (chrono::Utc::now() - chrono::Duration::hours(24)).to_rfc3339();
+        let cutoff = chrono::Utc::now() - chrono::Duration::hours(24);
         let mut total_deleted: u64 = 0;
         loop {
             let result = sqlx::query(

@@ -33,11 +33,11 @@ impl ReplayRepository {
         .bind(&id)
         .bind(project_id)
         .bind(session_id)
-        .bind(started_at.to_rfc3339())
+        .bind(started_at)
         .bind(user_agent)
         .bind(screen_width)
         .bind(screen_height)
-        .bind(now.to_rfc3339())
+        .bind(now)
         .fetch_one(pool)
         .await?;
 
@@ -95,7 +95,7 @@ impl ReplayRepository {
         .bind(segment_index)
         .bind(data)
         .bind(size_bytes)
-        .bind(now.to_rfc3339())
+        .bind(now)
         .fetch_one(pool)
         .await?;
 
@@ -181,7 +181,7 @@ impl ReplayRepository {
                     ORDER BY started_at LIMIT 1000
                 )",
             )
-            .bind(cutoff.to_rfc3339())
+            .bind(cutoff)
             .execute(pool)
             .await?;
             let deleted = result.rows_affected();

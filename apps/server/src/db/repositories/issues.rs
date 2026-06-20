@@ -35,8 +35,8 @@ impl IssueRepository {
         .bind(fingerprint)
         .bind(title)
         .bind(level)
-        .bind(now.to_rfc3339())
-        .bind(now.to_rfc3339())
+        .bind(now)
+        .bind(now)
         .bind(environment)
         .fetch_one(pool)
         .await?;
@@ -93,7 +93,7 @@ impl IssueRepository {
         // Use QueryBuilder instead of manual placeholder tracking —
         // every value goes through push_bind so there's no risk of a stray
         // filter string bypassing parameterisation.
-        let mut qb: sqlx::QueryBuilder<sqlx::Any> =
+        let mut qb: sqlx::QueryBuilder<sqlx::Postgres> =
             sqlx::QueryBuilder::new("SELECT * FROM issues WHERE project_id = ");
         qb.push_bind(project_id);
 
@@ -541,10 +541,10 @@ impl IssueRepository {
             r#"
             SELECT
                 project_id,
-                SUM(CASE WHEN status = 'unresolved' THEN 1 ELSE 0 END) as unresolved_count,
-                COALESCE(SUM(count), 0) as total_events,
-                COALESCE(SUM(user_count), 0) as total_users,
-                SUM(CASE WHEN status = 'unresolved' AND (level = 'fatal' OR level = 'error') THEN 1 ELSE 0 END) as critical_count
+                CAST(SUM(CASE WHEN status = 'unresolved' THEN 1 ELSE 0 END) AS BIGINT) as unresolved_count,
+                CAST(COALESCE(SUM(count), 0) AS BIGINT) as total_events,
+                CAST(COALESCE(SUM(user_count), 0) AS BIGINT) as total_users,
+                CAST(SUM(CASE WHEN status = 'unresolved' AND (level = 'fatal' OR level = 'error') THEN 1 ELSE 0 END) AS BIGINT) as critical_count
             FROM issues
             WHERE project_id IN ({})
             GROUP BY project_id

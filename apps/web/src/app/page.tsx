@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { redirect } from "next/navigation";
 import { Header, Hero, FeaturesGrid, SdkSection, PricingSection, FinalCta, Footer } from "@/components/landing";
 
 export const metadata: Metadata = {
@@ -14,6 +15,13 @@ export const metadata: Metadata = {
 };
 
 export default function Home() {
+  // The marketing landing page is only meaningful for the SaaS build.
+  // Self-hosted deployments are private installations — send users straight
+  // to the dashboard, which forwards unauthenticated visitors to /login.
+  if (process.env.NEXT_PUBLIC_DEPLOYMENT_MODE !== "saas") {
+    redirect("/dashboard");
+  }
+
   return (
     <div className="min-h-screen flex flex-col bg-[hsl(var(--background))]">
       <a

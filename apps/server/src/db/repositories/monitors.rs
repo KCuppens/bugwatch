@@ -41,7 +41,7 @@ impl MonitorRepository {
         .bind(expected_status)
         .bind(headers)
         .bind(body)
-        .bind(now.to_rfc3339())
+        .bind(now)
         .fetch_one(pool)
         .await
         .map_err(Into::into)
@@ -147,7 +147,7 @@ impl MonitorRepository {
                 WHERE is_active = TRUE
                   AND (
                       last_checked_at IS NULL
-                      OR (julianday(CURRENT_TIMESTAMP) - julianday(last_checked_at)) * 86400.0 >= interval_seconds
+                      OR EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - last_checked_at)) >= interval_seconds
                   )
                 ORDER BY last_checked_at ASC
                 LIMIT $1
@@ -244,7 +244,7 @@ impl MonitorRepository {
     ) -> Result<()> {
         sqlx::query("UPDATE monitors SET current_status = $1, last_checked_at = $2 WHERE id = $3")
             .bind(status)
-            .bind(checked_at.to_rfc3339())
+            .bind(checked_at)
             .bind(id)
             .execute(pool)
             .await?;
@@ -279,7 +279,7 @@ impl MonitorCheckRepository {
         .bind(response_time_ms)
         .bind(status_code)
         .bind(error_message)
-        .bind(now.to_rfc3339())
+        .bind(now)
         .fetch_one(pool)
         .await
         .map_err(Into::into)
@@ -312,7 +312,7 @@ impl MonitorCheckRepository {
     ) -> Result<(i64, i64, Option<f64>)> {
         // Get total checks and up checks in the time window
         // Use COALESCE to ensure SUM never returns NULL (which can't deserialize to i64)
-        let cutoff = (chrono::Utc::now() - chrono::Duration::hours(hours as i64)).to_rfc3339();
+        let cutoff = chrono::Utc::now() - chrono::Duration::hours(hours as i64);
         let stats: (i64, i64, Option<f64>) = sqlx::query_as(
             r#"
             SELECT
@@ -343,7 +343,7 @@ impl MonitorCheckRepository {
             return Ok(std::collections::HashMap::new());
         }
 
-        let cutoff = (chrono::Utc::now() - chrono::Duration::hours(hours as i64)).to_rfc3339();
+        let cutoff = chrono::Utc::now() - chrono::Duration::hours(hours as i64);
         let n = monitor_ids.len();
         let placeholders = (1..=n)
             .map(|i| format!("${}", i))
@@ -414,7 +414,7 @@ impl MonitorCheckRepository {
     }
 
     pub async fn cleanup_old_checks(pool: &DbPool, days: i32) -> Result<u64> {
-        let cutoff = (chrono::Utc::now() - chrono::Duration::days(days as i64)).to_rfc3339();
+        let cutoff = chrono::Utc::now() - chrono::Duration::days(days as i64);
         let result = sqlx::query("DELETE FROM monitor_checks WHERE checked_at < $1")
             .bind(&cutoff)
             .execute(pool)
@@ -461,9 +461,9 @@ impl MonitorIncidentRepository {
         )
         .bind(&id)
         .bind(monitor_id)
-        .bind(now.to_rfc3339())
+        .bind(now)
         .bind(cause)
-        .bind(now.to_rfc3339())
+        .bind(now)
         .fetch_one(pool)
         .await
         .map_err(Into::into)
@@ -480,7 +480,7 @@ impl MonitorIncidentRepository {
             RETURNING *
             "#,
         )
-        .bind(now.to_rfc3339())
+        .bind(now)
         .bind(id)
         .fetch_one(pool)
         .await

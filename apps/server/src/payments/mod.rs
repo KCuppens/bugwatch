@@ -184,7 +184,7 @@ pub async fn verify_and_apply_payment(
 
 /// Atomically increments org's x402 capacity column inside an existing sqlx transaction.
 pub async fn apply_capacity_grant_in_tx(
-    tx: &mut sqlx::Transaction<'_, sqlx::Any>,
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     org_id: &str,
     grant_type: &str,
     quantity: i64,

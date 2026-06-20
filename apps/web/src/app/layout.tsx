@@ -1,9 +1,10 @@
 import type { Metadata } from "next";
-import { Space_Mono, DM_Sans } from "next/font/google";
+import { Space_Mono } from "next/font/google";
 import { ThemeProvider } from "@/components/theme-provider";
 import { AuthProvider } from "@/lib/auth-context";
 import { BugwatchProvider } from "@/components/bugwatch-provider";
 import { ErrorBoundary } from "@/components/error-boundary";
+import { ErrorFallback } from "@/components/error-fallback";
 import { Toaster } from "@/components/ui/sonner";
 import "./globals.css";
 
@@ -12,14 +13,6 @@ const spaceMono = Space_Mono({
   variable: "--font-mono",
   display: "swap",
   weight: ["400", "700"],
-  adjustFontFallback: true,
-});
-
-const dmSans = DM_Sans({
-  subsets: ["latin"],
-  variable: "--font-sans",
-  display: "swap",
-  weight: ["400", "500", "600", "700"],
   adjustFontFallback: true,
 });
 
@@ -60,24 +53,9 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body className={`${spaceMono.variable} ${dmSans.variable} font-sans antialiased bg-gradient-mesh`}>
+      <body className={`${spaceMono.variable} font-sans antialiased bg-gradient-mesh`}>
         <ThemeProvider attribute="class" defaultTheme="dark" enableSystem={false} disableTransitionOnChange>
-          <ErrorBoundary
-            fallback={
-              <div className="min-h-screen flex items-center justify-center p-8 text-center">
-                <div>
-                  <p className="text-lg font-semibold mb-2">Something went wrong</p>
-                  <p className="text-sm text-muted-foreground mb-4">Please refresh the page to try again.</p>
-                  <button
-                    onClick={() => window.location.reload()}
-                    className="px-4 py-2 rounded-lg bg-accent text-accent-foreground text-sm font-medium hover:bg-accent/90 transition-colors"
-                  >
-                    Refresh
-                  </button>
-                </div>
-              </div>
-            }
-          >
+          <ErrorBoundary fallback={<ErrorFallback />}>
             <AuthProvider>
               <BugwatchProvider>
                 {children}

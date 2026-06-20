@@ -42,6 +42,7 @@ pub struct Project {
     pub onboarding_completed_at: Option<Timestamp>,
     pub organization_id: Option<String>,
     pub api_key_hash: String,
+    pub logo_url: Option<String>,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]

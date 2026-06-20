@@ -23,6 +23,7 @@ pub struct ProjectResponse {
     pub platform: Option<String>,
     pub framework: Option<String>,
     pub onboarding_completed_at: Option<String>,
+    pub logo_url: Option<String>,
 }
 
 impl From<crate::db::models::Project> for ProjectResponse {
@@ -37,6 +38,7 @@ impl From<crate::db::models::Project> for ProjectResponse {
             platform: p.platform,
             framework: p.framework,
             onboarding_completed_at: p.onboarding_completed_at.map(|dt| dt.to_rfc3339()),
+            logo_url: p.logo_url,
         }
     }
 }
@@ -53,6 +55,7 @@ pub struct UpdateProjectRequest {
     pub name: Option<String>,
     pub platform: Option<String>,
     pub framework: Option<String>,
+    pub logo_url: Option<String>,
 }
 
 /// GET /api/v1/projects
@@ -365,6 +368,19 @@ pub async fn update(
         let platform = req.platform.as_deref().or(project.platform.as_deref());
         let framework = req.framework.as_deref().or(project.framework.as_deref());
         ProjectRepository::update_sdk(&state.db, &id, platform, framework).await?;
+    }
+
+    // Update logo_url if present in request (explicit null clears it)
+    if req.logo_url.is_some() {
+        let url = req.logo_url.as_deref();
+        if let Some(u) = url {
+            if u.len() > 2048 {
+                return Err(AppError::Validation(
+                    "Logo URL too long (max 2048 characters)".to_string(),
+                ));
+            }
+        }
+        ProjectRepository::update_logo(&state.db, &id, url).await?;
     }
 
     // Fetch updated project

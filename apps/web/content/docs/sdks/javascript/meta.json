@@ -1,4 +1,4 @@
 {
   "title": "JavaScript",
-  "pages": ["core", "node", "nextjs", "react", "express", "fastify"]
+  "pages": ["core", "node", "nextjs", "react", "express", "fastify", "replay"]
 }

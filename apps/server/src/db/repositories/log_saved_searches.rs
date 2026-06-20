@@ -30,7 +30,7 @@ impl LogSavedSearchRepository {
         .bind(user_id)
         .bind(name)
         .bind(&filters_str)
-        .bind(now.to_rfc3339())
+        .bind(now)
         .fetch_one(pool)
         .await
         .map_err(Into::into)
