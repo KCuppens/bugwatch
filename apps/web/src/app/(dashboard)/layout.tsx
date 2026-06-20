@@ -9,6 +9,7 @@ const CommandPaletteProvider = dynamic(
   () => import("@/components/command-palette").then((m) => ({ default: m.CommandPaletteProvider })),
   { ssr: false }
 );
+import { QueryProvider } from "@/components/query-provider";
 import { ProjectProvider } from "@/lib/project-context";
 import { PaywallProvider } from "@/lib/paywall-context";
 import { OnboardingProvider } from "@/lib/onboarding-context";
@@ -23,6 +24,7 @@ const KeyboardShortcutsDialog = dynamic(
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   return (
     <AuthGuard>
+      <QueryProvider>
       <ProjectProvider>
         <PaywallProvider>
           <OnboardingProvider>
@@ -70,6 +72,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           </OnboardingProvider>
         </PaywallProvider>
       </ProjectProvider>
+      </QueryProvider>
     </AuthGuard>
   );
 }

@@ -101,8 +101,8 @@ function BreadcrumbData({
     return (
       <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[11px] font-mono">
         {status != null && <span className={`font-bold ${statusColor}`}>{String(status)}</span>}
-        {method && <span className="text-muted-foreground">{String(method)}</span>}
-        {url && <span className="text-muted-foreground truncate max-w-xs">{String(url)}</span>}
+        {Boolean(method) && <span className="text-muted-foreground">{String(method)}</span>}
+        {Boolean(url) && <span className="text-muted-foreground truncate max-w-xs">{String(url)}</span>}
       </div>
     );
   }
@@ -110,9 +110,9 @@ function BreadcrumbData({
   if (isNav && (data.from || data.to)) {
     return (
       <div className="mt-1.5 flex items-center gap-1 text-[11px] font-mono text-muted-foreground">
-        {data.from && <span className="truncate max-w-[120px]">{String(data.from)}</span>}
-        {data.from && data.to && <span>→</span>}
-        {data.to && <span className="truncate max-w-[120px]">{String(data.to)}</span>}
+        {Boolean(data.from) && <span className="truncate max-w-[120px]">{String(data.from)}</span>}
+        {Boolean(data.from) && Boolean(data.to) && <span>→</span>}
+        {Boolean(data.to) && <span className="truncate max-w-[120px]">{String(data.to)}</span>}
       </div>
     );
   }
@@ -372,77 +372,6 @@ export default function IssueDetailPage() {
     [handleStatusChange]
   );
 
-  // Keyboard shortcuts
-  useEffect(() => {
-    function handleKeyDown(e: KeyboardEvent) {
-      const target = e.target as HTMLElement;
-      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) return;
-      if (e.ctrlKey || e.metaKey || e.altKey) return;
-
-      switch (e.key.toLowerCase()) {
-        case "r":
-          if (issue?.status !== "resolved" && !pendingAction) {
-            e.preventDefault();
-            handleResolve();
-          }
-          break;
-        case "i":
-        case "m":
-        case "e":
-          if (issue?.status !== "ignored" && !pendingAction) {
-            e.preventDefault();
-            handleIgnore();
-          }
-          break;
-        case "c":
-          e.preventDefault();
-          handleCopyForAi();
-          break;
-        case "u":
-          // Up to list
-          e.preventDefault();
-          router.push(projectId ? `/dashboard?project=${projectId}` : "/dashboard");
-          break;
-        case "1":
-          e.preventDefault();
-          setActiveTab("debug");
-          break;
-        case "2":
-          e.preventDefault();
-          setActiveTab("timeline");
-          break;
-        case "3":
-          e.preventDefault();
-          setActiveTab("context");
-          break;
-        case "escape":
-          if (selectedEventId) closeEventModal();
-          break;
-      }
-    }
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [issue, pendingAction, selectedEventId, router, projectId, handleResolve, handleIgnore, handleCopyForAi]);
-
-  // Update browser tab title to show which issue is being viewed
-  useEffect(() => {
-    if (issue) {
-      document.title = `${issue.title} — Bugwatch`;
-      return () => {
-        document.title = "Bugwatch";
-      };
-    }
-  }, [issue?.title]);
-
-  const toggleFrame = useCallback((index: number) => {
-    setExpandedFrames((prev) => {
-      const next = new Set(prev);
-      if (next.has(index)) next.delete(index);
-      else next.add(index);
-      return next;
-    });
-  }, []);
-
   const handleCopyForAi = useCallback(() => {
     if (!issue) return;
     const jsonBlock = (v: unknown) => "```json\n" + JSON.stringify(v, null, 2) + "\n```";
@@ -549,6 +478,77 @@ export default function IssueDetailPage() {
       .then(() => toast.success("Copied for AI assistant — includes user identifiers"))
       .catch(() => toast.error("Copy failed"));
   }, [issue]);
+
+  // Keyboard shortcuts
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      const target = e.target as HTMLElement;
+      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+
+      switch (e.key.toLowerCase()) {
+        case "r":
+          if (issue?.status !== "resolved" && !pendingAction) {
+            e.preventDefault();
+            handleResolve();
+          }
+          break;
+        case "i":
+        case "m":
+        case "e":
+          if (issue?.status !== "ignored" && !pendingAction) {
+            e.preventDefault();
+            handleIgnore();
+          }
+          break;
+        case "c":
+          e.preventDefault();
+          handleCopyForAi();
+          break;
+        case "u":
+          // Up to list
+          e.preventDefault();
+          router.push(projectId ? `/dashboard?project=${projectId}` : "/dashboard");
+          break;
+        case "1":
+          e.preventDefault();
+          setActiveTab("debug");
+          break;
+        case "2":
+          e.preventDefault();
+          setActiveTab("timeline");
+          break;
+        case "3":
+          e.preventDefault();
+          setActiveTab("context");
+          break;
+        case "escape":
+          if (selectedEventId) closeEventModal();
+          break;
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [issue, pendingAction, selectedEventId, router, projectId, handleResolve, handleIgnore, handleCopyForAi]);
+
+  // Update browser tab title to show which issue is being viewed
+  useEffect(() => {
+    if (issue) {
+      document.title = `${issue.title} — Bugwatch`;
+      return () => {
+        document.title = "Bugwatch";
+      };
+    }
+  }, [issue?.title]);
+
+  const toggleFrame = useCallback((index: number) => {
+    setExpandedFrames((prev) => {
+      const next = new Set(prev);
+      if (next.has(index)) next.delete(index);
+      else next.add(index);
+      return next;
+    });
+  }, []);
 
   function handleCopyLink() {
     navigator.clipboard
@@ -1828,12 +1828,16 @@ export default function IssueDetailPage() {
                   const currentIdx = visibleModalTabs.findIndex((t) => t.id === eventModalTab);
                   if (e.key === "ArrowRight") {
                     const next = visibleModalTabs[(currentIdx + 1) % visibleModalTabs.length];
-                    setEventModalTab(next.id);
-                    document.getElementById(`modal-tab-${next.id}`)?.focus();
+                    if (next) {
+                      setEventModalTab(next.id);
+                      document.getElementById(`modal-tab-${next.id}`)?.focus();
+                    }
                   } else if (e.key === "ArrowLeft") {
                     const prev = visibleModalTabs[(currentIdx - 1 + visibleModalTabs.length) % visibleModalTabs.length];
-                    setEventModalTab(prev.id);
-                    document.getElementById(`modal-tab-${prev.id}`)?.focus();
+                    if (prev) {
+                      setEventModalTab(prev.id);
+                      document.getElementById(`modal-tab-${prev.id}`)?.focus();
+                    }
                   }
                 }}
               >
