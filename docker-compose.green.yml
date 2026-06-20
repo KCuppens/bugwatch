@@ -9,6 +9,11 @@ services:
     environment:
       DATABASE_URL: postgres://bugwatch:${POSTGRES_PASSWORD:-bugwatch}@postgres:5432/bugwatch
       JWT_SECRET: ${JWT_SECRET}
+      # Required in production: encrypts integration OAuth tokens at rest.
+      BUGWATCH_ENCRYPTION_KEY: ${BUGWATCH_ENCRYPTION_KEY}
+      # Dedicated secrets so a leaked JWT key can't also forge reset/oauth tokens.
+      PASSWORD_RESET_SECRET: ${PASSWORD_RESET_SECRET}
+      OAUTH_STATE_SECRET: ${OAUTH_STATE_SECRET}
       BUGWATCH_MODE: self-hosted
       ENVIRONMENT: ${ENVIRONMENT:-production}
       SERVER_ADDR: 0.0.0.0:3000

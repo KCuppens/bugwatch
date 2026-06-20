@@ -96,12 +96,16 @@ jobs:
     # !failure() ensures we don't deploy if CI or build actually failed.
     # !cancelled() ensures we don't deploy if the workflow was cancelled.
     # DEPLOY_ENABLED gates the SSH deploy: until a target server exists and the
-    # DEPLOY_HOST/USER/SSH_KEY (+ GHCR_PAT) secrets are set, leave the repo
-    # variable unset so this job skips cleanly instead of failing on an empty
-    # host. Set it with: gh variable set DEPLOY_ENABLED --body true
+    # DEPLOY_HOST/USER/SSH_KEY secrets are set, leave the repo variable unset so
+    # this job skips cleanly instead of failing on an empty host. Set it with:
+    # gh variable set DEPLOY_ENABLED --body true
+    #
+    # Single-server setup: push deploys straight to production (below), so the
+    # staging job only runs on explicit manual dispatch to avoid a redundant
+    # second blue-green swap on every push.
     if: >-
       always() && !failure() && !cancelled() && vars.DEPLOY_ENABLED == 'true' &&
-      (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.environment == 'staging'))
+      (github.event_name == 'workflow_dispatch' && inputs.environment == 'staging')
     needs: [ci, build-and-push]
     runs-on: ubuntu-latest
     environment: staging
