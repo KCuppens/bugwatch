@@ -133,7 +133,7 @@ function getTitleFromFrontmatter(content: string): string {
 }
 
 function filePathToUrl(filePath: string): string {
-  let url = filePath.replace(/\.mdx$/, "").replace(/\/index$/, "");
+  const url = filePath.replace(/\.mdx$/, "").replace(/\/index$/, "");
   return `${BASE_URL}/${url}`;
 }
 

@@ -1895,7 +1895,11 @@ export default function IssueDetailPage() {
                           isExpanded={modalExpandedFrames.has(i)}
                           onToggle={() => setModalExpandedFrames(prev => {
                             const next = new Set(prev);
-                            next.has(i) ? next.delete(i) : next.add(i);
+                            if (next.has(i)) {
+                              next.delete(i);
+                            } else {
+                              next.add(i);
+                            }
                             return next;
                           })}
                         />
