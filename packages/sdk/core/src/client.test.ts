@@ -71,7 +71,8 @@ describe("Bugwatch client", () => {
       expect(opts.sampleRate).toBe(1.0);
       expect(opts.maxBreadcrumbs).toBe(100);
       expect(opts.environment).toBe("production");
-      expect(opts.apiKey).toBe("key");
+      // getOptions() masks the apiKey for security; a present key surfaces as "[Filtered]".
+      expect(opts.apiKey).toBe("[Filtered]");
     });
 
     it("user-provided options override defaults", () => {
@@ -238,9 +239,11 @@ describe("Bugwatch client", () => {
       client.captureException(new Error("fingerprint me"));
       await flushMicrotasks();
       const sent = getSentEvent(fetchMock);
-      expect(sent.tags?.fingerprint).toBeDefined();
-      expect(typeof sent.tags?.fingerprint).toBe("string");
-      expect(sent.tags!.fingerprint!.length).toBeGreaterThan(0);
+      // Fingerprint is stored as a top-level event field (used by the server for grouping),
+      // not as a tag.
+      expect(sent.fingerprint).toBeDefined();
+      expect(typeof sent.fingerprint).toBe("string");
+      expect(sent.fingerprint!.length).toBeGreaterThan(0);
     });
 
     it("does NOT include fingerprint tag for plain captureMessage", async () => {

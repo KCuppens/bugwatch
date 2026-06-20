@@ -55,7 +55,8 @@ describe("index.ts (global SDK API)", () => {
     it("creates a Bugwatch client with explicit options", () => {
       const client = init({ apiKey: "bw_live_test" });
       expect(client).toBeInstanceOf(Bugwatch);
-      expect(client.getOptions().apiKey).toBe("bw_live_test");
+      // getOptions() masks the apiKey for security; a present key surfaces as "[Filtered]".
+      expect(client.getOptions().apiKey).toBe("[Filtered]");
     });
 
     it("returns the same client and warns on second init() without reset", () => {
@@ -70,7 +71,8 @@ describe("index.ts (global SDK API)", () => {
     it("uses BUGWATCH_API_KEY env var when no options given", () => {
       vi.stubEnv("BUGWATCH_API_KEY", "bw_live_envkey");
       const client = init();
-      expect(client.getOptions().apiKey).toBe("bw_live_envkey");
+      // A key resolved from the env var surfaces as the masked "[Filtered]" (not "" for "no key").
+      expect(client.getOptions().apiKey).toBe("[Filtered]");
     });
 
     it("explicit options override env vars", () => {
@@ -78,7 +80,8 @@ describe("index.ts (global SDK API)", () => {
       vi.stubEnv("BUGWATCH_ENVIRONMENT", "production");
       const client = init({ apiKey: "bw_live_explicit", environment: "staging" });
       const opts = client.getOptions();
-      expect(opts.apiKey).toBe("bw_live_explicit");
+      // apiKey is masked by getOptions(); environment proves explicit options win over env.
+      expect(opts.apiKey).toBe("[Filtered]");
       expect(opts.environment).toBe("staging");
     });
 
@@ -87,7 +90,8 @@ describe("index.ts (global SDK API)", () => {
       vi.stubEnv("BUGWATCH_ENVIRONMENT", "qa");
       const client = init({ release: "9.9.9" });
       const opts = client.getOptions();
-      expect(opts.apiKey).toBe("bw_live_envkey");
+      // apiKey (from env) is masked; environment (from env) + release (explicit) prove the merge.
+      expect(opts.apiKey).toBe("[Filtered]");
       expect(opts.environment).toBe("qa");
       expect(opts.release).toBe("9.9.9");
     });
@@ -131,7 +135,8 @@ describe("index.ts (global SDK API)", () => {
       reset();
       const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
       const second = init({ apiKey: "bw_live_b" });
-      expect(second.getOptions().apiKey).toBe("bw_live_b");
+      // apiKey is masked by getOptions(); a present key surfaces as "[Filtered]".
+      expect(second.getOptions().apiKey).toBe("[Filtered]");
       // No "called twice" warning should be logged on this fresh init.
       const calledTwiceWarnings = warn.mock.calls.filter(
         (c) => typeof c[0] === "string" && (c[0] as string).includes("called twice")
