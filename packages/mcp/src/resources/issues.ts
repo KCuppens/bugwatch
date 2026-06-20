@@ -15,7 +15,7 @@ export function buildIssueResourceHandlers(client: BugwatchClient) {
         /^bugwatch:\/\/projects\/([^/]+)\/issues$/
       );
       if (listMatch) {
-        const projectId = listMatch[1];
+        const projectId = listMatch[1]!;
         const issues = await client.listIssues(projectId, {
           per_page: 25,
           status: "unresolved",
@@ -37,7 +37,7 @@ export function buildIssueResourceHandlers(client: BugwatchClient) {
       );
       if (detailMatch) {
         const [, projectId, issueId] = detailMatch;
-        const issue = await client.getIssue(projectId, issueId);
+        const issue = await client.getIssue(projectId!, issueId!);
 
         // Format with stack trace for readability
         const detail = issue.data;

@@ -14,7 +14,7 @@ export function buildMonitorResourceHandlers(client: BugwatchClient) {
         throw new Error(`Unknown monitor resource: ${uri}`);
       }
 
-      const projectId = match[1];
+      const projectId = match[1]!;
       const monitors = await client.listMonitors(projectId);
       return {
         contents: [

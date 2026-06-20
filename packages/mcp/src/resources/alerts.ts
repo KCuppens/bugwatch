@@ -14,7 +14,7 @@ export function buildAlertResourceHandlers(client: BugwatchClient) {
         throw new Error(`Unknown alert resource: ${uri}`);
       }
 
-      const projectId = match[1];
+      const projectId = match[1]!;
 
       const [alerts, logs] = await Promise.all([
         client.listAlerts(projectId),

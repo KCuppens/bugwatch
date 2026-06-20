@@ -148,7 +148,7 @@ async function main() {
       // Single project detail
       const projectMatch = uri.match(/^bugwatch:\/\/projects\/([^/]+)$/);
       if (projectMatch) {
-        const project = await client.getProject(projectMatch[1]);
+        const project = await client.getProject(projectMatch[1]!);
         return {
           contents: [
             {

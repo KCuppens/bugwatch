@@ -14,7 +14,7 @@ export function buildServerResourceHandlers(client: BugwatchClient) {
         throw new Error(`Unknown server resource: ${uri}`);
       }
 
-      const projectId = match[1];
+      const projectId = match[1]!;
       const servers = await client.listServers(projectId);
       return {
         contents: [

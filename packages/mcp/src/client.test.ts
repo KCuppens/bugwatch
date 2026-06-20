@@ -47,7 +47,7 @@ describe("BugwatchClient", () => {
       await client.listProjects();
 
       expect(mockFetch).toHaveBeenCalledTimes(1);
-      const calledUrl = mockFetch.mock.calls[0][0] as string;
+      const calledUrl = mockFetch.mock.calls[0]![0] as string;
       expect(calledUrl).toMatch(/^https:\/\/api\.bugwatch\.dev/);
     });
 
@@ -61,7 +61,7 @@ describe("BugwatchClient", () => {
       const client = new BugwatchClient();
       await client.listProjects();
 
-      const calledUrl = mockFetch.mock.calls[0][0] as string;
+      const calledUrl = mockFetch.mock.calls[0]![0] as string;
       expect(calledUrl).toBe(
         "https://custom.example.com/api/v1/projects"
       );
@@ -88,7 +88,7 @@ describe("BugwatchClient", () => {
       client = new BugwatchClient();
       await client.listProjects(2, 10);
 
-      const calledUrl = mockFetch.mock.calls[0][0] as string;
+      const calledUrl = mockFetch.mock.calls[0]![0] as string;
       expect(calledUrl).toContain("page=2");
       expect(calledUrl).toContain("per_page=10");
     });
@@ -103,7 +103,7 @@ describe("BugwatchClient", () => {
       client = new BugwatchClient();
       await client.listProjects();
 
-      const calledUrl = mockFetch.mock.calls[0][0] as string;
+      const calledUrl = mockFetch.mock.calls[0]![0] as string;
       // No query string at all when no params supplied
       expect(calledUrl).toBe("https://api.test.dev/api/v1/projects");
     });
@@ -115,7 +115,7 @@ describe("BugwatchClient", () => {
       client = new BugwatchClient();
       await client.getIssue("proj-1", "issue-2");
 
-      const calledUrl = mockFetch.mock.calls[0][0] as string;
+      const calledUrl = mockFetch.mock.calls[0]![0] as string;
       expect(calledUrl).toBe(
         "https://api.test.dev/api/v1/projects/proj-1/issues/issue-2"
       );
@@ -144,7 +144,7 @@ describe("BugwatchClient", () => {
       const result = await client.listProjects();
 
       expect(mockFetch).toHaveBeenCalledTimes(1);
-      const [url, opts] = mockFetch.mock.calls[0];
+      const [url, opts] = mockFetch.mock.calls[0]!;
       expect(url).toBe("https://api.test.dev/api/v1/projects");
       // Default method is GET (no explicit method set)
       expect(opts.method).toBeUndefined();
@@ -164,7 +164,7 @@ describe("BugwatchClient", () => {
       expect(result).toHaveProperty("data");
       expect(result.data.id).toBe("p1");
 
-      const calledUrl = mockFetch.mock.calls[0][0] as string;
+      const calledUrl = mockFetch.mock.calls[0]![0] as string;
       expect(calledUrl).toBe("https://api.test.dev/api/v1/projects/p1");
     });
 
@@ -182,7 +182,7 @@ describe("BugwatchClient", () => {
         level: "error",
       });
 
-      const [url, opts] = mockFetch.mock.calls[0];
+      const [url, opts] = mockFetch.mock.calls[0]!;
       expect(url).toBe(
         "https://api.test.dev/api/v1/projects/proj-1/issues/_search"
       );
@@ -203,7 +203,7 @@ describe("BugwatchClient", () => {
       client = new BugwatchClient();
       await client.updateIssue("proj-1", "i1", { status: "resolved" });
 
-      const [url, opts] = mockFetch.mock.calls[0];
+      const [url, opts] = mockFetch.mock.calls[0]!;
       expect(url).toBe(
         "https://api.test.dev/api/v1/projects/proj-1/issues/i1"
       );
@@ -227,7 +227,7 @@ describe("BugwatchClient", () => {
       client = new BugwatchClient();
       await client.createMonitor("proj-1", monitorData);
 
-      const [url, opts] = mockFetch.mock.calls[0];
+      const [url, opts] = mockFetch.mock.calls[0]!;
       expect(url).toBe(
         "https://api.test.dev/api/v1/projects/proj-1/monitors"
       );
@@ -250,9 +250,9 @@ describe("BugwatchClient", () => {
 
       // Returns array directly, not { data: [...] }
       expect(Array.isArray(result)).toBe(true);
-      expect(result[0].id).toBe("a1");
+      expect(result[0]!.id).toBe("a1");
 
-      const calledUrl = mockFetch.mock.calls[0][0] as string;
+      const calledUrl = mockFetch.mock.calls[0]![0] as string;
       expect(calledUrl).toBe(
         "https://api.test.dev/api/v1/projects/proj-1/alerts"
       );
@@ -272,7 +272,7 @@ describe("BugwatchClient", () => {
       const client = new BugwatchClient();
       await client.listProjects();
 
-      const opts = mockFetch.mock.calls[0][1];
+      const opts = mockFetch.mock.calls[0]![1];
       expect(opts.headers["X-API-Key"]).toBe("my-secret-key");
       expect(opts.headers["Content-Type"]).toBe("application/json");
     });
