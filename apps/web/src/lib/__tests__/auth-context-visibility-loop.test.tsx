@@ -265,8 +265,10 @@ describe("AuthProvider — visibilitychange retry loop regression", () => {
 
     // The event handler re-checks the session before clearing (another tab may
     // have refreshed the cookies). Here the session is genuinely gone, so the
-    // re-check 401s and the user is cleared.
-    authApiMock.me.mockRejectedValueOnce(new ApiError(401, "unauthorized", "Session expired"));
+    // re-check 401s and the user is cleared. Use the mocked module's ApiError so
+    // the `instanceof ApiError` check in auth-context.tsx matches.
+    const { ApiError: ApiErrorMock } = await import("../api");
+    authApiMock.me.mockRejectedValueOnce(new ApiErrorMock(401, "unauthorized", "Session expired"));
 
     // Simulate fetchWithAuth dispatching the session-expired event
     await act(async () => {
@@ -302,8 +304,10 @@ describe("AuthProvider — visibilitychange retry loop regression", () => {
     });
 
     // Session expires: the event handler re-checks via me(), which now 401s,
-    // so the user is cleared.
-    authApiMock.me.mockRejectedValueOnce(new ApiError(401, "unauthorized", "Session expired"));
+    // so the user is cleared. Use the mocked module's ApiError so the
+    // `instanceof ApiError` check in auth-context.tsx matches.
+    const { ApiError: ApiErrorMock } = await import("../api");
+    authApiMock.me.mockRejectedValueOnce(new ApiErrorMock(401, "unauthorized", "Session expired"));
     await act(async () => {
       window.dispatchEvent(new Event("bugwatch-auth-expired"));
     });
