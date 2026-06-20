@@ -220,8 +220,7 @@ impl ServerMetricsRepository {
 
     /// Cleanup metrics older than given number of days
     pub async fn cleanup_old_metrics(pool: &DbPool, retention_days: i32) -> Result<u64> {
-        let cutoff =
-            chrono::Utc::now() - chrono::Duration::days(retention_days as i64);
+        let cutoff = chrono::Utc::now() - chrono::Duration::days(retention_days as i64);
         let mut total_deleted: u64 = 0;
         loop {
             let result = sqlx::query(

@@ -1,4 +1,5 @@
 """Bugwatch client for capturing and sending error events."""
+
 import contextvars
 import platform
 import socket
@@ -43,11 +44,7 @@ _ctx_breadcrumbs: contextvars.ContextVar[Optional[list[Breadcrumb]]] = contextva
 class BugwatchClient:
     """Main Bugwatch client for error tracking."""
 
-    def __init__(
-        self,
-        options: BugwatchOptions,
-        transport: Optional[Transport] = None
-    ):
+    def __init__(self, options: BugwatchOptions, transport: Optional[Transport] = None):
         """
         Initialize the Bugwatch client.
 
@@ -108,6 +105,7 @@ class BugwatchClient:
         # Apply sample rate
         if self.options.sample_rate < 1.0:
             import random
+
             if random.random() > self.options.sample_rate:
                 return ""
 
@@ -129,8 +127,11 @@ class BugwatchClient:
         sanitize_opts = getattr(self.options, "sanitize", None)
         if sanitize_opts is not False:
             import dataclasses
+
             event_dict = dataclasses.asdict(event)
-            scrubbed = scrub_event(event_dict, sanitize_opts if isinstance(sanitize_opts, dict) else None)
+            scrubbed = scrub_event(
+                event_dict, sanitize_opts if isinstance(sanitize_opts, dict) else None
+            )
             # Apply scrubbed fields back to event
             if event.extra:
                 event.extra = scrubbed.get("extra", event.extra)
@@ -176,6 +177,7 @@ class BugwatchClient:
         # Apply sample rate
         if self.options.sample_rate < 1.0:
             import random
+
             if random.random() > self.options.sample_rate:
                 return ""
 
@@ -379,6 +381,7 @@ class BugwatchClient:
 
             try:
                 import linecache
+
                 context_line = linecache.getline(filename, lineno).rstrip()
                 for i in range(max(1, lineno - 3), lineno):
                     line = linecache.getline(filename, i)
@@ -396,18 +399,20 @@ class BugwatchClient:
             if self.options.capture_locals and in_app:
                 local_vars = self._extract_locals(frame.f_locals)
 
-            frames.append(StackFrame(
-                filename=filename,
-                function=frame.f_code.co_name,
-                lineno=lineno,
-                colno=0,  # Python traceback doesn't have column numbers
-                context_line=context_line or None,
-                pre_context=pre_context or None,
-                post_context=post_context or None,
-                in_app=in_app,
-                module=frame.f_globals.get("__name__"),
-                vars=local_vars,
-            ))
+            frames.append(
+                StackFrame(
+                    filename=filename,
+                    function=frame.f_code.co_name,
+                    lineno=lineno,
+                    colno=0,  # Python traceback doesn't have column numbers
+                    context_line=context_line or None,
+                    pre_context=pre_context or None,
+                    post_context=post_context or None,
+                    in_app=in_app,
+                    module=frame.f_globals.get("__name__"),
+                    vars=local_vars,
+                )
+            )
 
             tb = tb.tb_next
 
@@ -444,8 +449,8 @@ class BugwatchClient:
         max_len = self.options.max_value_length
 
         # Variables to skip (internal Python/framework stuff)
-        skip_prefixes = ('_', '__')
-        skip_names = {'self', 'cls', 'request', 'response', 'environ'}
+        skip_prefixes = ("_", "__")
+        skip_names = {"self", "cls", "request", "response", "environ"}
 
         for name, value in local_vars.items():
             # Skip private/internal variables
@@ -484,7 +489,7 @@ class BugwatchClient:
         # Handle bytes
         if isinstance(value, bytes):
             try:
-                decoded = value.decode('utf-8', errors='replace')
+                decoded = value.decode("utf-8", errors="replace")
                 if len(decoded) > max_len:
                     return decoded[:max_len] + "..."
                 return decoded
@@ -501,19 +506,20 @@ class BugwatchClient:
         # Handle dicts
         if isinstance(value, dict):
             if len(value) > 10:
-                result = {k: self._serialize_value(v, max_len, depth + 1)
-                          for k, v in list(value.items())[:10]}
+                result = {
+                    k: self._serialize_value(v, max_len, depth + 1)
+                    for k, v in list(value.items())[:10]
+                }
                 result["..."] = f"{len(value) - 10} more keys"
                 return result
-            return {str(k): self._serialize_value(v, max_len, depth + 1)
-                    for k, v in value.items()}
+            return {str(k): self._serialize_value(v, max_len, depth + 1) for k, v in value.items()}
 
         # Handle sets
         if isinstance(value, (set, frozenset)):
             return self._serialize_value(list(value), max_len, depth)
 
         # Handle objects with __dict__
-        if hasattr(value, '__dict__'):
+        if hasattr(value, "__dict__"):
             type_name = type(value).__name__
             return f"<{type_name}>"
 

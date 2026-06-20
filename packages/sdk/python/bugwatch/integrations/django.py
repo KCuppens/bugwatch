@@ -1,4 +1,5 @@
 """Django integration for Bugwatch Python SDK."""
+
 from typing import Any, Callable, Optional
 
 from .. import get_client, init
@@ -48,18 +49,22 @@ class BugwatchMiddleware:
         # Set user context - always capture IP, add user info if authenticated
         if client:
             ip_address = _get_client_ip(request)
-            if hasattr(request, 'user') and request.user.is_authenticated:
-                client.set_user(UserContext(
-                    id=str(request.user.pk),
-                    email=getattr(request.user, 'email', None),
-                    username=getattr(request.user, 'username', None),
-                    ip_address=ip_address,
-                ))
+            if hasattr(request, "user") and request.user.is_authenticated:
+                client.set_user(
+                    UserContext(
+                        id=str(request.user.pk),
+                        email=getattr(request.user, "email", None),
+                        username=getattr(request.user, "username", None),
+                        ip_address=ip_address,
+                    )
+                )
             else:
                 # Anonymous user - still capture IP
-                client.set_user(UserContext(
-                    ip_address=ip_address,
-                ))
+                client.set_user(
+                    UserContext(
+                        ip_address=ip_address,
+                    )
+                )
 
         try:
             response = self.get_response(request)
@@ -80,28 +85,29 @@ class BugwatchMiddleware:
         try:
             from django.conf import settings
 
-            bugwatch_settings = getattr(settings, 'BUGWATCH', {})
-            if not bugwatch_settings.get('api_key'):
+            bugwatch_settings = getattr(settings, "BUGWATCH", {})
+            if not bugwatch_settings.get("api_key"):
                 print("[Bugwatch] No API key configured in BUGWATCH settings")
                 return
 
             client = init(
-                api_key=bugwatch_settings['api_key'],
-                endpoint=bugwatch_settings.get('endpoint', 'https://api.bugwatch.dev'),
-                environment=bugwatch_settings.get('environment'),
-                release=bugwatch_settings.get('release'),
-                debug=bugwatch_settings.get('debug', False),
-                sample_rate=bugwatch_settings.get('sample_rate', 1.0),
+                api_key=bugwatch_settings["api_key"],
+                endpoint=bugwatch_settings.get("endpoint", "https://api.bugwatch.dev"),
+                environment=bugwatch_settings.get("environment"),
+                release=bugwatch_settings.get("release"),
+                debug=bugwatch_settings.get("debug", False),
+                sample_rate=bugwatch_settings.get("sample_rate", 1.0),
             )
 
             # Support custom transport from settings
-            transport_setting = bugwatch_settings.get('transport')
+            transport_setting = bugwatch_settings.get("transport")
             if transport_setting and client:
                 try:
                     if isinstance(transport_setting, str):
                         # Import from string path
-                        module_path, class_name = transport_setting.rsplit('.', 1)
+                        module_path, class_name = transport_setting.rsplit(".", 1)
                         import importlib
+
                         module = importlib.import_module(module_path)
                         transport_class = getattr(module, class_name)
                         client.transport = transport_class()
@@ -174,17 +180,17 @@ def _get_client_ip(request: Any) -> Optional[str]:
     """Extract client IP address from Django request."""
     try:
         # Check for forwarded headers (behind proxy/load balancer)
-        x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
+        x_forwarded_for = request.META.get("HTTP_X_FORWARDED_FOR")
         if x_forwarded_for:
             # Take the first IP (client IP)
-            return x_forwarded_for.split(',')[0].strip()
+            return x_forwarded_for.split(",")[0].strip()
 
-        x_real_ip = request.META.get('HTTP_X_REAL_IP')
+        x_real_ip = request.META.get("HTTP_X_REAL_IP")
         if x_real_ip:
             return x_real_ip
 
         # Fall back to REMOTE_ADDR
-        return request.META.get('REMOTE_ADDR')
+        return request.META.get("REMOTE_ADDR")
     except Exception:
         return None
 
@@ -194,29 +200,29 @@ def _extract_request_context(request: Any) -> Optional[RequestContext]:
     try:
         # Get headers, filtering sensitive ones
         headers = {}
-        sensitive_headers = {'authorization', 'cookie', 'x-api-key', 'x-auth-token'}
+        sensitive_headers = {"authorization", "cookie", "x-api-key", "x-auth-token"}
 
         for key, value in request.META.items():
-            if key.startswith('HTTP_'):
-                header_name = key[5:].lower().replace('_', '-')
+            if key.startswith("HTTP_"):
+                header_name = key[5:].lower().replace("_", "-")
                 if header_name in sensitive_headers:
-                    headers[header_name] = '[Filtered]'
+                    headers[header_name] = "[Filtered]"
                 else:
                     headers[header_name] = value
 
         # Get query string
-        query_string = request.META.get('QUERY_STRING', '')
+        query_string = request.META.get("QUERY_STRING", "")
 
         # Get POST data (be careful with sensitive data)
         post_data = None
-        if request.method == 'POST':
+        if request.method == "POST":
             try:
                 post_data = dict(request.POST.items())
                 # Filter sensitive fields
-                sensitive_fields = {'password', 'token', 'secret', 'api_key', 'credit_card'}
+                sensitive_fields = {"password", "token", "secret", "api_key", "credit_card"}
                 for field in sensitive_fields:
                     if field in post_data:
-                        post_data[field] = '[Filtered]'
+                        post_data[field] = "[Filtered]"
             except Exception:
                 pass
 

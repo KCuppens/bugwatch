@@ -1,4 +1,5 @@
 """Flask integration for Bugwatch Python SDK."""
+
 from functools import wraps
 from typing import Any, Callable, Optional
 
@@ -29,10 +30,7 @@ class BugwatchFlask:
     """
 
     def __init__(
-        self,
-        app: Optional[Any] = None,
-        api_key: Optional[str] = None,
-        **kwargs: Any
+        self, app: Optional[Any] = None, api_key: Optional[str] = None, **kwargs: Any
     ) -> None:
         self.app = app
         if app is not None and api_key is not None:
@@ -46,7 +44,7 @@ class BugwatchFlask:
         environment: Optional[str] = None,
         release: Optional[str] = None,
         debug: bool = False,
-        **kwargs: Any
+        **kwargs: Any,
     ) -> None:
         """
         Initialize Bugwatch with a Flask app.
@@ -64,10 +62,10 @@ class BugwatchFlask:
         init(
             api_key=api_key,
             endpoint=endpoint,
-            environment=environment or app.config.get('ENV'),
+            environment=environment or app.config.get("ENV"),
             release=release,
             debug=debug or app.debug,
-            **kwargs
+            **kwargs,
         )
 
         # Register error handler
@@ -78,8 +76,8 @@ class BugwatchFlask:
         app.after_request(self._after_request)
 
         # Store reference
-        app.extensions = getattr(app, 'extensions', {})
-        app.extensions['bugwatch'] = self
+        app.extensions = getattr(app, "extensions", {})
+        app.extensions["bugwatch"] = self
 
     def _before_request(self) -> None:
         """Add request breadcrumb."""
@@ -94,13 +92,15 @@ class BugwatchFlask:
             )
 
             # Set user context if available
-            user = getattr(g, 'user', None) or getattr(g, 'current_user', None)
-            if user and hasattr(user, 'id'):
-                client.set_user(UserContext(
-                    id=str(user.id),
-                    email=getattr(user, 'email', None),
-                    username=getattr(user, 'username', None),
-                ))
+            user = getattr(g, "user", None) or getattr(g, "current_user", None)
+            if user and hasattr(user, "id"):
+                client.set_user(
+                    UserContext(
+                        id=str(user.id),
+                        email=getattr(user, "email", None),
+                        username=getattr(user, "username", None),
+                    )
+                )
 
     def _after_request(self, response: Any) -> Any:
         """Track response status."""
@@ -145,11 +145,7 @@ class BugwatchFlask:
         raise error
 
 
-def init_flask(
-    app: Any,
-    api_key: str,
-    **kwargs: Any
-) -> BugwatchFlask:
+def init_flask(app: Any, api_key: str, **kwargs: Any) -> BugwatchFlask:
     """
     Convenience function to initialize Bugwatch with Flask.
 
@@ -176,6 +172,7 @@ def capture_exceptions(func: Callable) -> Callable:
             # ... your code
             pass
     """
+
     @wraps(func)
     def wrapper(*args: Any, **kwargs: Any) -> Any:
         try:
@@ -206,12 +203,12 @@ def _extract_flask_request_context() -> Optional[RequestContext]:
 
         # Get headers, filtering sensitive ones
         headers = {}
-        sensitive_headers = {'authorization', 'cookie', 'x-api-key', 'x-auth-token'}
+        sensitive_headers = {"authorization", "cookie", "x-api-key", "x-auth-token"}
 
         for key, value in request.headers:
             header_name = key.lower()
             if header_name in sensitive_headers:
-                headers[header_name] = '[Filtered]'
+                headers[header_name] = "[Filtered]"
             else:
                 headers[header_name] = value
 
@@ -219,16 +216,16 @@ def _extract_flask_request_context() -> Optional[RequestContext]:
         form_data = None
         if request.form:
             form_data = dict(request.form.items())
-            sensitive_fields = {'password', 'token', 'secret', 'api_key', 'credit_card'}
+            sensitive_fields = {"password", "token", "secret", "api_key", "credit_card"}
             for field in sensitive_fields:
                 if field in form_data:
-                    form_data[field] = '[Filtered]'
+                    form_data[field] = "[Filtered]"
 
         return RequestContext(
             url=request.url,
             method=request.method,
             headers=headers,
-            query_string=request.query_string.decode('utf-8', errors='replace'),
+            query_string=request.query_string.decode("utf-8", errors="replace"),
             data=form_data,
         )
     except Exception:

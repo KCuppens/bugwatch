@@ -381,8 +381,7 @@ impl AlertLogRepository {
 
         let mut tx = pool.begin().await?;
 
-        let cutoff =
-            chrono::Utc::now() - chrono::Duration::minutes(cooldown_minutes as i64);
+        let cutoff = chrono::Utc::now() - chrono::Duration::minutes(cooldown_minutes as i64);
 
         // Double-check cooldown inside the transaction.
         let existing: Option<(i64,)> = sqlx::query_as(
@@ -440,8 +439,7 @@ impl AlertLogRepository {
         trigger_id: Option<&str>,
         cooldown_minutes: i32,
     ) -> Result<Option<AlertLog>> {
-        let cutoff =
-            chrono::Utc::now() - chrono::Duration::minutes(cooldown_minutes as i64);
+        let cutoff = chrono::Utc::now() - chrono::Duration::minutes(cooldown_minutes as i64);
         let log = sqlx::query_as::<_, AlertLog>(
             r#"
             SELECT * FROM alert_logs
@@ -570,8 +568,7 @@ impl EmailRateLimitRepository {
             return Ok(None);
         }
 
-        let cutoff =
-            chrono::Utc::now() - chrono::Duration::minutes(cooldown_minutes as i64);
+        let cutoff = chrono::Utc::now() - chrono::Duration::minutes(cooldown_minutes as i64);
         let result = sqlx::query_as::<_, EmailRateLimit>(
             r#"
             SELECT * FROM email_rate_limits

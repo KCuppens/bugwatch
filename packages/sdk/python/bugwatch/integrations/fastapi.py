@@ -1,4 +1,5 @@
 """FastAPI integration for Bugwatch Python SDK."""
+
 from functools import wraps
 from typing import Any, Callable, Optional
 
@@ -39,7 +40,7 @@ class BugwatchFastAPI:
         environment: Optional[str] = None,
         release: Optional[str] = None,
         debug: bool = False,
-        **kwargs: Any
+        **kwargs: Any,
     ) -> None:
         """
         Initialize Bugwatch with a FastAPI app.
@@ -60,7 +61,7 @@ class BugwatchFastAPI:
             environment=environment,
             release=release,
             debug=debug,
-            **kwargs
+            **kwargs,
         )
 
         # Add middleware
@@ -76,9 +77,7 @@ class BugwatchFastAPI:
         from starlette.responses import Response
 
         class BugwatchMiddleware(BaseHTTPMiddleware):
-            async def dispatch(
-                self, request: Request, call_next: Callable
-            ) -> Response:
+            async def dispatch(self, request: Request, call_next: Callable) -> Response:
                 client = get_client()
 
                 # Use request_scope for context isolation between concurrent requests
@@ -124,7 +123,9 @@ class BugwatchFastAPI:
                                         "http.url": str(request.url),
                                     },
                                     extra={
-                                        "request": request_context.__dict__ if request_context else None,
+                                        "request": request_context.__dict__
+                                        if request_context
+                                        else None,
                                     },
                                 )
                             except Exception:
@@ -139,9 +140,7 @@ class BugwatchFastAPI:
         from fastapi.responses import JSONResponse
 
         @app.exception_handler(Exception)
-        async def bugwatch_exception_handler(
-            request: Request, exc: Exception
-        ) -> JSONResponse:
+        async def bugwatch_exception_handler(request: Request, exc: Exception) -> JSONResponse:
             client = get_client()
             if client:
                 try:
@@ -166,11 +165,7 @@ class BugwatchFastAPI:
             raise exc
 
 
-def init_fastapi(
-    app: Any,
-    api_key: str,
-    **kwargs: Any
-) -> BugwatchFastAPI:
+def init_fastapi(app: Any, api_key: str, **kwargs: Any) -> BugwatchFastAPI:
     """
     Convenience function to initialize Bugwatch with FastAPI.
 
@@ -197,6 +192,7 @@ def capture_exceptions(func: Callable) -> Callable:
             # ... your code
             pass
     """
+
     @wraps(func)
     async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
         try:
@@ -232,6 +228,7 @@ def capture_exceptions(func: Callable) -> Callable:
             raise
 
     import asyncio
+
     if asyncio.iscoroutinefunction(func):
         return async_wrapper
     return sync_wrapper
@@ -242,12 +239,12 @@ async def _extract_fastapi_request_context(request: Any) -> Optional[RequestCont
     try:
         # Get headers, filtering sensitive ones
         headers = {}
-        sensitive_headers = {'authorization', 'cookie', 'x-api-key', 'x-auth-token'}
+        sensitive_headers = {"authorization", "cookie", "x-api-key", "x-auth-token"}
 
         for key, value in request.headers.items():
             header_name = key.lower()
             if header_name in sensitive_headers:
-                headers[header_name] = '[Filtered]'
+                headers[header_name] = "[Filtered]"
             else:
                 headers[header_name] = value
 
@@ -256,14 +253,14 @@ async def _extract_fastapi_request_context(request: Any) -> Optional[RequestCont
 
         # Get body data (be careful with sensitive data)
         body_data = None
-        if request.method in ('POST', 'PUT', 'PATCH'):
+        if request.method in ("POST", "PUT", "PATCH"):
             try:
                 body_data = await request.json()
                 if isinstance(body_data, dict):
-                    sensitive_fields = {'password', 'token', 'secret', 'api_key', 'credit_card'}
+                    sensitive_fields = {"password", "token", "secret", "api_key", "credit_card"}
                     for field in sensitive_fields:
                         if field in body_data:
-                            body_data[field] = '[Filtered]'
+                            body_data[field] = "[Filtered]"
             except Exception:
                 pass
 
@@ -296,16 +293,19 @@ def get_bugwatch_user(user_getter: Callable) -> Callable:
             # user context is now set in Bugwatch
             pass
     """
+
     async def dependency(*args: Any, **kwargs: Any) -> Any:
         user = await user_getter(*args, **kwargs)
 
         client = get_client()
         if client and user:
-            client.set_user(UserContext(
-                id=str(getattr(user, 'id', None)),
-                email=getattr(user, 'email', None),
-                username=getattr(user, 'username', None),
-            ))
+            client.set_user(
+                UserContext(
+                    id=str(getattr(user, "id", None)),
+                    email=getattr(user, "email", None),
+                    username=getattr(user, "username", None),
+                )
+            )
 
         return user
 

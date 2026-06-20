@@ -183,7 +183,7 @@ export class Bugwatch implements BugwatchClient {
    */
   getOptions(): BugwatchOptions {
     const { apiKey, ...rest } = this.options;
-    return { ...rest, apiKey: apiKey ? "[Filtered]" : undefined };
+    return { ...rest, apiKey: apiKey ? "[Filtered]" : "" };
   }
 
   /**

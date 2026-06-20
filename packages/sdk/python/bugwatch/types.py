@@ -1,4 +1,5 @@
 """Type definitions for Bugwatch Python SDK."""
+
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -7,6 +8,7 @@ from typing import Any, Optional
 
 class Level(str, Enum):
     """Error severity level."""
+
     DEBUG = "debug"
     INFO = "info"
     WARNING = "warning"
@@ -17,6 +19,7 @@ class Level(str, Enum):
 @dataclass
 class StackFrame:
     """Represents a single frame in a stack trace."""
+
     filename: str
     function: str
     lineno: int
@@ -32,6 +35,7 @@ class StackFrame:
 @dataclass
 class ExceptionInfo:
     """Information about an exception."""
+
     type: str
     value: str
     stacktrace: list[StackFrame] = field(default_factory=list)
@@ -41,6 +45,7 @@ class ExceptionInfo:
 @dataclass
 class Breadcrumb:
     """A breadcrumb for tracking user actions and events."""
+
     category: str
     message: str
     type: str = "default"  # Breadcrumb type: default, http, navigation, error, etc.
@@ -52,6 +57,7 @@ class Breadcrumb:
 @dataclass
 class UserContext:
     """User information for error context."""
+
     id: Optional[str] = None
     email: Optional[str] = None
     username: Optional[str] = None
@@ -62,6 +68,7 @@ class UserContext:
 @dataclass
 class RequestContext:
     """HTTP request information for error context."""
+
     url: Optional[str] = None
     method: Optional[str] = None
     headers: Optional[dict[str, str]] = None
@@ -74,6 +81,7 @@ class RequestContext:
 @dataclass
 class RuntimeInfo:
     """Runtime environment information."""
+
     name: str
     version: str
 
@@ -81,6 +89,7 @@ class RuntimeInfo:
 @dataclass
 class SdkInfo:
     """SDK information."""
+
     name: str
     version: str
 
@@ -88,6 +97,7 @@ class SdkInfo:
 @dataclass
 class ErrorEvent:
     """Complete error event to send to Bugwatch."""
+
     event_id: str
     timestamp: datetime
     level: Level
@@ -110,6 +120,7 @@ class ErrorEvent:
 @dataclass
 class BugwatchOptions:
     """Configuration options for the Bugwatch client."""
+
     api_key: str
     endpoint: str = "https://api.bugwatch.dev"
     environment: Optional[str] = None

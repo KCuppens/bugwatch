@@ -65,10 +65,13 @@ module Bugwatch
       init
     end
 
-    # For testing: reset all state
+    # For testing: discard all state without closing the transport.
+    # Callers that need a graceful shutdown should call Bugwatch.close first.
+    # Calling close here leaks mock doubles across RSpec examples because the
+    # previous example's InstanceDouble is already expired by the time the next
+    # example's before hook runs.
     def reset!
       @mutex&.synchronize do
-        @client&.close
         @client = nil
         @configuration = nil
       end

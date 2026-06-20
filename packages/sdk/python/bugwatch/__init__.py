@@ -22,6 +22,7 @@ Manual capture (optional)::
     except Exception:
         bugwatch.capture_exception()
 """
+
 import asyncio
 import atexit
 import os
@@ -109,6 +110,7 @@ _hooks_installed: bool = False
 # =============================================================================
 # Global Exception Hooks
 # =============================================================================
+
 
 def _bugwatch_excepthook(exc_type, exc_value, exc_tb):
     """Global exception hook to capture uncaught exceptions."""
@@ -299,6 +301,7 @@ def _uninstall_hooks():
 # Atexit Handler
 # =============================================================================
 
+
 def _atexit_handler():
     """Flush pending events and cleanup on shutdown with a timeout."""
     if _client is not None:
@@ -306,7 +309,7 @@ def _atexit_handler():
             # Use a thread-based timeout that works on all platforms
             def _flush():
                 try:
-                    if hasattr(_client.transport, 'flush'):
+                    if hasattr(_client.transport, "flush"):
                         _client.transport.flush()
                 except Exception:
                     pass
@@ -321,6 +324,7 @@ def _atexit_handler():
 # =============================================================================
 # Public API
 # =============================================================================
+
 
 def _validate_api_key(key: Optional[str]) -> str:
     """
@@ -344,6 +348,7 @@ def _validate_api_key(key: Optional[str]) -> str:
     # Warn if key doesn't follow expected format
     if not key.startswith("bw_"):
         import warnings
+
         warnings.warn(
             f"Bugwatch: API key should start with 'bw_'. Got key starting with '{key[:3] if len(key) >= 3 else key}'",
             UserWarning,
@@ -512,7 +517,7 @@ def get_client() -> Optional[BugwatchClient]:
 def flush():
     """Flush any pending events to Bugwatch."""
     if _client is not None:
-        if hasattr(_client.transport, 'flush'):
+        if hasattr(_client.transport, "flush"):
             _client.transport.flush()
 
 

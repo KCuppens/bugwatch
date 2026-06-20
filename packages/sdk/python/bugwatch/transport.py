@@ -1,4 +1,5 @@
 """HTTP transport for sending error events to Bugwatch."""
+
 import json
 import logging
 from abc import ABC, abstractmethod
@@ -50,7 +51,7 @@ class HttpTransport(Transport):
                     "Authorization": f"Bearer {self.options.api_key}",
                     "User-Agent": "bugwatch-python/0.1.0",
                 },
-                method="POST"
+                method="POST",
             )
 
             with urlopen(request, timeout=10) as response:
@@ -75,6 +76,7 @@ class HttpTransport(Transport):
     def _serialize_event(self, event: ErrorEvent) -> dict[str, Any]:
         """Serialize an event to a JSON-compatible dict."""
         from enum import Enum
+
         data = asdict(event)
 
         # Convert datetime/enum objects and remove None values
@@ -106,6 +108,7 @@ class AsyncHttpTransport(Transport):
         if self._client is None:
             try:
                 import httpx
+
                 self._client = httpx.AsyncClient(timeout=10.0)
             except ImportError as err:
                 raise ImportError(
@@ -134,7 +137,7 @@ class AsyncHttpTransport(Transport):
                 headers={
                     "Authorization": f"Bearer {self.options.api_key}",
                     "User-Agent": "bugwatch-python/0.1.0",
-                }
+                },
             )
 
             if response.status_code in (200, 201):

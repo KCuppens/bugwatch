@@ -176,7 +176,7 @@ describe("Bugwatch client", () => {
       expect(id).toBe("");
       // earlyEventId is now generated upfront so all drops get a real non-empty ID
       expect(onDropped).toHaveBeenCalledWith(expect.any(String), "sample_rate");
-      expect(onDropped.mock.calls[0][0]).not.toBe("");
+      expect(onDropped.mock.calls[0]![0]).not.toBe("");
       await flushMicrotasks();
       expect(fetchMock).not.toHaveBeenCalled();
     });

@@ -33,8 +33,12 @@ class TestGenerateFingerprint:
 
     def test_normalizes_uuids(self) -> None:
         """UUIDs in messages should be normalized."""
-        fp1 = generate_fingerprint("KeyError", "user 550e8400-e29b-41d4-a716-446655440000 not found")
-        fp2 = generate_fingerprint("KeyError", "user 6ba7b810-9dad-11d1-80b4-00c04fd430c8 not found")
+        fp1 = generate_fingerprint(
+            "KeyError", "user 550e8400-e29b-41d4-a716-446655440000 not found"
+        )
+        fp2 = generate_fingerprint(
+            "KeyError", "user 6ba7b810-9dad-11d1-80b4-00c04fd430c8 not found"
+        )
         assert fp1 == fp2
 
     def test_normalizes_quoted_strings(self) -> None:

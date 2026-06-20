@@ -2,6 +2,7 @@
 
 This integration works with any Python/Celery project (Flask, FastAPI, Django, etc.).
 """
+
 from typing import Any, Optional
 
 from .. import get_client

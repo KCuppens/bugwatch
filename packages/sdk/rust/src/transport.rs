@@ -15,10 +15,13 @@ fn is_retryable_status(status: u16) -> bool {
 /// Transport errors.
 #[derive(Error, Debug)]
 pub enum TransportError {
+    /// The server returned a non-success HTTP status.
     #[error("HTTP error: {0}")]
     Http(String),
+    /// The event could not be serialized to JSON.
     #[error("Serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
+    /// The request could not be completed (network/transport failure).
     #[error("Request error: {0}")]
     Request(String),
 }
@@ -244,6 +247,8 @@ pub struct ConsoleTransport {
 }
 
 impl ConsoleTransport {
+    /// Create a console transport. When `debug` is `true`, each event is
+    /// printed with additional detail (such as its tags).
     pub fn new(debug: bool) -> Self {
         Self { debug }
     }
@@ -259,7 +264,9 @@ impl Transport for ConsoleTransport {
         if let Some(ref message) = event.message {
             println!("  Message: {}", message);
         }
-        println!("  Tags: {:?}", event.tags);
+        if self.debug {
+            println!("  Tags: {:?}", event.tags);
+        }
         Ok(())
     }
 

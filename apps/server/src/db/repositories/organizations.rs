@@ -987,10 +987,9 @@ mod tests {
         UsageRepository::increment(&pool, "org-usage", "events", period_start, period_end, 5)
             .await
             .unwrap();
-        let count =
-            UsageRepository::get_current(&pool, "org-usage", "events", period_start)
-                .await
-                .unwrap();
+        let count = UsageRepository::get_current(&pool, "org-usage", "events", period_start)
+            .await
+            .unwrap();
         assert_eq!(count, 15);
     }
 
