@@ -21,12 +21,17 @@ jobs:
           - image: ghcr.io/kcuppens/bugwatch-server
             dockerfile: apps/server/Dockerfile
             cache_scope: server
+            build_args: ""
           # apps/web/Dockerfile — pnpm monorepo build, published to GHCR for
           # managed/cloud deployments. For self-hosted installs, docker/Dockerfile.web
           # is the standalone npm build (validated by ci.yml docker-build job).
+          # NEXT_PUBLIC_API_URL is inlined at build time; single-origin deploy
+          # (Caddy routes /api/* to the server) → point at https://bugwatch.dev.
           - image: ghcr.io/kcuppens/bugwatch-web
             dockerfile: apps/web/Dockerfile
             cache_scope: web
+            build_args: |
+              NEXT_PUBLIC_API_URL=https://bugwatch.dev
 
     steps:
       - name: Checkout repository
@@ -59,6 +64,7 @@ jobs:
           context: .
           file: ${{ matrix.dockerfile }}
           push: true
+          build-args: ${{ matrix.build_args }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=${{ matrix.cache_scope }}

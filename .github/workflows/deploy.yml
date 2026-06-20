@@ -79,6 +79,11 @@ jobs:
           context: .
           file: apps/web/Dockerfile
           push: true
+          # NEXT_PUBLIC_* are inlined at build time. The deployment serves web +
+          # API from one origin (Caddy routes /api/* to the server), so point the
+          # web client at https://bugwatch.dev (the request layer appends /api/v1).
+          build-args: |
+            NEXT_PUBLIC_API_URL=https://bugwatch.dev
           tags: |
             ${{ env.WEB_IMAGE }}:${{ steps.tag.outputs.sha_tag }}
             ${{ env.WEB_IMAGE }}:latest
