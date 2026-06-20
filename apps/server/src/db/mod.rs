@@ -203,15 +203,28 @@ pub(crate) async fn run_migrations(pool: &sqlx::PgPool) -> Result<()> {
                 .unwrap_or(false);
 
         if !already_applied {
-            // Atomic: SQL + migration record in one transaction so a crash between
-            // the two steps cannot cause the migration to re-run on the next start.
-            let mut tx = pool.begin().await?;
-            sqlx::raw_sql(sql).execute(&mut *tx).await?;
-            sqlx::query("INSERT INTO _migrations (name) VALUES ($1)")
-                .bind(name)
-                .execute(&mut *tx)
-                .await?;
-            tx.commit().await?;
+            if sql.to_ascii_uppercase().contains("CONCURRENTLY") {
+                // CREATE INDEX CONCURRENTLY cannot run inside a transaction block,
+                // so run the migration directly on the pool (auto-commit) and
+                // record it separately. These migrations use IF NOT EXISTS, so a
+                // crash between the two steps is safe to retry on next start.
+                sqlx::raw_sql(sql).execute(pool).await?;
+                sqlx::query("INSERT INTO _migrations (name) VALUES ($1)")
+                    .bind(name)
+                    .execute(pool)
+                    .await?;
+            } else {
+                // Atomic: SQL + migration record in one transaction so a crash
+                // between the two steps cannot cause the migration to re-run on
+                // the next start.
+                let mut tx = pool.begin().await?;
+                sqlx::raw_sql(sql).execute(&mut *tx).await?;
+                sqlx::query("INSERT INTO _migrations (name) VALUES ($1)")
+                    .bind(name)
+                    .execute(&mut *tx)
+                    .await?;
+                tx.commit().await?;
+            }
             info!("Migration {} completed", name);
         } else {
             info!("Migration {} skipped (already applied)", name);
