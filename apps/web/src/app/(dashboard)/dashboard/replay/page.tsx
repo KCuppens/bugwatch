@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -40,7 +40,7 @@ function formatTime(dateString: string): string {
   return date.toLocaleDateString();
 }
 
-export default function ReplayPage() {
+function ReplayPageContent() {
   const searchParams = useSearchParams();
   const projectId = searchParams.get("project");
   const hasReplay = useFeature("session_replay");
@@ -271,5 +271,13 @@ export default function ReplayPage() {
         </>
       )}
     </div>
+  );
+}
+
+export default function ReplayPage() {
+  return (
+    <Suspense>
+      <ReplayPageContent />
+    </Suspense>
   );
 }

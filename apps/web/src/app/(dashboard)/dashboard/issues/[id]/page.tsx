@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo, Suspense } from "react";
 import { useParams, useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
@@ -181,7 +181,7 @@ function DistributionBars({
   );
 }
 
-export default function IssueDetailPage() {
+function IssueDetailPageContent() {
   const params = useParams();
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -2081,5 +2081,13 @@ export default function IssueDetailPage() {
         />
       )}
     </div>
+  );
+}
+
+export default function IssueDetailPage() {
+  return (
+    <Suspense>
+      <IssueDetailPageContent />
+    </Suspense>
   );
 }
