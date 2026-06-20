@@ -8,7 +8,12 @@ const withBundleAnalyzer = bundleAnalyzer({ enabled: process.env.ANALYZE === "tr
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
-  transpilePackages: ["@bugwatch/nextjs", "@bugwatch/core", "@bugwatch/node"],
+  // @bugwatch/core is isomorphic and safe to transpile/bundle. @bugwatch/node
+  // and @bugwatch/nextjs import Node built-ins (`os`, via instrumentation) and
+  // run only on the server — keep them external so Next doesn't bundle them
+  // (and choke resolving `os` for the edge runtime).
+  transpilePackages: ["@bugwatch/core"],
+  serverExternalPackages: ["@bugwatch/node", "@bugwatch/nextjs"],
   webpack(config, { dev }) {
     if (dev) {
       // Docker on Windows doesn't relay inotify events — force polling so
