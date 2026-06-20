@@ -65,7 +65,7 @@ describe("loadConfig / saveConfig", () => {
     expect(fsPromises.writeFile).toHaveBeenCalledWith(
       expect.stringContaining("config.json"),
       expect.stringContaining('"apiKey": "bw_test_key"'),
-      "utf-8"
+      { encoding: "utf-8", mode: 0o600 }
     );
   });
 
@@ -252,13 +252,13 @@ describe("Error handling", () => {
     const fetchSpy = mockFetchResponse("Unauthorized", 401, "Unauthorized");
     vi.stubGlobal("fetch", fetchSpy);
 
-    await expect(listProjects()).rejects.toThrow(/API request failed: 401/);
+    await expect(listProjects()).rejects.toThrow(/Request failed \(401\)/);
   });
 
   it("throws an error when the API returns 500", async () => {
     const fetchSpy = mockFetchResponse("Internal Server Error", 500, "Internal Server Error");
     vi.stubGlobal("fetch", fetchSpy);
 
-    await expect(listIssues("proj1")).rejects.toThrow(/API request failed: 500/);
+    await expect(listIssues("proj1")).rejects.toThrow(/Request failed \(500\)/);
   });
 });
