@@ -14,7 +14,7 @@
     "packages/sdk/*"
   ],
   "scripts": {
-    "dev": "turbo dev",
+    "dev": "turbo dev --concurrency=15",
     "build": "turbo build",
     "test": "turbo test",
     "lint": "turbo lint",
