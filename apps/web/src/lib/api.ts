@@ -4,7 +4,11 @@
 // In production, use the configured API URL for direct cross-origin requests.
 const API_BASE_URL = process.env.NODE_ENV === "development" ? "" : (process.env.NEXT_PUBLIC_API_URL ?? "");
 
-if (process.env.NODE_ENV === "production") {
+// Validate only in the browser at runtime. The API client is only ever used
+// client-side, so this must NOT run during `next build`/SSG/prerender (static
+// pages such as docs transitively import this module and would otherwise crash
+// the build when NEXT_PUBLIC_API_URL — a build-time-inlined var — is unset).
+if (typeof window !== "undefined" && process.env.NODE_ENV === "production") {
   if (!API_BASE_URL) {
     throw new Error("[Bugwatch] NEXT_PUBLIC_API_URL must be set in production.");
   }
