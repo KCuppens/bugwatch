@@ -260,7 +260,7 @@ describe("captureError", () => {
     const req = makeReq();
     req.get = (name: string) => (name === "x-forwarded-for" ? "203.0.113.1" : undefined);
     captureError(req, new Error("e"));
-    const extra = (mockCaptureException.mock.calls[0]! as any[])[1].extra;
-    expect(extra.client_ip).toBe("203.0.113.1");
+    const context = (mockCaptureException.mock.calls[0]! as any[])[1];
+    expect(context.user.ip_address).toBe("203.0.113.1");
   });
 });
