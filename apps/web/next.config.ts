@@ -8,13 +8,8 @@ const withBundleAnalyzer = bundleAnalyzer({ enabled: process.env.ANALYZE === "tr
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
-  // @bugwatch/core is isomorphic and safe to transpile/bundle. @bugwatch/node
-  // and @bugwatch/nextjs import Node built-ins (`os`, via instrumentation) and
-  // run only on the server — keep them external so Next doesn't bundle them
-  // (and choke resolving `os` for the edge runtime).
-  transpilePackages: ["@bugwatch/core"],
-  serverExternalPackages: ["@bugwatch/node", "@bugwatch/nextjs"],
-  webpack(config, { dev }) {
+  transpilePackages: ["@bugwatch/nextjs", "@bugwatch/core", "@bugwatch/node"],
+  webpack(config, { dev, isServer, nextRuntime }) {
     if (dev) {
       // Docker on Windows doesn't relay inotify events — force polling so
       // webpack detects file changes without native FS events.
@@ -22,6 +17,13 @@ const nextConfig: NextConfig = {
         poll: 1000,
         aggregateTimeout: 300,
       };
+    }
+    // The bugwatch instrumentation lazily `await import("os")` only under the
+    // nodejs runtime (guarded by NEXT_RUNTIME). Stub the Node built-in for the
+    // client and edge bundles so webpack can resolve it; it is never executed
+    // there.
+    if (!isServer || nextRuntime === "edge") {
+      config.resolve.fallback = { ...config.resolve.fallback, os: false };
     }
     return config;
   },
