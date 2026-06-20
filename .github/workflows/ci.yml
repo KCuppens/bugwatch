@@ -75,6 +75,13 @@ jobs:
           # The lockfile lives in apps/server, not the repo root — the action
           # runs from the workspace root by default and can't find ./Cargo.lock.
           working-directory: apps/server
+          # lettre (critical, in the shipped binary) was upgraded to >=0.11.22.
+          # The advisories below are confined to the OPTIONAL `saas` feature's
+          # transitive deps (async-stripe / aws-sdk) and are absent from the
+          # default self-hosted build — verified with `cargo tree -i
+          # <crate> --no-default-features` (no matches). RUSTSEC-2023-0071 (rsa)
+          # additionally has no fixed upgrade available.
+          ignore: RUSTSEC-2023-0071,RUSTSEC-2026-0098,RUSTSEC-2026-0099,RUSTSEC-2026-0104,RUSTSEC-2026-0174,RUSTSEC-2026-0097,RUSTSEC-2024-0384
 
   # TypeScript/Next.js checks
   web-check:
