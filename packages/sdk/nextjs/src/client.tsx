@@ -605,7 +605,6 @@ export function BugwatchProvider({
     return () => {
       closeClient();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [optionsKey]);
 
   return <BugwatchErrorBoundary>{children}</BugwatchErrorBoundary>;
