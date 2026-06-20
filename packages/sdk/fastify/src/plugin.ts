@@ -200,6 +200,7 @@ const bugwatchPluginImpl: FastifyPluginAsync<BugwatchFastifyOptions> = async (
   const requestStartTimes = new WeakMap<FastifyRequest, number>();
 
   // Decorate requests with bugwatch
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   fastify.decorateRequest("bugwatch", null as any);
 
   // onRequest hook — create scoped context and run the entire request lifecycle inside it.

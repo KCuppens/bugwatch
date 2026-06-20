@@ -206,6 +206,7 @@ export function setup(
   // Hook into app.listen to add error handler automatically
   const originalListen = app.listen.bind(app);
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (app as any).listen = function (
     ...args: Parameters<typeof originalListen>
   ): ReturnType<typeof originalListen> {
@@ -213,6 +214,7 @@ export function setup(
     addErrorHandler();
 
     // Restore original listen for any future calls
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (app as any).listen = originalListen;
 
     return originalListen(...args);

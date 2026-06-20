@@ -72,6 +72,9 @@ jobs:
         uses: rustsec/audit-check@v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+          # The lockfile lives in apps/server, not the repo root — the action
+          # runs from the workspace root by default and can't find ./Cargo.lock.
+          working-directory: apps/server
 
   # TypeScript/Next.js checks
   web-check:

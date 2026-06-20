@@ -141,6 +141,7 @@ function setupGlobalErrorHandler(): () => void {
   const originalOnError = window.onerror;
 
   window.onerror = (message, source, lineno, colno, error) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     if (error && !(error as any).__bugwatch_captured && !isBrowserExtensionError(error)) {
       captureException(error, {
         tags: { mechanism: "onerror" },
@@ -166,6 +167,7 @@ function setupGlobalErrorHandler(): () => void {
 function setupUnhandledRejectionHandler(): () => void {
   const handler = (event: PromiseRejectionEvent) => {
     // Skip if already captured by fetch instrumentation
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     if (event.reason && (event.reason as any).__bugwatch_captured) {
       return;
     }
@@ -464,6 +466,7 @@ function setupFetchInstrumentation(options: ClientOptions): () => void {
 
       // Mark as already captured so unhandledrejection handler skips it
       if (error instanceof Error) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         (error as any).__bugwatch_captured = true;
       }
 
