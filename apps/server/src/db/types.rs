@@ -342,7 +342,7 @@ mod tests {
     #[tokio::test]
     async fn timestamp_encode_decode_roundtrip() {
         let pool = test_any_pool().await;
-        sqlx::query("CREATE TEMP TABLE ts_rt (ts TIMESTAMPTZ NOT NULL)")
+        sqlx::query("CREATE TABLE ts_rt (ts TIMESTAMPTZ NOT NULL)")
             .execute(&pool)
             .await
             .unwrap();

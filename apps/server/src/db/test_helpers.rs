@@ -185,7 +185,7 @@ CREATE TABLE IF NOT EXISTS organizations (
     billing_address TEXT,
     x402_extra_projects INTEGER NOT NULL DEFAULT 0,
     x402_extra_monitors INTEGER NOT NULL DEFAULT 0,
-    x402_extra_storage_bytes INTEGER NOT NULL DEFAULT 0,
+    x402_extra_storage_bytes BIGINT NOT NULL DEFAULT 0,
     x402_extra_retention_days INTEGER NOT NULL DEFAULT 0
 );
 
@@ -202,7 +202,8 @@ CREATE TABLE IF NOT EXISTS projects (
     platform TEXT,
     framework TEXT,
     onboarding_completed_at TIMESTAMPTZ,
-    organization_id TEXT
+    organization_id TEXT,
+    logo_url TEXT
 );
 
 CREATE TABLE IF NOT EXISTS issues (
@@ -214,8 +215,8 @@ CREATE TABLE IF NOT EXISTS issues (
     level TEXT NOT NULL DEFAULT 'error',
     first_seen TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     last_seen TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    count INTEGER NOT NULL DEFAULT 1,
-    user_count INTEGER NOT NULL DEFAULT 0,
+    count BIGINT NOT NULL DEFAULT 1,
+    user_count BIGINT NOT NULL DEFAULT 0,
     environment TEXT NOT NULL DEFAULT 'production',
     UNIQUE(project_id, fingerprint)
 );
@@ -369,14 +370,14 @@ CREATE TABLE IF NOT EXISTS servers (
 CREATE TABLE IF NOT EXISTS server_metrics (
     id TEXT PRIMARY KEY NOT NULL,
     server_db_id TEXT NOT NULL,
-    cpu_usage_percent REAL,
-    load_avg_1 REAL,
-    load_avg_5 REAL,
-    load_avg_15 REAL,
+    cpu_usage_percent DOUBLE PRECISION,
+    load_avg_1 DOUBLE PRECISION,
+    load_avg_5 DOUBLE PRECISION,
+    load_avg_15 DOUBLE PRECISION,
     mem_total_bytes BIGINT,
     mem_used_bytes BIGINT,
     mem_available_bytes BIGINT,
-    mem_usage_percent REAL,
+    mem_usage_percent DOUBLE PRECISION,
     swap_total_bytes BIGINT,
     swap_used_bytes BIGINT,
     net_rx_bytes_per_sec BIGINT,
@@ -487,7 +488,7 @@ CREATE TABLE IF NOT EXISTS session_recordings (
     duration_ms INTEGER,
     is_complete BOOLEAN NOT NULL DEFAULT FALSE,
     segment_count INTEGER NOT NULL DEFAULT 0,
-    total_size_bytes INTEGER NOT NULL DEFAULT 0,
+    total_size_bytes BIGINT NOT NULL DEFAULT 0,
     environment TEXT,
     release TEXT,
     user_agent TEXT,
@@ -515,8 +516,8 @@ CREATE TABLE IF NOT EXISTS agent_payments (
     payment_type TEXT NOT NULL,
     feature TEXT,
     grant_type TEXT,
-    grant_quantity INTEGER,
-    amount_usdc INTEGER NOT NULL,
+    grant_quantity BIGINT,
+    amount_usdc BIGINT NOT NULL,
     tx_hash TEXT,
     status TEXT NOT NULL DEFAULT 'pending',
     expires_at TIMESTAMPTZ NOT NULL,

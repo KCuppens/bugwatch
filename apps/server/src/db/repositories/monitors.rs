@@ -130,7 +130,7 @@ impl MonitorRepository {
     #[allow(dead_code)]
     pub async fn list_active(pool: &DbPool) -> Result<Vec<Monitor>> {
         sqlx::query_as::<_, Monitor>(
-            "SELECT * FROM monitors WHERE is_active = 1 ORDER BY created_at DESC",
+            "SELECT * FROM monitors WHERE is_active = TRUE ORDER BY created_at DESC",
         )
         .fetch_all(pool)
         .await
@@ -321,7 +321,7 @@ impl MonitorCheckRepository {
             SELECT
                 COUNT(*) as total,
                 COALESCE(SUM(CASE WHEN status = 'up' THEN 1 ELSE 0 END), 0) as up_count,
-                AVG(response_time_ms) as avg_response
+                AVG(response_time_ms)::double precision as avg_response
             FROM monitor_checks
             WHERE monitor_id = $1
             AND checked_at >= $2
@@ -358,7 +358,7 @@ impl MonitorCheckRepository {
                 monitor_id,
                 COUNT(*) as total,
                 COALESCE(SUM(CASE WHEN status = 'up' THEN 1 ELSE 0 END), 0) as up_count,
-                AVG(response_time_ms) as avg_response
+                AVG(response_time_ms)::double precision as avg_response
             FROM monitor_checks
             WHERE monitor_id IN ({})
               AND checked_at >= ${}
@@ -818,7 +818,7 @@ mod tests {
     #[tokio::test]
     async fn count_by_owner() {
         let pool = test_any_pool().await;
-        sqlx::query("INSERT INTO projects (id, name, slug, api_key, api_key_hash, owner_id) VALUES (?, ?, ?, ?, '', ?)")
+        sqlx::query("INSERT INTO projects (id, name, slug, api_key, api_key_hash, owner_id) VALUES ($1, $2, $3, $4, '', $5)")
             .bind("proj-cbo").bind("P").bind("slug-cbo").bind("key-cbo").bind("owner-x")
             .execute(&pool).await.unwrap();
         MonitorRepository::create(
@@ -848,7 +848,7 @@ mod tests {
     #[tokio::test]
     async fn count_by_organization() {
         let pool = test_any_pool().await;
-        sqlx::query("INSERT INTO projects (id, name, slug, api_key, api_key_hash, owner_id, organization_id) VALUES (?, ?, ?, ?, '', ?, ?)")
+        sqlx::query("INSERT INTO projects (id, name, slug, api_key, api_key_hash, owner_id, organization_id) VALUES ($1, $2, $3, $4, '', $5, $6)")
             .bind("proj-cborg").bind("P").bind("slug-cborg").bind("key-cborg").bind("u1").bind("org-x")
             .execute(&pool).await.unwrap();
         MonitorRepository::create(

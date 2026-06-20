@@ -386,7 +386,7 @@ impl AlertLogRepository {
         // Double-check cooldown inside the transaction.
         let existing: Option<(i64,)> = sqlx::query_as(
             r#"
-            SELECT 1 FROM alert_logs
+            SELECT 1::bigint FROM alert_logs
             WHERE alert_rule_id = $1
             AND ($2 IS NULL OR trigger_id = $3)
             AND status = 'sent'

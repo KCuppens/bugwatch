@@ -102,8 +102,8 @@ impl EventRepository {
             JOIN issues i ON e.issue_id = i.id
             WHERE i.project_id = $1
               AND e.timestamp > $2
-              AND json_extract(e.payload, '$.tags.next.digest') = $3
-              AND json_extract(e.payload, '$.tags.mechanism') = 'nextjs.onRequestError'
+              AND (e.payload::jsonb #>> '{tags,next,digest}') = $3
+              AND (e.payload::jsonb #>> '{tags,mechanism}') = 'nextjs.onRequestError'
             "#,
         )
         .bind(project_id)
@@ -118,9 +118,9 @@ impl EventRepository {
     /// Count distinct user IDs seen in an issue's events.
     pub async fn count_unique_users(pool: &DbPool, issue_id: &str) -> Result<i64> {
         let (count,): (i64,) = sqlx::query_as(
-            r#"SELECT COUNT(DISTINCT json_extract(payload, '$.user.id'))
+            r#"SELECT COUNT(DISTINCT (payload::jsonb #>> '{user,id}'))
                FROM events WHERE issue_id = $1
-               AND json_extract(payload, '$.user.id') IS NOT NULL"#,
+               AND (payload::jsonb #>> '{user,id}') IS NOT NULL"#,
         )
         .bind(issue_id)
         .fetch_one(pool)
@@ -136,10 +136,10 @@ impl EventRepository {
         tag_key: &str,
         limit: i64,
     ) -> Result<Vec<(String, i64)>> {
-        let sql = r#"SELECT json_extract(payload, '$.tags.' || $1) AS val, COUNT(*) AS cnt
+        let sql = r#"SELECT (payload::jsonb #> '{tags}' ->> $1) AS val, COUNT(*) AS cnt
                FROM events
                WHERE issue_id = $2
-                 AND json_extract(payload, '$.tags.' || $3) IS NOT NULL
+                 AND (payload::jsonb #> '{tags}' ->> $3) IS NOT NULL
                GROUP BY val ORDER BY cnt DESC LIMIT $4"#
             .to_string();
         let rows: Vec<(String, i64)> = sqlx::query_as(&sql)
