@@ -98,7 +98,7 @@ describe("BugwatchReplay", () => {
   it("the send callback passed to recorder invokes transport.sendSegment", () => {
     makeReplay();
     const transport = getTransportInstance();
-    const sendCallback = vi.mocked(ReplayRecorder).mock.calls[0][1] as (seg: any) => void;
+    const sendCallback = vi.mocked(ReplayRecorder).mock.calls[0]![1] as (seg: any) => void;
     const seg = { sessionId: "x", segmentIndex: 0, data: "", startedAt: 0 };
     sendCallback(seg);
     expect(transport.sendSegment).toHaveBeenCalledWith(seg);

@@ -280,7 +280,7 @@ describe("header filtering", () => {
       .catch(() => {});
 
     if (mockCaptureException.mock.calls.length > 0) {
-      const requestCtx = mockCaptureException.mock.calls[0][1]?.request;
+      const requestCtx = ((mockCaptureException.mock.calls[0] as any[])![1] as any)?.request;
       if (requestCtx?.headers) {
         expect(requestCtx.headers.authorization).toBeUndefined();
         expect(requestCtx.headers["x-api-key"]).toBeUndefined();

@@ -24,6 +24,8 @@ export interface NextjsOptions extends NodeOptions {
   captureApiErrors?: boolean;
   /** Capture build-time errors */
   captureBuildErrors?: boolean;
+  /** Runtime information (name and version) attached to events */
+  runtime?: { name: string; version: string };
 }
 
 const DEFAULT_NEXTJS_OPTIONS: Partial<NextjsOptions> = {

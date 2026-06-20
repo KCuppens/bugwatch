@@ -10,7 +10,7 @@ function makeSegment(overrides: Partial<ReplaySegment> = {}): ReplaySegment {
     sessionId: "sess-123",
     segmentIndex: 0,
     data: btoa('{"events":[]}'),
-    startedAt: Date.now(),
+    startedAt: Date.now() as unknown as string,
     userAgent: "test-agent",
     screenWidth: 1920,
     screenHeight: 1080,
@@ -23,7 +23,7 @@ let fetchMock: ReturnType<typeof vi.fn>;
 beforeEach(() => {
   vi.useFakeTimers();
   fetchMock = vi.fn();
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 });
 
 afterEach(() => {
@@ -39,7 +39,7 @@ describe("ReplayTransport.sendSegment", () => {
     await transport.sendSegment(makeSegment());
 
     expect(fetchMock).toHaveBeenCalledOnce();
-    const [url, options] = fetchMock.mock.calls[0];
+    const [url, options] = fetchMock.mock.calls[0]!;
     expect(url).toBe(`${ENDPOINT}/api/v1/replay/segments`);
     expect(options.method).toBe("POST");
     expect(options.headers["Authorization"]).toBe(`Bearer ${API_KEY}`);
@@ -116,7 +116,7 @@ describe("ReplayTransport.finish", () => {
     await transport.finish("my-session");
 
     expect(fetchMock).toHaveBeenCalledOnce();
-    const [url, options] = fetchMock.mock.calls[0];
+    const [url, options] = fetchMock.mock.calls[0]!;
     expect(url).toBe(`${ENDPOINT}/api/v1/replay/finish`);
     const body = JSON.parse(options.body);
     expect(body.session_id).toBe("my-session");

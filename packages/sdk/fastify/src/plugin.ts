@@ -1,11 +1,10 @@
-import type { FastifyPluginAsync, FastifyRequest, FastifyReply } from "fastify";
+import type { FastifyPluginAsync, FastifyRequest } from "fastify";
 import fp from "fastify-plugin";
 import {
   getClient,
   captureException,
   captureMessage as coreCaptureMessage,
   addBreadcrumb,
-  setUser,
   flush,
   close,
   runWithContext,
@@ -201,7 +200,7 @@ const bugwatchPluginImpl: FastifyPluginAsync<BugwatchFastifyOptions> = async (
   const requestStartTimes = new WeakMap<FastifyRequest, number>();
 
   // Decorate requests with bugwatch
-  fastify.decorateRequest("bugwatch", null);
+  fastify.decorateRequest("bugwatch", null as any);
 
   // onRequest hook — create scoped context and run the entire request lifecycle inside it.
   // We use runWithContext so that all downstream hooks and the route handler

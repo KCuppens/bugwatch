@@ -122,7 +122,7 @@ describe("onRequestError", () => {
       { path: "/p", method: "POST", headers: { authorization: "Bearer secret", host: "example.com" } },
       { routerKind: "Pages Router", routePath: "/p", routeType: "page" }
     );
-    const requestCtx = mockCaptureException.mock.calls[0][1]?.request;
+    const requestCtx = mockCaptureException.mock.calls[0]![1]?.request;
     expect(requestCtx.headers.authorization).toBe("[Filtered]");
     expect(requestCtx.headers.host).toBe("example.com");
   });
@@ -151,7 +151,7 @@ describe("onRequestError", () => {
         renderSource: "react-server-components",
       }
     );
-    const tags = mockCaptureException.mock.calls[0][1]?.tags;
+    const tags = mockCaptureException.mock.calls[0]![1]?.tags;
     expect(tags["next.renderSource"]).toBe("react-server-components");
   });
 });

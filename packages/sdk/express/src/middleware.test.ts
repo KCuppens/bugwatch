@@ -46,7 +46,6 @@ function makeReq(overrides: Record<string, any> = {}): any {
     url: "/test?q=1",
     path: "/test",
     originalUrl: "/test?q=1",
-    headers,
     socket: { remoteAddress: "127.0.0.1" },
     protocol: "http",
     get: (name: string) => {
@@ -113,7 +112,7 @@ describe("requestHandler", () => {
 
   it("extracts and sets user context when extractUser provided", () => {
     _mockClient = makeMockClient();
-    const scopedCtx = { user: undefined as any };
+    const scopedCtx = { user: undefined as any, tags: {}, extra: {} };
     mockCreateScopedContext.mockReturnValue(scopedCtx);
     const extractUser = vi.fn(() => ({ id: "u42", email: "a@b.com" }));
     requestHandler({ extractUser })(makeReq(), makeRes(), vi.fn());
@@ -167,7 +166,7 @@ describe("errorHandler", () => {
   it("normalises non-Error to Error with name NonErrorException", async () => {
     _mockClient = makeMockClient();
     await errorHandler()("string error" as any, makeReq(), makeRes(500), vi.fn());
-    const [capturedErr] = mockCaptureException.mock.calls[0];
+    const [capturedErr] = mockCaptureException.mock.calls[0]! as any[];
     expect(capturedErr).toBeInstanceOf(Error);
     expect(capturedErr.name).toBe("NonErrorException");
   });
@@ -175,7 +174,7 @@ describe("errorHandler", () => {
   it("normalises thrown objects to JSON string", async () => {
     _mockClient = makeMockClient();
     await errorHandler()({ code: 42 } as any, makeReq(), makeRes(500), vi.fn());
-    const [capturedErr] = mockCaptureException.mock.calls[0];
+    const [capturedErr] = mockCaptureException.mock.calls[0]! as any[];
     expect(capturedErr.message).toContain("42");
   });
 
@@ -183,7 +182,7 @@ describe("errorHandler", () => {
     _mockClient = makeMockClient();
     const req = makeReq({ headers: { authorization: "Bearer secret", "content-type": "application/json" } });
     await errorHandler()(new Error("e"), req, makeRes(), vi.fn());
-    const requestCtx = mockCaptureException.mock.calls[0][1].request;
+    const requestCtx = (mockCaptureException.mock.calls[0]! as any[])[1].request;
     expect(requestCtx.headers.authorization).toBeUndefined();
     expect(requestCtx.headers["content-type"]).toBe("application/json");
   });
@@ -192,7 +191,7 @@ describe("errorHandler", () => {
     _mockClient = makeMockClient();
     const req = makeReq({ headers: { cookie: "session=abc", "x-api-key": "key123" } });
     await errorHandler()(new Error("e"), req, makeRes(), vi.fn());
-    const requestCtx = mockCaptureException.mock.calls[0][1].request;
+    const requestCtx = (mockCaptureException.mock.calls[0]! as any[])[1].request;
     expect(requestCtx.headers.cookie).toBeUndefined();
     expect(requestCtx.headers["x-api-key"]).toBeUndefined();
   });
@@ -213,7 +212,7 @@ describe("errorHandler", () => {
     _mockClient = makeMockClient();
     const req = makeReq({ body: { username: "alice", password: "secret" } });
     await errorHandler({ includeBody: true })(new Error("e"), req, makeRes(), vi.fn());
-    const requestCtx = mockCaptureException.mock.calls[0][1].request;
+    const requestCtx = (mockCaptureException.mock.calls[0]! as any[])[1].request;
     expect(requestCtx.data?.username).toBe("alice");
     expect(requestCtx.data?.password).toBeUndefined();
   });
@@ -261,7 +260,7 @@ describe("captureError", () => {
     const req = makeReq();
     req.get = (name: string) => (name === "x-forwarded-for" ? "203.0.113.1" : undefined);
     captureError(req, new Error("e"));
-    const extra = mockCaptureException.mock.calls[0][1].extra;
+    const extra = (mockCaptureException.mock.calls[0]! as any[])[1].extra;
     expect(extra.client_ip).toBe("203.0.113.1");
   });
 });

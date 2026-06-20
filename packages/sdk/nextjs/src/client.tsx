@@ -1,6 +1,6 @@
 "use client";
 
-import { Component, useEffect, useMemo, type ReactNode, type ErrorInfo } from "react";
+import { Component, useEffect, useMemo, type ReactNode, type ReactElement, type ErrorInfo } from "react";
 import {
   init as coreInit,
   captureException,
@@ -576,7 +576,7 @@ interface BugwatchProviderProps {
 export function BugwatchProvider({
   options,
   children,
-}: BugwatchProviderProps): JSX.Element {
+}: BugwatchProviderProps): ReactElement {
   // Serialize options to a stable string so useEffect doesn't re-run
   // on every render when options object is passed inline.
   const optionsKey = useMemo(

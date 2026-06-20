@@ -4,12 +4,10 @@ import {
   getClient,
   captureException,
   addBreadcrumb,
-  setUser,
   flush,
   runWithContext,
   createScopedContext,
   type RequestContext,
-  type ErrorEvent,
   type ScopedContext,
 } from "@bugwatch/core";
 import type { BugwatchExpressOptions, BugwatchRequest, AsyncRequestHandler } from "./types";
@@ -261,7 +259,7 @@ export function errorHandler(
   return async (
     err: unknown,
     req: BugwatchRequest,
-    res: Response,
+    _res: Response,
     next: NextFunction
   ) => {
     const client = getClient();
