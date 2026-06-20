@@ -90,8 +90,12 @@ jobs:
     # always() overrides the default "skip if dependency skipped" behavior.
     # !failure() ensures we don't deploy if CI or build actually failed.
     # !cancelled() ensures we don't deploy if the workflow was cancelled.
+    # DEPLOY_ENABLED gates the SSH deploy: until a target server exists and the
+    # DEPLOY_HOST/USER/SSH_KEY (+ GHCR_PAT) secrets are set, leave the repo
+    # variable unset so this job skips cleanly instead of failing on an empty
+    # host. Set it with: gh variable set DEPLOY_ENABLED --body true
     if: >-
-      always() && !failure() && !cancelled() &&
+      always() && !failure() && !cancelled() && vars.DEPLOY_ENABLED == 'true' &&
       (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.environment == 'staging'))
     needs: [ci, build-and-push]
     runs-on: ubuntu-latest
@@ -116,8 +120,10 @@ jobs:
 
   # ---------- Deploy to production ----------
   deploy-production:
+    # Gated on DEPLOY_ENABLED like deploy-staging — skips cleanly until a server
+    # and deploy secrets are configured. Set: gh variable set DEPLOY_ENABLED --body true
     if: >-
-      always() && !failure() && !cancelled() &&
+      always() && !failure() && !cancelled() && vars.DEPLOY_ENABLED == 'true' &&
       (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.environment == 'production'))
     # On push: waits for staging to succeed. On manual dispatch to production: staging is skipped, runs directly.
     needs: [ci, build-and-push, deploy-staging]
