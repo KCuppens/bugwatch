@@ -20,6 +20,14 @@ use crate::{
     AppError, AppResult, AppState,
 };
 
+type ProviderCredentials = (
+    String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    String,
+);
+
 // ============================================================================
 // Response types
 // ============================================================================
@@ -86,8 +94,8 @@ pub async fn list_integrations(
         30,
     )?;
 
-    if !state.config.deployment_mode.is_self_hosted()
-        && !(state.config.x402_enabled && x402_verified.is_some())
+    if !(state.config.deployment_mode.is_self_hosted()
+        || state.config.x402_enabled && x402_verified.is_some())
     {
         let guard = TierGuard::for_user(&auth_user, &state)
             .await
@@ -140,8 +148,8 @@ pub async fn oauth_authorize(
     x402_verified: Option<axum::Extension<crate::payments::X402PaymentVerified>>,
     Path(provider): Path<String>,
 ) -> AppResult<Json<ApiResponse<OAuthUrlResponse>>> {
-    if !state.config.deployment_mode.is_self_hosted()
-        && !(state.config.x402_enabled && x402_verified.is_some())
+    if !(state.config.deployment_mode.is_self_hosted()
+        || state.config.x402_enabled && x402_verified.is_some())
     {
         let guard = TierGuard::for_user(&auth_user, &state)
             .await
@@ -327,16 +335,7 @@ pub async fn oauth_callback(
         ));
     }
 
-    let result: Result<
-        (
-            String,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            String,
-        ),
-        AppError,
-    > = match provider.as_str() {
+    let result: Result<ProviderCredentials, AppError> = match provider.as_str() {
         "github" => {
             let client_id =
                 state.config.github_client_id.as_ref().ok_or_else(|| {
@@ -510,8 +509,8 @@ pub async fn delete_integration(
         10,
     )?;
 
-    if !state.config.deployment_mode.is_self_hosted()
-        && !(state.config.x402_enabled && x402_verified.is_some())
+    if !(state.config.deployment_mode.is_self_hosted()
+        || state.config.x402_enabled && x402_verified.is_some())
     {
         let guard = TierGuard::for_user(&auth_user, &state)
             .await
@@ -566,8 +565,8 @@ pub async fn create_issue_link(
     Path((project_id, issue_id)): Path<(String, String)>,
     Json(req): Json<CreateIssueLinkRequest>,
 ) -> AppResult<Json<ApiResponse<IssueLinkResponse>>> {
-    if !state.config.deployment_mode.is_self_hosted()
-        && !(state.config.x402_enabled && x402_verified.is_some())
+    if !(state.config.deployment_mode.is_self_hosted()
+        || state.config.x402_enabled && x402_verified.is_some())
     {
         let guard = TierGuard::for_user(&auth_user, &state)
             .await
@@ -734,7 +733,7 @@ pub async fn create_issue_link(
                 || !project_key
                     .chars()
                     .next()
-                    .map_or(false, |c| c.is_ascii_uppercase())
+                    .is_some_and(|c| c.is_ascii_uppercase())
                 || !project_key
                     .chars()
                     .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())

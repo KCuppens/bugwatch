@@ -31,14 +31,14 @@ impl TierGuard {
 
         // G4: Block access for canceled/unpaid subscriptions before any tier check.
         // Self-hosted mode bypasses this so local instances are never locked out.
-        if !state.config.deployment_mode.is_self_hosted() {
-            if matches!(org.subscription_status.as_str(), "canceled" | "unpaid") {
-                return Err((
-                    StatusCode::PAYMENT_REQUIRED,
-                    "Your subscription is not active. Please renew to continue using this feature."
-                        .to_string(),
-                ));
-            }
+        if !state.config.deployment_mode.is_self_hosted()
+            && matches!(org.subscription_status.as_str(), "canceled" | "unpaid")
+        {
+            return Err((
+                StatusCode::PAYMENT_REQUIRED,
+                "Your subscription is not active. Please renew to continue using this feature."
+                    .to_string(),
+            ));
         }
 
         let tier = if state.config.deployment_mode.is_self_hosted() {

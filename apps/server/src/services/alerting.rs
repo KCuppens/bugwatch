@@ -57,7 +57,7 @@ fn evaluate_metric_condition(
         } => {
             let applies = server_id.is_none() || server_id.as_deref() == Some(server_db_id);
             applies
-                .then(|| metric.cpu_usage_percent)
+                .then_some(metric.cpu_usage_percent)
                 .flatten()
                 .filter(|&cpu| cpu >= *threshold_percent)
                 .map(|cpu| {
@@ -73,7 +73,7 @@ fn evaluate_metric_condition(
         } => {
             let applies = server_id.is_none() || server_id.as_deref() == Some(server_db_id);
             applies
-                .then(|| metric.mem_usage_percent)
+                .then_some(metric.mem_usage_percent)
                 .flatten()
                 .filter(|&mem| mem >= *threshold_percent)
                 .map(|mem| {

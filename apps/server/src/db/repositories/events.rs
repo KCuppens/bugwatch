@@ -136,13 +136,12 @@ impl EventRepository {
         tag_key: &str,
         limit: i64,
     ) -> Result<Vec<(String, i64)>> {
-        let sql = format!(
-            r#"SELECT json_extract(payload, '$.tags.' || $1) AS val, COUNT(*) AS cnt
+        let sql = r#"SELECT json_extract(payload, '$.tags.' || $1) AS val, COUNT(*) AS cnt
                FROM events
                WHERE issue_id = $2
                  AND json_extract(payload, '$.tags.' || $3) IS NOT NULL
                GROUP BY val ORDER BY cnt DESC LIMIT $4"#
-        );
+            .to_string();
         let rows: Vec<(String, i64)> = sqlx::query_as(&sql)
             .bind(tag_key)
             .bind(issue_id)

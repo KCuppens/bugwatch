@@ -645,7 +645,7 @@ mod saas_billing {
                 OrganizationRepository::set_stripe_customer(
                     &state.db,
                     &org.id,
-                    &customer.id.to_string(),
+                    customer.id.as_ref(),
                 )
                 .await
                 .map_err(|e| {
@@ -1342,7 +1342,7 @@ mod saas_billing {
             &org.id,
             &req.tier,
             seats as i32,
-            Some(&subscription.id.to_string()),
+            Some(subscription.id.as_ref()),
             "active",
             Some(if annual { "annual" } else { "monthly" }),
             period_start,
@@ -2001,6 +2001,7 @@ mod saas_billing {
     }
 
     #[derive(Deserialize)]
+    #[allow(dead_code)]
     pub struct AddTaxIdRequest {
         #[serde(rename = "type")]
         pub type_: String,
@@ -2226,7 +2227,7 @@ mod tests {
     #[test]
     fn generate_org_slug_suffix_length_is_eight() {
         let slug = generate_org_slug("test");
-        let suffix = slug.split('-').last().unwrap();
+        let suffix = slug.split('-').next_back().unwrap();
         assert_eq!(suffix.len(), 8);
     }
 

@@ -54,6 +54,7 @@ impl IssueRepository {
             .map_err(Into::into)
     }
 
+    #[allow(dead_code)]
     pub async fn find_by_fingerprint(
         pool: &DbPool,
         project_id: &str,
@@ -69,6 +70,7 @@ impl IssueRepository {
         .map_err(Into::into)
     }
 
+    #[allow(dead_code)]
     pub async fn update_status(pool: &DbPool, id: &str, status: &str) -> Result<()> {
         sqlx::query("UPDATE issues SET status = $1 WHERE id = $2")
             .bind(status)
@@ -87,8 +89,8 @@ impl IssueRepository {
         limit: i64,
         offset: i64,
     ) -> Result<Vec<Issue>> {
-        let limit = limit.max(1).min(1000);
-        let offset = offset.max(0).min(100_000);
+        let limit = limit.clamp(1, 1000);
+        let offset = offset.clamp(0, 100_000);
 
         // Use QueryBuilder instead of manual placeholder tracking —
         // every value goes through push_bind so there's no risk of a stray

@@ -56,6 +56,7 @@ pub struct IntegrationRepository;
 
 impl IntegrationRepository {
     /// Create a new integration
+    #[allow(clippy::too_many_arguments)]
     pub async fn create(
         pool: &DbPool,
         organization_id: &str,
@@ -188,6 +189,7 @@ pub struct IssueLinkRepository;
 
 impl IssueLinkRepository {
     /// Create a new issue link
+    #[allow(clippy::too_many_arguments)]
     pub async fn create(
         pool: &DbPool,
         issue_id: &str,

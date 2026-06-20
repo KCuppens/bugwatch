@@ -259,6 +259,7 @@ impl LogRepository {
     // ── Read — single entry ──────────────────────────────────────────────────
 
     /// Find a single log entry by its `id` column (UUID text).
+    #[allow(dead_code)]
     pub async fn find_by_id(pool: &DbPool, id: &str) -> Result<Option<LogEntry>> {
         sqlx::query_as::<_, LogEntry>("SELECT * FROM logs WHERE id = $1")
             .bind(id)
@@ -321,6 +322,7 @@ impl LogRepository {
     /// Returns the number of partitions dropped.
     ///
     /// NOTE: PostgreSQL-specific — mark integration tests accordingly.
+    #[allow(dead_code)]
     pub async fn cleanup_expired_partitions(pool: &DbPool, retention_days: i32) -> Result<u64> {
         // Find partition names whose month-end is before the cutoff.
         let rows: Vec<(String,)> = sqlx::query_as(
@@ -566,6 +568,7 @@ fn build_filter_query(
 
 /// Bind the `project_id` ($1) and then all dynamic bindings produced by
 /// `build_filter_query` to a `query_as` builder.
+#[allow(dead_code)]
 fn bind_filter_params<'q, O>(
     mut q: sqlx::query::QueryAs<'q, sqlx::Any, O, sqlx::any::AnyArguments<'q>>,
     project_id: &'q str,
@@ -652,7 +655,7 @@ mod tests {
     async fn bulk_create_duplicate_log_id_returns_one_duplicate() {
         let pool = test_any_pool().await;
         let entry = make_entry("log-dup-1", "warn", "dup message");
-        LogRepository::bulk_create(&pool, "proj-log-2", &[entry.clone()])
+        LogRepository::bulk_create(&pool, "proj-log-2", std::slice::from_ref(&entry))
             .await
             .unwrap();
         let (accepted, duplicates) = LogRepository::bulk_create(&pool, "proj-log-2", &[entry])

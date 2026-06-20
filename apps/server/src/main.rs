@@ -599,10 +599,14 @@ fn create_app(state: AppState) -> Router {
     // x402_enabled is false and deployment_mode is self-hosted).
     #[cfg(feature = "saas")]
     let router = {
-        let s = state.clone();
-        router.layer(axum::middleware::from_fn(move |req, next| {
-            crate::payments::x402_payment_middleware(s.clone(), req, next)
-        }))
+        router.layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            |axum::extract::State(s): axum::extract::State<AppState>,
+             req: axum::extract::Request,
+             next: axum::middleware::Next| async move {
+                crate::payments::x402_payment_middleware(s, req, next).await
+            },
+        ))
     };
 
     router

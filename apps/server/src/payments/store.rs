@@ -31,6 +31,7 @@ impl PaymentStore {
         Self { pool }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn create_feature_challenge(
         &self,
         nonce: &str,
@@ -63,6 +64,7 @@ impl PaymentStore {
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn create_capacity_challenge(
         &self,
         nonce: &str,

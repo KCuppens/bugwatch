@@ -269,7 +269,7 @@ pub async fn create(
     }
 
     let project = ProjectRepository::create_in_tx(
-        &mut *tx,
+        &mut tx,
         &req.name,
         &slug,
         &owner_id,
@@ -574,7 +574,7 @@ mod tests {
     #[test]
     fn slug_suffix_length_is_eight() {
         let slug = generate_slug("test");
-        let suffix = slug.split('-').last().unwrap();
+        let suffix = slug.split('-').next_back().unwrap();
         assert_eq!(suffix.len(), 8);
     }
 

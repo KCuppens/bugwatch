@@ -96,7 +96,7 @@ pub async fn list(
     require_project_access(&state.db, &auth, &project_id).await?;
 
     let page = params.page.max(1);
-    let per_page = params.per_page.min(100).max(1);
+    let per_page = params.per_page.clamp(1, 100);
     let offset = ((page - 1) * per_page) as i64;
 
     // Run list + count in parallel — they share no dependency, so serializing
@@ -157,7 +157,7 @@ pub async fn search(
     require_project_access(&state.db, &auth, &project_id).await?;
 
     let page = req.page.unwrap_or(1).max(1);
-    let per_page = req.per_page.unwrap_or(50).min(100).max(1);
+    let per_page = req.per_page.unwrap_or(50).clamp(1, 100);
     let offset = ((page - 1) * per_page) as i64;
 
     // Validate text search length
@@ -845,7 +845,7 @@ fn parse_exception_from_payload(json: &serde_json::Value) -> Option<ExceptionDet
     let (exception_type, value, frames) =
         if let Some(values) = exception_obj.get("values").and_then(|v| v.as_array()) {
             // Sentry format
-            let exc = values.get(0)?;
+            let exc = values.first()?;
             let exc_type = exc.get("type")?.as_str()?.to_string();
             let exc_value = exc
                 .get("value")
@@ -987,31 +987,29 @@ fn parse_breadcrumbs_from_payload(json: &serde_json::Value) -> Vec<BreadcrumbDet
 
     breadcrumbs
         .iter()
-        .filter_map(|b| {
-            Some(BreadcrumbDetail {
-                timestamp: b
-                    .get("timestamp")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string(),
-                breadcrumb_type: b
-                    .get("type")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("default")
-                    .to_string(),
-                category: b
-                    .get("category")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string(),
-                message: b.get("message").and_then(|v| v.as_str()).map(String::from),
-                level: b
-                    .get("level")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("info")
-                    .to_string(),
-                data: b.get("data").cloned(),
-            })
+        .map(|b| BreadcrumbDetail {
+            timestamp: b
+                .get("timestamp")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            breadcrumb_type: b
+                .get("type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("default")
+                .to_string(),
+            category: b
+                .get("category")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            message: b.get("message").and_then(|v| v.as_str()).map(String::from),
+            level: b
+                .get("level")
+                .and_then(|v| v.as_str())
+                .unwrap_or("info")
+                .to_string(),
+            data: b.get("data").cloned(),
         })
         .collect()
 }
@@ -1247,8 +1245,8 @@ pub async fn list_across_projects(
     // Gate: Pro+ tier required for cross-project issue aggregation
     // x402_verified is set by the payment middleware when a valid feature_access payment was
     // verified; bypass the tier check only when x402 is enabled AND payment was verified.
-    if !state.config.deployment_mode.is_self_hosted()
-        && !(state.config.x402_enabled && x402_verified.is_some())
+    if !(state.config.deployment_mode.is_self_hosted()
+        || state.config.x402_enabled && x402_verified.is_some())
     {
         let (org_id, tier_str) = match &*auth {
             AuthIdentity::User(user) => {
@@ -1332,7 +1330,7 @@ pub async fn list_across_projects(
         projects.iter().map(|p| (p.id.clone(), p)).collect();
 
     let page = params.page.max(1);
-    let limit = params.limit.min(100).max(1);
+    let limit = params.limit.clamp(1, 100);
     let offset = ((page - 1) * limit) as i64;
 
     // B5: status allowlist
@@ -1444,8 +1442,8 @@ pub async fn get_stats_by_project(
     // Gate: Pro+ tier required for cross-project statistics
     // x402_verified is set by the payment middleware when a valid feature_access payment was
     // verified; bypass the tier check only when x402 is enabled AND payment was verified.
-    if !state.config.deployment_mode.is_self_hosted()
-        && !(state.config.x402_enabled && x402_verified.is_some())
+    if !(state.config.deployment_mode.is_self_hosted()
+        || state.config.x402_enabled && x402_verified.is_some())
     {
         let (org_id, tier_str) = match &*auth {
             AuthIdentity::User(user) => {

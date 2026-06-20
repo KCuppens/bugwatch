@@ -157,6 +157,7 @@ impl OrganizationRepository {
     }
 
     /// Update subscription details (called from Stripe webhook)
+    #[allow(clippy::too_many_arguments)]
     pub async fn update_subscription(
         pool: &DbPool,
         id: &str,
@@ -205,6 +206,7 @@ impl OrganizationRepository {
     /// Atomically activate a subscription only if it has not already been recorded.
     /// Returns Ok(true) if the row was updated, Ok(false) if already processed.
     /// Prevents concurrent verify_checkout calls from double-processing the same session.
+    #[allow(clippy::too_many_arguments)]
     pub async fn activate_subscription_if_new(
         pool: &DbPool,
         id: &str,
@@ -738,7 +740,7 @@ impl BillingEventRepository {
         organization_id: &str,
         limit: i32,
     ) -> Result<Vec<BillingEvent>> {
-        let limit = limit.max(1).min(1000);
+        let limit = limit.clamp(1, 1000);
         sqlx::query_as::<_, BillingEvent>(
             "SELECT * FROM billing_events WHERE organization_id = $1 ORDER BY created_at DESC LIMIT $2",
         )

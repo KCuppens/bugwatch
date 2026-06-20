@@ -127,6 +127,7 @@ pub struct ServerMetricsRepository;
 
 impl ServerMetricsRepository {
     /// Insert a new metrics snapshot
+    #[allow(clippy::too_many_arguments)]
     pub async fn create(
         pool: &DbPool,
         server_db_id: &str,
@@ -230,7 +231,7 @@ impl ServerMetricsRepository {
                     LIMIT 5000
                 )",
             )
-            .bind(&cutoff)
+            .bind(cutoff)
             .execute(pool)
             .await?;
             let deleted = result.rows_affected();

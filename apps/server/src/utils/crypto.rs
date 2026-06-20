@@ -179,7 +179,7 @@ mod tests {
         // Craft a token with wrong nonce length
         use base64::Engine;
         let engine = base64::engine::general_purpose::STANDARD;
-        let bad_nonce = engine.encode(&[0u8; 5]); // 5 bytes, not 12
+        let bad_nonce = engine.encode([0u8; 5]); // 5 bytes, not 12
         let fake_ct = engine.encode(b"fake");
         let bad_token = format!("enc:{}:{}", bad_nonce, fake_ct);
         assert!(decrypt_token(&bad_token, "key").is_err());

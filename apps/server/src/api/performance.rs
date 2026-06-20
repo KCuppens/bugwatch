@@ -117,8 +117,8 @@ pub async fn ingest_transaction(
     }
 
     // 4. Check if project has performance monitoring access
-    if !state.config.deployment_mode.is_self_hosted()
-        && !(state.config.x402_enabled && x402_verified.is_some())
+    if !(state.config.deployment_mode.is_self_hosted()
+        || state.config.x402_enabled && x402_verified.is_some())
     {
         let tier_str = OrganizationRepository::get_project_tier(&state.db, &project.id)
             .await

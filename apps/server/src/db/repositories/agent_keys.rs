@@ -137,7 +137,7 @@ impl AgentAuditLogRepository {
         agent_key_id: &str,
         limit: i64,
     ) -> Result<Vec<AgentAuditLog>> {
-        let limit = limit.max(1).min(10_000);
+        let limit = limit.clamp(1, 10_000);
         sqlx::query_as::<_, AgentAuditLog>(
             "SELECT * FROM agent_audit_log WHERE agent_key_id = $1 ORDER BY created_at DESC LIMIT $2",
         )
@@ -154,7 +154,7 @@ impl AgentAuditLogRepository {
         organization_id: &str,
         limit: i64,
     ) -> Result<Vec<AgentAuditLog>> {
-        let limit = limit.max(1).min(10_000);
+        let limit = limit.clamp(1, 10_000);
         sqlx::query_as::<_, AgentAuditLog>(
             r#"
             SELECT al.* FROM agent_audit_log al

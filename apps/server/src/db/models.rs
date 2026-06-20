@@ -387,6 +387,7 @@ pub struct Transaction {
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct Span {
     pub id: String,
     pub transaction_id: String,

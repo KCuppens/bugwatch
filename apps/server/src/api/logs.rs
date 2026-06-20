@@ -443,10 +443,9 @@ pub async fn list_logs(
         .collect();
     let total: u32 = total_count.try_into().unwrap_or(u32::MAX);
 
-    let total_pages = if per_page == 0 {
-        0
-    } else {
-        total / per_page + u32::from(total % per_page != 0)
+    let total_pages = match total.checked_div(per_page) {
+        None => 0,
+        Some(q) => q + u32::from(!total.is_multiple_of(per_page)),
     };
 
     Ok(Json(PaginatedResponse {

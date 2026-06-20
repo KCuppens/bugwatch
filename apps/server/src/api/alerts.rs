@@ -57,12 +57,12 @@ fn validate_channel_url(url: &str) -> AppResult<()> {
                 v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_unspecified()
             }
             std::net::IpAddr::V6(v6) => {
-                if v6.is_loopback() || v6.is_unspecified() {
-                    true
-                } else if v6
-                    .to_ipv4_mapped()
-                    .map(|v4| v4.is_loopback() || v4.is_private() || v4.is_link_local())
-                    .unwrap_or(false)
+                if v6.is_loopback()
+                    || v6.is_unspecified()
+                    || v6
+                        .to_ipv4_mapped()
+                        .map(|v4| v4.is_loopback() || v4.is_private() || v4.is_link_local())
+                        .unwrap_or(false)
                 {
                     true
                 } else {
@@ -240,12 +240,10 @@ pub async fn create_alert_rule(
         }
         AlertCondition::ServerOffline {
             missing_minutes, ..
-        } => {
-            if *missing_minutes == 0 {
-                return Err(AppError::BadRequest(
-                    "missing_minutes must be greater than 0".to_string(),
-                ));
-            }
+        } if *missing_minutes == 0 => {
+            return Err(AppError::BadRequest(
+                "missing_minutes must be greater than 0".to_string(),
+            ));
         }
         _ => {}
     }
@@ -397,12 +395,10 @@ pub async fn update_alert_rule(
             }
             AlertCondition::ServerOffline {
                 missing_minutes, ..
-            } => {
-                if *missing_minutes == 0 {
-                    return Err(AppError::BadRequest(
-                        "missing_minutes must be greater than 0".to_string(),
-                    ));
-                }
+            } if *missing_minutes == 0 => {
+                return Err(AppError::BadRequest(
+                    "missing_minutes must be greater than 0".to_string(),
+                ));
             }
             _ => {}
         }
@@ -420,14 +416,14 @@ pub async fn update_alert_rule(
     let condition_json = request
         .condition
         .as_ref()
-        .map(|c| serde_json::to_string(c))
+        .map(serde_json::to_string)
         .transpose()
         .map_err(|e| AppError::BadRequest(format!("Invalid condition: {}", e)))?;
 
     let actions_json = request
         .channel_ids
         .as_ref()
-        .map(|ids| serde_json::to_string(ids))
+        .map(serde_json::to_string)
         .transpose()
         .map_err(|e| AppError::BadRequest(format!("Invalid channel IDs: {}", e)))?;
 
@@ -879,7 +875,7 @@ pub async fn update_channel(
     let config_json = request
         .config
         .as_ref()
-        .map(|c| serde_json::to_string(c))
+        .map(serde_json::to_string)
         .transpose()
         .map_err(|e| AppError::BadRequest(format!("Invalid config: {}", e)))?;
 
@@ -1048,7 +1044,7 @@ pub async fn list_alert_logs_across_projects(
 
     let limit = query.limit.min(100) as i64;
     // B3: clamp offset to prevent absurdly large OFFSET values if used in future pagination
-    let _offset = query.offset.unwrap_or(0).max(0).min(10_000_000i64);
+    let _offset = query.offset.unwrap_or(0).clamp(0, 10_000_000i64);
 
     // Fetch alert logs across all projects
     let logs = AlertLogRepository::list_across_projects(&state.db, &project_ids, limit)
@@ -1080,9 +1076,7 @@ pub async fn list_alert_logs_across_projects(
                 tracing::debug!(alert_rule_id = %log.alert_rule_id, "Skipping log for deleted/unknown rule");
                 return None;
             };
-            let Some(project) = project_map.get(project_id) else {
-                return None;
-            };
+            let project = project_map.get(project_id)?;
             Some(AlertLogWithProjectInfo {
                 id: log.id,
                 alert_rule_id: log.alert_rule_id,

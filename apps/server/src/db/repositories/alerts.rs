@@ -397,7 +397,7 @@ impl AlertLogRepository {
         .bind(alert_rule_id)
         .bind(trigger_id)
         .bind(trigger_id)
-        .bind(&cutoff)
+        .bind(cutoff)
         .fetch_optional(&mut *tx)
         .await?;
 
@@ -454,7 +454,7 @@ impl AlertLogRepository {
         .bind(rule_id)
         .bind(trigger_id)
         .bind(trigger_id)
-        .bind(&cutoff)
+        .bind(cutoff)
         .fetch_optional(pool)
         .await?;
 
@@ -538,7 +538,7 @@ impl AlertLogRepository {
                     LIMIT 5000
                 )",
             )
-            .bind(&cutoff)
+            .bind(cutoff)
             .execute(pool)
             .await?;
             let deleted = result.rows_affected();
@@ -579,7 +579,7 @@ impl EmailRateLimitRepository {
         .bind(project_id)
         .bind(issue_fingerprint)
         .bind(channel_id)
-        .bind(&cutoff)
+        .bind(cutoff)
         .fetch_optional(pool)
         .await?;
 
@@ -627,7 +627,7 @@ impl EmailRateLimitRepository {
                     LIMIT 1000
                 )",
             )
-            .bind(&cutoff)
+            .bind(cutoff)
             .execute(pool)
             .await?;
             let deleted = result.rows_affected();

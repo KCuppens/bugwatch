@@ -281,7 +281,7 @@ fn verify_stripe_signature(payload: &[u8], signature_header: &str, secret: &str)
         let delta = now - ts;
         // delta > 0  => event is in the past (allow up to 300s)
         // delta < 0  => event is in the future (allow up to 60s of skew)
-        if delta > 300 || delta < -60 {
+        if !(-60..=300).contains(&delta) {
             tracing::warn!("Stripe webhook rejected: timestamp out of window ({ts})");
             return false;
         }

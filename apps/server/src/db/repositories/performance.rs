@@ -220,7 +220,7 @@ impl PerformanceRepository {
         end: DateTime<Utc>,
         limit: i64,
     ) -> Result<Vec<TransactionAggregate>> {
-        let limit = limit.max(1).min(10_000);
+        let limit = limit.clamp(1, 10_000);
         let rows = sqlx::query_as::<
             _,
             (
@@ -334,7 +334,7 @@ impl PerformanceRepository {
             .into_iter()
             .map(|r| {
                 let ts = chrono::DateTime::from_timestamp(r.0, 0)
-                    .unwrap_or_else(|| chrono::DateTime::UNIX_EPOCH);
+                    .unwrap_or(chrono::DateTime::UNIX_EPOCH);
                 TimeSeriesPoint {
                     timestamp: ts,
                     p50: r.1.unwrap_or(0.0),
@@ -362,7 +362,7 @@ impl PerformanceRepository {
                     LIMIT 5000
                 )",
             )
-            .bind(&cutoff)
+            .bind(cutoff)
             .execute(pool)
             .await?;
             let deleted = result.rows_affected();

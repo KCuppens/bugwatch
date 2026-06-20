@@ -9,6 +9,7 @@ use uuid::Uuid;
 pub struct MonitorRepository;
 
 impl MonitorRepository {
+    #[allow(clippy::too_many_arguments)]
     pub async fn create(
         pool: &DbPool,
         project_id: &str,
@@ -126,6 +127,7 @@ impl MonitorRepository {
         Ok((monitors, total.0))
     }
 
+    #[allow(dead_code)]
     pub async fn list_active(pool: &DbPool) -> Result<Vec<Monitor>> {
         sqlx::query_as::<_, Monitor>(
             "SELECT * FROM monitors WHERE is_active = 1 ORDER BY created_at DESC",
@@ -186,6 +188,7 @@ impl MonitorRepository {
         q.fetch_all(pool).await.map_err(Into::into)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn update(
         pool: &DbPool,
         id: &str,
@@ -325,7 +328,7 @@ impl MonitorCheckRepository {
             "#,
         )
         .bind(monitor_id)
-        .bind(&cutoff)
+        .bind(cutoff)
         .fetch_one(pool)
         .await?;
 
@@ -368,7 +371,7 @@ impl MonitorCheckRepository {
         for mid in monitor_ids {
             q = q.bind(mid);
         }
-        let rows = q.bind(&cutoff).fetch_all(pool).await?;
+        let rows = q.bind(cutoff).fetch_all(pool).await?;
 
         Ok(rows
             .into_iter()
@@ -416,7 +419,7 @@ impl MonitorCheckRepository {
     pub async fn cleanup_old_checks(pool: &DbPool, days: i32) -> Result<u64> {
         let cutoff = chrono::Utc::now() - chrono::Duration::days(days as i64);
         let result = sqlx::query("DELETE FROM monitor_checks WHERE checked_at < $1")
-            .bind(&cutoff)
+            .bind(cutoff)
             .execute(pool)
             .await?;
 

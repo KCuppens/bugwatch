@@ -313,14 +313,14 @@ mod tests {
 
     #[test]
     fn bool_not_owned() {
-        assert_eq!(!Bool(true), false);
-        assert_eq!(!Bool(false), true);
+        assert!(!(!Bool(true)));
+        assert!(!Bool(false));
     }
 
     #[test]
     fn bool_not_ref() {
-        assert_eq!(!&Bool(true), false);
-        assert_eq!(!&Bool(false), true);
+        assert!(!(!&Bool(true)));
+        assert!(!&Bool(false));
     }
 
     #[test]

@@ -659,7 +659,7 @@ pub async fn update(
 
     // B8: timeout bounds on update
     if let Some(timeout) = request.timeout_ms {
-        if timeout < 1_000 || timeout > 300_000 {
+        if !(1_000..=300_000).contains(&timeout) {
             return Err(AppError::BadRequest(
                 "Timeout must be between 1000 and 300000 milliseconds".to_string(),
             ));
@@ -703,7 +703,7 @@ pub async fn update(
     let headers_str = request
         .headers
         .as_ref()
-        .map(|h| serde_json::to_string(h))
+        .map(serde_json::to_string)
         .transpose()
         .map_err(|_| AppError::BadRequest("Invalid headers format".to_string()))?;
     if let Some(ref hs) = headers_str {

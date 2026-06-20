@@ -161,8 +161,8 @@ pub async fn ingest_metrics(
     }
 
     // 4. Check tier — server monitoring is Pro+ only (bypassed in self-hosted mode or valid x402 payment)
-    if !state.config.deployment_mode.is_self_hosted()
-        && !(state.config.x402_enabled && x402_verified.is_some())
+    if !(state.config.deployment_mode.is_self_hosted()
+        || state.config.x402_enabled && x402_verified.is_some())
     {
         let tier_str = OrganizationRepository::get_project_tier(&state.db, &project.id)
             .await
@@ -173,7 +173,7 @@ pub async fn ingest_metrics(
             return Err(crate::payments::x402_feature_response(
                 &state,
                 "server_monitoring",
-                &resource,
+                resource,
                 org_id,
                 None,
                 "Server monitoring requires a Pro plan or higher. Upgrade to access this feature.",

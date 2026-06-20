@@ -20,7 +20,9 @@ pub struct LogAlertRuleRef {
     pub id: String,
     pub project_id: String,
     pub name: String,
+    #[allow(dead_code)]
     pub level_filter: Option<String>,
+    #[allow(dead_code)]
     pub search_filter: Option<String>,
     pub threshold: i64,
     pub window_seconds: i64,

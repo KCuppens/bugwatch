@@ -1,5 +1,6 @@
 use sqlx::{postgres::PgPoolOptions, PgPool, SqlitePool};
 
+#[allow(dead_code)]
 pub async fn test_pool() -> SqlitePool {
     let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
     sqlx::any::install_default_drivers();
@@ -52,6 +53,7 @@ async fn apply_schema_pg(pool: &PgPool) {
     sqlx::raw_sql(SCHEMA_PG).execute(pool).await.unwrap();
 }
 
+#[allow(dead_code)]
 async fn apply_schema_sqlite(pool: &SqlitePool) {
     sqlx::raw_sql(SCHEMA_SQLITE).execute(pool).await.unwrap();
 }
@@ -578,6 +580,7 @@ CREATE TABLE IF NOT EXISTS log_alert_rules (
 );
 "#;
 
+#[allow(dead_code)]
 const SCHEMA_SQLITE: &str = r#"
 CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY NOT NULL,

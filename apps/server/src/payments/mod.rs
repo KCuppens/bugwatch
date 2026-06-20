@@ -269,7 +269,19 @@ pub async fn x402_payment_middleware(state: AppState, req: Request<Body>, next: 
                     // We look it up from the DB via the API key
                     // DB lookup only happens after X-Payment header is present AND decoded successfully
                     let request_path = req.uri().path().to_string();
-                    let org_id = get_org_id_from_request(&state, &req).await;
+                    // Extract the API key into an owned value BEFORE the await so the
+                    // middleware future does not hold a `&Request<Body>` across it
+                    // (`&Request<Body>` is not `Send`, which `Router::layer` requires).
+                    let api_key = req
+                        .headers()
+                        .get("X-API-Key")
+                        .or_else(|| req.headers().get("Authorization"))
+                        .and_then(|v| v.to_str().ok())
+                        .map(|s| s.to_string());
+                    let org_id = match api_key.as_deref() {
+                        Some(k) => get_org_id_from_api_key(&state, k).await,
+                        None => None,
+                    };
                     if let Some(org_id) = org_id {
                         match verify_and_apply_payment(&state, &proof, &org_id, &request_path).await
                         {
@@ -362,6 +374,23 @@ pub async fn x402_feature_response(
     }
 }
 
+/// Extracts org_id from request using the X-API-Key agent auth header
+async fn get_org_id_from_api_key(state: &AppState, api_key: &str) -> Option<String> {
+    use crate::auth::agent::hash_agent_key;
+    use crate::db::repositories::AgentKeyRepository;
+
+    let key = api_key.trim_start_matches("Bearer ").trim();
+    if !key.starts_with("bw_agent_") {
+        return None;
+    }
+
+    let key_hash = hash_agent_key(key, state.config.jwt_secret.as_bytes());
+    let agent_key = AgentKeyRepository::find_by_hash(&state.db, &key_hash)
+        .await
+        .ok()??;
+    Some(agent_key.organization_id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -396,27 +425,4 @@ mod tests {
         let err = decode_payment_proof(&b64(r#"{"nonce":"only-nonce"}"#)).unwrap_err();
         assert!(err.contains("JSON parse failed"), "got: {}", err);
     }
-}
-
-/// Extracts org_id from request using the X-API-Key agent auth header
-async fn get_org_id_from_request(state: &AppState, req: &Request<Body>) -> Option<String> {
-    use crate::auth::agent::hash_agent_key;
-    use crate::db::repositories::AgentKeyRepository;
-
-    let api_key = req
-        .headers()
-        .get("X-API-Key")
-        .or_else(|| req.headers().get("Authorization"))
-        .and_then(|v| v.to_str().ok())?;
-
-    let key = api_key.trim_start_matches("Bearer ").trim();
-    if !key.starts_with("bw_agent_") {
-        return None;
-    }
-
-    let key_hash = hash_agent_key(key, state.config.jwt_secret.as_bytes());
-    let agent_key = AgentKeyRepository::find_by_hash(&state.db, &key_hash)
-        .await
-        .ok()??;
-    Some(agent_key.organization_id)
 }
