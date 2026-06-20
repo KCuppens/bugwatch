@@ -3,7 +3,7 @@
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 
 class Level(str, Enum):
@@ -131,6 +131,6 @@ class BugwatchOptions:
     sample_rate: float = 1.0
     attach_stacktrace: bool = True
     send_default_pii: bool = False
-    before_send: Optional[callable] = None
+    before_send: Optional[Callable[..., Any]] = None
     capture_locals: bool = False  # Capture local variables (may include sensitive data)
     max_value_length: int = 1024  # Max length for serialized variable values

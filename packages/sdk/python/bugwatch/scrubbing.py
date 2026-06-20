@@ -108,7 +108,7 @@ def _scrub_value(
     patterns: list[Pattern[str]],
     scrub_emails: bool,
     depth: int,
-    seen: set,
+    seen: set[int],
 ) -> Any:
     if depth > 8:
         return value
@@ -160,7 +160,7 @@ def scrub_event(
     sensitive_keys = [k.lower() for k in sensitive_keys]
     patterns = DEFAULT_VALUE_PATTERNS + (opts.get("custom_patterns") or [])
     scrub_emails = opts.get("scrub_emails", False)
-    seen: set = set()
+    seen: set[int] = set()
 
     result = copy.deepcopy(event)
 

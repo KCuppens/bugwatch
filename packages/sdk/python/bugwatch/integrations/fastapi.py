@@ -77,7 +77,7 @@ class BugwatchFastAPI:
         from starlette.responses import Response
 
         class BugwatchMiddleware(BaseHTTPMiddleware):
-            async def dispatch(self, request: Request, call_next: Callable) -> Response:
+            async def dispatch(self, request: Request, call_next: Callable[..., Any]) -> Response:
                 client = get_client()
 
                 # Use request_scope for context isolation between concurrent requests
@@ -91,7 +91,7 @@ class BugwatchFastAPI:
                         )
 
                     try:
-                        response = await call_next(request)
+                        response: Response = await call_next(request)
 
                         # Add response breadcrumb
                         if client:
@@ -139,7 +139,7 @@ class BugwatchFastAPI:
         from fastapi import Request
         from fastapi.responses import JSONResponse
 
-        @app.exception_handler(Exception)
+        @app.exception_handler(Exception)  # type: ignore[untyped-decorator]
         async def bugwatch_exception_handler(request: Request, exc: Exception) -> JSONResponse:
             client = get_client()
             if client:
@@ -180,7 +180,7 @@ def init_fastapi(app: Any, api_key: str, **kwargs: Any) -> BugwatchFastAPI:
     return BugwatchFastAPI(app, api_key=api_key, **kwargs)
 
 
-def capture_exceptions(func: Callable) -> Callable:
+def capture_exceptions(func: Callable[..., Any]) -> Callable[..., Any]:
     """
     Decorator to capture exceptions from a FastAPI route.
 
@@ -276,7 +276,7 @@ async def _extract_fastapi_request_context(request: Any) -> Optional[RequestCont
 
 
 # Dependency injection helper
-def get_bugwatch_user(user_getter: Callable) -> Callable:
+def get_bugwatch_user(user_getter: Callable[..., Any]) -> Callable[..., Any]:
     """
     Create a dependency that sets the Bugwatch user context.
 

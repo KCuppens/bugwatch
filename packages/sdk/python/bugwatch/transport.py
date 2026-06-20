@@ -5,7 +5,7 @@ import logging
 from abc import ABC, abstractmethod
 from dataclasses import asdict
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Optional, cast
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -92,7 +92,7 @@ class HttpTransport(Transport):
                 return [convert_and_clean(item) for item in obj]
             return obj
 
-        return convert_and_clean(data)
+        return cast("dict[str, Any]", convert_and_clean(data))
 
 
 class AsyncHttpTransport(Transport):

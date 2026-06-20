@@ -172,7 +172,7 @@ describe("expressErrorHandler", () => {
     _mockClient = makeMockClient();
     const handler = expressErrorHandler();
     handler(new Error("e"), makeReq({ authorization: "Bearer secret" }), { statusCode: 500 } as any, vi.fn());
-    const requestArg = _mockClient.captureException.mock.calls[0][1].request;
+    const requestArg = _mockClient.captureException.mock.calls[0]![1].request;
     expect(requestArg.headers.authorization).toBe("[Filtered]");
     expect(requestArg.headers["content-type"]).toBe("application/json");
   });
@@ -181,7 +181,7 @@ describe("expressErrorHandler", () => {
     _mockClient = makeMockClient();
     const handler = expressErrorHandler();
     handler("plain string" as any, makeReq(), { statusCode: 500 } as any, vi.fn());
-    const [err] = _mockClient.captureException.mock.calls[0];
+    const [err] = _mockClient.captureException.mock.calls[0]!;
     // expressErrorHandler does not normalise — it forwards whatever err it receives
     expect(err).toBe("plain string");
   });
@@ -336,7 +336,7 @@ describe("uncaughtException handler", () => {
     const client = init({ apiKey: "bw_test" });
 
     const listeners = process.rawListeners("uncaughtException") as Function[];
-    const ourHandler = listeners[listeners.length - 1];
+    const ourHandler = listeners[listeners.length - 1]!;
 
     ourHandler(new Error("crash!"));
 
@@ -355,7 +355,7 @@ describe("uncaughtException handler", () => {
     const client = init({ apiKey: "bw_test" });
 
     const listeners = process.rawListeners("uncaughtException") as Function[];
-    const ourHandler = listeners[listeners.length - 1];
+    const ourHandler = listeners[listeners.length - 1]!;
 
     ourHandler("plain string crash");
 
@@ -373,7 +373,7 @@ describe("unhandledRejection handler", () => {
     const client = init({ apiKey: "bw_test" });
 
     const listeners = process.rawListeners("unhandledRejection") as Function[];
-    const ourHandler = listeners[listeners.length - 1];
+    const ourHandler = listeners[listeners.length - 1]!;
 
     ourHandler(new Error("unhandled promise"));
 
@@ -387,7 +387,7 @@ describe("unhandledRejection handler", () => {
     const client = init({ apiKey: "bw_test" });
 
     const listeners = process.rawListeners("unhandledRejection") as Function[];
-    const ourHandler = listeners[listeners.length - 1];
+    const ourHandler = listeners[listeners.length - 1]!;
 
     ourHandler(42);
 
@@ -410,7 +410,7 @@ describe("setupConsoleErrorCapture (via init)", () => {
   it("captures Error objects found in console.error args", () => {
     const client = init({ apiKey: "bw_test" });
     const err = new Error("db connection failed");
-    vi.spyOn(origConsoleError, "apply" as any).mockImplementation(() => {});
+    vi.spyOn(origConsoleError as any, "apply").mockImplementation(() => {});
     console.error("context:", err);
     expect(client.captureException).toHaveBeenCalledWith(
       err,
@@ -420,14 +420,14 @@ describe("setupConsoleErrorCapture (via init)", () => {
 
   it("captures error-like text messages", () => {
     const client = init({ apiKey: "bw_test" });
-    vi.spyOn(origConsoleError, "apply" as any).mockImplementation(() => {});
+    vi.spyOn(origConsoleError as any, "apply").mockImplementation(() => {});
     console.error("ECONNREFUSED connecting to database");
     expect(client.captureMessage).toHaveBeenCalledWith(expect.stringContaining("ECONNREFUSED"), "warning");
   });
 
   it("skips messages starting with [Bugwatch]", () => {
     const client = init({ apiKey: "bw_test" });
-    vi.spyOn(origConsoleError, "apply" as any).mockImplementation(() => {});
+    vi.spyOn(origConsoleError as any, "apply").mockImplementation(() => {});
     console.error("[Bugwatch] SDK debug info");
     expect(client.captureException).not.toHaveBeenCalled();
     expect(client.captureMessage).not.toHaveBeenCalled();
@@ -435,7 +435,7 @@ describe("setupConsoleErrorCapture (via init)", () => {
 
   it("skips non-error-like plain text", () => {
     const client = init({ apiKey: "bw_test" });
-    vi.spyOn(origConsoleError, "apply" as any).mockImplementation(() => {});
+    vi.spyOn(origConsoleError as any, "apply").mockImplementation(() => {});
     console.error("everything is fine");
     expect(client.captureException).not.toHaveBeenCalled();
     expect(client.captureMessage).not.toHaveBeenCalled();

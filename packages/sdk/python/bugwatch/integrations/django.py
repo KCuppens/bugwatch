@@ -26,7 +26,7 @@ class BugwatchMiddleware:
         }
     """
 
-    def __init__(self, get_response: Callable) -> None:
+    def __init__(self, get_response: Callable[..., Any]) -> None:
         self.get_response = get_response
         self._initialized = False
 
@@ -183,14 +183,15 @@ def _get_client_ip(request: Any) -> Optional[str]:
         x_forwarded_for = request.META.get("HTTP_X_FORWARDED_FOR")
         if x_forwarded_for:
             # Take the first IP (client IP)
-            return x_forwarded_for.split(",")[0].strip()
+            return str(x_forwarded_for.split(",")[0].strip())
 
         x_real_ip = request.META.get("HTTP_X_REAL_IP")
         if x_real_ip:
-            return x_real_ip
+            return str(x_real_ip)
 
         # Fall back to REMOTE_ADDR
-        return request.META.get("REMOTE_ADDR")
+        remote_addr = request.META.get("REMOTE_ADDR")
+        return str(remote_addr) if remote_addr is not None else None
     except Exception:
         return None
 

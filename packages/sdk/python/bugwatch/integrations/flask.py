@@ -160,7 +160,7 @@ def init_flask(app: Any, api_key: str, **kwargs: Any) -> BugwatchFlask:
     return BugwatchFlask(app, api_key=api_key, **kwargs)
 
 
-def capture_exceptions(func: Callable) -> Callable:
+def capture_exceptions(func: Callable[..., Any]) -> Callable[..., Any]:
     """
     Decorator to capture exceptions from a Flask view.
 

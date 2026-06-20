@@ -7,7 +7,7 @@ import sys
 import threading
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from .fingerprint import fingerprint_from_exception
 from .scrubbing import scrub_event
@@ -443,7 +443,7 @@ class BugwatchClient:
 
         return True
 
-    def _extract_locals(self, local_vars: dict) -> dict[str, Any]:
+    def _extract_locals(self, local_vars: dict[str, Any]) -> Optional[dict[str, Any]]:
         """Extract and serialize local variables safely."""
         result = {}
         max_len = self.options.max_value_length
@@ -533,7 +533,7 @@ class BugwatchClient:
             return f"<{type(value).__name__}>"
 
 
-def request_scope():
+def request_scope() -> "_RequestScope":
     """
     Context manager that creates an isolated scope for a single request.
 
@@ -554,20 +554,20 @@ def request_scope():
 class _RequestScope:
     """Context manager for request-scoped isolation using contextvars."""
 
-    def __enter__(self):
+    def __enter__(self) -> "_RequestScope":
         self._user_token = _ctx_user.set(None)
         self._request_token = _ctx_request.set(None)
         self._breadcrumbs_token = _ctx_breadcrumbs.set([])
         return self
 
-    def __exit__(self, *exc):
+    def __exit__(self, *exc: Any) -> "Literal[False]":
         _ctx_user.reset(self._user_token)
         _ctx_request.reset(self._request_token)
         _ctx_breadcrumbs.reset(self._breadcrumbs_token)
         return False
 
-    async def __aenter__(self):
+    async def __aenter__(self) -> "_RequestScope":
         return self.__enter__()
 
-    async def __aexit__(self, *exc):
+    async def __aexit__(self, *exc: Any) -> "Literal[False]":
         return self.__exit__(*exc)

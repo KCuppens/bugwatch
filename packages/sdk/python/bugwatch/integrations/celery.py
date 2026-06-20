@@ -125,12 +125,12 @@ class CeleryIntegration:
             task_retry,
         )
 
-        @task_failure.connect
+        @task_failure.connect  # type: ignore[untyped-decorator]
         def handle_task_failure(
             sender: Any = None,
             task_id: Optional[str] = None,
             exception: Optional[Exception] = None,
-            args: Optional[tuple] = None,
+            args: Optional[tuple[Any, ...]] = None,
             kwargs: Optional[dict[str, Any]] = None,
             traceback: Any = None,
             einfo: Any = None,
@@ -179,7 +179,7 @@ class CeleryIntegration:
                 # Never let our handler cause task issues
                 pass
 
-        @task_retry.connect
+        @task_retry.connect  # type: ignore[untyped-decorator]
         def handle_task_retry(
             sender: Any = None,
             reason: Any = None,
@@ -212,12 +212,12 @@ class CeleryIntegration:
                 # Never let our handler cause task issues
                 pass
 
-        @task_prerun.connect
+        @task_prerun.connect  # type: ignore[untyped-decorator]
         def handle_task_prerun(
             sender: Any = None,
             task_id: Optional[str] = None,
             task: Any = None,
-            args: Optional[tuple] = None,
+            args: Optional[tuple[Any, ...]] = None,
             kwargs: Optional[dict[str, Any]] = None,
             **kw: Any,
         ) -> None:
@@ -243,12 +243,12 @@ class CeleryIntegration:
                 # Never let our handler cause task issues
                 pass
 
-        @task_postrun.connect
+        @task_postrun.connect  # type: ignore[untyped-decorator]
         def handle_task_postrun(
             sender: Any = None,
             task_id: Optional[str] = None,
             task: Any = None,
-            args: Optional[tuple] = None,
+            args: Optional[tuple[Any, ...]] = None,
             kwargs: Optional[dict[str, Any]] = None,
             retval: Any = None,
             state: Optional[str] = None,
