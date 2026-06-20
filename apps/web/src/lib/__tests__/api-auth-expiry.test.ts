@@ -8,9 +8,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { api } from "../api";
 
-// Helper: build a minimal Response-like object for jsdom
+// Helper: build a minimal Response-like object for jsdom.
+// handleResponse() requires a JSON content-type on successful (2xx) bodies,
+// so tag every mock response as application/json the way the real API does.
 function makeResponse(body: string | null, status: number): Response {
-  return new Response(body, { status });
+  return new Response(body, {
+    status,
+    headers: { "content-type": "application/json" },
+  });
 }
 
 describe("fetchWithAuth — session expiry event", () => {

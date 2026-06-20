@@ -238,9 +238,9 @@ describe("AuthProvider — visibilitychange retry loop regression", () => {
     expect(authApiMock.me).toHaveBeenCalledTimes(1);
   });
 
-  // ── 5. bugwatch-auth-expired event does not trigger a re-fetch ──
+  // ── 5. bugwatch-auth-expired event re-checks the session, then clears on 401 ──
 
-  it("bugwatch-auth-expired event clears user but does not trigger another fetchCurrentUser", async () => {
+  it("bugwatch-auth-expired event re-checks the session and clears user when it has expired", async () => {
     const mockUser = { id: "u1", email: "a@b.com", name: "A", created_at: "", organization: null };
 
     // initAuth succeeds — user is set
@@ -263,16 +263,21 @@ describe("AuthProvider — visibilitychange retry loop regression", () => {
     expect(capturedCtx.user).not.toBeNull();
     expect(authApiMock.me).toHaveBeenCalledTimes(1);
 
+    // The event handler re-checks the session before clearing (another tab may
+    // have refreshed the cookies). Here the session is genuinely gone, so the
+    // re-check 401s and the user is cleared.
+    authApiMock.me.mockRejectedValueOnce(new ApiError(401, "unauthorized", "Session expired"));
+
     // Simulate fetchWithAuth dispatching the session-expired event
     await act(async () => {
       window.dispatchEvent(new Event("bugwatch-auth-expired"));
     });
 
-    // user must be cleared
+    // user must be cleared after the failed re-check
     expect(capturedCtx.user).toBeNull();
 
-    // The event handler must NOT call fetchCurrentUser — it only clears state
-    expect(authApiMock.me).toHaveBeenCalledTimes(1);
+    // The event handler re-checks via fetchCurrentUser (one additional me() call)
+    expect(authApiMock.me).toHaveBeenCalledTimes(2);
   });
 
   // ── 6. visibilitychange after bugwatch-auth-expired does not re-fetch ──
@@ -296,13 +301,15 @@ describe("AuthProvider — visibilitychange retry loop regression", () => {
       );
     });
 
-    // Session expires
+    // Session expires: the event handler re-checks via me(), which now 401s,
+    // so the user is cleared.
+    authApiMock.me.mockRejectedValueOnce(new ApiError(401, "unauthorized", "Session expired"));
     await act(async () => {
       window.dispatchEvent(new Event("bugwatch-auth-expired"));
     });
 
     expect(capturedCtx.user).toBeNull();
-    const callCountAfterExpiry = authApiMock.me.mock.calls.length; // should be 1
+    const callCountAfterExpiry = authApiMock.me.mock.calls.length; // 2: mount + expiry re-check
 
     // User switches back to the tab
     await act(async () => {

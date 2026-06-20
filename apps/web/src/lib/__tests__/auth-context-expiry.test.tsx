@@ -43,11 +43,11 @@ describe("AuthProvider — bugwatch-auth-expired event", () => {
     vi.clearAllMocks();
   });
 
-  it("clears user state when bugwatch-auth-expired fires after user is set", async () => {
-    const { authApi } = await import("../api");
+  it("clears user state when bugwatch-auth-expired fires and the session has truly expired", async () => {
+    const { authApi, ApiError } = await import("../api");
 
-    // Simulate a logged-in user returned by /auth/me
-    vi.mocked(authApi.me).mockResolvedValue({
+    // Simulate a logged-in user returned by /auth/me on mount
+    vi.mocked(authApi.me).mockResolvedValueOnce({
       data: { id: "user-1", email: "test@example.com", name: "Test User" },
     } as never);
 
@@ -67,6 +67,13 @@ describe("AuthProvider — bugwatch-auth-expired event", () => {
 
     // Auth should now be established
     expect(capturedCtx.isAuthenticated).toBe(true);
+
+    // The event handler re-checks the session before clearing (another tab may
+    // have refreshed the cookies). Here the session is genuinely gone, so the
+    // re-check 401s and the user is cleared.
+    vi.mocked(authApi.me).mockRejectedValueOnce(
+      new ApiError(401, "unauthorized", "Session expired")
+    );
 
     // Fire the session-expired event (as fetchWithAuth would on failed refresh)
     await act(async () => {
