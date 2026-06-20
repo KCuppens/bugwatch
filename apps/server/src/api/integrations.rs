@@ -1372,6 +1372,8 @@ mod tests {
             db: pool.clone(),
             config: Arc::new(config),
             rate_limiter: crate::RateLimiter::new(),
+            #[cfg(feature = "saas")]
+            stripe: None,
             alerting_service,
             notification_service,
             bugwatch: None,

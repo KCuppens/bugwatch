@@ -12,7 +12,7 @@ use crate::billing::StripeClient;
 #[cfg(feature = "saas")]
 use crate::db::models::UsageRecord;
 #[cfg(feature = "saas")]
-use crate::db::repositories::UsageRepository;
+use crate::db::repositories::organizations::UsageRepository;
 use crate::{
     auth::AuthUser,
     db::{
@@ -545,9 +545,9 @@ mod saas_billing {
             seats: org.seats,
             subscription_status: org.subscription_status,
             billing_interval: org.billing_interval,
-            current_period_start: org.current_period_start,
-            current_period_end: org.current_period_end,
-            cancel_at_period_end: org.cancel_at_period_end,
+            current_period_start: org.current_period_start.map(|t| t.0),
+            current_period_end: org.current_period_end.map(|t| t.0),
+            cancel_at_period_end: org.cancel_at_period_end.0,
             has_stripe: org.stripe_subscription_id.is_some(),
         }))
     }
@@ -801,9 +801,9 @@ mod saas_billing {
                             seats: org.seats,
                             subscription_status: org.subscription_status,
                             billing_interval: org.billing_interval,
-                            current_period_start: org.current_period_start,
-                            current_period_end: org.current_period_end,
-                            cancel_at_period_end: org.cancel_at_period_end,
+                            current_period_start: org.current_period_start.map(|t| t.0),
+                            current_period_end: org.current_period_end.map(|t| t.0),
+                            cancel_at_period_end: org.cancel_at_period_end.0,
                             has_stripe: true,
                         }),
                         message: "Subscription already active".to_string(),
@@ -930,9 +930,9 @@ mod saas_billing {
                         seats: o.seats,
                         subscription_status: o.subscription_status.clone(),
                         billing_interval: o.billing_interval.clone(),
-                        current_period_start: o.current_period_start,
-                        current_period_end: o.current_period_end,
-                        cancel_at_period_end: o.cancel_at_period_end,
+                        current_period_start: o.current_period_start.map(|t| t.0),
+                        current_period_end: o.current_period_end.map(|t| t.0),
+                        cancel_at_period_end: o.cancel_at_period_end.0,
                         has_stripe: o.stripe_subscription_id.is_some(),
                     });
                     return Ok(Json(VerifyCheckoutResponse {
@@ -1139,8 +1139,8 @@ mod saas_billing {
             Some(&subscription_id),
             new_status,
             org.billing_interval.as_deref(),
-            org.current_period_start,
-            org.current_period_end,
+            org.current_period_start.map(|t| t.0),
+            org.current_period_end.map(|t| t.0),
             cancel_flag,
         )
         .await
@@ -1180,7 +1180,7 @@ mod saas_billing {
         let now = chrono::Utc::now();
         let (period_start, period_end) = match (&org.current_period_start, &org.current_period_end)
         {
-            (Some(start), Some(end)) => (*start, *end),
+            (Some(start), Some(end)) => (start.0, end.0),
             _ => {
                 // Default to current calendar month - use beginning of current month
                 use chrono::{Datelike, TimeZone};
@@ -2148,10 +2148,10 @@ mod saas_billing {
             monthly_cost_cents,
             seats_used: members_count,
             seats_total: org.seats,
-            billing_period_start: org.current_period_start,
-            billing_period_end: org.current_period_end,
+            billing_period_start: org.current_period_start.map(|t| t.0),
+            billing_period_end: org.current_period_end.map(|t| t.0),
             is_past_due: org.subscription_status == "past_due",
-            cancel_at_period_end: org.cancel_at_period_end,
+            cancel_at_period_end: org.cancel_at_period_end.0,
         }))
     }
 
