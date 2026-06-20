@@ -52,38 +52,38 @@ describe("registerBugwatch", () => {
     warnSpy.mockRestore();
   });
 
-  it("initialises edge runtime SDK when runtime=edge", () => {
+  it("initialises edge runtime SDK when runtime=edge", async () => {
     // initEdge uses require('@bugwatch/core') which resolves to the CJS build — a different
     // module instance from the ESM mock; verify via the observable side-effect instead.
-    registerBugwatch({ apiKey: "bw_edge_key", runtime: "edge" });
+    await registerBugwatch({ apiKey: "bw_edge_key", runtime: "edge" });
     expect(isRegistered()).toBe(true);
   });
 
-  it("is idempotent — second call is a no-op", () => {
-    registerBugwatch({ apiKey: "bw_edge_key", runtime: "edge" });
+  it("is idempotent — second call is a no-op", async () => {
+    await registerBugwatch({ apiKey: "bw_edge_key", runtime: "edge" });
     expect(isRegistered()).toBe(true);
     // getEnvConfig is called before init but after the registered guard, so a second call
     // (which hits the guard) must not call getEnvConfig again.
     const callsBefore = vi.mocked(configMod.getEnvConfig).mock.calls.length;
-    registerBugwatch({ apiKey: "bw_edge_key", runtime: "edge" });
+    await registerBugwatch({ apiKey: "bw_edge_key", runtime: "edge" });
     expect(vi.mocked(configMod.getEnvConfig).mock.calls.length).toBe(callsBefore);
   });
 
-  it("uses apiKey from env config (edge runtime)", () => {
+  it("uses apiKey from env config (edge runtime)", async () => {
     vi.mocked(configMod.getEnvConfig).mockReturnValue({ apiKey: "bw_env_key" });
     // No explicit apiKey — must read bw_env_key from env config and still register.
-    registerBugwatch({ runtime: "edge" });
+    await registerBugwatch({ runtime: "edge" });
     expect(isRegistered()).toBe(true);
   });
 });
 
 describe("reset", () => {
-  it("allows re-registration after reset", () => {
-    registerBugwatch({ apiKey: "bw_key", runtime: "edge" });
+  it("allows re-registration after reset", async () => {
+    await registerBugwatch({ apiKey: "bw_key", runtime: "edge" });
     expect(isRegistered()).toBe(true);
     reset();
     expect(isRegistered()).toBe(false);
-    registerBugwatch({ apiKey: "bw_key", runtime: "edge" });
+    await registerBugwatch({ apiKey: "bw_key", runtime: "edge" });
     expect(isRegistered()).toBe(true);
   });
 });
@@ -158,33 +158,36 @@ describe("onRequestError", () => {
 
 // ── detectRuntime (via registerBugwatch without explicit runtime) ─────────────
 describe("detectRuntime", () => {
-  it("detects edge from NEXT_RUNTIME env var", () => {
+  it("detects edge from NEXT_RUNTIME env var", async () => {
     vi.stubEnv("NEXT_RUNTIME", "edge");
-    registerBugwatch({ apiKey: "bw_test" });
+    await registerBugwatch({ apiKey: "bw_test" });
     expect(isRegistered()).toBe(true);
     // Edge path taken — initNode (which uses require('./index')) is NOT called
     expect(mockNodeIndexInit).not.toHaveBeenCalled();
   });
 
-  it("detects edge from EdgeRuntime global", () => {
+  it("detects edge from EdgeRuntime global", async () => {
     vi.stubGlobal("EdgeRuntime", "edge");
-    registerBugwatch({ apiKey: "bw_test" });
+    await registerBugwatch({ apiKey: "bw_test" });
     expect(isRegistered()).toBe(true);
     vi.unstubAllGlobals();
   });
 
-  it("enters nodejs path when no edge indicators (covers detectRuntime default return)", () => {
-    // require('./index') fails in this ESM/CJS context but the detectRuntime
-    // "return nodejs" branch and the initNode call site are still counted as covered.
-    expect(() => registerBugwatch({ apiKey: "bw_test" })).toThrow();
+  it("enters nodejs path when no edge indicators (covers detectRuntime default return)", async () => {
+    // No edge indicators → detectRuntime returns "nodejs" and initNode runs,
+    // importing the mocked ./index and calling its init. Exercising this path
+    // covers the detectRuntime default-return branch and the initNode call site.
+    await registerBugwatch({ apiKey: "bw_test" });
+    expect(isRegistered()).toBe(true);
+    expect(mockNodeIndexInit).toHaveBeenCalled();
   });
 });
 
 // ── initEdge debug log ────────────────────────────────────────────────────────
 describe("initEdge debug", () => {
-  it("logs debug message when debug is true", () => {
+  it("logs debug message when debug is true", async () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-    registerBugwatch({ apiKey: "bw_test", runtime: "edge", debug: true });
+    await registerBugwatch({ apiKey: "bw_test", runtime: "edge", debug: true });
     expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("Edge runtime"));
     logSpy.mockRestore();
   });
