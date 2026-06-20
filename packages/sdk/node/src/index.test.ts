@@ -57,8 +57,10 @@ describe("init", () => {
 
   it("sets runtime, version, os.platform, os.arch tags", () => {
     const client = init({ apiKey: "bw_test" });
-    expect(client.setTag).toHaveBeenCalledWith("runtime", "node");
-    expect(client.setTag).toHaveBeenCalledWith("runtime.version", process.version);
+    // runtime is provided via the core init options, not as a tag
+    expect(core.init).toHaveBeenCalledWith(
+      expect.objectContaining({ runtime: { name: "node", version: process.version } })
+    );
     expect(client.setTag).toHaveBeenCalledWith("os.platform", process.platform);
     expect(client.setTag).toHaveBeenCalledWith("os.arch", process.arch);
   });
