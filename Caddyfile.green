@@ -22,3 +22,10 @@
         reverse_proxy bugwatch-web-green:3001
     }
 }
+
+# Backward-compatible API host: existing SDK clients were configured against
+# https://api.bugwatch.dev before the single-origin cutover. Keep it serving the
+# API directly so already-deployed integrations don't break.
+api.bugwatch.dev {
+    reverse_proxy bugwatch-server-green:3000
+}
