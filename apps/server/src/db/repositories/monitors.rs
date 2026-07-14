@@ -151,7 +151,10 @@ impl MonitorRepository {
                       last_checked_at IS NULL
                       OR EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - last_checked_at)) >= interval_seconds
                   )
-                ORDER BY last_checked_at ASC
+                -- NULLS FIRST: never-checked monitors must win the batch, otherwise a
+                -- standing backlog of due monitors starves new ones of their first check
+                -- forever (Postgres sorts NULLs last under plain ASC).
+                ORDER BY last_checked_at ASC NULLS FIRST
                 LIMIT $1
             )
             RETURNING *

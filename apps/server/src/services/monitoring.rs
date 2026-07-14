@@ -13,8 +13,12 @@ use crate::db::{
     DbPool,
 };
 
-/// Maximum concurrent health checks to prevent OOM from accumulated timeouts
-const MAX_CONCURRENT_CHECKS: usize = 10;
+/// Maximum concurrent health checks — bounds in-flight requests (OOM guard for
+/// accumulated timeouts) and sizes the per-cycle claim batch. Must cover the fleet:
+/// at a 10s cycle, capacity is 6×this per minute vs one check per monitor per
+/// interval_seconds (60s default) — 10 capped us at 60 checks/min against 500+
+/// active monitors, stretching every "60s" monitor to ~9 minutes.
+const MAX_CONCURRENT_CHECKS: usize = 100;
 
 /// Health check worker that monitors endpoints
 pub struct HealthCheckWorker {
