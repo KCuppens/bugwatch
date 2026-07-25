@@ -32,7 +32,7 @@
     "fastify": "^4.0.0 || ^5.0.0"
   },
   "devDependencies": {
-    "fastify": "^5.8.5",
+    "fastify": "^5.10.0",
     "tsup": "^8.0.0",
     "typescript": "^5.3.0"
   },

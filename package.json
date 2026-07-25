@@ -53,14 +53,14 @@
     ]
   },
   "devDependencies": {
-    "@playwright/test": "^1.57.0",
-    "@vitest/coverage-v8": "^4.0.16",
+    "@playwright/test": "^1.61.1",
+    "@vitest/coverage-v8": "^4.1.10",
     "husky": "^9.1.7",
     "lint-staged": "^15.5.2",
-    "prettier": "^3.2.5",
-    "turbo": "^2.3.3",
+    "prettier": "^3.9.4",
+    "turbo": "^2.10.4",
     "typescript": "^5.7.2",
-    "typescript-eslint": "^8.57.0",
+    "typescript-eslint": "^8.63.0",
     "vitest": "^4.0.16"
   },
   "packageManager": "npm@10.8.0",
