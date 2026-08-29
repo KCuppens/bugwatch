@@ -13,7 +13,7 @@ saas = ["dep:async-stripe", "dep:aws-sdk-sesv2", "dep:aws-config"]
 
 [dependencies]
 # Web framework
-axum = { version = "0.7", features = ["macros"] }
+axum = { version = "0.8", features = ["macros"] }
 axum-extra = { version = "0.9", features = ["typed-header"] }
 tokio = { version = "1.43", features = ["rt-multi-thread", "macros", "sync", "net", "time", "signal", "io-util", "fs"] }
 tower = "0.5"
