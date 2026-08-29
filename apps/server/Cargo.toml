@@ -68,7 +68,7 @@ urlencoding = "2.1"
 reqwest = { version = "0.12", features = ["json"] }
 
 # Stripe payments (SaaS only)
-async-stripe = { version = "0.39", features = ["runtime-tokio-hyper"], optional = true }
+async-stripe = { version = "0.41", features = ["runtime-tokio-hyper"], optional = true }
 
 # AWS SDK for email (SES) (SaaS only)
 aws-config = { version = "1.5", features = ["behavior-version-latest"], optional = true }
