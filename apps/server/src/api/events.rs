@@ -391,6 +391,34 @@ pub async fn ingest(
         (fp, msg.to_string())
     };
 
+    // 6b. Server-side noise filter: drop events whose title contains any of this
+    //     project's `settings.ignore_patterns` (substring match). Lets an operator
+    //     silence high-volume client noise (e.g. "HTTP 429" prefetch errors) at
+    //     ingestion without an SDK redeploy. Returns 202 "ignored" without
+    //     creating or incrementing an issue. Malformed settings are ignored.
+    if let Ok(settings) = serde_json::from_str::<serde_json::Value>(&project.settings) {
+        if let Some(patterns) = settings.get("ignore_patterns").and_then(|v| v.as_array()) {
+            let matched = patterns
+                .iter()
+                .filter_map(|p| p.as_str())
+                .any(|p| !p.is_empty() && title.contains(p));
+            if matched {
+                tracing::debug!(
+                    "Dropping event {} — title matches project {} ignore_patterns",
+                    event.event_id,
+                    project.id
+                );
+                return Ok((
+                    StatusCode::ACCEPTED,
+                    Json(IngestResponse {
+                        id: event.event_id.clone(),
+                        status: "ignored".to_string(),
+                    }),
+                ));
+            }
+        }
+    }
+
     // 7. Get level as string
     let level = match event.level {
         EventLevel::Fatal => "fatal",
