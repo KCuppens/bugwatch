@@ -26,6 +26,7 @@ env:
   REGISTRY: ghcr.io
   SERVER_IMAGE: ghcr.io/kcuppens/bugwatch-server
   WEB_IMAGE: ghcr.io/kcuppens/bugwatch-web
+  MCP_IMAGE: ghcr.io/kcuppens/bugwatch-mcp
 
 jobs:
   # ---------- CI (skipped on manual dispatch) ----------
@@ -89,6 +90,18 @@ jobs:
             ${{ env.WEB_IMAGE }}:latest
           cache-from: type=gha,scope=web
           cache-to: type=gha,scope=web,mode=max
+
+      - name: Build and push MCP image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: packages/mcp/Dockerfile
+          push: true
+          tags: |
+            ${{ env.MCP_IMAGE }}:${{ steps.tag.outputs.sha_tag }}
+            ${{ env.MCP_IMAGE }}:latest
+          cache-from: type=gha,scope=mcp
+          cache-to: type=gha,scope=mcp,mode=max
 
   # ---------- Deploy to staging ----------
   deploy-staging:

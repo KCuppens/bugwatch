@@ -47,6 +47,29 @@ services:
       retries: 3
       start_period: 30s
 
+  bugwatch-mcp-blue:
+    image: ghcr.io/kcuppens/bugwatch-mcp:${IMAGE_TAG:-latest}
+    container_name: bugwatch-mcp-blue
+    restart: unless-stopped
+    stop_grace_period: 15s
+    networks:
+      - bugwatch
+    environment:
+      MCP_HTTP_PORT: 3002
+      # Single shared upstream key: every caller acts as this Bugwatch agent key.
+      BUGWATCH_AGENT_KEY: ${BUGWATCH_AGENT_KEY}
+      # Talk to the same-color API over the internal network.
+      BUGWATCH_URL: http://bugwatch-server-blue:3000
+      # Shared bearer secret gating the public /mcp endpoint. Leave unset only if
+      # the endpoint is otherwise network-restricted.
+      MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN:-}
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3002/health').then(r=>{process.exit(r.ok?0:1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
 networks:
   bugwatch:
     external: true

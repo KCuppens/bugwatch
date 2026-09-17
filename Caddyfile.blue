@@ -4,6 +4,11 @@
         reverse_proxy bugwatch-server-blue:3000
     }
 
+    # Hosted MCP server (Streamable HTTP)
+    handle /mcp* {
+        reverse_proxy bugwatch-mcp-blue:3002
+    }
+
     # Health check
     handle /health {
         reverse_proxy bugwatch-server-blue:3000

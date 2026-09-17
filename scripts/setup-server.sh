@@ -39,6 +39,12 @@ JWT_SECRET=CHANGE_ME_MIN_32_CHARS
 # Database
 POSTGRES_PASSWORD=CHANGE_ME
 
+# Hosted MCP (bugwatch.dev/mcp)
+# Required for the bugwatch-mcp container to start. Single shared agent key.
+BUGWATCH_AGENT_KEY=CHANGE_ME_bw_agent_key
+# Shared bearer secret gating /mcp. Strongly recommended (empty = open endpoint).
+MCP_AUTH_TOKEN=CHANGE_ME_random_secret
+
 # SMTP (optional)
 SMTP_HOST=
 SMTP_PORT=587

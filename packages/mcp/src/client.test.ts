@@ -29,11 +29,27 @@ describe("BugwatchClient", () => {
   // ─── Constructor ───────────────────────────────────────────────
 
   describe("constructor", () => {
-    it("throws when BUGWATCH_API_KEY is not set", () => {
+    it("throws when no API key is set", () => {
       delete process.env.BUGWATCH_API_KEY;
+      delete process.env.BUGWATCH_AGENT_KEY;
       expect(() => new BugwatchClient()).toThrowError(
-        "BUGWATCH_API_KEY environment variable is required"
+        "A Bugwatch API key is required"
       );
+    });
+
+    it("accepts an explicit apiKey/baseUrl config", async () => {
+      delete process.env.BUGWATCH_API_KEY;
+      delete process.env.BUGWATCH_AGENT_KEY;
+
+      const mockFetch = mockFetchResponse({ data: [], pagination: {} });
+      vi.stubGlobal("fetch", mockFetch);
+
+      const client = new BugwatchClient({ apiKey: "explicit-key", baseUrl: "https://internal.example.com/" });
+      await client.listProjects();
+
+      const [url, opts] = mockFetch.mock.calls[0]!;
+      expect(url).toBe("https://internal.example.com/api/v1/projects");
+      expect(opts.headers["X-API-Key"]).toBe("explicit-key");
     });
 
     it("uses default URL when BUGWATCH_URL is not set", async () => {

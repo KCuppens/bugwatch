@@ -105,6 +105,15 @@ if [[ "$HEALTHY" == true ]]; then
     fi
 fi
 
+# Hosted MCP server. Its healthcheck fails if BUGWATCH_AGENT_KEY is missing from
+# .env, so a misconfigured deploy rolls back cleanly instead of shipping a broken
+# /mcp endpoint.
+if [[ "$HEALTHY" == true ]]; then
+    if ! wait_for_healthy "bugwatch-mcp-${NEXT_COLOR}"; then
+        HEALTHY=false
+    fi
+fi
+
 # ---------- Swap or rollback ----------
 
 if [[ "$HEALTHY" == true ]]; then
