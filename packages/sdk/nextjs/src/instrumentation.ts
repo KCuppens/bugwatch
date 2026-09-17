@@ -28,6 +28,16 @@ export interface RegisterOptions {
   captureUnhandledRejections?: boolean;
   /** Capture errors logged via console.error as warning-level events (default: true) */
   captureConsoleErrors?: boolean;
+  /**
+   * Patterns to drop before sending, matched against the error message. Without
+   * this, the uncaught-exception / unhandled-rejection handlers report every
+   * error — including noisy runtime internals (e.g. Node/undici's
+   * `transformAlgorithm is not a function`) that surface as unhandled rejections
+   * and never reach the onRequestError filter.
+   */
+  ignoreErrors?: (string | RegExp)[];
+  /** Called with each event before send; return null to drop it. */
+  beforeSend?: (event: import("@bugwatch/core").ErrorEvent) => import("@bugwatch/core").ErrorEvent | null;
 }
 
 const DEFAULT_OPTIONS: RegisterOptions = {
@@ -118,6 +128,8 @@ async function initNode(apiKey: string, endpoint: string | undefined, options: R
     debug: options.debug || process.env.BUGWATCH_DEBUG === "true",
     captureUncaughtExceptions: options.captureUncaughtExceptions,
     captureUnhandledRejections: options.captureUnhandledRejections,
+    ...(options.ignoreErrors && { ignoreErrors: options.ignoreErrors }),
+    ...(options.beforeSend && { beforeSend: options.beforeSend }),
     ...(hostname && { serverName: hostname }),
     runtime: { name: "node", version: process.version },
   });
@@ -144,6 +156,8 @@ async function initEdge(apiKey: string, endpoint: string | undefined, options: R
     ...(endpoint && { endpoint }),
     environment: process.env.NODE_ENV || "production",
     debug: options.debug || process.env.BUGWATCH_DEBUG === "true",
+    ...(options.ignoreErrors && { ignoreErrors: options.ignoreErrors }),
+    ...(options.beforeSend && { beforeSend: options.beforeSend }),
   });
 
   if (options.debug || process.env.BUGWATCH_DEBUG === "true") {
