@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Generic single-server blue-green reference (the "gold pattern"). NOTE: production
+# does NOT use this — it runs as the `buguno` cell on the shared infrauno host via
+# /opt/infrauno/scripts/deploy-cell.sh. See deploy/infrauno/README.md.
 set -euo pipefail
 
 DEPLOY_DIR="/opt/bugwatch"

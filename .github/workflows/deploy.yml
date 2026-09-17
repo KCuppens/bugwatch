@@ -131,9 +131,10 @@ jobs:
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           script_stop: true
           envs: IMAGE_TAG,GHCR_TOKEN,GHCR_USER,DEPLOY_ENV
+          # Prod runs as the `buguno` cell on the shared infrauno host — deploy via
+          # the shared orchestrator, not a per-app script. See deploy/infrauno/README.md.
           script: |
-            cd /opt/bugwatch
-            bash scripts/deploy-blue-green.sh
+            bash /opt/infrauno/scripts/deploy-cell.sh buguno
         env:
           IMAGE_TAG: ${{ needs.build-and-push.outputs.image_tag || inputs.image_tag || 'latest' }}
           GHCR_TOKEN: ${{ secrets.GHCR_PAT }}
@@ -160,9 +161,10 @@ jobs:
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           script_stop: true
           envs: IMAGE_TAG,GHCR_TOKEN,GHCR_USER,DEPLOY_ENV
+          # Prod runs as the `buguno` cell on the shared infrauno host — deploy via
+          # the shared orchestrator, not a per-app script. See deploy/infrauno/README.md.
           script: |
-            cd /opt/bugwatch
-            bash scripts/deploy-blue-green.sh
+            bash /opt/infrauno/scripts/deploy-cell.sh buguno
         env:
           IMAGE_TAG: ${{ needs.build-and-push.outputs.image_tag || inputs.image_tag || 'latest' }}
           GHCR_TOKEN: ${{ secrets.GHCR_PAT }}

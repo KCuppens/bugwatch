@@ -1,0 +1,5 @@
+# Backward-compat: existing SDK clients were configured against api.bugwatch.dev
+# BEFORE the buguno rename. Phase 1 keeps this alive untouched so no installed
+# integration breaks. Retire only in Phase 2 (public rebrand) with redirects.
+# Color swapped in lockstep with buguno.caddy by the deploy script.
+reverse_proxy buguno-server-green:3000

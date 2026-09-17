@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Bugwatch server setup script
-# Run once on a fresh server to configure boot recovery and directory structure.
+# Bugwatch server setup script (generic single-server reference).
+# NOTE: production runs as the `buguno` cell on the shared infrauno host, not this
+# standalone layout. See deploy/infrauno/README.md for the real deployment.
+# Run once on a fresh (dedicated) server to configure boot recovery and dirs.
 #
 # Usage: sudo bash scripts/setup-server.sh
 

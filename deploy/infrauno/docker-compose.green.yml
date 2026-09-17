@@ -1,0 +1,56 @@
+# buguno cell (GREEN) — mirror of /opt/buguno/docker-compose.green.yml.
+# The green cell does NOT define `db` (the shared buguno-db is owned by the blue
+# compose / was created once and persists). server + web + mcp only.
+name: buguno-green
+services:
+  server:
+    image: ghcr.io/kcuppens/bugwatch-server:${IMAGE_TAG:-latest}
+    container_name: buguno-server-green
+    restart: unless-stopped
+    env_file: [.env]
+    environment:
+      DATABASE_URL: postgres://buguno:${POSTGRES_PASSWORD}@buguno-db:5432/buguno
+      BUGWATCH_MODE: self-hosted
+      ENVIRONMENT: production
+      SERVER_ADDR: 0.0.0.0:3000
+      APP_URL: https://bugwatch.dev
+      ALLOWED_ORIGINS: https://bugwatch.dev
+    networks: [edge, internal]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+  web:
+    image: ghcr.io/kcuppens/bugwatch-web:${IMAGE_TAG:-latest}
+    container_name: buguno-web-green
+    restart: unless-stopped
+    environment:
+      PORT: 3001
+    networks: [edge]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001',{redirect:'manual'}).then(()=>process.exit(0)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+  mcp:
+    # Hosted MCP server (Streamable HTTP) at https://bugwatch.dev/mcp.
+    image: bugwatch-mcp:local
+    container_name: buguno-mcp-green
+    restart: unless-stopped
+    env_file: [.env]
+    environment:
+      MCP_HTTP_PORT: 3002
+      BUGWATCH_URL: http://buguno-server-green:3000
+    networks: [edge, internal]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3002/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+networks:
+  edge: {external: true}
+  internal: {name: buguno-internal, external: true}
