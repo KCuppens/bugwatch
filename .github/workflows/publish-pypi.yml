@@ -11,7 +11,7 @@ env:
 jobs:
   publish:
     name: Publish to PyPI
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-2
     permissions:
       contents: read
       id-token: write

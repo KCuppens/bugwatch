@@ -15,7 +15,7 @@ jobs:
   # Rust backend checks
   rust-check:
     name: Rust Check
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-4
     # The server test suite (test_helpers::test_any_pool) needs a live Postgres.
     # Credentials/db match the default URL in apps/server/src/db/test_helpers.rs.
     services:
@@ -86,7 +86,7 @@ jobs:
   # TypeScript/Next.js checks
   web-check:
     name: Web Check
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-2
     steps:
       - uses: actions/checkout@v4
 
@@ -137,7 +137,7 @@ jobs:
   # E2E tests with Playwright
   e2e-test:
     name: E2E Tests
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-4
     needs: [web-check]
     steps:
       - uses: actions/checkout@v4
@@ -171,7 +171,7 @@ jobs:
   # Python SDK checks
   python-sdk-check:
     name: Python SDK Check
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-2
     defaults:
       run:
         working-directory: packages/sdk/python
@@ -201,7 +201,7 @@ jobs:
   # Rust SDK checks
   rust-sdk-check:
     name: Rust SDK Check
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-2
     defaults:
       run:
         working-directory: packages/sdk/rust
@@ -236,7 +236,7 @@ jobs:
   # Go SDK checks
   go-sdk-check:
     name: Go SDK Check
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-2
     defaults:
       run:
         working-directory: packages/sdk/go
@@ -262,7 +262,7 @@ jobs:
   # Ruby SDK checks
   ruby-sdk-check:
     name: Ruby SDK Check
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-2
     defaults:
       run:
         working-directory: packages/sdk/ruby
@@ -285,7 +285,7 @@ jobs:
   # PHP SDK checks
   php-sdk-check:
     name: PHP SDK Check
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-2
     defaults:
       run:
         working-directory: packages/sdk/php
@@ -313,7 +313,7 @@ jobs:
   # Java SDK checks
   java-sdk-check:
     name: Java SDK Check
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-2
     defaults:
       run:
         working-directory: packages/sdk/java
@@ -333,7 +333,7 @@ jobs:
   # Build Docker images (runs on all branches — push: false keeps it safe on PRs)
   docker-build:
     name: Docker Build
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-4
     needs: [rust-check, web-check, e2e-test, python-sdk-check, rust-sdk-check, go-sdk-check, ruby-sdk-check, php-sdk-check, java-sdk-check]
     steps:
       - uses: actions/checkout@v4

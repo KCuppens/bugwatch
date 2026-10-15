@@ -10,7 +10,7 @@ env:
 
 jobs:
   build-and-push:
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-4
     permissions:
       contents: read
       packages: write
@@ -71,7 +71,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=${{ matrix.cache_scope }}
 
   validate-self-hosted-dockerfile:
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-4
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
