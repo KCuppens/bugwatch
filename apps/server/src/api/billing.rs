@@ -17,7 +17,9 @@ use crate::{
     auth::AuthUser,
     db::{
         models::{Organization, OrganizationMember},
-        repositories::{OrganizationMemberRepository, OrganizationRepository, UserRepository},
+        repositories::{
+            OrganizationMemberRepository, OrganizationRepository, ProjectRepository, UserRepository,
+        },
     },
     AppState,
 };
@@ -168,6 +170,23 @@ fn generate_org_slug(name: &str) -> String {
     format!("{}-{}", base, &uuid::Uuid::new_v4().to_string()[..8])
 }
 
+/// Steps every newly created organization needs: the owner becomes a member (so
+/// list_members and seat counts are consistent) and the owner's projects that have
+/// no organization yet move into it.
+async fn set_up_new_org(
+    db: &crate::db::DbPool,
+    org_id: &str,
+    owner_id: &str,
+) -> Result<(), (StatusCode, String)> {
+    OrganizationMemberRepository::add(db, org_id, owner_id, "owner")
+        .await
+        .map_err(db_err)?;
+    ProjectRepository::attach_orphans_to_org(db, owner_id, org_id)
+        .await
+        .map_err(db_err)?;
+    Ok(())
+}
+
 /// Create a new organization (only if user doesn't have one)
 pub async fn create_organization(
     user: AuthUser,
@@ -204,10 +223,7 @@ pub async fn create_organization(
             "User already has an organization".to_string(),
         ))?;
 
-    // Add the owner to organization_members so list_members/seat counts are consistent
-    let _ = OrganizationMemberRepository::add(&state.db, &org.id, &user.id, "owner")
-        .await
-        .map_err(db_err)?;
+    set_up_new_org(&state.db, &org.id, &user.id).await?;
 
     tracing::info!(org_id = %org.id, owner_id = %user.id, org_name = %name, "Organization created");
 
@@ -616,9 +632,7 @@ mod saas_billing {
                     )
                 })?;
 
-                OrganizationMemberRepository::add(&state.db, &new_org.id, &user.id, "owner")
-                    .await
-                    .map_err(db_err)?;
+                set_up_new_org(&state.db, &new_org.id, &user.id).await?;
 
                 new_org
             }

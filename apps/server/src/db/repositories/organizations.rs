@@ -133,6 +133,24 @@ impl OrganizationRepository {
         Ok(result)
     }
 
+    /// The organization a user's new projects belong to: the oldest one they own,
+    /// else the only one they are a member of, else none. Same rule as migration 036.
+    pub async fn find_project_org_id(pool: &DbPool, user_id: &str) -> Result<Option<String>> {
+        sqlx::query_scalar(
+            r#"
+            SELECT COALESCE(
+                (SELECT id FROM organizations WHERE owner_id = $1 ORDER BY created_at, id LIMIT 1),
+                (SELECT MIN(organization_id) FROM organization_members WHERE user_id = $1
+                 HAVING COUNT(DISTINCT organization_id) = 1)
+            )
+            "#,
+        )
+        .bind(user_id)
+        .fetch_one(pool)
+        .await
+        .map_err(Into::into)
+    }
+
     /// Invalidate the org-user cache. Call after any mutation to organizations.
     /// Clears all entries (not per-org) — intentional trade-off: targeted eviction
     /// would require a reverse user→org index. Acceptable for current write volume.
@@ -1204,5 +1222,36 @@ mod tests {
         assert_eq!(current.len(), 2);
         let all = UsageRepository::list_all(&pool, "org-ulca").await.unwrap();
         assert_eq!(all.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn find_project_org_id_prefers_owned_then_single_membership() {
+        let pool = test_any_pool().await;
+        sqlx::raw_sql(
+            "INSERT INTO organizations (id, name, slug, owner_id, created_at) VALUES
+                ('org-old', 'Old', 'pfo-old', 'pfo-owner', '2024-01-01T00:00:00Z'),
+                ('org-0-new', 'New', 'pfo-new', 'pfo-owner', '2025-01-01T00:00:00Z'),
+                ('org-x', 'X', 'pfo-x', 'pfo-x-owner', '2024-01-01T00:00:00Z');
+             INSERT INTO organization_members (id, organization_id, user_id, role) VALUES
+                ('pm1', 'org-x', 'pfo-owner', 'member'),
+                ('pm2', 'org-x', 'pfo-member', 'member'),
+                ('pm3', 'org-old', 'pfo-two', 'member'),
+                ('pm4', 'org-x', 'pfo-two', 'member');",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let org_of = |user: &'static str| OrganizationRepository::find_project_org_id(&pool, user);
+        assert_eq!(
+            org_of("pfo-owner").await.unwrap().as_deref(),
+            Some("org-old")
+        );
+        assert_eq!(
+            org_of("pfo-member").await.unwrap().as_deref(),
+            Some("org-x")
+        );
+        assert_eq!(org_of("pfo-two").await.unwrap(), None);
+        assert_eq!(org_of("pfo-nobody").await.unwrap(), None);
     }
 }
