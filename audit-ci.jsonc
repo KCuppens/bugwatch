@@ -1,0 +1,21 @@
+{
+  "$schema": "https://github.com/IBM/audit-ci/raw/main/docs/schema.json",
+  // Fail on any high or critical advisory that is not listed below.
+  "high": true,
+  "allowlist": [
+    // braces: every published version is affected, so no upgrade clears it.
+    // It is pulled in by chokidar/micromatch (tailwindcss 3, fast-glob via
+    // eslint-config-next, lint-staged) and only parses repo-owned globs at
+    // build and lint time.
+    "GHSA-vfj7-8cjw-p6xm",
+    // image-size: fixed in 2.0.3, but fumadocs-core 14 requires ^1.2.0 and
+    // only reads repo-owned docs images in its remarkImage MDX plugin at
+    // build time. Clears with the fumadocs 16 upgrade.
+    "GHSA-5p2g-fcmc-qvqq",
+    "GHSA-w3rx-r6r6-pgpr",
+    // glob 10.3.3: the advisory is in the glob CLI (-c/--cmd). It comes from
+    // @node-minify/core, pinned by @opennextjs/aws (latest included), which
+    // calls the library API at build time, never the CLI.
+    "GHSA-5j98-mcp5-4vw2"
+  ]
+}
