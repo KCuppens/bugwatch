@@ -11,7 +11,10 @@ const config: Config = {
     "./src/app/**/*.{js,ts,jsx,tsx,mdx}",
     "./content/**/*.mdx",
     "./mdx-components.tsx",
+    // fumadocs-ui sits in apps/web/node_modules or the root node_modules,
+    // depending on how npm hoists it.
     "./node_modules/fumadocs-ui/dist/**/*.js",
+    "../../node_modules/fumadocs-ui/dist/**/*.js",
   ],
   theme: {
     extend: {
