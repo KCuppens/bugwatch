@@ -13,7 +13,7 @@ jobs:
   # Parse version and verify all packages match
   prepare:
     name: Prepare Release
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-2
     outputs:
       version: ${{ steps.parse.outputs.version }}
     steps:
@@ -71,7 +71,7 @@ jobs:
   # Publish npm packages in dependency order
   publish-npm:
     name: Publish npm Packages
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-2
     needs: prepare
     permissions:
       contents: read
@@ -142,7 +142,7 @@ jobs:
   # Publish Python SDK
   publish-pypi:
     name: Publish Python SDK
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-2
     needs: prepare
     permissions:
       contents: read
@@ -181,7 +181,7 @@ jobs:
   # Publish Rust SDK
   publish-crates:
     name: Publish Rust SDK
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-4
     needs: prepare
     defaults:
       run:
@@ -215,7 +215,7 @@ jobs:
   # Create GitHub Release
   create-release:
     name: Create GitHub Release
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-2
     needs: [publish-npm, publish-pypi, publish-crates]
     permissions:
       contents: write

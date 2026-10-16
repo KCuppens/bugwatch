@@ -38,7 +38,7 @@ jobs:
   build-and-push:
     if: github.event_name == 'push'
     needs: ci
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-4
     permissions:
       contents: read
       packages: write
@@ -120,7 +120,7 @@ jobs:
       always() && !failure() && !cancelled() && vars.DEPLOY_ENABLED == 'true' &&
       (github.event_name == 'workflow_dispatch' && inputs.environment == 'staging')
     needs: [ci, build-and-push]
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-2
     environment: staging
     steps:
       - name: Deploy via SSH
@@ -150,7 +150,7 @@ jobs:
       (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.environment == 'production'))
     # On push: waits for staging to succeed. On manual dispatch to production: staging is skipped, runs directly.
     needs: [ci, build-and-push, deploy-staging]
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-2
     environment: production
     steps:
       - name: Deploy via SSH

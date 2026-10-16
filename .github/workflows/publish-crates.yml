@@ -8,7 +8,7 @@ on:
 jobs:
   publish:
     name: Publish to crates.io
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-4
     defaults:
       run:
         working-directory: packages/sdk/rust
