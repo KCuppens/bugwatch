@@ -55,6 +55,7 @@
   "devDependencies": {
     "@playwright/test": "^1.57.0",
     "@vitest/coverage-v8": "^4.0.16",
+    "audit-ci": "7.1.0",
     "husky": "^9.1.7",
     "lint-staged": "^15.5.2",
     "prettier": "^3.2.5",
@@ -62,6 +63,9 @@
     "typescript": "^5.7.2",
     "typescript-eslint": "^8.57.0",
     "vitest": "^4.0.16"
+  },
+  "overrides": {
+    "postcss": "^8.5.30"
   },
   "packageManager": "npm@10.8.0",
   "engines": {
