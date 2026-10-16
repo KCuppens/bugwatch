@@ -40,17 +40,18 @@ bugwatch.init(api_key="your-api-key")
 ```
 
 The SDK automatically captures:
+
 - **Uncaught exceptions** in the main thread (`sys.excepthook`)
 - **Thread exceptions** in spawned threads (`threading.excepthook`)
 - **Async task exceptions** in asyncio tasks
 
 ## Environment Variables
 
-| Variable | Description |
-|----------|-------------|
-| `BUGWATCH_API_KEY` | Your API key (required if not passed to `init()`) |
-| `BUGWATCH_ENVIRONMENT` | Environment name (e.g., "production") |
-| `BUGWATCH_RELEASE` | Release/version identifier |
+| Variable               | Description                                       |
+| ---------------------- | ------------------------------------------------- |
+| `BUGWATCH_API_KEY`     | Your API key (required if not passed to `init()`) |
+| `BUGWATCH_ENVIRONMENT` | Environment name (e.g., "production")             |
+| `BUGWATCH_RELEASE`     | Release/version identifier                        |
 
 ## Manual Capture (Optional)
 
@@ -78,14 +79,14 @@ Add the middleware to your settings:
 # settings.py
 
 MIDDLEWARE = [
-    'bugwatch.integrations.django.BugwatchMiddleware',
+    "bugwatch.integrations.django.BugwatchMiddleware",
     # ... other middleware
 ]
 
 BUGWATCH = {
-    'api_key': 'your-api-key',  # Or use BUGWATCH_API_KEY env var
-    'environment': 'production',
-    'release': '1.0.0',
+    "api_key": "your-api-key",  # Or use BUGWATCH_API_KEY env var
+    "environment": "production",
+    "release": "1.0.0",
 }
 ```
 
@@ -96,7 +97,7 @@ from flask import Flask
 from bugwatch.integrations.flask import BugwatchFlask
 
 app = Flask(__name__)
-BugwatchFlask(app, api_key='your-api-key')
+BugwatchFlask(app, api_key="your-api-key")
 ```
 
 ## FastAPI Integration
@@ -106,7 +107,7 @@ from fastapi import FastAPI
 from bugwatch.integrations.fastapi import BugwatchFastAPI
 
 app = FastAPI()
-BugwatchFastAPI(app, api_key='your-api-key')
+BugwatchFastAPI(app, api_key="your-api-key")
 ```
 
 ## Logging Integration
@@ -153,6 +154,7 @@ logging.error("This will be sent to Bugwatch")
 Initialize the SDK. If `api_key` is not provided, reads from `BUGWATCH_API_KEY` environment variable.
 
 Options:
+
 - `api_key` (str): Your Bugwatch API key
 - `endpoint` (str): API endpoint (default: https://api.bugwatch.dev)
 - `environment` (str): Environment name
