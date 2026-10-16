@@ -545,7 +545,7 @@ impl AlertingService {
                     trigger_id: Some(server.id.clone()),
                     url: Some(format!(
                         "{}/dashboard/server?project={}",
-                        app_url, &server.project_id
+                        app_url, server.project_id
                     )),
                     timestamp: chrono::Utc::now().to_rfc3339(),
                     project_id: None,
