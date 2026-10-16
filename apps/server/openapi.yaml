@@ -280,7 +280,7 @@ components:
         organization_id:
           type: string
           nullable: true
-          description: Organization the project belongs to. Null when the owner has no organization.
+          description: Organization the project belongs to. For an agent key, the key's organization. Otherwise the oldest organization the owner owns, or else the only one they are a member of. Null when none applies.
         created_at:
           type: string
           format: date-time
