@@ -277,6 +277,10 @@ components:
           type: string
         owner_id:
           type: string
+        organization_id:
+          type: string
+          nullable: true
+          description: Organization the project belongs to. Null when the owner has no organization.
         created_at:
           type: string
           format: date-time

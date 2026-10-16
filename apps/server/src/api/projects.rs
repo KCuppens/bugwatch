@@ -19,6 +19,7 @@ pub struct ProjectResponse {
     pub slug: String,
     pub api_key: String,
     pub owner_id: String,
+    pub organization_id: Option<String>,
     pub created_at: String,
     pub platform: Option<String>,
     pub framework: Option<String>,
@@ -34,6 +35,7 @@ impl From<crate::db::models::Project> for ProjectResponse {
             slug: p.slug,
             api_key: p.api_key,
             owner_id: p.owner_id,
+            organization_id: p.organization_id,
             created_at: p.created_at.to_rfc3339(),
             platform: p.platform,
             framework: p.framework,
@@ -159,7 +161,7 @@ pub async fn create(
         ));
     }
 
-    // Resolve owner_id and org for tier checks
+    // Resolve owner_id and the organization the project belongs to
     let (owner_id, org) = match &*auth {
         AuthIdentity::User(user) => {
             let org = OrganizationRepository::find_by_user(&state.db, &user.id).await?;
@@ -273,6 +275,7 @@ pub async fn create(
         &req.name,
         &slug,
         &owner_id,
+        org.as_ref().map(|o| o.id.as_str()),
         req.platform.as_deref(),
         req.framework.as_deref(),
     )
@@ -774,6 +777,108 @@ mod tests {
             .unwrap()
             .starts_with("bw_live_"));
         assert!(json["data"]["id"].as_str().is_some());
+        assert_eq!(json["data"].get("organization_id"), Some(&Value::Null));
+    }
+
+    async fn send_json(app: &axum::Router, req: Request<Body>) -> Value {
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert!(resp.status().is_success(), "{}", resp.status());
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
+    async fn create_org_id(app: &axum::Router, token: &str) -> String {
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/organization")
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::from(r#"{"name":"Org"}"#))
+            .unwrap();
+        let json = send_json(app, req).await;
+        json["organization"]["id"].as_str().unwrap().to_string()
+    }
+
+    #[tokio::test]
+    async fn create_project_with_user_org_stores_org_id() {
+        let app = make_app().await;
+        let token = signup_and_token(&app, "proj_create_org@example.com").await;
+        let org_id = create_org_id(&app, &token).await;
+        let json = create_project(&app, &token, "Org App").await;
+        assert_eq!(json["data"]["organization_id"], org_id.as_str());
+    }
+
+    #[tokio::test]
+    async fn create_project_with_agent_key_stores_org_id_and_lists_it() {
+        let app = make_app().await;
+        let token = signup_and_token(&app, "proj_create_agent@example.com").await;
+        let org_id = create_org_id(&app, &token).await;
+        let key_req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/agent-keys")
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::from(
+                r#"{"name":"agent","permissions":["read","write"]}"#,
+            ))
+            .unwrap();
+        let agent_key = send_json(&app, key_req).await["data"]["key"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let create_req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/projects")
+            .header("content-type", "application/json")
+            .header("x-api-key", &agent_key)
+            .body(Body::from(r#"{"name":"Agent App"}"#))
+            .unwrap();
+        let created = send_json(&app, create_req).await;
+        assert_eq!(created["data"]["organization_id"], org_id.as_str());
+
+        let list_req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/projects")
+            .header("x-api-key", &agent_key)
+            .body(Body::empty())
+            .unwrap();
+        let listed = send_json(&app, list_req).await;
+        let ids: Vec<&str> = listed["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(ids, vec![created["data"]["id"].as_str().unwrap()]);
+    }
+
+    #[tokio::test]
+    async fn creating_an_organization_adopts_existing_projects() {
+        let app = make_app().await;
+        let token = signup_and_token(&app, "proj_adopt@example.com").await;
+        let project = create_project(&app, &token, "Early App").await;
+        let project_id = project["data"]["id"].as_str().unwrap().to_string();
+        let other_token = signup_and_token(&app, "proj_adopt_other@example.com").await;
+        let other = create_project(&app, &other_token, "Other App").await;
+        let other_id = other["data"]["id"].as_str().unwrap().to_string();
+
+        let org_id = create_org_id(&app, &token).await;
+
+        let get = |id: String, token: String| {
+            Request::builder()
+                .method("GET")
+                .uri(format!("/api/v1/projects/{}", id))
+                .header("authorization", format!("Bearer {}", token))
+                .body(Body::empty())
+                .unwrap()
+        };
+        let mine = send_json(&app, get(project_id, token)).await;
+        assert_eq!(mine["data"]["organization_id"], org_id.as_str());
+        let theirs = send_json(&app, get(other_id, other_token)).await;
+        assert!(theirs["data"]["organization_id"].is_null());
     }
 
     #[tokio::test]
