@@ -77,11 +77,13 @@ jobs:
           working-directory: apps/server
           # lettre (critical, in the shipped binary) was upgraded to >=0.11.22.
           # The advisories below are confined to the OPTIONAL `saas` feature's
-          # transitive deps (async-stripe / aws-sdk) and are absent from the
-          # default self-hosted build — verified with `cargo tree -i
-          # <crate> --no-default-features` (no matches). RUSTSEC-2023-0071 (rsa)
+          # transitive deps (async-stripe / aws-sdk, including h2 0.3 and
+          # rustls 0.21 via hyper 0.14 and aws-smithy-http-client) and are
+          # absent from the default self-hosted build, which only resolves
+          # patched h2 0.4 / rustls 0.23. Verified with `cargo tree -i
+          # <crate>@<version> --no-default-features` (no matches). RUSTSEC-2023-0071 (rsa)
           # additionally has no fixed upgrade available.
-          ignore: RUSTSEC-2023-0071,RUSTSEC-2026-0098,RUSTSEC-2026-0099,RUSTSEC-2026-0104,RUSTSEC-2026-0174,RUSTSEC-2026-0097,RUSTSEC-2024-0384
+          ignore: RUSTSEC-2023-0071,RUSTSEC-2026-0098,RUSTSEC-2026-0099,RUSTSEC-2026-0104,RUSTSEC-2026-0174,RUSTSEC-2026-0097,RUSTSEC-2024-0384,RUSTSEC-2026-0258,RUSTSEC-2026-0346,RUSTSEC-2026-0349
 
   # TypeScript/Next.js checks
   web-check:
@@ -121,7 +123,7 @@ jobs:
         run: npm run build
 
       - name: Security audit
-        run: npm audit --audit-level=high
+        run: npx audit-ci --config audit-ci.jsonc
 
       - name: Run unit tests with coverage
         run: npm test

@@ -1,8 +1,9 @@
 # Stage 1: Build the Rust binary (self-hosted, no --features saas)
-# rust 1.88: Cargo.lock pulls deps (home 0.5.12, icu_* 2.2.0) whose MSRV is
-# 1.86–1.88; the older 1.85 toolchain refuses to build them. Stays on bookworm
-# so the produced binary matches the debian:bookworm-slim runtime's GLIBC.
-FROM rust:1.88-bookworm AS builder
+# rust 1.99: Cargo.lock is not committed, so every build resolves the newest
+# compatible deps, and those raise their MSRV over time (uuid 1.28 needs 1.89).
+# Stays on bookworm so the produced binary matches the debian:bookworm-slim
+# runtime's GLIBC.
+FROM rust:1.99-bookworm AS builder
 
 WORKDIR /usr/src/bugwatch/apps/server
 
