@@ -161,18 +161,20 @@ pub async fn create(
         ));
     }
 
-    // Resolve owner_id and the organization the project belongs to
-    let (owner_id, org) = match &*auth {
+    // Resolve owner_id, the org for tier checks, and the organization the project belongs to
+    let (owner_id, org, organization_id) = match &*auth {
         AuthIdentity::User(user) => {
             let org = OrganizationRepository::find_by_user(&state.db, &user.id).await?;
-            (user.id.clone(), org)
+            let organization_id =
+                OrganizationRepository::find_project_org_id(&state.db, &user.id).await?;
+            (user.id.clone(), org, organization_id)
         }
         AuthIdentity::Agent(agent) => {
             let org = OrganizationRepository::find_by_id(&state.db, &agent.organization_id).await?;
             let owner_id = org.as_ref().map(|o| o.owner_id.clone()).ok_or_else(|| {
                 AppError::Internal("Organization not found for agent".to_string())
             })?;
-            (owner_id, org)
+            (owner_id, org, Some(agent.organization_id.clone()))
         }
     };
 
@@ -275,7 +277,7 @@ pub async fn create(
         &req.name,
         &slug,
         &owner_id,
-        org.as_ref().map(|o| o.id.as_str()),
+        organization_id.as_deref(),
         req.platform.as_deref(),
         req.framework.as_deref(),
     )
