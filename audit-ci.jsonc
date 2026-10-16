@@ -1,21 +1,24 @@
 {
   "$schema": "https://github.com/IBM/audit-ci/raw/main/docs/schema.json",
-  // Fail on any high or critical advisory that is not listed below.
+  // Fail on any high or critical advisory except the ones allowlisted below.
   "high": true,
   "allowlist": [
-    // braces: every published version is affected, so no upgrade clears it.
-    // It is pulled in by chokidar/micromatch (tailwindcss 3, fast-glob via
-    // eslint-config-next, lint-staged) and only parses repo-owned globs at
-    // build and lint time.
+    // braces: no patched release exists. Reached only through build and lint
+    // tooling (tailwindcss 3, eslint-config-next, lint-staged) that expands
+    // glob patterns written in this repo, never user input.
     "GHSA-vfj7-8cjw-p6xm",
-    // image-size: fixed in 2.0.3, but fumadocs-core 14 requires ^1.2.0 and
-    // only reads repo-owned docs images in its remarkImage MDX plugin at
-    // build time. Clears with the fumadocs 16 upgrade.
-    "GHSA-5p2g-fcmc-qvqq",
+    // image-size: fumadocs-core 14 requires ^1.2.0 and 1.x has no fix (2.0.3
+    // has it, through the fumadocs 15 major). It only reads the repo's own
+    // docs images at build time.
     "GHSA-w3rx-r6r6-pgpr",
-    // glob 10.3.3: the advisory is in the glob CLI (-c/--cmd). It comes from
-    // @node-minify/core, pinned by @opennextjs/aws (latest included), which
-    // calls the library API at build time, never the CLI.
-    "GHSA-5j98-mcp5-4vw2"
+    "GHSA-5p2g-fcmc-qvqq",
+    // glob 10.3.3, pinned by @opennextjs/aws > @node-minify/core. The advisory
+    // is in glob's CLI (-c/--cmd); the library API used here is not affected.
+    "GHSA-5j98-mcp5-4vw2",
+    // postcss 8.4.31, pinned by next 15 (fixed only in next 16). Both advisories
+    // need attacker-controlled CSS with a sourceMappingURL; next only processes
+    // the repo's own CSS at build time.
+    "GHSA-6g55-p6wh-862q",
+    "GHSA-r28c-9q8g-f849"
   ]
 }
