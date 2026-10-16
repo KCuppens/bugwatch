@@ -80,8 +80,10 @@ jobs:
           # transitive deps (async-stripe / aws-sdk) and are absent from the
           # default self-hosted build — verified with `cargo tree -i
           # <crate> --no-default-features` (no matches). RUSTSEC-2023-0071 (rsa)
-          # additionally has no fixed upgrade available.
-          ignore: RUSTSEC-2023-0071,RUSTSEC-2026-0098,RUSTSEC-2026-0099,RUSTSEC-2026-0104,RUSTSEC-2026-0174,RUSTSEC-2026-0097,RUSTSEC-2024-0384
+          # additionally has no fixed upgrade available. RUSTSEC-2026-0258 (h2
+          # 0.3) and RUSTSEC-2026-0346/0349 (rustls 0.21) come only through
+          # aws-smithy-http-client under the same `saas` feature.
+          ignore: RUSTSEC-2023-0071,RUSTSEC-2026-0098,RUSTSEC-2026-0099,RUSTSEC-2026-0104,RUSTSEC-2026-0174,RUSTSEC-2026-0097,RUSTSEC-2024-0384,RUSTSEC-2026-0258,RUSTSEC-2026-0346,RUSTSEC-2026-0349
 
   # TypeScript/Next.js checks
   web-check:
