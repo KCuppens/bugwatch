@@ -4,6 +4,14 @@ on:
   push:
     branches: [main]
     tags: ["v*"]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.gitignore'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   REGISTRY: ghcr.io
@@ -11,6 +19,7 @@ env:
 jobs:
   build-and-push:
     runs-on: ubicloud-standard-4
+    timeout-minutes: 20
     permissions:
       contents: read
       packages: write
@@ -72,6 +81,7 @@ jobs:
 
   validate-self-hosted-dockerfile:
     runs-on: ubicloud-standard-4
+    timeout-minutes: 15
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4

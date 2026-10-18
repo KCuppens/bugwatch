@@ -3,6 +3,10 @@ name: Deploy
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.gitignore'
   workflow_dispatch:
     inputs:
       environment:
@@ -39,6 +43,7 @@ jobs:
     if: github.event_name == 'push'
     needs: ci
     runs-on: ubicloud-standard-4
+    timeout-minutes: 15
     permissions:
       contents: read
       packages: write
@@ -121,6 +126,7 @@ jobs:
       (github.event_name == 'workflow_dispatch' && inputs.environment == 'staging')
     needs: [ci, build-and-push]
     runs-on: ubicloud-standard-2
+    timeout-minutes: 10
     environment: staging
     steps:
       - name: Deploy via SSH
@@ -151,6 +157,7 @@ jobs:
     # On push: waits for staging to succeed. On manual dispatch to production: staging is skipped, runs directly.
     needs: [ci, build-and-push, deploy-staging]
     runs-on: ubicloud-standard-2
+    timeout-minutes: 10
     environment: production
     steps:
       - name: Deploy via SSH

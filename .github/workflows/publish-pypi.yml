@@ -12,6 +12,7 @@ jobs:
   publish:
     name: Publish to PyPI
     runs-on: ubicloud-standard-2
+    timeout-minutes: 10
     permissions:
       contents: read
       id-token: write
