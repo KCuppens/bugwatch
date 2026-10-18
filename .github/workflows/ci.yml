@@ -155,7 +155,7 @@ jobs:
     name: E2E Tests
     runs-on: ubicloud-standard-4
     timeout-minutes: 15
-    needs: [web-check]
+    needs: [web-check, rust-check]
     steps:
       - uses: actions/checkout@v4
 
