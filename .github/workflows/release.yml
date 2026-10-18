@@ -14,6 +14,7 @@ jobs:
   prepare:
     name: Prepare Release
     runs-on: ubicloud-standard-2
+    timeout-minutes: 10
     outputs:
       version: ${{ steps.parse.outputs.version }}
     steps:
@@ -72,6 +73,7 @@ jobs:
   publish-npm:
     name: Publish npm Packages
     runs-on: ubicloud-standard-2
+    timeout-minutes: 10
     needs: prepare
     permissions:
       contents: read
@@ -143,6 +145,7 @@ jobs:
   publish-pypi:
     name: Publish Python SDK
     runs-on: ubicloud-standard-2
+    timeout-minutes: 10
     needs: prepare
     permissions:
       contents: read
@@ -181,7 +184,8 @@ jobs:
   # Publish Rust SDK
   publish-crates:
     name: Publish Rust SDK
-    runs-on: ubicloud-standard-4
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 10
     needs: prepare
     defaults:
       run:
@@ -216,6 +220,7 @@ jobs:
   create-release:
     name: Create GitHub Release
     runs-on: ubicloud-standard-2
+    timeout-minutes: 10
     needs: [publish-npm, publish-pypi, publish-crates]
     permissions:
       contents: write

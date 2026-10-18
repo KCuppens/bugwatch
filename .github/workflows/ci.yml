@@ -3,9 +3,21 @@ name: CI
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.gitignore'
   pull_request:
     branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.gitignore'
   workflow_call:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
@@ -16,6 +28,7 @@ jobs:
   rust-check:
     name: Rust Check
     runs-on: ubicloud-standard-4
+    timeout-minutes: 20
     # The server test suite (test_helpers::test_any_pool) needs a live Postgres.
     # Credentials/db match the default URL in apps/server/src/db/test_helpers.rs.
     services:
@@ -89,6 +102,7 @@ jobs:
   web-check:
     name: Web Check
     runs-on: ubicloud-standard-2
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
@@ -140,6 +154,7 @@ jobs:
   e2e-test:
     name: E2E Tests
     runs-on: ubicloud-standard-4
+    timeout-minutes: 15
     needs: [web-check]
     steps:
       - uses: actions/checkout@v4
@@ -174,6 +189,7 @@ jobs:
   python-sdk-check:
     name: Python SDK Check
     runs-on: ubicloud-standard-2
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: packages/sdk/python
@@ -204,6 +220,7 @@ jobs:
   rust-sdk-check:
     name: Rust SDK Check
     runs-on: ubicloud-standard-2
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: packages/sdk/rust
@@ -239,6 +256,7 @@ jobs:
   go-sdk-check:
     name: Go SDK Check
     runs-on: ubicloud-standard-2
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: packages/sdk/go
@@ -265,6 +283,7 @@ jobs:
   ruby-sdk-check:
     name: Ruby SDK Check
     runs-on: ubicloud-standard-2
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: packages/sdk/ruby
@@ -288,6 +307,7 @@ jobs:
   php-sdk-check:
     name: PHP SDK Check
     runs-on: ubicloud-standard-2
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: packages/sdk/php
@@ -316,6 +336,7 @@ jobs:
   java-sdk-check:
     name: Java SDK Check
     runs-on: ubicloud-standard-2
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: packages/sdk/java
@@ -336,6 +357,7 @@ jobs:
   docker-build:
     name: Docker Build
     runs-on: ubicloud-standard-4
+    timeout-minutes: 15
     needs: [rust-check, web-check, e2e-test, python-sdk-check, rust-sdk-check, go-sdk-check, ruby-sdk-check, php-sdk-check, java-sdk-check]
     steps:
       - uses: actions/checkout@v4
