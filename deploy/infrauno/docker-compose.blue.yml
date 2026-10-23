@@ -1,14 +1,14 @@
 # buguno cell (BLUE) — bugwatch retrofit onto the infrauno shared-Caddy model.
 # Mirror of /opt/buguno/docker-compose.blue.yml on the infrauno host.
 # server + web + mcp on `edge` (reachable by the shared Caddy) + `internal`;
-# postgres on `internal` only. Uses the existing ghcr bugwatch-* images
-# (Phase-1: no republish). The mcp image is built ON the host as
-# `bugwatch-mcp:local` (see README) until CI publishes ghcr.io/kcuppens/bugwatch-mcp.
+# postgres on `internal` only. Images are built on the host by the HookCI deploy
+# (scripts/deploy/build-images.sh) and tagged `sha-<12 hex>`; IMAGE_TAG picks them.
 name: buguno-blue
 
 services:
   server:
-    image: ghcr.io/kcuppens/bugwatch-server:${IMAGE_TAG:-latest}
+    image: bugwatch-server:${IMAGE_TAG:-unset}
+    pull_policy: never
     container_name: buguno-server-blue
     restart: unless-stopped
     stop_grace_period: 30s
@@ -31,7 +31,8 @@ services:
       start_period: 15s
 
   web:
-    image: ghcr.io/kcuppens/bugwatch-web:${IMAGE_TAG:-latest}
+    image: bugwatch-web:${IMAGE_TAG:-unset}
+    pull_policy: never
     container_name: buguno-web-blue
     restart: unless-stopped
     environment:
@@ -46,7 +47,8 @@ services:
 
   mcp:
     # Hosted MCP server (Streamable HTTP) at https://bugwatch.dev/mcp.
-    image: bugwatch-mcp:local
+    image: bugwatch-mcp:${IMAGE_TAG:-unset}
+    pull_policy: never
     container_name: buguno-mcp-blue
     restart: unless-stopped
     env_file: [.env]
