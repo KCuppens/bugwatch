@@ -50,6 +50,9 @@ checks:
     # next/font/google (apps/web/src/app/layout.tsx) fetches Space Mono at build and dev start.
     - fonts.googleapis.com
     - fonts.gstatic.com
+    # The Chillax @import in apps/web/src/app/globals.css, loaded by the e2e browsers.
+    - api.fontshare.com
+    - cdn.fontshare.com
     # SDK dependencies: pip, go modules, gems, composer packages, Maven Central.
     - pypi.org
     - files.pythonhosted.org
