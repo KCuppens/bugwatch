@@ -95,8 +95,8 @@ hand from the repo root (`bash scripts/ci/setup.sh`, then `bash scripts/ci/web-c
 | `docker-build` | `docker-build.sh` | `apps/web/package-lock.json` is in sync with `apps/web/package.json` |
 
 `e2e-test` starts after `web-check` and `rust-check` pass, `docker-build` after all the others. The
-checks run on the same box as production, as the sandboxed `hookci-run` user (no docker, no sudo), one
-job at a time, held to 2 cores and 8 GB. Because of that:
+checks run on the same box as production, as the sandboxed `hookci-run` user (no docker, no sudo),
+each held to 2 cores and 8 GB; independent jobs run in parallel. Because of that:
 
 - Toolchains aren't installed on the host. `scripts/ci/tools.sh` fetches pinned, checksummed copies
   (Node, Rust with rustfmt, clippy and cargo-audit, Go and golangci-lint, Python, JDK and Maven, PHP
