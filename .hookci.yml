@@ -33,7 +33,9 @@ checks:
     - github.com
     - objects.githubusercontent.com
     - release-assets.githubusercontent.com
+    # dl.static-php.dev redirects to its DigitalOcean Spaces bucket.
     - dl.static-php.dev
+    - static-php-cli.fra1.digitaloceanspaces.com
     - getcomposer.org
     # npm ci (setup) and audit-ci (web-check).
     - registry.npmjs.org
