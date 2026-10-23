@@ -6,13 +6,14 @@ set -euo pipefail
 ci_tools java
 cd packages/sdk/java
 
-# Maven's HTTP transport takes its proxy from settings.xml, not from the environment.
+# Maven's HTTP transport takes its proxy from settings.xml, not from the environment, and
+# its local repository defaults to the passwd home (/home/hookci-run), not $HOME.
 settings="$CI_TMP/maven-settings.xml"
 proxy="${HTTPS_PROXY:-}"
 proxy="${proxy#*://}"
 proxy="${proxy%%/*}"
 {
-  echo '<settings><proxies>'
+  echo "<settings><localRepository>$HOME/.m2/repository</localRepository><proxies>"
   if [ -n "$proxy" ]; then
     for protocol in https http; do
       echo "<proxy><id>hookci-$protocol</id><active>true</active><protocol>$protocol</protocol>"

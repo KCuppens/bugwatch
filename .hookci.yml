@@ -58,6 +58,7 @@ checks:
     - rubygems.org
     - index.rubygems.org
     - repo.packagist.org
+    - packagist.org
     - codeload.github.com
     - api.github.com
     - repo.maven.apache.org
