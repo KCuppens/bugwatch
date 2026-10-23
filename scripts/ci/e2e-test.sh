@@ -9,7 +9,8 @@ set -euo pipefail
 ci_tools node
 
 ci_step "npm run build"
-npm run build
+# loose: see web-check.sh.
+npm run build -- --env-mode=loose
 
 ci_step "playwright test"
 # list: hookci keeps the log, not the HTML report.

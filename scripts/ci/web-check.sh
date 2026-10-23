@@ -18,7 +18,9 @@ for sdk in core node nextjs; do
 done
 
 ci_step "npm run build"
-npm run build
+# loose: turbo's strict env mode drops HTTPS_PROXY, and next/font reaches Google Fonts only
+# through the egress proxy.
+npm run build -- --env-mode=loose
 
 ci_step "audit-ci"
 npx audit-ci --config audit-ci.jsonc
