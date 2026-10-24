@@ -26,4 +26,6 @@ ci_step "audit-ci"
 npx audit-ci --config audit-ci.jsonc
 
 ci_step "npm test"
-npm test
+# The job is held to 2 CPUs; turbo's default of 10 parallel suites starves vitest's first
+# Fastify inject past its 5s timeout.
+npm test -- --concurrency=2
