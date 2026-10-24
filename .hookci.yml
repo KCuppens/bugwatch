@@ -14,7 +14,7 @@ checks:
   on:
     pull_request: true
     push:
-      branches: [main, hookci-ci-deploy]
+      branches: [main]
   # The agent shares infrauno with production, so every job is guaranteed 2 cores and held to
   # 8 GB; independent jobs run in parallel. Rust builds start cold; jobs below raise the timeout
   # where needed.
