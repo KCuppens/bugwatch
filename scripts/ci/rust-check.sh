@@ -33,6 +33,9 @@ ci_step "cargo audit"
 # fixed only in >=0.103.16, and comes in through saas-only aws-config / aws-sdk-sesv2 ->
 # aws-smithy-runtime -> aws-smithy-http-client 1.5.1 -> rustls 0.21.12 (also via hyper-rustls 0.24
 # -> tokio-rustls 0.24). The default build resolves only rustls-webpki 0.103.16.
+# RUSTSEC-2026-0387 (crypto-bigint 0.5.5, fixed in >=0.7.6): saas-only aws-config / aws-sdk-sesv2 ->
+# aws-runtime -> aws-sigv4, whose latest release (1.6.3) still requires crypto-bigint ^0.5.4 for
+# SigV4a. The default build has no crypto-bigint.
 cargo audit \
   --ignore RUSTSEC-2023-0071 \
   --ignore RUSTSEC-2026-0098 \
@@ -44,4 +47,5 @@ cargo audit \
   --ignore RUSTSEC-2026-0258 \
   --ignore RUSTSEC-2026-0346 \
   --ignore RUSTSEC-2026-0349 \
-  --ignore RUSTSEC-2026-0382
+  --ignore RUSTSEC-2026-0382 \
+  --ignore RUSTSEC-2026-0387
