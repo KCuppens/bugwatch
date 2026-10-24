@@ -19,6 +19,10 @@
     // need attacker-controlled CSS with a sourceMappingURL; next only processes
     // the repo's own CSS at build time.
     "GHSA-6g55-p6wh-862q",
-    "GHSA-r28c-9q8g-f849"
+    "GHSA-r28c-9q8g-f849",
+    // undici 7.29.1, pinned exactly by miniflare (wrangler > @opennextjs/cloudflare);
+    // no miniflare release ships 7.30.1 yet. miniflare is the local Workers emulator
+    // used at build/preview time and only talks to the repo's own dev server.
+    "GHSA-xjj6-f33q-929c"
   ]
 }

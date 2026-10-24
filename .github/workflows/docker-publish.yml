@@ -33,7 +33,8 @@ jobs:
             build_args: ""
           # apps/web/Dockerfile — pnpm monorepo build, published to GHCR for
           # managed/cloud deployments. For self-hosted installs, docker/Dockerfile.web
-          # is the standalone npm build (validated by ci.yml docker-build job).
+          # is the standalone npm build (validate-self-hosted-dockerfile below; the
+          # HookCI docker-build check keeps apps/web/package-lock.json in sync).
           # NEXT_PUBLIC_API_URL is inlined at build time; single-origin deploy
           # (Caddy routes /api/* to the server) → point at https://bugwatch.dev.
           - image: ghcr.io/kcuppens/bugwatch-web
