@@ -23,8 +23,10 @@ flock -w 1800 9 || { echo "another buguno deploy holds the lock" >&2; exit 1; }
 echo "==> $(date -Is) deploy $1 ($tag)" | tee -a /opt/buguno/deploys.log
 IMAGE_TAG="$tag" bash /opt/infrauno/scripts/deploy-cell.sh buguno 2>&1 | tee -a /opt/buguno/deploys.log
 
+# Pruning is best effort: grep exits 1 when there is nothing to prune (a single tag), which
+# pipefail would otherwise report as a failed deploy after the cell already flipped.
 for img in "${images[@]}"; do
-  docker image ls "$img" --format '{{.CreatedAt}}\t{{.Tag}}' | sort -r | cut -f2 \
+  { docker image ls "$img" --format '{{.CreatedAt}}\t{{.Tag}}' | sort -r | cut -f2 \
     | grep -E '^sha-[0-9a-f]{12}$' | grep -vx "$tag" | tail -n +3 \
-    | while read -r old; do docker image rm "$img:$old" >/dev/null || true; done
+    | while read -r old; do docker image rm "$img:$old" >/dev/null || true; done; } || true
 done
