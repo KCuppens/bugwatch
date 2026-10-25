@@ -35,28 +35,38 @@ Cloudflare (proxied CNAME -> cf tunnel)  bugwatch.dev / api.bugwatch.dev / bugun
   networks: edge (shared with Caddy) + internal (buguno-internal, db)
 ```
 
-Containers (active color, currently **green**): `buguno-server-green`,
-`buguno-web-green`, `buguno-mcp-green`, `buguno-db`.
+Containers: `buguno-{server,web,mcp}-<color>` (active color in
+`/opt/buguno/.active-color`) and `buguno-db`.
 
-## Deploying (server + web)
+## Deploying (server + web + mcp)
 
-Deploys are blue-green via the shared orchestrator (invoked over SSH from the
-product's GitHub Actions deploy job, or run by hand on the host):
+A push to `main` deploys through HookCI once every check passes
+(`.hookci.yml` `deployments.production`). The deploy step runs as `hookci-deploy`
+on infrauno:
 
-```bash
-# on infrauno, IMAGE_TAG selects the ghcr tag (default: latest)
-IMAGE_TAG=sha-xxxxxxx GHCR_TOKEN=... GHCR_USER=... \
-  bash /opt/infrauno/scripts/deploy-cell.sh buguno
-```
+1. `scripts/deploy/build-images.sh` builds `bugwatch-{server,web,mcp}:sha-<12 hex>`
+   on the host. Nothing goes through GHCR.
+2. `sudo -n /opt/buguno/hookci-deploy-prod.sh <sha>` (root, the only command
+   `/etc/sudoers.d/hookci-buguno` allows) checks the three images exist, takes
+   `/var/lock/buguno-deploy.lock`, runs
+   `IMAGE_TAG=sha-<12 hex> /opt/infrauno/scripts/deploy-cell.sh buguno`, logs to
+   `/opt/buguno/deploys.log` and keeps the newest 3 tags per image.
 
-`deploy-cell.sh`: pulls + `up -d` the idle color, health-gates **every** service
+`deploy-cell.sh`: `up -d` the idle color, health-gates **every** service
 in that color's compose, then repoints all `routes/buguno*.caddy` with
 `sed -E "s/-(blue|green):/-<next>:/g"` and reloads the shared Caddy, then stops
-the old color's app services (never the shared `db`).
+the old color's app services (never the shared `db`). The server applies its
+migrations on boot.
 
-> **CI status:** GitHub Actions is currently **billing-locked**, so nothing builds
-> or deploys via CI. Until that's resolved, images are built/deployed by hand on
-> the host (below).
+Rollback to a kept tag, on infrauno as root:
+
+```bash
+docker image ls bugwatch-server   # pick a sha-<12 hex> tag
+IMAGE_TAG=sha-<12 hex> bash /opt/infrauno/scripts/deploy-cell.sh buguno
+```
+
+The compose files use `bugwatch-*:${IMAGE_TAG:-unset}` with `pull_policy: never`, so
+`up` without `IMAGE_TAG` fails instead of starting an unknown image.
 
 ## The hosted MCP server (`/mcp`)
 
@@ -88,26 +98,9 @@ Client config:
 Both `server` and `mcp` use `env_file: [.env]`, so **editing `.env` recreates the
 server container too** (a few-seconds API blip). Expect that when rotating these.
 
-### Building / updating the MCP image (manual, while CI is locked)
+### Updating the MCP image
 
-The compose references `bugwatch-mcp:local`, built on the host:
-
-```bash
-# from a machine with the repo checked out:
-cd packages/mcp
-tar czf - --exclude=node_modules --exclude=dist --exclude='*.test.ts' \
-    package.json tsconfig.json tsup.config.ts Dockerfile src \
-  | ssh infrauno 'rm -rf /root/buguno-mcp-build && mkdir -p /root/buguno-mcp-build/packages/mcp \
-      && tar xzf - -C /root/buguno-mcp-build/packages/mcp'
-ssh infrauno 'cd /root/buguno-mcp-build && docker build -f packages/mcp/Dockerfile -t bugwatch-mcp:local .'
-# recreate the active-color mcp container
-ssh infrauno 'cd /opt/buguno && docker compose -p buguno-green -f docker-compose.green.yml up -d mcp'
-```
-
-Once CI is unlocked, `deploy.yml` builds and pushes `ghcr.io/kcuppens/bugwatch-mcp`;
-switch the compose `image:` from `bugwatch-mcp:local` to the GHCR ref so swaps pull
-it like server/web. (`deploy-cell.sh` does `pull || true`, so `:local` is tolerated
-in the meantime — pull fails, the local image is used.)
+The MCP image is built and deployed with server and web on every `main` deploy.
 
 ### Minting an agent key via the DB
 
@@ -134,8 +127,10 @@ key can enumerate them.
 |---|---|
 | `docker-compose.blue.yml` | `/opt/buguno/docker-compose.blue.yml` |
 | `docker-compose.green.yml` | `/opt/buguno/docker-compose.green.yml` |
+| `hookci-deploy-prod.sh` | `/opt/buguno/hookci-deploy-prod.sh` (root, 0755) |
 | `routes/buguno.caddy` | `/opt/infrauno/shared/routes/buguno.caddy` |
 | `routes/buguno-api.caddy` | `/opt/infrauno/shared/routes/buguno-api.caddy` |
 
 When you change these, copy them to the host paths above (the host is not a git
-checkout).
+checkout). `/etc/sudoers.d/hookci-buguno` (root, 0440):
+`hookci-deploy ALL=(root) NOPASSWD: /opt/buguno/hookci-deploy-prod.sh`.
