@@ -188,7 +188,7 @@ pub async fn oauth_authorize(
     // Falls back to JWT secret if OAUTH_STATE_SECRET is not configured.
     let oauth_secret = state.config.oauth_state_secret.clone();
     let state_data = format!("{}:{}", auth_user.id, chrono::Utc::now().timestamp());
-    use hmac::{Hmac, Mac};
+    use hmac::{Hmac, KeyInit, Mac};
     use sha2::Sha256;
     type HmacSha256 = Hmac<Sha256>;
     let mut mac = HmacSha256::new_from_slice(oauth_secret.as_bytes()).map_err(|e| {
@@ -298,7 +298,7 @@ pub async fn oauth_callback(
 
     // Verify HMAC
     let state_data = format!("{}:{}", user_id, timestamp);
-    use hmac::{Hmac, Mac};
+    use hmac::{Hmac, KeyInit, Mac};
     use sha2::Sha256;
     type HmacSha256 = Hmac<Sha256>;
     let oauth_secret = state.config.oauth_state_secret.clone();
@@ -909,7 +909,7 @@ pub async fn delete_issue_link(
 /// Verify an HMAC-SHA256 signature against a payload using constant-time comparison.
 /// Always computes the HMAC to avoid timing leaks from hex decode failures.
 fn verify_webhook_signature(payload: &[u8], signature: &str, secret: &str) -> bool {
-    use hmac::{Hmac, Mac};
+    use hmac::{Hmac, KeyInit, Mac};
     use sha2::Sha256;
     type HmacSha256 = Hmac<Sha256>;
 
@@ -1166,7 +1166,7 @@ mod tests {
 
     #[test]
     fn webhook_sig_valid_signature_matches() {
-        use hmac::{Hmac, Mac};
+        use hmac::{Hmac, KeyInit, Mac};
         use sha2::Sha256;
         type HmacSha256 = Hmac<Sha256>;
 
@@ -1191,7 +1191,7 @@ mod tests {
 
     #[test]
     fn webhook_sig_mismatched_payload_fails() {
-        use hmac::{Hmac, Mac};
+        use hmac::{Hmac, KeyInit, Mac};
         use sha2::Sha256;
         type HmacSha256 = Hmac<Sha256>;
 
@@ -1476,7 +1476,7 @@ mod tests {
     }
 
     fn hmac_hex(secret: &str, payload: &[u8]) -> String {
-        use hmac::{Hmac, Mac};
+        use hmac::{Hmac, KeyInit, Mac};
         use sha2::Sha256;
         type HmacSha256 = Hmac<Sha256>;
         let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).unwrap();

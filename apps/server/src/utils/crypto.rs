@@ -4,7 +4,7 @@ use aes_gcm::{
 };
 use anyhow::{anyhow, Result};
 use base64::Engine;
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit as HmacKeyInit, Mac};
 use sha2::{Digest, Sha256};
 
 type HmacSha256 = Hmac<Sha256>;
@@ -21,13 +21,14 @@ fn derive_key_hkdf(secret: &str) -> [u8; 32] {
     // RFC 5869 HKDF-Extract: PRK = HMAC-SHA256(salt=key, IKM=secret)
     // salt = b"bugwatch-token-key-v2" (fixed, domain-separating)
     // IKM  = secret (the raw encryption key material)
-    let mut mac = <HmacSha256 as KeyInit>::new_from_slice(b"bugwatch-token-key-v2")
+    let mut mac = <HmacSha256 as HmacKeyInit>::new_from_slice(b"bugwatch-token-key-v2")
         .expect("HMAC accepts any key size");
     mac.update(secret.as_bytes());
     let prk = mac.finalize().into_bytes();
 
     // RFC 5869 HKDF-Expand (single block): T(1) = HMAC-SHA256(PRK, info=b"aes256gcm" || 0x01)
-    let mut mac = <HmacSha256 as KeyInit>::new_from_slice(&prk).expect("HMAC accepts any key size");
+    let mut mac =
+        <HmacSha256 as HmacKeyInit>::new_from_slice(&prk).expect("HMAC accepts any key size");
     mac.update(b"aes256gcm\x01");
     mac.finalize().into_bytes().into()
 }
