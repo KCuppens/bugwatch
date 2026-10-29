@@ -1,7 +1,6 @@
 """Tests for Bugwatch client."""
-import pytest
 
-from bugwatch import init, get_client, capture_exception, capture_message
+from bugwatch import capture_exception, capture_message, get_client, init
 from bugwatch.client import BugwatchClient
 from bugwatch.transport import NoopTransport
 from bugwatch.types import BugwatchOptions, Level, UserContext
@@ -51,7 +50,7 @@ class TestBugwatchClient:
         error = RuntimeError("explicit error")
         error.__traceback__ = None  # Simulate no traceback
 
-        event_id = self.client.capture_exception(error)
+        self.client.capture_exception(error)
 
         # Even without traceback, it should capture
         assert len(self.transport.events) == 1
@@ -99,11 +98,13 @@ class TestBugwatchClient:
 
     def test_user_context(self) -> None:
         """Should include user context in events."""
-        self.client.set_user(UserContext(
-            id="user-123",
-            email="test@example.com",
-            username="testuser",
-        ))
+        self.client.set_user(
+            UserContext(
+                id="user-123",
+                email="test@example.com",
+                username="testuser",
+            )
+        )
 
         self.client.capture_message("test")
 
@@ -146,6 +147,7 @@ class TestBugwatchClient:
 
     def test_before_send_hook(self) -> None:
         """Should call before_send hook."""
+
         def before_send(event):
             event.tags["modified"] = "true"
             return event
@@ -160,6 +162,7 @@ class TestBugwatchClient:
 
     def test_before_send_can_drop_event(self) -> None:
         """before_send returning None should drop event."""
+
         def before_send(event):
             return None
 
@@ -178,6 +181,7 @@ class TestGlobalFunctions:
     def setup_method(self) -> None:
         """Reset global client."""
         import bugwatch
+
         bugwatch._client = None
 
     def test_init_returns_client(self) -> None:

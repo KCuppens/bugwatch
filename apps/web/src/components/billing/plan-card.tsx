@@ -1,13 +1,14 @@
-'use client';
+"use client";
 
-import { useState } from 'react';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
-import { Loader2, ExternalLink, Calendar, CreditCard, Users } from 'lucide-react';
-import { billingApi, type Subscription, type Organization } from '@/lib/api';
-import { isValidHttpUrl } from '@/lib/url-utils';
-import { getTierDisplayName, getTierRateLimit, type Tier } from '@/hooks/use-feature';
+import { useState } from "react";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Loader2, ExternalLink, Calendar, CreditCard, Users } from "lucide-react";
+import { billingApi, type Subscription, type Organization } from "@/lib/api";
+import { isStripeBillingUrl } from "@/lib/url-utils";
+import { toast } from "sonner";
+import { getTierDisplayName, getTierRateLimit, type Tier } from "@/hooks/use-feature";
 
 interface PlanCardProps {
   organization: Organization | null;
@@ -16,20 +17,21 @@ interface PlanCardProps {
   onRefresh: () => void;
 }
 
-export function PlanCard({ organization, subscription, isOwner, onRefresh: _onRefresh }: PlanCardProps) {
+export function PlanCard({ organization, subscription, isOwner }: PlanCardProps) {
   const [loading, setLoading] = useState(false);
 
-  const currentTier = (organization?.tier || 'free') as Tier;
+  const currentTier = (organization?.tier || "free") as Tier;
 
   const handleManageBilling = async () => {
     if (!isOwner) return;
     setLoading(true);
     try {
       const response = await billingApi.createPortal(window.location.href);
-      if (!isValidHttpUrl(response.portal_url)) return;
+      if (!isStripeBillingUrl(response.portal_url)) return;
       window.location.href = response.portal_url;
     } catch (error) {
-      console.error('Failed to open billing portal:', error);
+      console.error("Failed to open billing portal:", error);
+      toast.error("Failed to open billing portal. Please try again.");
     } finally {
       setLoading(false);
     }
@@ -37,10 +39,10 @@ export function PlanCard({ organization, subscription, isOwner, onRefresh: _onRe
 
   const formatDate = (dateStr: string | null) => {
     if (!dateStr) return null;
-    return new Date(dateStr).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric',
+    return new Date(dateStr).toLocaleDateString(undefined, {
+      year: "numeric",
+      month: "long",
+      day: "numeric",
     });
   };
 
@@ -51,21 +53,27 @@ export function PlanCard({ organization, subscription, isOwner, onRefresh: _onRe
           <div>
             <CardTitle className="flex items-center gap-2">
               Current Plan
-              <Badge variant={currentTier === 'free' ? 'secondary' : 'default'}>
+              <Badge variant={currentTier === "free" ? "secondary" : "default"}>
                 {getTierDisplayName(currentTier)}
               </Badge>
             </CardTitle>
             <CardDescription>
-              {currentTier === 'free'
-                ? 'You are on the free plan'
+              {currentTier === "free"
+                ? "You are on the free plan"
                 : `${getTierRateLimit(currentTier).toLocaleString()} events/minute`}
             </CardDescription>
           </div>
           {subscription?.has_stripe && isOwner && (
-            <Button variant="outline" onClick={handleManageBilling} disabled={loading}>
-              {loading && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+            <Button
+              variant="outline"
+              onClick={handleManageBilling}
+              disabled={loading}
+              aria-busy={loading}
+              aria-label={loading ? "Opening billing portal…" : "Manage billing"}
+            >
+              {loading && <Loader2 className="h-4 w-4 mr-2 animate-spin" aria-hidden="true" />}
               Manage Billing
-              <ExternalLink className="h-4 w-4 ml-2" />
+              <ExternalLink className="h-4 w-4 ml-2" aria-hidden="true" />
             </Button>
           )}
         </div>
@@ -79,10 +87,10 @@ export function PlanCard({ organization, subscription, isOwner, onRefresh: _onRe
                 <Calendar className="h-4 w-4 text-muted-foreground" />
               </div>
               <div>
-                <p className="text-sm font-medium">
-                  {subscription.cancel_at_period_end ? 'Cancels' : 'Renews'}
-                </p>
-                <p className={`text-sm ${subscription.cancel_at_period_end ? 'text-amber-600' : 'text-muted-foreground'}`}>
+                <p className="text-sm font-medium">{subscription.cancel_at_period_end ? "Cancels" : "Renews"}</p>
+                <p
+                  className={`text-sm ${subscription.cancel_at_period_end ? "text-amber-600" : "text-muted-foreground"}`}
+                >
                   {formatDate(subscription.current_period_end)}
                 </p>
               </div>
@@ -97,9 +105,7 @@ export function PlanCard({ organization, subscription, isOwner, onRefresh: _onRe
               </div>
               <div>
                 <p className="text-sm font-medium">Billing</p>
-                <p className="text-sm text-muted-foreground capitalize">
-                  {subscription.billing_interval}
-                </p>
+                <p className="text-sm text-muted-foreground capitalize">{subscription.billing_interval}</p>
               </div>
             </div>
           )}
@@ -113,7 +119,7 @@ export function PlanCard({ organization, subscription, isOwner, onRefresh: _onRe
               <div>
                 <p className="text-sm font-medium">Seats</p>
                 <p className="text-sm text-muted-foreground">
-                  {organization.seats} {organization.seats === 1 ? 'seat' : 'seats'}
+                  {organization.seats} {organization.seats === 1 ? "seat" : "seats"}
                 </p>
               </div>
             </div>

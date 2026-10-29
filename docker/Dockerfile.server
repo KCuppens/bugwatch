@@ -15,6 +15,9 @@ COPY apps/server/Cargo.toml apps/server/Cargo.lock* ./
 # Copy migrations early (needed for include_str! at compile time)
 COPY apps/server/migrations ./migrations
 
+# Copy openapi spec (needed for include_str! at compile time)
+COPY apps/server/openapi.yaml ./openapi.yaml
+
 # Copy agent scripts (needed for include_str! at compile time)
 COPY apps/agent /apps/agent
 
@@ -54,6 +57,11 @@ EXPOSE 3000
 ENV SERVER_ADDR=0.0.0.0:3000
 ENV DATABASE_URL=sqlite:/app/data/bugwatch.db
 ENV RUST_LOG=info
+
+# Wire /health into the container lifecycle so orchestrators (Docker, ECS, k8s)
+# can detect unhealthy containers and restart them automatically.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD curl -f http://localhost:3000/health || exit 1
 
 # Run the server
 CMD ["/app/bugwatch-server"]

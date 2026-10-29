@@ -11,6 +11,47 @@ pub struct ExternalIssue {
     pub status: Option<String>,
 }
 
+/// Escape Markdown-significant characters so user-supplied text is embedded
+/// as literal content rather than formatting. Intentionally limited to a safe
+/// subset of characters commonly used for markdown injection.
+fn markdown_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '\\' | '[' | ']' | '(' | ')' | '#' | '!' | '`' | '*' | '_' => {
+                out.push('\\');
+                out.push(ch);
+            }
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+/// Strip ASCII control characters (\x00-\x1F) except newline and tab, and
+/// cap the resulting string at `max_bytes` UTF-8 bytes without splitting a
+/// multi-byte character.
+fn sanitize_for_adf(s: &str) -> String {
+    let mut cleaned = String::with_capacity(s.len());
+    for ch in s.chars() {
+        let c = ch as u32;
+        if c < 0x20 && ch != '\n' && ch != '\t' {
+            continue;
+        }
+        cleaned.push(ch);
+    }
+    const MAX_BYTES: usize = 30_000;
+    if cleaned.len() <= MAX_BYTES {
+        return cleaned;
+    }
+    let mut end = MAX_BYTES;
+    while end > 0 && !cleaned.is_char_boundary(end) {
+        end -= 1;
+    }
+    cleaned.truncate(end);
+    cleaned
+}
+
 /// Format a Bugwatch issue body for external issue trackers (Markdown)
 pub fn format_issue_body(
     title: &str,
@@ -18,12 +59,17 @@ pub fn format_issue_body(
     event_url: &str,
     extra_context: Option<&str>,
 ) -> String {
+    let safe_title = markdown_escape(title);
+    let safe_issue_id = markdown_escape(issue_id);
     let mut body = format!(
         "## Bugwatch Issue\n\n**Title:** {}\n**Issue ID:** {}\n\n[View in Bugwatch]({})\n",
-        title, issue_id, event_url
+        safe_title, safe_issue_id, event_url
     );
     if let Some(ctx) = extra_context {
-        body.push_str(&format!("\n### Additional Context\n\n{}\n", ctx));
+        body.push_str(&format!(
+            "\n### Additional Context\n\n{}\n",
+            markdown_escape(ctx)
+        ));
     }
     body.push_str("\n---\n*Created by [Bugwatch](https://bugwatch.dev)*\n");
     body
@@ -170,7 +216,11 @@ impl JiraService {
             cloud_id
         );
 
-        // Convert markdown body to Jira ADF format (simplified)
+        // Convert markdown body to Jira ADF format (simplified).
+        // Always wrap user-supplied content as a single plain "text" node so
+        // an attacker cannot inject arbitrary ADF structure via keywords like
+        // `{"type":"..."`. Control chars are stripped and the body is capped.
+        let safe_body = sanitize_for_adf(body);
         let adf_body = serde_json::json!({
             "type": "doc",
             "version": 1,
@@ -178,7 +228,7 @@ impl JiraService {
                 "type": "paragraph",
                 "content": [{
                     "type": "text",
-                    "text": body
+                    "text": safe_body
                 }]
             }]
         });
@@ -277,6 +327,11 @@ impl JiraService {
             .header("Accept", "application/json")
             .send()
             .await?;
+
+        if !response.status().is_success() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(anyhow::anyhow!("Failed to get Jira cloud ID: {}", text));
+        }
 
         let data: Vec<serde_json::Value> = response.json().await?;
         data.first()
@@ -443,10 +498,117 @@ impl LinearService {
             .send()
             .await?;
 
+        if !response.status().is_success() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(anyhow::anyhow!("Failed to get Linear user: {}", text));
+        }
+
         let data: serde_json::Value = response.json().await?;
         let viewer = &data["data"]["viewer"];
         let id = viewer["id"].as_str().unwrap_or("unknown").to_string();
         let name = viewer["name"].as_str().unwrap_or("unknown").to_string();
         Ok((id, name))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── markdown_escape ──────────────────────────────────────────────────────
+
+    #[test]
+    fn markdown_escape_plain_text_unchanged() {
+        assert_eq!(markdown_escape("hello world"), "hello world");
+    }
+
+    #[test]
+    fn markdown_escape_empty_string() {
+        assert_eq!(markdown_escape(""), "");
+    }
+
+    #[test]
+    fn markdown_escape_special_chars() {
+        let special = r#"#[]()*_`!\<"#;
+        let escaped = markdown_escape(special);
+        // Every special char should be preceded by backslash
+        assert!(escaped.contains("\\#"));
+        assert!(escaped.contains("\\["));
+        assert!(escaped.contains("\\]"));
+        assert!(escaped.contains("\\("));
+        assert!(escaped.contains("\\)"));
+        assert!(escaped.contains("\\*"));
+        assert!(escaped.contains("\\_"));
+        assert!(escaped.contains("\\`"));
+        assert!(escaped.contains("\\!"));
+    }
+
+    #[test]
+    fn markdown_escape_backslash() {
+        assert_eq!(markdown_escape("\\"), "\\\\");
+    }
+
+    // ── sanitize_for_adf ─────────────────────────────────────────────────────
+
+    #[test]
+    fn sanitize_for_adf_passes_normal_text() {
+        let s = "Hello World";
+        assert_eq!(sanitize_for_adf(s), s);
+    }
+
+    #[test]
+    fn sanitize_for_adf_preserves_newline_and_tab() {
+        let s = "line1\nline2\ttab";
+        assert_eq!(sanitize_for_adf(s), s);
+    }
+
+    #[test]
+    fn sanitize_for_adf_removes_control_chars() {
+        let result = sanitize_for_adf("Hello\x00World\x01\x1FEnd");
+        assert_eq!(result, "HelloWorldEnd");
+    }
+
+    #[test]
+    fn sanitize_for_adf_truncates_at_30000_bytes() {
+        let long = "a".repeat(40_000);
+        let result = sanitize_for_adf(&long);
+        assert_eq!(result.len(), 30_000);
+    }
+
+    #[test]
+    fn sanitize_for_adf_short_string_not_truncated() {
+        let s = "short";
+        assert_eq!(sanitize_for_adf(s), s);
+    }
+
+    // ── format_issue_body ─────────────────────────────────────────────────────
+
+    #[test]
+    fn format_issue_body_contains_required_fields() {
+        let body = format_issue_body("Test Error", "iss-123", "https://bugwatch.dev/1", None);
+        assert!(body.contains("Test Error"));
+        assert!(body.contains("iss-123"));
+        assert!(body.contains("https://bugwatch.dev/1"));
+        assert!(body.contains("Bugwatch Issue"));
+        assert!(body.contains("View in Bugwatch"));
+    }
+
+    #[test]
+    fn format_issue_body_with_extra_context() {
+        let body = format_issue_body("Err", "i1", "https://x.com", Some("Extra context here"));
+        assert!(body.contains("Additional Context"));
+        assert!(body.contains("Extra context here"));
+    }
+
+    #[test]
+    fn format_issue_body_without_extra_context_no_section() {
+        let body = format_issue_body("Err", "i1", "https://x.com", None);
+        assert!(!body.contains("Additional Context"));
+    }
+
+    #[test]
+    fn format_issue_body_escapes_markdown_in_title() {
+        let body = format_issue_body("[critical] Error", "i1", "https://x.com", None);
+        assert!(body.contains("\\[critical\\]"));
     }
 }

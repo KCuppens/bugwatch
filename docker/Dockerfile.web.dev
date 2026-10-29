@@ -5,15 +5,20 @@ WORKDIR /app
 
 # Copy package files
 COPY package.json package-lock.json* ./
+COPY tsconfig.base.json ./
 COPY apps/web/package.json ./apps/web/
 COPY packages/ ./packages/
 
 # Install dependencies
 RUN npm ci
 
+# Build local SDK packages (required before Next.js can resolve them)
+RUN npm run build --workspace=@bugwatch/core \
+    && npm run build --workspace=@bugwatch/node \
+    && npm run build --workspace=@bugwatch/nextjs
+
 # Copy source code
 COPY apps/web ./apps/web
-COPY tsconfig.base.json ./
 
 ENV NODE_ENV=development
 ENV NEXT_TELEMETRY_DISABLED=1

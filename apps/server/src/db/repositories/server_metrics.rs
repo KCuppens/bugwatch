@@ -23,7 +23,7 @@ impl ServerRepository {
 
         let server = sqlx::query_as::<_, Server>(
             "INSERT INTO servers (id, project_id, server_id, hostname, os, kernel, first_seen, last_seen, is_active)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $7, TRUE)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, TRUE)
              ON CONFLICT (project_id, server_id) DO UPDATE SET
                 hostname = EXCLUDED.hostname,
                 os = COALESCE(EXCLUDED.os, servers.os),
@@ -39,6 +39,7 @@ impl ServerRepository {
         .bind(os)
         .bind(kernel)
         .bind(now)
+        .bind(now)
         .fetch_one(pool)
         .await?;
 
@@ -48,7 +49,7 @@ impl ServerRepository {
     /// List all servers for a project
     pub async fn list_by_project(pool: &DbPool, project_id: &str) -> Result<Vec<Server>> {
         let servers = sqlx::query_as::<_, Server>(
-            "SELECT * FROM servers WHERE project_id = $1 ORDER BY last_seen DESC",
+            "SELECT * FROM servers WHERE project_id = $1 ORDER BY last_seen DESC LIMIT 500",
         )
         .bind(project_id)
         .fetch_all(pool)
@@ -57,7 +58,7 @@ impl ServerRepository {
         Ok(servers)
     }
 
-    /// Find a server by its agent-reported server_id within a project
+    #[allow(dead_code)]
     pub async fn find_by_server_id(
         pool: &DbPool,
         project_id: &str,
@@ -86,13 +87,15 @@ impl ServerRepository {
 
     /// Check if a project has any servers registered
     pub async fn has_servers(pool: &DbPool, project_id: &str) -> Result<bool> {
-        let exists: bool =
-            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM servers WHERE project_id = $1)")
+        // Use COUNT with LIMIT 1 instead of EXISTS: the Any driver cannot decode
+        // SQLite's INTEGER 0/1 result from EXISTS into a native Rust bool.
+        let count: i64 =
+            sqlx::query_scalar("SELECT COUNT(1) FROM servers WHERE project_id = $1 LIMIT 1")
                 .bind(project_id)
                 .fetch_one(pool)
                 .await?;
 
-        Ok(exists)
+        Ok(count > 0)
     }
 
     /// Count servers for a project
@@ -124,6 +127,7 @@ pub struct ServerMetricsRepository;
 
 impl ServerMetricsRepository {
     /// Insert a new metrics snapshot
+    #[allow(clippy::too_many_arguments)]
     pub async fn create(
         pool: &DbPool,
         server_db_id: &str,
@@ -203,7 +207,8 @@ impl ServerMetricsRepository {
         let metrics = sqlx::query_as::<_, ServerMetric>(
             "SELECT * FROM server_metrics
              WHERE server_db_id = $1 AND recorded_at >= $2 AND recorded_at <= $3
-             ORDER BY recorded_at ASC",
+             ORDER BY recorded_at ASC
+             LIMIT 10000",
         )
         .bind(server_db_id)
         .bind(from)
@@ -216,13 +221,164 @@ impl ServerMetricsRepository {
 
     /// Cleanup metrics older than given number of days
     pub async fn cleanup_old_metrics(pool: &DbPool, retention_days: i32) -> Result<u64> {
-        let result = sqlx::query(
-            "DELETE FROM server_metrics WHERE recorded_at < NOW() - make_interval(days => $1)",
-        )
-        .bind(retention_days)
-        .execute(pool)
-        .await?;
+        let cutoff = chrono::Utc::now() - chrono::Duration::days(retention_days as i64);
+        let mut total_deleted: u64 = 0;
+        loop {
+            let result = sqlx::query(
+                "DELETE FROM server_metrics WHERE id IN (
+                    SELECT id FROM server_metrics
+                    WHERE recorded_at < $1
+                    LIMIT 5000
+                )",
+            )
+            .bind(cutoff)
+            .execute(pool)
+            .await?;
+            let deleted = result.rows_affected();
+            total_deleted += deleted;
+            if deleted == 0 {
+                break;
+            }
+        }
+        Ok(total_deleted)
+    }
+}
 
-        Ok(result.rows_affected())
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::{models::Server, test_helpers::test_any_pool};
+
+    async fn make_server(pool: &DbPool, project_id: &str, server_id: &str) -> Server {
+        ServerRepository::upsert(
+            pool,
+            project_id,
+            server_id,
+            "web-01.example.com",
+            Some("Linux"),
+            Some("5.15"),
+        )
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn upsert_creates_server() {
+        let pool = test_any_pool().await;
+        let server = make_server(&pool, "proj-1", "srv-1").await;
+        assert_eq!(server.hostname, "web-01.example.com");
+        assert_eq!(server.os.as_deref(), Some("Linux"));
+        assert!(*server.is_active);
+    }
+
+    #[tokio::test]
+    async fn upsert_updates_on_conflict() {
+        let pool = test_any_pool().await;
+        make_server(&pool, "proj-2", "srv-dup").await;
+        let updated = ServerRepository::upsert(
+            &pool,
+            "proj-2",
+            "srv-dup",
+            "new-hostname",
+            Some("FreeBSD"),
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(updated.hostname, "new-hostname");
+        assert_eq!(updated.os.as_deref(), Some("FreeBSD"));
+    }
+
+    #[tokio::test]
+    async fn list_by_project_scoped() {
+        let pool = test_any_pool().await;
+        make_server(&pool, "proj-list", "srv-a").await;
+        make_server(&pool, "proj-list", "srv-b").await;
+        make_server(&pool, "proj-other", "srv-c").await;
+        let servers = ServerRepository::list_by_project(&pool, "proj-list")
+            .await
+            .unwrap();
+        assert_eq!(servers.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn find_by_server_id() {
+        let pool = test_any_pool().await;
+        let s = make_server(&pool, "proj-fsid", "srv-fsid").await;
+        let found = ServerRepository::find_by_server_id(&pool, "proj-fsid", "srv-fsid")
+            .await
+            .unwrap();
+        assert_eq!(found.unwrap().id, s.id);
+    }
+
+    #[tokio::test]
+    async fn find_by_id() {
+        let pool = test_any_pool().await;
+        let s = make_server(&pool, "proj-fid", "srv-fid").await;
+        let found = ServerRepository::find_by_id(&pool, &s.id).await.unwrap();
+        assert_eq!(found.unwrap().server_id, "srv-fid");
+    }
+
+    #[tokio::test]
+    async fn count_by_project() {
+        let pool = test_any_pool().await;
+        make_server(&pool, "proj-cnt", "srv-c1").await;
+        make_server(&pool, "proj-cnt", "srv-c2").await;
+        let count = ServerRepository::count_by_project(&pool, "proj-cnt")
+            .await
+            .unwrap();
+        assert_eq!(count, 2);
+    }
+
+    #[tokio::test]
+    async fn metrics_create_and_get_latest() {
+        let pool = test_any_pool().await;
+        let s = make_server(&pool, "proj-met", "srv-met").await;
+        let metric = ServerMetricsRepository::create(
+            &pool,
+            &s.id,
+            Some(45.5),
+            Some(1.2),
+            Some(0.8),
+            Some(0.5),
+            Some(8 * 1024 * 1024 * 1024),
+            Some(4 * 1024 * 1024 * 1024),
+            Some(4 * 1024 * 1024 * 1024),
+            Some(50.0),
+            None,
+            None,
+            None,
+            None,
+            Some(86400),
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(metric.server_db_id, s.id);
+        assert_eq!(metric.cpu_usage_percent, Some(45.5));
+        let latest = ServerMetricsRepository::get_latest(&pool, &s.id)
+            .await
+            .unwrap();
+        assert_eq!(latest.unwrap().id, metric.id);
+    }
+
+    #[tokio::test]
+    async fn metrics_get_latest_missing_returns_none() {
+        let pool = test_any_pool().await;
+        let result = ServerMetricsRepository::get_latest(&pool, "no-server")
+            .await
+            .unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn metrics_cleanup_old_noop() {
+        let pool = test_any_pool().await;
+        let deleted = ServerMetricsRepository::cleanup_old_metrics(&pool, 30)
+            .await
+            .unwrap();
+        assert_eq!(deleted, 0);
     }
 }

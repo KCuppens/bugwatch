@@ -44,12 +44,9 @@ export function useListKeyboardNavigation({
     if (!isEnabled) return;
 
     function handleKeyDown(e: KeyboardEvent) {
-      const target = e.target as HTMLElement;
-      if (
-        target.tagName === "INPUT" ||
-        target.tagName === "TEXTAREA" ||
-        target.isContentEditable
-      ) {
+      if (!(e.target instanceof HTMLElement)) return;
+      const target = e.target;
+      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) {
         // Only handle Escape in inputs
         if (e.key === "Escape") {
           (target as HTMLInputElement).blur();
@@ -123,7 +120,18 @@ export function useListKeyboardNavigation({
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isEnabled, focusedIndex, itemCount, onOpen, onToggleSelect, onFocusSearch, onResolve, onIgnore, onShowHelp, scrollIntoView]);
+  }, [
+    isEnabled,
+    focusedIndex,
+    itemCount,
+    onOpen,
+    onToggleSelect,
+    onFocusSearch,
+    onResolve,
+    onIgnore,
+    onShowHelp,
+    scrollIntoView,
+  ]);
 
   // Reset focus when item count changes
   useEffect(() => {

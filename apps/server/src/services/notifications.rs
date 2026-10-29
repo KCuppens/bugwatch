@@ -21,6 +21,34 @@ enum EmailTransport {
     Ses(SesClient),
 }
 
+/// Returns true for IP addresses that should never be webhook targets:
+/// loopback, RFC-1918 private, and link-local ranges.
+fn is_ssrf_risk(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => {
+            v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_unspecified()
+        }
+        std::net::IpAddr::V6(v6) => {
+            if v6.is_loopback() || v6.is_unspecified() {
+                return true;
+            }
+            // IPv4-mapped IPv6 (::ffff:x.x.x.x) — check embedded IPv4 address
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                if v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_unspecified()
+                {
+                    return true;
+                }
+            }
+            let o = v6.octets();
+            // fe80::/10 link-local
+            let is_link_local = o[0] == 0xfe && (o[1] & 0xc0) == 0x80;
+            // fc00::/7 unique local (fc00:: and fd00::)
+            let is_unique_local = o[0] & 0xfe == 0xfc;
+            is_link_local || is_unique_local
+        }
+    }
+}
+
 /// Notification service for sending alerts via various channels
 pub struct NotificationService {
     client: Client,
@@ -215,17 +243,19 @@ impl NotificationService {
     pub async fn new() -> Self {
         let client = Client::builder()
             .timeout(std::time::Duration::from_secs(30))
+            .min_tls_version(reqwest::tls::Version::TLS_1_2)
+            .user_agent("Bugwatch/1.0")
             .build()
             .expect("Failed to create HTTP client");
 
         // Try SMTP first (self-hosted), then AWS SES (SaaS)
-        let email_transport = Self::init_smtp_transport()
-            .map(|t| {
+        let email_transport = match Self::init_smtp_transport() {
+            Ok(t) => {
                 info!("SMTP email transport initialized");
-                EmailTransport::Smtp(t)
-            })
-            .ok()
-            .or_else(|| Self::init_ses_transport_sync());
+                Some(EmailTransport::Smtp(t))
+            }
+            Err(_) => Self::init_ses_transport().await,
+        };
 
         if email_transport.is_none() {
             warn!("No email transport configured (set SMTP_HOST or AWS credentials). Email notifications will be logged only.");
@@ -270,13 +300,10 @@ impl NotificationService {
     }
 
     /// Initialize SES transport (SaaS only)
-    fn init_ses_transport_sync() -> Option<EmailTransport> {
+    async fn init_ses_transport() -> Option<EmailTransport> {
         #[cfg(feature = "saas")]
         {
-            // Use tokio::task::block_in_place to run async SES init
-            match tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(Self::init_ses_client())
-            }) {
+            match Self::init_ses_client().await {
                 Ok(client) => {
                     info!("AWS SES email transport initialized");
                     Some(EmailTransport::Ses(client))
@@ -473,7 +500,8 @@ impl NotificationService {
         recipient: &str,
         payload: &AlertPayload,
     ) -> Result<()> {
-        let subject = format!("[Bugwatch] {}", payload.title);
+        let title_safe = payload.title.replace('\r', "").replace('\n', " ");
+        let subject = format!("[Bugwatch] {}", title_safe);
         let html_body = self.build_email_html(payload);
 
         let email = LettreMessage::builder()
@@ -506,17 +534,17 @@ impl NotificationService {
         recipient: &str,
         payload: &AlertPayload,
     ) -> Result<()> {
-        let subject = format!("[Bugwatch] {}", payload.title);
+        let title_safe = payload.title.replace('\r', "").replace('\n', " ");
+        let subject = format!("[Bugwatch] {}", title_safe);
 
         // Build HTML email body
         let html_body = self.build_email_html(payload);
+        // Strip CRLF to prevent email header injection via user-controlled fields.
+        // title_safe is already defined above for the subject line.
+        let message_safe = payload.message.replace('\r', "").replace('\n', " ");
         let text_body = format!(
             "{}\n\n{}\n\nProject: {}\nSeverity: {}\nTime: {}",
-            payload.title,
-            payload.message,
-            payload.project_name,
-            payload.severity,
-            payload.timestamp
+            title_safe, message_safe, payload.project_name, payload.severity, payload.timestamp
         );
 
         let email_content = EmailContent::builder()
@@ -616,28 +644,101 @@ impl NotificationService {
     ) -> Result<Option<String>> {
         let config: WebhookConfig = serde_json::from_str(&channel.config)?;
 
-        let mut request = self.client.post(&config.url).json(payload);
-
-        // Add HMAC signature if secret is configured
-        if let Some(secret) = &config.secret {
-            let payload_json = serde_json::to_string(payload)?;
-            let signature = compute_hmac_signature(&payload_json, secret);
-            request = request.header("X-Bugwatch-Signature", signature);
+        // SSRF guard: resolve the webhook hostname and reject private/internal addresses.
+        // Collect all resolved IPs and pin them in a throw-away client to prevent
+        // DNS rebinding (TOCTOU: reqwest would otherwise re-resolve the hostname on send).
+        let parsed =
+            url::Url::parse(&config.url).map_err(|_| anyhow::anyhow!("Webhook URL is invalid"))?;
+        if !matches!(parsed.scheme(), "http" | "https") {
+            return Err(anyhow::anyhow!("Webhook URL must use http or https"));
         }
-
-        let response = request.send().await?;
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-
-        if !status.is_success() {
-            return Err(anyhow!("Webhook failed: {} - {}", status, body));
+        let host = parsed
+            .host_str()
+            .ok_or_else(|| anyhow::anyhow!("Webhook URL has no host"))?
+            .to_string();
+        let port = parsed.port_or_known_default().unwrap_or(80);
+        let lookup = format!("{}:{}", host, port);
+        let addrs: Vec<std::net::SocketAddr> = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            tokio::net::lookup_host(&lookup),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("DNS lookup timed out for webhook host"))?
+        .map_err(|e| anyhow::anyhow!("Failed to resolve webhook host: {}", e))?
+        .collect();
+        if addrs.is_empty() {
+            return Err(anyhow::anyhow!(
+                "Webhook URL host did not resolve to any address"
+            ));
         }
+        for addr in &addrs {
+            if is_ssrf_risk(addr.ip()) {
+                return Err(anyhow::anyhow!(
+                    "Webhook URL resolves to a private or internal address"
+                ));
+            }
+        }
+        let pinned_client = Client::builder()
+            .timeout(std::time::Duration::from_secs(15))
+            .min_tls_version(reqwest::tls::Version::TLS_1_2)
+            .resolve(&host, addrs[0])
+            .build()
+            .map_err(|e| anyhow::anyhow!("Failed to build pinned webhook client: {}", e))?;
+
+        // Compute signature once; rebuild request each attempt since send() consumes the builder.
+        let signature = config
+            .secret
+            .as_ref()
+            .map(|secret| -> anyhow::Result<Option<String>> {
+                if secret.len() < 16 {
+                    tracing::warn!(
+                        url = %config.url,
+                        "Webhook secret is too short (< 16 chars); skipping HMAC signature"
+                    );
+                    return Ok(None);
+                }
+                let payload_json = serde_json::to_string(payload)
+                    .map_err(|e| anyhow::anyhow!("Failed to serialize webhook payload: {}", e))?;
+                Ok(Some(compute_hmac_signature(&payload_json, secret)?))
+            })
+            .transpose()?
+            .flatten();
+
+        // Single attempt — outer send_with_retry in alerting.rs handles up to 3
+        // retries with jitter. An inner retry loop here would produce up to 9
+        // total requests per alert to an already-failing endpoint.
+        let mut req = pinned_client.post(&config.url).json(payload);
+        if let Some(ref sig) = signature {
+            req = req.header("X-Bugwatch-Signature", sig.as_str());
+        }
+        let response_body = match req.send().await {
+            Ok(resp) => {
+                let status = resp.status();
+                // Cap at 64KB to prevent memory exhaustion from hostile endpoints.
+                let raw = resp.bytes().await.unwrap_or_default();
+                if raw.len() >= 65_536 {
+                    tracing::warn!(url = %config.url, "Webhook response body truncated at 65KB");
+                }
+                let body = String::from_utf8_lossy(if raw.len() > 65_536 {
+                    &raw[..65_536]
+                } else {
+                    &raw
+                })
+                .into_owned();
+                if !status.is_success() {
+                    let truncated_body: String = body.chars().take(512).collect();
+                    return Err(anyhow!("Webhook failed: {} - {}", status, truncated_body));
+                }
+                body
+            }
+            Err(e) => return Err(anyhow::Error::from(e)),
+        };
 
         info!("Webhook sent to {}", config.url);
 
         // Try to parse the response body for an action command
-        if !body.is_empty() {
-            if let Ok(webhook_resp) = serde_json::from_str::<WebhookResponse>(&body) {
+        if !response_body.is_empty() {
+            if let Ok(webhook_resp) = serde_json::from_str::<WebhookResponse>(&response_body) {
                 if let Some(action) = webhook_resp.action {
                     if action == "resolve" || action == "ignore" {
                         info!("Webhook returned action: {}", action);
@@ -665,10 +766,53 @@ impl NotificationService {
             anyhow!("Invalid Slack config: {}", e)
         })?;
 
-        info!(
-            "Slack webhook URL configured: {}...",
-            &config.webhook_url.chars().take(50).collect::<String>()
-        );
+        // SSRF guard — validate Slack webhook URL resolves to a safe address.
+        // Incoming webhook URLs are typically hooks.slack.com, but we validate
+        // all resolutions to catch misconfigured or crafted URLs.
+        let (slack_webhook_host, pinned_addr) = {
+            let parsed = url::Url::parse(&config.webhook_url)
+                .map_err(|_| anyhow!("Slack webhook URL is invalid"))?;
+            if !matches!(parsed.scheme(), "http" | "https") {
+                return Err(anyhow!("Slack webhook URL must use http or https"));
+            }
+            let host = parsed
+                .host_str()
+                .ok_or_else(|| anyhow!("Slack webhook URL has no host"))?
+                .to_string();
+            let port = parsed.port_or_known_default().unwrap_or(443);
+            let addrs: Vec<std::net::SocketAddr> = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                tokio::net::lookup_host(format!("{}:{}", host, port)),
+            )
+            .await
+            .map_err(|_| anyhow!("DNS lookup timed out for Slack webhook host"))?
+            .map_err(|e| anyhow!("Failed to resolve Slack webhook host: {}", e))?
+            .collect();
+            if addrs.is_empty() {
+                return Err(anyhow!("Slack webhook host did not resolve to any address"));
+            }
+            for addr in &addrs {
+                if is_ssrf_risk(addr.ip()) {
+                    return Err(anyhow!(
+                        "Slack webhook URL resolves to a private or internal address"
+                    ));
+                }
+            }
+            (host, addrs[0])
+        };
+
+        info!("Slack webhook URL host: {}", slack_webhook_host);
+
+        // Build a pinned reqwest client that resolves the host to the exact
+        // SocketAddr we just validated. This closes the DNS-rebinding window
+        // between SSRF check and connect.
+        let pinned_slack_client = Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .min_tls_version(reqwest::tls::Version::TLS_1_2)
+            .user_agent("Bugwatch/1.0")
+            .resolve(&slack_webhook_host, pinned_addr)
+            .build()
+            .map_err(|e| anyhow!("Failed to build pinned Slack client: {}", e))?;
 
         // Get template (use default if not configured)
         let template = config.message_template.unwrap_or_default();
@@ -700,7 +844,7 @@ impl NotificationService {
             match block_config.block_type {
                 SlackBlockType::Header => {
                     // Slack section text limit: 3000 chars
-                    let header_text = format!("{} *{}*", emoji, payload.title);
+                    let header_text = format!("{} *{}*", emoji, slack_escape(&payload.title));
                     blocks.push(serde_json::json!({
                         "type": "section",
                         "text": {
@@ -710,12 +854,14 @@ impl NotificationService {
                     }));
                 }
                 SlackBlockType::Message => {
-                    // Slack section text limit: 3000 chars (account for backticks + ellipsis)
-                    let msg = if payload.message.len() > 2997 {
-                        let end = floor_char_boundary(&payload.message, 2993);
-                        format!("`{}...`", &payload.message[..end])
+                    // Slack section text limit: 3000 chars (account for backticks + ellipsis).
+                    // Escape backticks in the message so it can't break out of the inline code span.
+                    let escaped_message = slack_escape(&payload.message);
+                    let msg = if escaped_message.len() > 2997 {
+                        let end = floor_char_boundary(&escaped_message, 2993);
+                        format!("`{}...`", &escaped_message[..end])
                     } else {
-                        format!("`{}`", payload.message)
+                        format!("`{}`", escaped_message)
                     };
                     blocks.push(serde_json::json!({
                         "type": "section",
@@ -732,7 +878,9 @@ impl NotificationService {
                     // Slack context text limit: 3000 chars
                     let context_text = format!(
                         "*Project:* {} | *Severity:* {} | *Time:* {}",
-                        payload.project_name, payload.severity, payload.timestamp
+                        slack_escape(&payload.project_name),
+                        slack_escape(&payload.severity),
+                        slack_escape(&payload.timestamp)
                     );
                     blocks.push(serde_json::json!({
                         "type": "context",
@@ -759,17 +907,26 @@ impl NotificationService {
                 match action_config.action_type {
                     SlackActionType::ViewIssue => {
                         if let Some(url) = &payload.url {
-                            links.push(format!("<{}|{}>", url, action_config.label));
+                            let safe_url = url.replace('>', "%3E").replace('|', "%7C");
+                            links.push(format!("<{}|{}>", safe_url, action_config.label));
                         }
                     }
                     SlackActionType::Resolve => {
                         if let Some(url) = &payload.url {
-                            links.push(format!("<{}?action=resolve|{}>", url, action_config.label));
+                            let safe_url = url.replace('>', "%3E").replace('|', "%7C");
+                            links.push(format!(
+                                "<{}?action=resolve|{}>",
+                                safe_url, action_config.label
+                            ));
                         }
                     }
                     SlackActionType::Mute => {
                         if let Some(url) = &payload.url {
-                            links.push(format!("<{}?action=mute|{}>", url, action_config.label));
+                            let safe_url = url.replace('>', "%3E").replace('|', "%7C");
+                            links.push(format!(
+                                "<{}?action=mute|{}>",
+                                safe_url, action_config.label
+                            ));
                         }
                     }
                 }
@@ -788,7 +945,12 @@ impl NotificationService {
 
         // If no blocks were generated, add a minimal fallback block
         if blocks.is_empty() {
-            let fallback_block_text = format!("{} *{}*: {}", emoji, payload.title, payload.message);
+            let fallback_block_text = format!(
+                "{} *{}*: {}",
+                emoji,
+                slack_escape(&payload.title),
+                slack_escape(&payload.message)
+            );
             blocks.push(serde_json::json!({
                 "type": "section",
                 "text": {
@@ -800,7 +962,9 @@ impl NotificationService {
 
         let fallback_text = format!(
             "[{}] {}: {}",
-            payload.severity, payload.title, payload.message
+            payload.severity,
+            slack_escape(&payload.title),
+            slack_escape(&payload.message)
         );
 
         // Incoming webhooks do NOT support blocks inside attachments (that's
@@ -819,18 +983,20 @@ impl NotificationService {
             slack_payload["channel"] = serde_json::json!(channel);
         }
 
-        let response = self
-            .client
+        let response = pinned_slack_client
             .post(&config.webhook_url)
             .json(&slack_payload)
+            .timeout(std::time::Duration::from_secs(10))
             .send()
             .await?;
 
         let status = response.status();
         if !status.is_success() {
-            let body = response.text().await.unwrap_or_default();
+            let raw = response.bytes().await.unwrap_or_default();
+            let body = String::from_utf8_lossy(if raw.len() > 512 { &raw[..512] } else { &raw })
+                .into_owned();
             error!("Slack webhook failed with status {}: {}", status, body);
-            return Err(anyhow!("Slack webhook failed: {} - {}", status, body));
+            return Err(anyhow!("Slack webhook failed with status {}", status));
         }
 
         info!(
@@ -885,13 +1051,17 @@ impl NotificationService {
             .client
             .post("https://events.pagerduty.com/v2/enqueue")
             .json(&pd_payload)
+            .timeout(std::time::Duration::from_secs(10))
             .send()
             .await?;
 
         let status = response.status();
         if !status.is_success() {
-            let body = response.text().await.unwrap_or_default();
-            return Err(anyhow!("PagerDuty failed: {} - {}", status, body));
+            tracing::warn!(status = %status, "PagerDuty notification failed");
+            return Err(anyhow!(
+                "PagerDuty notification failed with status {}",
+                status
+            ));
         }
 
         info!("PagerDuty notification sent");
@@ -954,13 +1124,17 @@ impl NotificationService {
             .post("https://api.opsgenie.com/v2/alerts")
             .header("Authorization", format!("GenieKey {}", config.api_key))
             .json(&og_payload)
+            .timeout(std::time::Duration::from_secs(10))
             .send()
             .await?;
 
         let status = response.status();
         if !status.is_success() {
-            let body = response.text().await.unwrap_or_default();
-            return Err(anyhow!("OpsGenie failed: {} - {}", status, body));
+            tracing::warn!(status = %status, "OpsGenie notification failed");
+            return Err(anyhow!(
+                "OpsGenie notification failed with status {}",
+                status
+            ));
         }
 
         info!("OpsGenie notification sent");
@@ -1000,6 +1174,19 @@ fn truncate_str(s: &str, max_len: usize) -> String {
     format!("{}...", truncated)
 }
 
+/// Escape characters that have special meaning in Slack mrkdwn so that
+/// user-supplied content is rendered as literal text. Covers the `&<>`
+/// entities Slack requires plus the most common mrkdwn formatters
+/// (`*` bold/italic, backtick for code). `_` and `~` are intentionally
+/// omitted to avoid mangling legitimate identifiers in alert bodies.
+fn slack_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('`', "'")
+        .replace('*', "\\*")
+}
+
 /// Escape HTML special characters to prevent injection in email bodies.
 fn html_escape(s: &str) -> String {
     s.replace('&', "&amp;")
@@ -1010,26 +1197,271 @@ fn html_escape(s: &str) -> String {
 }
 
 /// Compute HMAC-SHA256 signature for webhook payloads
-pub(crate) fn compute_hmac_signature(payload: &str, secret: &str) -> String {
+pub(crate) fn compute_hmac_signature(payload: &str, secret: &str) -> Result<String> {
     use hmac::{Hmac, Mac};
     use sha2::Sha256;
 
     type HmacSha256 = Hmac<Sha256>;
 
-    let mut mac =
-        HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC can take key of any size");
+    let mut mac = HmacSha256::new_from_slice(secret.as_bytes())
+        .map_err(|e| anyhow!("Failed to initialize HMAC: {}", e))?;
     mac.update(payload.as_bytes());
 
     let result = mac.finalize();
     let bytes = result.into_bytes();
 
     // Return as hex string
-    hex::encode(bytes)
+    Ok(hex::encode(bytes))
 }
 
-impl Default for NotificationService {
-    fn default() -> Self {
-        // Use blocking runtime for default initialization
-        tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(Self::new()))
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::IpAddr;
+
+    // ── is_ssrf_risk ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn ssrf_risk_loopback_v4() {
+        let ip: IpAddr = "127.0.0.1".parse().unwrap();
+        assert!(is_ssrf_risk(ip));
+    }
+
+    #[test]
+    fn ssrf_risk_private_v4_10() {
+        let ip: IpAddr = "10.0.0.1".parse().unwrap();
+        assert!(is_ssrf_risk(ip));
+    }
+
+    #[test]
+    fn ssrf_risk_private_v4_192_168() {
+        let ip: IpAddr = "192.168.1.1".parse().unwrap();
+        assert!(is_ssrf_risk(ip));
+    }
+
+    #[test]
+    fn ssrf_risk_private_v4_172_16() {
+        let ip: IpAddr = "172.16.0.1".parse().unwrap();
+        assert!(is_ssrf_risk(ip));
+    }
+
+    #[test]
+    fn ssrf_risk_link_local_v4() {
+        let ip: IpAddr = "169.254.0.1".parse().unwrap();
+        assert!(is_ssrf_risk(ip));
+    }
+
+    #[test]
+    fn ssrf_risk_unspecified_v4() {
+        let ip: IpAddr = "0.0.0.0".parse().unwrap();
+        assert!(is_ssrf_risk(ip));
+    }
+
+    #[test]
+    fn ssrf_risk_public_v4_is_safe() {
+        let ip: IpAddr = "8.8.8.8".parse().unwrap();
+        assert!(!is_ssrf_risk(ip));
+    }
+
+    #[test]
+    fn ssrf_risk_loopback_v6() {
+        let ip: IpAddr = "::1".parse().unwrap();
+        assert!(is_ssrf_risk(ip));
+    }
+
+    #[test]
+    fn ssrf_risk_unspecified_v6() {
+        let ip: IpAddr = "::".parse().unwrap();
+        assert!(is_ssrf_risk(ip));
+    }
+
+    #[test]
+    fn ssrf_risk_link_local_v6() {
+        let ip: IpAddr = "fe80::1".parse().unwrap();
+        assert!(is_ssrf_risk(ip));
+    }
+
+    #[test]
+    fn ssrf_risk_unique_local_v6() {
+        let ip: IpAddr = "fd00::1".parse().unwrap();
+        assert!(is_ssrf_risk(ip));
+    }
+
+    #[test]
+    fn ssrf_risk_ipv4_mapped_private() {
+        // ::ffff:10.0.0.1 — IPv4-mapped IPv6 of a private address
+        let ip: IpAddr = "::ffff:10.0.0.1".parse().unwrap();
+        assert!(is_ssrf_risk(ip));
+    }
+
+    #[test]
+    fn ssrf_risk_public_v6_is_safe() {
+        let ip: IpAddr = "2001:4860:4860::8888".parse().unwrap();
+        assert!(!is_ssrf_risk(ip));
+    }
+
+    // ── floor_char_boundary ───────────────────────────────────────────────────
+
+    #[test]
+    fn floor_char_boundary_ascii_within_bounds() {
+        assert_eq!(floor_char_boundary("hello", 3), 3);
+    }
+
+    #[test]
+    fn floor_char_boundary_at_end() {
+        assert_eq!(floor_char_boundary("hello", 5), 5);
+    }
+
+    #[test]
+    fn floor_char_boundary_beyond_end() {
+        assert_eq!(floor_char_boundary("hello", 100), 5);
+    }
+
+    #[test]
+    fn floor_char_boundary_multibyte_char() {
+        // "é" is 2 bytes (0xC3 0xA9); index 1 is inside the char
+        let s = "éx";
+        assert_eq!(floor_char_boundary(s, 1), 0); // falls back to char boundary at 0
+        assert_eq!(floor_char_boundary(s, 2), 2); // 2 is the start of 'x'
+    }
+
+    // ── truncate_str ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn truncate_str_short_string_unchanged() {
+        assert_eq!(truncate_str("hello", 10), "hello");
+    }
+
+    #[test]
+    fn truncate_str_exact_length_unchanged() {
+        assert_eq!(truncate_str("hello", 5), "hello");
+    }
+
+    #[test]
+    fn truncate_str_long_string_gets_ellipsis() {
+        let result = truncate_str("hello world", 8);
+        assert!(result.ends_with("..."));
+        assert!(result.len() <= 8);
+    }
+
+    // ── slack_escape ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn slack_escape_ampersand() {
+        assert_eq!(slack_escape("a & b"), "a &amp; b");
+    }
+
+    #[test]
+    fn slack_escape_angle_brackets() {
+        assert_eq!(slack_escape("<script>"), "&lt;script&gt;");
+    }
+
+    #[test]
+    fn slack_escape_backtick() {
+        assert_eq!(slack_escape("`code`"), "'code'");
+    }
+
+    #[test]
+    fn slack_escape_asterisk() {
+        assert_eq!(slack_escape("*bold*"), "\\*bold\\*");
+    }
+
+    #[test]
+    fn slack_escape_plain_text_unchanged() {
+        assert_eq!(slack_escape("plain text"), "plain text");
+    }
+
+    // ── html_escape ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn html_escape_ampersand() {
+        assert_eq!(html_escape("a & b"), "a &amp; b");
+    }
+
+    #[test]
+    fn html_escape_angle_brackets() {
+        assert_eq!(html_escape("<div>"), "&lt;div&gt;");
+    }
+
+    #[test]
+    fn html_escape_quotes() {
+        assert_eq!(html_escape(r#""hi""#), "&quot;hi&quot;");
+    }
+
+    #[test]
+    fn html_escape_single_quote() {
+        assert_eq!(html_escape("it's"), "it&#x27;s");
+    }
+
+    // ── compute_hmac_signature ────────────────────────────────────────────────
+
+    #[test]
+    fn hmac_signature_is_deterministic() {
+        let s1 = compute_hmac_signature("payload", "secret").unwrap();
+        let s2 = compute_hmac_signature("payload", "secret").unwrap();
+        assert_eq!(s1, s2);
+    }
+
+    #[test]
+    fn hmac_signature_different_payloads_differ() {
+        let s1 = compute_hmac_signature("payload1", "secret").unwrap();
+        let s2 = compute_hmac_signature("payload2", "secret").unwrap();
+        assert_ne!(s1, s2);
+    }
+
+    #[test]
+    fn hmac_signature_is_64_hex_chars() {
+        let sig = compute_hmac_signature("test", "key").unwrap();
+        assert_eq!(sig.len(), 64);
+        assert!(sig.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    // ── NotificationService::map_to_pd_severity ───────────────────────────────
+
+    #[test]
+    fn pd_severity_fatal_maps_to_critical() {
+        assert_eq!(NotificationService::map_to_pd_severity("fatal"), "critical");
+    }
+
+    #[test]
+    fn pd_severity_error_maps_to_error() {
+        assert_eq!(NotificationService::map_to_pd_severity("error"), "error");
+    }
+
+    #[test]
+    fn pd_severity_warning_maps_to_warning() {
+        assert_eq!(
+            NotificationService::map_to_pd_severity("warning"),
+            "warning"
+        );
+    }
+
+    #[test]
+    fn pd_severity_other_maps_to_info() {
+        assert_eq!(NotificationService::map_to_pd_severity("debug"), "info");
+        assert_eq!(NotificationService::map_to_pd_severity("unknown"), "info");
+    }
+
+    // ── NotificationService::map_to_og_priority ───────────────────────────────
+
+    #[test]
+    fn og_priority_fatal_maps_to_p1() {
+        assert_eq!(NotificationService::map_to_og_priority("fatal"), "P1");
+    }
+
+    #[test]
+    fn og_priority_error_maps_to_p2() {
+        assert_eq!(NotificationService::map_to_og_priority("error"), "P2");
+    }
+
+    #[test]
+    fn og_priority_warning_maps_to_p3() {
+        assert_eq!(NotificationService::map_to_og_priority("warning"), "P3");
+    }
+
+    #[test]
+    fn og_priority_other_maps_to_p5() {
+        assert_eq!(NotificationService::map_to_og_priority("info"), "P5");
+        assert_eq!(NotificationService::map_to_og_priority("unknown"), "P5");
     }
 }

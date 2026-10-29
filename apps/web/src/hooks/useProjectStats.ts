@@ -17,9 +17,10 @@ export function useProjectStats(): UseProjectStatsResult {
   const [stats, setStats] = useState<Map<string, ProjectStatsWithInfo>>(new Map());
   const [isLoading, setIsLoading] = useState(true);
 
-  const fetchStats = useCallback(async () => {
+  const fetchStats = useCallback(async (signal?: AbortSignal) => {
     try {
       const res = await overviewApi.getStatsByProject();
+      if (signal?.aborted) return;
       const map = new Map<string, ProjectStatsWithInfo>();
       for (const row of res.data) {
         map.set(row.project_id, row);
@@ -28,14 +29,18 @@ export function useProjectStats(): UseProjectStatsResult {
     } catch {
       // Fail silently — selector still works without badges
     } finally {
-      setIsLoading(false);
+      if (!signal?.aborted) setIsLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    fetchStats();
-    const interval = setInterval(fetchStats, 60000);
-    return () => clearInterval(interval);
+    const controller = new AbortController();
+    fetchStats(controller.signal);
+    const interval = setInterval(() => fetchStats(controller.signal), 60000);
+    return () => {
+      controller.abort();
+      clearInterval(interval);
+    };
   }, [fetchStats]);
 
   return { stats, isLoading };

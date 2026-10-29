@@ -9,6 +9,24 @@ const withBundleAnalyzer = bundleAnalyzer({ enabled: process.env.ANALYZE === "tr
 const nextConfig: NextConfig = {
   reactStrictMode: true,
   transpilePackages: ["@bugwatch/nextjs", "@bugwatch/core", "@bugwatch/node"],
+  webpack(config, { dev, isServer, nextRuntime }) {
+    if (dev) {
+      // Docker on Windows doesn't relay inotify events — force polling so
+      // webpack detects file changes without native FS events.
+      config.watchOptions = {
+        poll: 1000,
+        aggregateTimeout: 300,
+      };
+    }
+    // The bugwatch instrumentation lazily `await import("os")` only under the
+    // nodejs runtime (guarded by NEXT_RUNTIME). Stub the Node built-in for the
+    // client and edge bundles so webpack can resolve it; it is never executed
+    // there.
+    if (!isServer || nextRuntime === "edge") {
+      config.resolve.fallback = { ...config.resolve.fallback, os: false };
+    }
+    return config;
+  },
   output: "standalone",
   // Tree-shake icon libs so each page only pulls the icons it actually uses
   // instead of the whole barrel export.
@@ -27,6 +45,28 @@ const nextConfig: NextConfig = {
     },
   },
   async headers() {
+    const isDev = process.env.NODE_ENV === "development";
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000";
+
+    // Dev needs `'unsafe-eval'` (Next's react-refresh runtime) and `data:` fonts
+    // (Tailwind/lucide-react inline woff2). Without these the dev bundle fails
+    // to evaluate and React never hydrates — typing into inputs silently does
+    // nothing because the page is effectively static HTML.
+    const scriptSrc = isDev
+      ? "script-src 'self' 'unsafe-inline' 'unsafe-eval'"
+      : "script-src 'self' 'unsafe-inline'";
+
+    // Both HTTP API and the matching WebSocket origin must be allowed. In dev,
+    // also allow the dev-server WS (localhost + the public dev domain via wss).
+    const wsOrigin = apiUrl.replace(/^http/, "ws");
+    const connectSrc = isDev
+      ? `connect-src 'self' ${apiUrl} ${wsOrigin} ws://localhost:3001 ws://localhost:3000 wss://dev.bugwatch.dev wss://api-dev.bugwatch.dev`
+      : `connect-src 'self' ${apiUrl} ${wsOrigin}`;
+
+    const fontSrc = isDev
+      ? "font-src 'self' data: https://api.fontshare.com https://cdn.fontshare.com"
+      : "font-src 'self' https://api.fontshare.com https://cdn.fontshare.com";
+
     return [
       {
         source: "/(.*)",
@@ -43,11 +83,11 @@ const nextConfig: NextConfig = {
             key: "Content-Security-Policy",
             value: [
               "default-src 'self'",
-              "script-src 'self' 'unsafe-inline'",
-              "style-src 'self' 'unsafe-inline'",
+              scriptSrc,
+              "style-src 'self' 'unsafe-inline' https://api.fontshare.com",
               "img-src 'self' data: blob:",
-              `connect-src 'self' ${process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000"}`,
-              "font-src 'self'",
+              connectSrc,
+              fontSrc,
               "frame-ancestors 'none'",
             ].join("; "),
           },

@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useEffect } from "react";
+import { useRef, useEffect, useMemo } from "react";
 import {
   Search,
   Clock,
@@ -43,13 +43,7 @@ const iconMap: Record<string, React.ComponentType<{ className?: string }>> = {
   "chevron-left": ChevronLeft,
 };
 
-export function SearchAutocomplete({
-  suggestions,
-  selectedIndex,
-  onSelect,
-  onHover,
-  query,
-}: SearchAutocompleteProps) {
+export function SearchAutocomplete({ suggestions, selectedIndex, onSelect, onHover, query }: SearchAutocompleteProps) {
   const listRef = useRef<HTMLDivElement>(null);
   const selectedRef = useRef<HTMLDivElement>(null);
 
@@ -63,43 +57,53 @@ export function SearchAutocomplete({
     }
   }, [selectedIndex]);
 
+  // Group suggestions by category and assign stable global indices.
+  // Must be called before any conditional return to satisfy Rules of Hooks.
+  const groupedSuggestions = useMemo(() => {
+    let idx = 0;
+    const groups: Array<{ category: string; items: Array<{ suggestion: Suggestion; globalIndex: number }> }> = [];
+    const categoryMap = new Map<string, typeof groups[0]>();
+    for (const suggestion of suggestions) {
+      const category = suggestion.category || "Suggestions";
+      let group = categoryMap.get(category);
+      if (!group) {
+        group = { category, items: [] };
+        groups.push(group);
+        categoryMap.set(category, group);
+      }
+      group.items.push({ suggestion, globalIndex: idx++ });
+    }
+    return groups;
+  }, [suggestions]);
+
   if (suggestions.length === 0) {
     return null;
   }
 
-  // Group suggestions by category
-  const groupedSuggestions = suggestions.reduce((acc, suggestion) => {
-    const category = suggestion.category || "Suggestions";
-    if (!acc[category]) {
-      acc[category] = [];
-    }
-    acc[category].push(suggestion);
-    return acc;
-  }, {} as Record<string, Suggestion[]>);
-
-  let globalIndex = 0;
-
   return (
     <div
       ref={listRef}
+      id="search-autocomplete-listbox"
+      role="listbox"
+      aria-label="Search suggestions"
+      aria-live="polite"
       className="absolute top-full left-0 right-0 mt-2 max-h-80 overflow-y-auto rounded-lg border bg-popover shadow-lg z-50 animate-in fade-in slide-in-from-top-2"
     >
-      {Object.entries(groupedSuggestions).map(([category, items]) => (
+      {groupedSuggestions.map(({ category, items }) => (
         <div key={category}>
           <div className="px-3 py-2 text-xs font-medium text-muted-foreground sticky top-0 bg-popover border-b">
             {category}
           </div>
-          {items.map((suggestion) => {
-            const currentIndex = globalIndex++;
+          {items.map(({ suggestion, globalIndex: currentIndex }) => {
             const isSelected = currentIndex === selectedIndex;
-            const Icon = suggestion.icon
-              ? iconMap[suggestion.icon] || Search
-              : Search;
+            const Icon = suggestion.icon ? iconMap[suggestion.icon] || Search : Search;
 
             return (
               <div
                 key={`${suggestion.type}-${suggestion.value}-${currentIndex}`}
                 ref={isSelected ? selectedRef : null}
+                role="option"
+                aria-selected={isSelected}
                 className={cn(
                   "flex items-center gap-3 px-3 py-2 cursor-pointer transition-colors",
                   isSelected ? "bg-accent" : "hover:bg-muted"
@@ -116,29 +120,24 @@ export function SearchAutocomplete({
                     suggestion.type === "history"
                       ? "text-muted-foreground"
                       : suggestion.type === "saved"
-                      ? "text-primary"
-                      : "text-muted-foreground"
+                        ? "text-primary"
+                        : "text-muted-foreground"
                   )}
+                  aria-hidden="true"
                 />
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
-                    <span className="text-sm truncate">
-                      {renderHighlightedLabel(suggestion.label, query)}
-                    </span>
+                    <span className="text-sm truncate">{renderHighlightedLabel(suggestion.label, query)}</span>
                     {suggestion.count !== undefined && (
-                      <span className="text-xs text-muted-foreground">
-                        ({suggestion.count})
-                      </span>
+                      <span className="text-xs text-muted-foreground">({suggestion.count})</span>
                     )}
                   </div>
                   {suggestion.description && (
-                    <p className="text-xs text-muted-foreground truncate">
-                      {suggestion.description}
-                    </p>
+                    <p className="text-xs text-muted-foreground truncate">{suggestion.description}</p>
                   )}
                 </div>
                 {isSelected && (
-                  <kbd className="hidden sm:inline-flex h-5 items-center gap-1 rounded border bg-muted px-1.5 text-[10px] font-medium text-muted-foreground">
+                  <kbd aria-hidden="true" className="hidden sm:inline-flex h-5 items-center gap-1 rounded border bg-muted px-1.5 text-[10px] font-medium text-muted-foreground">
                     Enter
                   </kbd>
                 )}
@@ -148,8 +147,8 @@ export function SearchAutocomplete({
         </div>
       ))}
 
-      {/* Footer with keyboard hints */}
-      <div className="flex items-center justify-between border-t px-3 py-2 text-xs text-muted-foreground bg-muted/50">
+      {/* Footer with keyboard hints — decorative, suppress from accessibility tree */}
+      <div aria-hidden="true" className="flex items-center justify-between border-t px-3 py-2 text-xs text-muted-foreground bg-muted/50">
         <div className="flex items-center gap-4">
           <span className="flex items-center gap-1">
             <kbd className="rounded border bg-background px-1">↑↓</kbd>

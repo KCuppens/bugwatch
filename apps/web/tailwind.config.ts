@@ -11,7 +11,10 @@ const config: Config = {
     "./src/app/**/*.{js,ts,jsx,tsx,mdx}",
     "./content/**/*.mdx",
     "./mdx-components.tsx",
+    // fumadocs-ui sits in apps/web/node_modules or the root node_modules,
+    // depending on how npm hoists it.
     "./node_modules/fumadocs-ui/dist/**/*.js",
+    "../../node_modules/fumadocs-ui/dist/**/*.js",
   ],
   theme: {
     extend: {
@@ -85,9 +88,9 @@ const config: Config = {
         "30": "7.5rem",
       },
       fontFamily: {
-        sans: ["var(--font-geist-sans)"],
-        mono: ["var(--font-geist-mono)"],
-        display: ["var(--font-display)", "var(--font-geist-sans)", "system-ui", "sans-serif"],
+        sans: ["var(--font-sans)", "system-ui", "sans-serif"],
+        mono: ["var(--font-mono)", "monospace"],
+        display: ["var(--font-sans)", "system-ui", "sans-serif"],
       },
       fontSize: {
         "display-xl": ["72px", { lineHeight: "1.05", letterSpacing: "-0.03em", fontWeight: "700" }],

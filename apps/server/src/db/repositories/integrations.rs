@@ -56,6 +56,7 @@ pub struct IntegrationRepository;
 
 impl IntegrationRepository {
     /// Create a new integration
+    #[allow(clippy::too_many_arguments)]
     pub async fn create(
         pool: &DbPool,
         organization_id: &str,
@@ -83,7 +84,7 @@ impl IntegrationRepository {
                 external_user_id = EXCLUDED.external_user_id,
                 external_username = EXCLUDED.external_username,
                 config = EXCLUDED.config,
-                updated_at = NOW()
+                updated_at = CURRENT_TIMESTAMP
             RETURNING *
             "#,
         )
@@ -134,7 +135,7 @@ impl IntegrationRepository {
         organization_id: &str,
     ) -> Result<Vec<Integration>> {
         let results = sqlx::query_as::<_, Integration>(
-            "SELECT * FROM integrations WHERE organization_id = $1 ORDER BY created_at DESC",
+            "SELECT * FROM integrations WHERE organization_id = $1 ORDER BY created_at DESC LIMIT 1000",
         )
         .bind(organization_id)
         .fetch_all(pool)
@@ -151,7 +152,7 @@ impl IntegrationRepository {
         Ok(())
     }
 
-    /// Update access token (for token refresh)
+    #[allow(dead_code)]
     pub async fn update_token(
         pool: &DbPool,
         id: &str,
@@ -162,10 +163,10 @@ impl IntegrationRepository {
         let encrypted_access = maybe_encrypt(access_token)?;
         let encrypted_refresh = refresh_token.map(maybe_encrypt).transpose()?;
 
-        sqlx::query(
+        let result = sqlx::query(
             r#"
             UPDATE integrations
-            SET access_token = $1, refresh_token = $2, token_expires_at = $3, updated_at = NOW()
+            SET access_token = $1, refresh_token = $2, token_expires_at = $3, updated_at = CURRENT_TIMESTAMP
             WHERE id = $4
             "#,
         )
@@ -175,6 +176,11 @@ impl IntegrationRepository {
         .bind(id)
         .execute(pool)
         .await?;
+        if result.rows_affected() == 0 {
+            return Err(anyhow::anyhow!(
+                "Integration not found or could not be updated"
+            ));
+        }
         Ok(())
     }
 }
@@ -183,6 +189,7 @@ pub struct IssueLinkRepository;
 
 impl IssueLinkRepository {
     /// Create a new issue link
+    #[allow(clippy::too_many_arguments)]
     pub async fn create(
         pool: &DbPool,
         issue_id: &str,
@@ -218,7 +225,7 @@ impl IssueLinkRepository {
     /// List all links for an issue
     pub async fn list_by_issue(pool: &DbPool, issue_id: &str) -> Result<Vec<IssueLink>> {
         sqlx::query_as::<_, IssueLink>(
-            "SELECT * FROM issue_links WHERE issue_id = $1 ORDER BY created_at DESC",
+            "SELECT * FROM issue_links WHERE issue_id = $1 ORDER BY created_at DESC LIMIT 100",
         )
         .bind(issue_id)
         .fetch_all(pool)
@@ -254,7 +261,7 @@ impl IssueLinkRepository {
         let result = sqlx::query(
             r#"
             UPDATE issue_links
-            SET external_status = $1, updated_at = NOW()
+            SET external_status = $1, updated_at = CURRENT_TIMESTAMP
             WHERE provider = $2 AND external_issue_id = $3 AND sync_enabled = true
             "#,
         )
@@ -264,5 +271,179 @@ impl IssueLinkRepository {
         .execute(pool)
         .await?;
         Ok(result.rows_affected())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::{
+        models::{Integration, IssueLink},
+        test_helpers::test_any_pool,
+    };
+
+    async fn make_integration(pool: &DbPool, org_id: &str, provider: &str) -> Integration {
+        IntegrationRepository::create(
+            pool,
+            org_id,
+            provider,
+            "access-token-123",
+            Some("refresh-abc"),
+            None,
+            Some("ext-user-1"),
+            Some("jsmith"),
+            "{}",
+            "user-1",
+        )
+        .await
+        .unwrap()
+    }
+
+    async fn make_link(
+        pool: &DbPool,
+        issue_id: &str,
+        integration_id: &str,
+        external_id: &str,
+    ) -> IssueLink {
+        IssueLinkRepository::create(
+            pool,
+            issue_id,
+            integration_id,
+            "github",
+            external_id,
+            "PROJ-1",
+            "https://github.com/org/repo/issues/1",
+            None,
+        )
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn create_and_find_by_id() {
+        let pool = test_any_pool().await;
+        let integ = make_integration(&pool, "org-1", "github").await;
+        assert_eq!(integ.provider, "github");
+        assert_eq!(integ.access_token, "access-token-123");
+        let found = IntegrationRepository::find_by_id(&pool, &integ.id)
+            .await
+            .unwrap();
+        assert_eq!(found.unwrap().id, integ.id);
+    }
+
+    #[tokio::test]
+    async fn find_by_id_missing_returns_none() {
+        let pool = test_any_pool().await;
+        let found = IntegrationRepository::find_by_id(&pool, "nope")
+            .await
+            .unwrap();
+        assert!(found.is_none());
+    }
+
+    #[tokio::test]
+    async fn find_by_org_and_provider() {
+        let pool = test_any_pool().await;
+        let integ = make_integration(&pool, "org-2", "jira").await;
+        let found = IntegrationRepository::find_by_org_and_provider(&pool, "org-2", "jira")
+            .await
+            .unwrap();
+        assert_eq!(found.unwrap().id, integ.id);
+    }
+
+    #[tokio::test]
+    async fn list_by_organization_scoped() {
+        let pool = test_any_pool().await;
+        make_integration(&pool, "org-list", "github").await;
+        make_integration(&pool, "org-list", "jira").await;
+        make_integration(&pool, "org-other", "github").await;
+        let list = IntegrationRepository::list_by_organization(&pool, "org-list")
+            .await
+            .unwrap();
+        assert_eq!(list.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn delete_integration() {
+        let pool = test_any_pool().await;
+        let integ = make_integration(&pool, "org-del", "github").await;
+        IntegrationRepository::delete(&pool, &integ.id)
+            .await
+            .unwrap();
+        let found = IntegrationRepository::find_by_id(&pool, &integ.id)
+            .await
+            .unwrap();
+        assert!(found.is_none());
+    }
+
+    #[tokio::test]
+    async fn update_token_changes_access_token() {
+        let pool = test_any_pool().await;
+        let integ = make_integration(&pool, "org-ut", "github").await;
+        IntegrationRepository::update_token(&pool, &integ.id, "new-token", None, None)
+            .await
+            .unwrap();
+        let updated = IntegrationRepository::find_by_id(&pool, &integ.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(updated.access_token, "new-token");
+        assert!(updated.refresh_token.is_none());
+    }
+
+    #[tokio::test]
+    async fn create_upserts_on_conflict() {
+        let pool = test_any_pool().await;
+        make_integration(&pool, "org-ups", "github").await;
+        make_integration(&pool, "org-ups", "github").await;
+        let list = IntegrationRepository::list_by_organization(&pool, "org-ups")
+            .await
+            .unwrap();
+        assert_eq!(list.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn issue_link_create_and_find_by_id() {
+        let pool = test_any_pool().await;
+        let link = make_link(&pool, "issue-1", "integ-1", "ext-123").await;
+        assert_eq!(link.provider, "github");
+        assert_eq!(link.external_issue_id, "ext-123");
+        assert!(*link.sync_enabled);
+        let found = IssueLinkRepository::find_by_id(&pool, &link.id)
+            .await
+            .unwrap();
+        assert_eq!(found.unwrap().id, link.id);
+    }
+
+    #[tokio::test]
+    async fn issue_link_list_by_issue() {
+        let pool = test_any_pool().await;
+        make_link(&pool, "issue-list", "integ-1", "ext-a").await;
+        make_link(&pool, "issue-other", "integ-2", "ext-b").await;
+        let links = IssueLinkRepository::list_by_issue(&pool, "issue-list")
+            .await
+            .unwrap();
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].issue_id, "issue-list");
+    }
+
+    #[tokio::test]
+    async fn issue_link_delete() {
+        let pool = test_any_pool().await;
+        let link = make_link(&pool, "issue-del", "integ-del", "ext-del").await;
+        IssueLinkRepository::delete(&pool, &link.id).await.unwrap();
+        let found = IssueLinkRepository::find_by_id(&pool, &link.id)
+            .await
+            .unwrap();
+        assert!(found.is_none());
+    }
+
+    #[tokio::test]
+    async fn issue_link_update_status() {
+        let pool = test_any_pool().await;
+        make_link(&pool, "issue-us", "integ-us", "ext-us-1").await;
+        let affected = IssueLinkRepository::update_status(&pool, "github", "ext-us-1", "closed")
+            .await
+            .unwrap();
+        assert_eq!(affected, 1);
     }
 }

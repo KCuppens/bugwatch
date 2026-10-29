@@ -28,16 +28,24 @@ export function IssueNavigation({ currentIssueId, projectId }: IssueNavigationPr
       if (currentIndex === -1) return;
 
       setPosition({ current: currentIndex + 1, total: issueOrder.length });
-      setPrevId(currentIndex > 0 ? issueOrder[currentIndex - 1] ?? null : null);
-      setNextId(currentIndex < issueOrder.length - 1 ? issueOrder[currentIndex + 1] ?? null : null);
+      setPrevId(currentIndex > 0 ? (issueOrder[currentIndex - 1] ?? null) : null);
+      setNextId(currentIndex < issueOrder.length - 1 ? (issueOrder[currentIndex + 1] ?? null) : null);
     } catch {
       // Ignore storage errors
     }
   }, [currentIssueId, projectId]);
 
-  const navigateTo = useCallback((id: string) => {
-    router.push(`/dashboard/issues/${id}?project=${projectId}`);
-  }, [router, projectId]);
+  const navigateTo = useCallback(
+    (id: string) => {
+      const params = new URLSearchParams();
+      if (projectId) {
+        params.set("project", String(projectId));
+      }
+      const qs = params.toString();
+      router.push(`/dashboard/issues/${encodeURIComponent(id)}${qs ? `?${qs}` : ""}`);
+    },
+    [router, projectId]
+  );
 
   // Keyboard shortcuts: [ for prev, ] for next
   useEffect(() => {

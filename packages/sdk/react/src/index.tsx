@@ -5,6 +5,7 @@ import React, {
   createContext,
   useContext,
   useEffect,
+  useState,
   useCallback,
   useRef,
   useMemo,
@@ -44,6 +45,10 @@ export interface ReactOptions extends BugwatchOptions {
   captureConsoleBreadcrumbs?: boolean;
   /** Capture HTTP 4xx/5xx errors from fetch requests */
   captureHttpErrors?: boolean;
+  /** Capture request bodies on HTTP errors (opt-in — may contain passwords/PII) */
+  captureRequestBodies?: boolean;
+  /** Capture response bodies on HTTP errors (opt-in — may contain server internals) */
+  captureResponseBodies?: boolean;
 }
 
 const DEFAULT_REACT_OPTIONS: Partial<ReactOptions> = {
@@ -52,6 +57,55 @@ const DEFAULT_REACT_OPTIONS: Partial<ReactOptions> = {
   captureConsoleBreadcrumbs: true,
   captureHttpErrors: true,
 };
+
+// Internal marker interface — avoids `as any` when tagging captured errors
+interface MarkedError extends Error {
+  __bugwatch_captured?: boolean;
+}
+
+// Tracks active fetch instrumentation to prevent double-wrapping from
+// nested BugwatchProviders or React StrictMode double-mount in dev.
+let fetchInstrumentationCount = 0;
+
+// Keys to scrub from serialized request/response bodies (opt-in body capture)
+const SENSITIVE_BODY_KEYS = new Set([
+  "password", "secret", "token", "api_key", "apiKey",
+  "credit_card", "creditCard", "ssn", "social_security",
+]);
+
+function scrubBody(raw: string): string {
+  try {
+    const parsed = JSON.parse(raw);
+    if (typeof parsed === "object" && parsed !== null) {
+      const scrubbed = scrubObject(parsed);
+      return JSON.stringify(scrubbed);
+    }
+  } catch {
+    // Not JSON — return as-is (truncation happens at call site)
+  }
+  return raw;
+}
+
+function scrubObject(obj: unknown): unknown {
+  if (Array.isArray(obj)) return obj.map(scrubObject);
+  if (typeof obj !== "object" || obj === null) return obj;
+  const result: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(obj as Record<string, unknown>)) {
+    result[k] = SENSITIVE_BODY_KEYS.has(k.toLowerCase()) ? "[Filtered]" : scrubObject(v);
+  }
+  return result;
+}
+
+// Serializes options to a stable change-detection string. Unlike JSON.stringify,
+// converts RegExp values to their string form so denyUrls/allowUrls pattern changes
+// are correctly detected as re-initialization triggers.
+function serializeOptions(opts: Partial<ReactOptions>): string {
+  return JSON.stringify(opts, (_, value) => {
+    if (value instanceof RegExp) return value.toString();
+    if (typeof value === "function") return "[Function]";
+    return value as unknown;
+  });
+}
 
 /**
  * Bugwatch context
@@ -82,10 +136,7 @@ export function useBugwatch(): BugwatchContextValue {
 /**
  * Hook to capture exceptions
  */
-export function useCaptureException(): (
-  error: Error,
-  context?: Partial<ErrorEvent>
-) => string {
+export function useCaptureException(): (error: Error, context?: Partial<ErrorEvent>) => string {
   const { captureException } = useBugwatch();
   return captureException;
 }
@@ -93,10 +144,7 @@ export function useCaptureException(): (
 /**
  * Hook to capture messages
  */
-export function useCaptureMessage(): (
-  message: string,
-  level?: ErrorEvent["level"]
-) => string {
+export function useCaptureMessage(): (message: string, level?: ErrorEvent["level"]) => string {
   const { captureMessage } = useBugwatch();
   return captureMessage;
 }
@@ -108,7 +156,16 @@ export function useCaptureMessage(): (
  * - Capture network errors as exceptions
  * Returns cleanup function to restore original fetch
  */
-function setupFetchInstrumentation(options: { endpoint?: string }): () => void {
+function setupFetchInstrumentation(options: { endpoint?: string; debug?: boolean; captureRequestBodies?: boolean; captureResponseBodies?: boolean }): () => void {
+  // Prevent double-wrapping from nested providers or StrictMode re-mount
+  if (fetchInstrumentationCount > 0) {
+    fetchInstrumentationCount++;
+    return () => {
+      fetchInstrumentationCount--;
+    };
+  }
+  fetchInstrumentationCount++;
+
   const originalFetch = window.fetch;
   const sdkEndpoint = options.endpoint || "https://api.bugwatch.dev";
   const sdkEventUrl = `${sdkEndpoint}/api/v1/events`;
@@ -116,15 +173,18 @@ function setupFetchInstrumentation(options: { endpoint?: string }): () => void {
   window.fetch = async function (input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
     let url: string;
     try {
-      url = typeof input === "string"
-        ? input
-        : input instanceof URL
-          ? input.href
-          : (input as Request).url || String(input);
-    } catch {
+      url =
+        typeof input === "string" ? input : input instanceof URL ? input.href : (input as Request).url || String(input);
+    } catch (err) {
+      if (options.debug) {
+        console.warn("[Bugwatch] fetch instrumentation skipped — could not extract URL:", err);
+      }
       return originalFetch.call(window, input, init);
     }
-    const method = init?.method || (typeof input !== "string" && !(input instanceof URL) ? (input as Request).method : "GET") || "GET";
+    const method =
+      init?.method ||
+      (typeof input !== "string" && !(input instanceof URL) ? (input as Request).method : "GET") ||
+      "GET";
 
     // Skip instrumenting our own SDK event requests to avoid infinite loops
     if (url.startsWith(sdkEventUrl)) {
@@ -137,68 +197,74 @@ function setupFetchInstrumentation(options: { endpoint?: string }): () => void {
       const response = await originalFetch.call(window, input, init);
       const duration = Date.now() - startTime;
 
-      // Add breadcrumb for every request
-      coreAddBreadcrumb({
-        category: "http",
-        message: `${method.toUpperCase()} ${url}`,
-        level: response.ok ? "info" : "warning",
-        data: {
-          method: method.toUpperCase(),
-          url,
-          status_code: response.status,
-          duration_ms: duration,
-        },
-      });
+      // Add breadcrumb for every request — wrapped so SDK errors never break caller's fetch
+      try {
+        coreAddBreadcrumb({
+          category: "http",
+          message: `${method.toUpperCase()} ${url}`,
+          level: response.ok ? "info" : "warning",
+          data: {
+            method: method.toUpperCase(),
+            url,
+            status_code: response.status,
+            duration_ms: duration,
+          },
+        });
+      } catch {
+        // Instrumentation must not break the user's fetch
+      }
 
       // Capture 4xx/5xx responses as errors (exclude 401/403 — expected auth flow)
       if (response.status >= 400 && response.status !== 401 && response.status !== 403) {
-        // Clone response to read body without consuming the original
-        let responseBody = '';
-        try {
-          responseBody = await response.clone().text();
-          if (responseBody.length > 2000) {
-            responseBody = responseBody.substring(0, 2000) + '...(truncated)';
+        // Response body capture is opt-in: may contain server stack traces or internal data
+        let responseBody: string | undefined;
+        if (options.captureResponseBodies) {
+          try {
+            const text = await response.clone().text();
+            responseBody = text.length > 2000 ? text.substring(0, 2000) + "...(truncated)" : text;
+          } catch {
+            // Ignore body read errors
           }
-        } catch {
-          // Ignore body read errors
         }
 
-        // Capture request body if present
-        let requestBody = '';
-        if (init?.body) {
+        // Request body capture is opt-in: may contain passwords, PII, or API keys.
+        // Sensitive field values are scrubbed before storage.
+        let requestBody: string | undefined;
+        if (options.captureRequestBodies && init?.body) {
           try {
-            requestBody = typeof init.body === 'string'
-              ? init.body
-              : JSON.stringify(init.body);
-            if (requestBody.length > 2000) {
-              requestBody = requestBody.substring(0, 2000) + '...(truncated)';
-            }
+            const raw = typeof init.body === "string" ? init.body : JSON.stringify(init.body);
+            const scrubbed = scrubBody(raw);
+            requestBody = scrubbed.length > 2000 ? scrubbed.substring(0, 2000) + "...(truncated)" : scrubbed;
           } catch {
             // Ignore serialization errors
           }
         }
 
-        const error = new Error(`HTTP ${response.status}: ${method.toUpperCase()} ${url}`);
-        error.name = "HttpError";
-        coreCaptureException(error, {
-          level: response.status >= 500 ? "error" : "warning",
-          tags: {
-            mechanism: "fetch",
-            "http.method": method.toUpperCase(),
-            "http.status_code": String(response.status),
-            "http.url": url,
-          },
-          request: {
-            url,
-            method: method.toUpperCase(),
-          },
-          extra: {
-            request_body: requestBody || undefined,
-            response_body: responseBody || "(empty response)",
-            response_status: response.status,
-            duration_ms: duration,
-          },
-        });
+        try {
+          const error = new Error(`HTTP ${response.status}: ${method.toUpperCase()} ${url}`);
+          error.name = "HttpError";
+          coreCaptureException(error, {
+            level: response.status >= 500 ? "error" : "warning",
+            tags: {
+              mechanism: "fetch",
+              "http.method": method.toUpperCase(),
+              "http.status_code": String(response.status),
+              "http.url": url,
+            },
+            request: {
+              url,
+              method: method.toUpperCase(),
+            },
+            extra: {
+              ...(requestBody !== undefined && { request_body: requestBody }),
+              ...(responseBody !== undefined && { response_body: responseBody }),
+              response_status: response.status,
+              duration_ms: duration,
+            },
+          });
+        } catch {
+          // Instrumentation must not break the user's fetch
+        }
       }
 
       return response;
@@ -206,35 +272,41 @@ function setupFetchInstrumentation(options: { endpoint?: string }): () => void {
       const duration = Date.now() - startTime;
 
       // Network error (DNS failure, CORS, connection refused, etc.)
-      coreAddBreadcrumb({
-        category: "http",
-        message: `${method.toUpperCase()} ${url} (network error)`,
-        level: "error",
-        data: {
-          method: method.toUpperCase(),
-          url,
-          duration_ms: duration,
-          error: error instanceof Error ? error.message : String(error),
-        },
-      });
+      try {
+        coreAddBreadcrumb({
+          category: "http",
+          message: `${method.toUpperCase()} ${url} (network error)`,
+          level: "error",
+          data: {
+            method: method.toUpperCase(),
+            url,
+            duration_ms: duration,
+            error: error instanceof Error ? error.message : String(error),
+          },
+        });
+      } catch {
+        // Instrumentation must not break the user's fetch
+      }
 
-      const networkError = error instanceof Error
-        ? error
-        : new Error(String(error));
+      const networkError = error instanceof Error ? error : new Error(String(error));
       networkError.name = networkError.name || "NetworkError";
 
-      coreCaptureException(networkError, {
-        level: "error",
-        tags: {
-          mechanism: "fetch",
-          "http.method": method.toUpperCase(),
-          "http.url": url,
-        },
-      });
+      try {
+        coreCaptureException(networkError, {
+          level: "error",
+          tags: {
+            mechanism: "fetch",
+            "http.method": method.toUpperCase(),
+            "http.url": url,
+          },
+        });
+      } catch {
+        // Instrumentation must not break the user's fetch
+      }
 
       // Mark as already captured so unhandledrejection handler skips it
       if (error instanceof Error) {
-        (error as any).__bugwatch_captured = true;
+        (error as MarkedError).__bugwatch_captured = true;
       }
 
       throw error; // Re-throw so the caller still gets the error
@@ -242,7 +314,10 @@ function setupFetchInstrumentation(options: { endpoint?: string }): () => void {
   };
 
   return () => {
-    window.fetch = originalFetch;
+    fetchInstrumentationCount--;
+    if (fetchInstrumentationCount === 0) {
+      window.fetch = originalFetch;
+    }
   };
 }
 
@@ -284,18 +359,15 @@ interface BugwatchProviderProps {
  * </BugwatchProvider>
  * ```
  */
-export function BugwatchProvider({
-  options,
-  children,
-  fallback,
-  onError,
-}: BugwatchProviderProps): JSX.Element {
+export function BugwatchProvider({ options, children, fallback, onError }: BugwatchProviderProps): React.ReactElement {
+  // Track client in state so contextValue re-memoizes after SDK init completes.
+  // getClient() returns null on first render (before useEffect fires).
+  const [client, setClient] = useState<BugwatchClient | null>(() => getClient());
+
   // Serialize options to a stable string so useEffect doesn't re-run on every render.
   // Object identity of `options` changes every render if passed inline.
-  const optionsKey = useMemo(
-    () => (options ? JSON.stringify(options) : ""),
-    [options]
-  );
+  // serializeOptions handles RegExp values so denyUrls/allowUrls pattern changes are detected.
+  const optionsKey = useMemo(() => (options ? serializeOptions(options) : ""), [options]);
   const optionsRef = useRef(options);
   optionsRef.current = options;
 
@@ -308,8 +380,8 @@ export function BugwatchProvider({
 
     // Skip initialization if no API key is available
     if (!mergedOptions.apiKey) {
-      if (process.env.NODE_ENV === 'development') {
-        console.warn('[Bugwatch] No API key provided. Set BUGWATCH_API_KEY env var or pass options.apiKey');
+      if (process.env.NODE_ENV === "development") {
+        console.warn("[Bugwatch] No API key provided. Set BUGWATCH_API_KEY env var or pass options.apiKey");
       }
       return;
     }
@@ -318,16 +390,17 @@ export function BugwatchProvider({
     try {
       coreInit(mergedOptions);
     } catch (err) {
-      if (process.env.NODE_ENV === 'development') {
-        console.error('[Bugwatch] Initialization failed:', err);
+      if (process.env.NODE_ENV === "development") {
+        console.error("[Bugwatch] Initialization failed:", err);
       }
       return;
     }
 
-    // Add React-specific tags
-    const client = getClient();
-    if (client) {
-      client.setTag("framework", "react");
+    // Add React-specific tags and update context client state
+    const initializedClient = getClient();
+    if (initializedClient) {
+      initializedClient.setTag("framework", "react");
+      setClient(initializedClient);
     }
 
     // Store original handlers for cleanup
@@ -341,9 +414,10 @@ export function BugwatchProvider({
       if (mergedOptions.captureGlobalErrors) {
         originalOnError = window.onerror;
         window.onerror = (message, source, lineno, colno, error) => {
-          if (error && !(error as any).__bugwatch_captured && !isBrowserExtensionError(error)) {
+          if (error && !(error as MarkedError).__bugwatch_captured && !isBrowserExtensionError(error)) {
             coreCaptureException(error, {
               tags: { mechanism: "window.onerror" },
+              extra: { __sourceUrl: source, lineno, colno },
             });
           }
           if (originalOnError) {
@@ -356,13 +430,10 @@ export function BugwatchProvider({
       if (mergedOptions.captureUnhandledRejections) {
         unhandledRejectionHandler = (event: PromiseRejectionEvent) => {
           // Skip if already captured by fetch instrumentation
-          if (event.reason && (event.reason as any).__bugwatch_captured) {
+          if (event.reason instanceof Error && (event.reason as MarkedError).__bugwatch_captured) {
             return;
           }
-          const error =
-            event.reason instanceof Error
-              ? event.reason
-              : new Error(String(event.reason));
+          const error = event.reason instanceof Error ? event.reason : new Error(String(event.reason));
           // Skip errors originating from browser extensions
           if (isBrowserExtensionError(error)) {
             return;
@@ -378,13 +449,21 @@ export function BugwatchProvider({
         originalConsoleError = console.error;
         let inBreadcrumb = false;
         console.error = (...args: unknown[]) => {
+          // Always forward to original first so logs are never lost
+          originalConsoleError!(...args);
           if (!inBreadcrumb) {
             inBreadcrumb = true;
             try {
+              // Sanitize objects in args — raw objects may contain passwords or PII
+              const sanitizedArgs = args.map((a) => {
+                if (typeof a === "object" && a !== null && !(a instanceof Error)) return "[Object]";
+                try { return String(a); } catch { return "[unstringifiable]"; }
+              });
               coreAddBreadcrumb({
                 category: "console",
-                message: args.map(String).join(" "),
+                message: sanitizedArgs.join(" "),
                 level: "error",
+                data: { arguments: sanitizedArgs },
               });
             } catch {
               // Silently ignore breadcrumb failures
@@ -392,7 +471,6 @@ export function BugwatchProvider({
               inBreadcrumb = false;
             }
           }
-          originalConsoleError!(...args);
         };
       }
 
@@ -429,29 +507,19 @@ export function BugwatchProvider({
         }
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [optionsKey]);
 
-  const captureException = useCallback(
-    (error: Error, context?: Partial<ErrorEvent>) => {
-      return coreCaptureException(error, context);
-    },
-    []
-  );
+  const captureException = useCallback((error: Error, context?: Partial<ErrorEvent>) => {
+    return coreCaptureException(error, context);
+  }, []);
 
-  const captureMessage = useCallback(
-    (message: string, level?: ErrorEvent["level"]) => {
-      return coreCaptureMessage(message, level);
-    },
-    []
-  );
+  const captureMessage = useCallback((message: string, level?: ErrorEvent["level"]) => {
+    return coreCaptureMessage(message, level);
+  }, []);
 
-  const addBreadcrumb = useCallback(
-    (breadcrumb: Omit<Breadcrumb, "timestamp">) => {
-      coreAddBreadcrumb(breadcrumb);
-    },
-    []
-  );
+  const addBreadcrumb = useCallback((breadcrumb: Omit<Breadcrumb, "timestamp">) => {
+    coreAddBreadcrumb(breadcrumb);
+  }, []);
 
   const setUser = useCallback((user: UserContext | null) => {
     coreSetUser(user);
@@ -465,10 +533,11 @@ export function BugwatchProvider({
     coreSetExtra(key, value);
   }, []);
 
-  // Memoize context value to prevent unnecessary re-renders
+  // Memoize context value to prevent unnecessary re-renders.
+  // `client` is in state so this updates after SDK init completes.
   const contextValue = useMemo<BugwatchContextValue>(
     () => ({
-      client: getClient(),
+      client,
       captureException,
       captureMessage,
       addBreadcrumb,
@@ -476,7 +545,7 @@ export function BugwatchProvider({
       setTag,
       setExtra,
     }),
-    [captureException, captureMessage, addBreadcrumb, setUser, setTag, setExtra]
+    [client, captureException, captureMessage, addBreadcrumb, setUser, setTag, setExtra]
   );
 
   return (
@@ -595,10 +664,15 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
       }
 
       return (
-        <div style={{ padding: "20px", fontFamily: "sans-serif" }}>
+        <div
+          role="alert"
+          style={{ padding: "20px", fontFamily: "sans-serif", color: "#212529", backgroundColor: "#ffffff" }}
+        >
           <h2>Something went wrong</h2>
           <p>{this.state.error.message}</p>
-          <button onClick={this.reset}>Try again</button>
+          <button onClick={this.reset} aria-label="Retry after error">
+            Try again
+          </button>
         </div>
       );
     }

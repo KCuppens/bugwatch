@@ -44,11 +44,6 @@ impl AuthIdentity {
         }
     }
 
-    /// Check if this identity is an agent
-    pub fn is_agent(&self) -> bool {
-        matches!(self, AuthIdentity::Agent(_))
-    }
-
     /// Check if the agent has a specific permission (always true for users)
     pub fn has_permission(&self, permission: &str) -> bool {
         match self {
@@ -113,7 +108,7 @@ impl FromRequestParts<AppState> for EitherAuth {
 mod tests {
     use super::*;
     use crate::db::models::AgentKey;
-    use chrono::Utc;
+    use crate::db::types::{Bool, Timestamp};
 
     fn make_user() -> User {
         User {
@@ -121,8 +116,8 @@ mod tests {
             email: "test@example.com".to_string(),
             password_hash: "hash".to_string(),
             name: Some("Test User".to_string()),
-            created_at: Utc::now(),
-            email_verified: true,
+            created_at: Timestamp::now(),
+            email_verified: Bool(true),
             failed_login_attempts: 0,
             locked_until: None,
         }
@@ -139,7 +134,7 @@ mod tests {
                 permissions: serde_json::to_string(&permissions).unwrap(),
                 created_by: "user-1".to_string(),
                 last_used_at: None,
-                created_at: Utc::now(),
+                created_at: Timestamp::now(),
                 revoked_at: None,
             },
             organization_id: "org-1".to_string(),
@@ -179,17 +174,5 @@ mod tests {
             identity.has_permission("anything"),
             "Admin should imply any permission"
         );
-    }
-
-    #[test]
-    fn is_agent_returns_false_for_user() {
-        let identity = AuthIdentity::User(make_user());
-        assert!(!identity.is_agent());
-    }
-
-    #[test]
-    fn is_agent_returns_true_for_agent() {
-        let identity = AuthIdentity::Agent(make_agent(vec!["read".to_string()]));
-        assert!(identity.is_agent());
     }
 }

@@ -1,6 +1,9 @@
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use tracing;
+
+use crate::error::AppError;
 
 pub struct OnChainVerifier {
     rpc_url: String,
@@ -14,18 +17,21 @@ struct RpcResponse {
 }
 
 impl OnChainVerifier {
-    pub fn new(rpc_url: String) -> Self {
-        Self {
-            rpc_url,
-            client: Client::builder()
-                .timeout(std::time::Duration::from_secs(30))
-                .build()
-                .expect("Failed to build HTTP client"),
-        }
+    /// Build an on-chain verifier backed by a reqwest client with a 30s timeout.
+    ///
+    /// Returns an error instead of panicking if the underlying TLS/HTTP client cannot
+    /// be initialised — startup code should propagate this so the process fails cleanly
+    /// rather than unwinding inside construction.
+    pub fn new(rpc_url: String) -> Result<Self, AppError> {
+        let client = Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .map_err(|e| AppError::Internal(format!("OnChainVerifier HTTP client init: {e}")))?;
+        Ok(Self { rpc_url, client })
     }
 
     /// Verifies a USDC ERC-20 Transfer event on Base.
-    /// Checks: tx receipt exists, tx was to the USDC contract, a Transfer log
+    /// Checks: tx receipt exists, tx was confirmed within 24h, a Transfer log
     /// from any sender to `expected_to` of at least `min_amount` micro-USDC exists.
     /// Returns Ok(actual_amount) or Err(reason).
     pub async fn verify_usdc_transfer(
@@ -36,7 +42,8 @@ impl OnChainVerifier {
         min_amount: u64,
     ) -> Result<u64, String> {
         // Pre-validate tx_hash format: must be 0x + 64 hex chars
-        if !tx_hash.starts_with("0x") || tx_hash.len() != 66
+        if !tx_hash.starts_with("0x")
+            || tx_hash.len() != 66
             || !tx_hash[2..].chars().all(|c| c.is_ascii_hexdigit())
         {
             return Err("Invalid transaction hash format (expected 0x + 64 hex chars)".to_string());
@@ -54,6 +61,31 @@ impl OnChainVerifier {
             return Err("Transaction failed or reverted".to_string());
         }
 
+        // 2b. Reject transactions confirmed more than 24h ago to prevent old-tx replay.
+        if let Some(block_number) = receipt.get("blockNumber").and_then(|v| v.as_str()) {
+            match self.eth_get_block_timestamp(block_number).await {
+                Ok(block_ts) => {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+                    if now.saturating_sub(block_ts) > 86_400 {
+                        return Err(format!(
+                            "Transaction was confirmed more than 24h ago (block timestamp: {}); \
+                             submit a recent transaction",
+                            block_ts
+                        ));
+                    }
+                }
+                Err(e) => {
+                    return Err(format!(
+                        "Could not verify block timestamp (replay guard unavailable): {}",
+                        e
+                    ));
+                }
+            }
+        }
+
         // 3. (receipt["to"] is not checked here — it is not reliably present on all RPC nodes.
         //     Instead we verify log["address"] == usdc_address inside the log loop below.)
 
@@ -65,6 +97,11 @@ impl OnChainVerifier {
             .strip_prefix("0x")
             .or_else(|| expected_to.strip_prefix("0X"))
             .unwrap_or(expected_to);
+        if addr_without_prefix.len() != 40
+            || !addr_without_prefix.chars().all(|c| c.is_ascii_hexdigit())
+        {
+            return Err("Invalid expected_to address format".into());
+        }
         let expected_to_padded = format!("0x{:0>64}", addr_without_prefix.to_lowercase());
 
         let logs = receipt
@@ -72,6 +109,7 @@ impl OnChainVerifier {
             .and_then(|v| v.as_array())
             .ok_or("No logs in receipt")?;
 
+        let usdc_address_lower = usdc_address.to_lowercase();
         for log in logs {
             let topics = log.get("topics").and_then(|v| v.as_array());
             let Some(topics) = topics else { continue };
@@ -86,10 +124,15 @@ impl OnChainVerifier {
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_lowercase();
-            if log_address != usdc_address.to_lowercase() {
+            if log_address != usdc_address_lower {
                 continue;
             }
 
+            // ERC-20 Transfer event log layout:
+            //   topics[0] = keccak256("Transfer(address,address,uint256)") — event signature
+            //   topics[1] = from address (32-byte left-padded)
+            //   topics[2] = to address (32-byte left-padded)
+            //   data      = transferred amount as uint256 (32 bytes, big-endian)
             let topic0 = topics[0].as_str().unwrap_or("").to_lowercase();
             let topic2 = topics[2].as_str().unwrap_or("").to_lowercase();
 
@@ -101,11 +144,17 @@ impl OnChainVerifier {
                 continue;
             }
 
-            // Parse transfer value from log data (uint256, hex encoded)
+            // Parse transfer value from log data (uint256 = max 32 bytes = 64 hex chars)
             let data = log.get("data").and_then(|v| v.as_str()).unwrap_or("0x");
             let value_hex = data.trim_start_matches("0x");
+            if value_hex.is_empty() {
+                return Err("Transfer amount is zero or missing".to_string());
+            }
+            if value_hex.len() > 64 {
+                return Err("Invalid transfer data".to_string());
+            }
             let value = u128::from_str_radix(value_hex, 16)
-                .map_err(|_| "Failed to parse transfer value".to_string())?;
+                .map_err(|_| "Invalid transfer data".to_string())?;
 
             // USDC has 6 decimals. Our amounts are already in micro-USDC (6 decimals)
             // so value from chain IS in micro-USDC
@@ -125,14 +174,13 @@ impl OnChainVerifier {
         Err("No valid USDC Transfer event found to expected recipient".to_string())
     }
 
-    async fn eth_get_transaction_receipt(&self, tx_hash: &str) -> Result<Value, String> {
+    async fn eth_get_block_timestamp(&self, block_number: &str) -> Result<u64, String> {
         let payload = json!({
             "jsonrpc": "2.0",
-            "method": "eth_getTransactionReceipt",
-            "params": [tx_hash],
-            "id": 1
+            "method": "eth_getBlockByNumber",
+            "params": [block_number, false],
+            "id": 2
         });
-
         let response: RpcResponse = self
             .client
             .post(&self.rpc_url)
@@ -142,14 +190,88 @@ impl OnChainVerifier {
             .map_err(|e| format!("RPC request failed: {}", e))?
             .json()
             .await
-            .map_err(|e| format!("Failed to parse RPC response: {}", e))?;
+            .map_err(|e| format!("Failed to parse block response: {}", e))?;
 
-        if let Some(err) = response.error {
-            return Err(format!("RPC error: {}", err));
+        let block = response
+            .result
+            .ok_or_else(|| "Block not found".to_string())?;
+        let ts_hex = block
+            .get("timestamp")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| "Missing block timestamp".to_string())?;
+        u64::from_str_radix(ts_hex.trim_start_matches("0x"), 16)
+            .map_err(|_| "Invalid block timestamp".to_string())
+    }
+
+    async fn eth_get_transaction_receipt(&self, tx_hash: &str) -> Result<Value, String> {
+        let payload = json!({
+            "jsonrpc": "2.0",
+            "method": "eth_getTransactionReceipt",
+            "params": [tx_hash],
+            "id": 1
+        });
+
+        const MAX_RETRIES: u32 = 3;
+        let mut last_err = String::new();
+
+        for attempt in 0..=MAX_RETRIES {
+            if attempt > 0 {
+                let delay_ms = 1000u64 * 2u64.pow(attempt - 1);
+                tracing::warn!(
+                    tx_hash = tx_hash,
+                    attempt = attempt,
+                    delay_ms = delay_ms,
+                    "eth_getTransactionReceipt failed, retrying"
+                );
+                tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+            }
+
+            let send_result = self.client.post(&self.rpc_url).json(&payload).send().await;
+
+            let http_response = match send_result {
+                Err(e) => {
+                    last_err = format!("RPC request failed: {}", e);
+                    continue; // network error — retry
+                }
+                Ok(r) => r,
+            };
+
+            let response: RpcResponse = match http_response.json().await {
+                Err(e) => {
+                    // Treat transient parse failures (truncated TCP, proxy error page) as retryable
+                    last_err = format!("Failed to parse RPC response: {}", e);
+                    continue;
+                }
+                Ok(r) => r,
+            };
+
+            if let Some(err) = response.error {
+                let err_str = err.to_string();
+                // -32005 = rate limited, -32603 = internal error — retryable
+                if (err_str.contains("-32005") || err_str.contains("-32603"))
+                    && attempt < MAX_RETRIES
+                {
+                    last_err = format!("RPC error (will retry): {}", err_str);
+                    continue;
+                }
+                return Err(format!("RPC error: {}", err_str));
+            }
+
+            // Null result means tx is pending/not yet propagated — retry
+            match response.result {
+                Some(v) => return Ok(v),
+                None => {
+                    last_err = "Transaction not found or not yet confirmed".to_string();
+                    continue;
+                }
+            }
         }
 
-        response
-            .result
-            .ok_or_else(|| "Transaction not found or not yet confirmed".to_string())
+        tracing::error!(
+            tx_hash = tx_hash,
+            max_retries = MAX_RETRIES,
+            "eth_getTransactionReceipt exhausted all retries"
+        );
+        Err(last_err)
     }
 }

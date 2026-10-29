@@ -2,3 +2,7 @@ parameters:
     level: 6
     paths:
         - src
+    excludePaths:
+        # Optional framework integrations — their deps are not installed in CI
+        - src/Integrations/Laravel
+        - src/Integrations/Symfony

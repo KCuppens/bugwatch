@@ -1,17 +1,24 @@
 use axum::{
-    extract::{Path, Query, State},
+    extract::{ConnectInfo, Path, Query, State},
+    http::HeaderMap,
     Json,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::net::SocketAddr;
 
 use super::{ApiResponse, PaginatedResponse, PaginationMeta, PaginationParams};
 use crate::{
+    api::auth::extract_client_ip,
     auth::{AuthIdentity, EitherAuth},
     billing::tiers::can_access_feature,
-    db::repositories::{
-        issues::{Facets, ProjectStats, SearchFilters},
-        EventRepository, IssueRepository, OrganizationRepository, ProjectRepository,
+    db::{
+        models::Project,
+        repositories::{
+            issues::{Facets, ProjectStats, SearchFilters},
+            EventRepository, IssueRepository, OrganizationRepository, ProjectRepository,
+        },
+        DbPool,
     },
     AppError, AppResult, AppState,
 };
@@ -61,6 +68,23 @@ pub struct UpdateIssueRequest {
     pub status: Option<String>,
 }
 
+/// Verify a project exists and the caller is authorised to access it.
+/// Returns the project on success, 404 if missing, 403 if access denied.
+async fn require_project_access(
+    db: &DbPool,
+    auth: &EitherAuth,
+    project_id: &str,
+) -> AppResult<Project> {
+    let project = ProjectRepository::find_by_id(db, project_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound(format!("Project {} not found", project_id)))?;
+    if !auth.can_access_project(db, &project).await {
+        tracing::warn!(project_id = %project_id, "Access denied to project");
+        return Err(AppError::Forbidden("Access denied".to_string()));
+    }
+    Ok(project)
+}
+
 /// GET /api/v1/projects/:project_id/issues
 pub async fn list(
     State(state): State<AppState>,
@@ -69,17 +93,10 @@ pub async fn list(
     Query(params): Query<PaginationParams>,
     Query(filters): Query<IssueFilters>,
 ) -> AppResult<Json<PaginatedResponse<IssueResponse>>> {
-    // Verify project access
-    let project = ProjectRepository::find_by_id(&state.db, &project_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound(format!("Project {} not found", project_id)))?;
-
-    if !auth.can_access_project(&state.db, &project).await {
-        return Err(AppError::Forbidden("Access denied".to_string()));
-    }
+    require_project_access(&state.db, &auth, &project_id).await?;
 
     let page = params.page.max(1);
-    let per_page = params.per_page.min(100).max(1);
+    let per_page = params.per_page.clamp(1, 100);
     let offset = ((page - 1) * per_page) as i64;
 
     // Run list + count in parallel — they share no dependency, so serializing
@@ -113,23 +130,34 @@ pub async fn list(
 /// Advanced search with filters, sorting, and facets
 pub async fn search(
     State(state): State<AppState>,
+    ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     auth: EitherAuth,
     Path(project_id): Path<String>,
     Json(req): Json<SearchRequest>,
 ) -> AppResult<Json<SearchResponse>> {
     let start = std::time::Instant::now();
 
-    // Verify project access
-    let project = ProjectRepository::find_by_id(&state.db, &project_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound(format!("Project {} not found", project_id)))?;
-
-    if !auth.can_access_project(&state.db, &project).await {
-        return Err(AppError::Forbidden("Access denied".to_string()));
+    // Rate limit: authenticated identities get 60/min; anonymous IPs get 20/min
+    let (rl_key, rl_limit) = if let Some(id) = auth.user_id() {
+        (format!("search:{}:{}", id, project_id), 60)
+    } else if let Some(org_id) = auth.agent_org_id() {
+        (format!("search:agent:{}:{}", org_id, project_id), 60)
+    } else {
+        let ip = extract_client_ip(&headers, state.config.trust_proxy, Some(peer_addr));
+        (format!("search:anon_search:{}:{}", ip, project_id), 20)
+    };
+    let rl = state.rate_limiter.check(&rl_key, rl_limit);
+    if !rl.allowed {
+        return Err(AppError::BadRequest(
+            "Too many requests. Please try again later.".to_string(),
+        ));
     }
 
+    require_project_access(&state.db, &auth, &project_id).await?;
+
     let page = req.page.unwrap_or(1).max(1);
-    let per_page = req.per_page.unwrap_or(50).min(100).max(1);
+    let per_page = req.per_page.unwrap_or(50).clamp(1, 100);
     let offset = ((page - 1) * per_page) as i64;
 
     // Validate text search length
@@ -140,6 +168,26 @@ pub async fn search(
                     "Search text too long (max 200 characters)".to_string(),
                 ));
             }
+        }
+        // Allowlist-check status/level and shape-check environment before we
+        // forward the lists to the DB layer.
+        validate_search_filters(filters)?;
+    }
+
+    // B2: cap numeric filter values to prevent absurdly large DB parameters
+    const MAX_FILTER_VALUE: i64 = 1_000_000_000;
+    if let Some(ref filters) = req.filters {
+        if filters.count_gt.unwrap_or(0) > MAX_FILTER_VALUE {
+            return Err(AppError::BadRequest("count_gt too large".to_string()));
+        }
+        if filters.count_lt.unwrap_or(0) > MAX_FILTER_VALUE {
+            return Err(AppError::BadRequest("count_lt too large".to_string()));
+        }
+        if filters.users_gt.unwrap_or(0) > MAX_FILTER_VALUE {
+            return Err(AppError::BadRequest("users_gt too large".to_string()));
+        }
+        if filters.users_lt.unwrap_or(0) > MAX_FILTER_VALUE {
+            return Err(AppError::BadRequest("users_lt too large".to_string()));
         }
     }
 
@@ -171,22 +219,34 @@ pub async fn search(
     };
 
     let sort_field = req.sort.as_ref().map(|s| s.field.as_str());
-    let sort_direction = req.sort.as_ref().and_then(|s| s.direction.as_deref());
+    if let Some(field) = sort_field {
+        const ALLOWED_SORT: &[&str] = &["count", "users", "first_seen", "last_seen"];
+        if !ALLOWED_SORT.contains(&field) {
+            return Err(AppError::BadRequest(format!(
+                "Invalid sort field '{}'. Allowed: count, users, first_seen, last_seen",
+                field
+            )));
+        }
+    }
+    let sort_direction = req
+        .sort
+        .as_ref()
+        .and_then(|s| s.direction.map(|d| d.as_str()));
 
-    // Run search and facet queries
-    let issues = IssueRepository::search(
-        &state.db,
-        &project_id,
-        &filters,
-        sort_field,
-        sort_direction,
-        per_page as i64,
-        offset,
-    )
-    .await?;
-
-    let total = IssueRepository::count_search(&state.db, &project_id, &filters).await?;
-    let facets = IssueRepository::get_facets(&state.db, &project_id).await?;
+    // Run search, count, and facet queries in parallel
+    let (issues, total, facets) = tokio::try_join!(
+        IssueRepository::search(
+            &state.db,
+            &project_id,
+            &filters,
+            sort_field,
+            sort_direction,
+            per_page as i64,
+            offset,
+        ),
+        IssueRepository::count_search(&state.db, &project_id, &filters),
+        IssueRepository::get_facets(&state.db, &project_id),
+    )?;
 
     let total_pages = ((total as f64) / (per_page as f64)).ceil() as u32;
     let query_time_ms = start.elapsed().as_millis() as u64;
@@ -230,10 +290,87 @@ pub struct SearchFiltersRequest {
     pub text: Option<String>,
 }
 
+/// Max entries allowed per list filter (status / level / environment).
+/// Pathologically large filter lists can explode SQL IN-clauses and DB planner
+/// work, so cap them to a reasonable number.
+const MAX_FILTER_VEC_LEN: usize = 50;
+
+/// Max byte length for a single environment name. Environments are user-defined,
+/// so we can't use an allowlist — instead we validate shape (printable ASCII).
+const MAX_ENVIRONMENT_LEN: usize = 64;
+
+/// Allowed issue status values — must match the DB column's accepted set
+/// (`'unresolved'` is the default; `update_status` in this file accepts
+/// `unresolved | resolved | ignored`; `archived` / `new` are tolerated here
+/// for forward-compat with the UI's saved-search presets).
+const ALLOWED_STATUSES: &[&str] = &["unresolved", "resolved", "ignored", "archived", "new"];
+
+/// Allowed event/issue level values — matches `EventLevel` in `api/events.rs`.
+const ALLOWED_LEVELS: &[&str] = &["debug", "info", "warning", "error", "fatal"];
+
+/// Validate the user-supplied filter vectors against allowlists / shape rules
+/// before they are forwarded to the DB. Returns `AppError::Validation` with a
+/// generic message on any mismatch (intentionally non-specific to avoid echoing
+/// attacker input back in error responses).
+fn validate_search_filters(f: &SearchFiltersRequest) -> AppResult<()> {
+    fn check_allowlist(values: &Option<Vec<String>>, allowed: &[&str]) -> AppResult<()> {
+        if let Some(vs) = values {
+            if vs.len() > MAX_FILTER_VEC_LEN {
+                return Err(AppError::Validation("invalid filter value".into()));
+            }
+            for v in vs {
+                if !allowed.contains(&v.as_str()) {
+                    return Err(AppError::Validation("invalid filter value".into()));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    check_allowlist(&f.status, ALLOWED_STATUSES)?;
+    check_allowlist(&f.level, ALLOWED_LEVELS)?;
+
+    // Environment is user-defined — validate shape only: non-empty, <=64 chars,
+    // printable ASCII (no control bytes, no newlines, no NUL). Cap the list too.
+    if let Some(envs) = &f.environment {
+        if envs.len() > MAX_FILTER_VEC_LEN {
+            return Err(AppError::Validation("invalid filter value".into()));
+        }
+        for env in envs {
+            if env.is_empty() || env.len() > MAX_ENVIRONMENT_LEN {
+                return Err(AppError::Validation("invalid filter value".into()));
+            }
+            // Printable ASCII: 0x20..=0x7E, rejecting everything else (incl. UTF-8
+            // multi-byte, control chars, tabs, newlines).
+            if !env.bytes().all(|b| (0x20..=0x7E).contains(&b)) {
+                return Err(AppError::Validation("invalid filter value".into()));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+#[derive(Debug, Deserialize, Clone, Copy)]
+#[serde(rename_all = "lowercase")]
+pub enum SortDirection {
+    Asc,
+    Desc,
+}
+
+impl SortDirection {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SortDirection::Asc => "asc",
+            SortDirection::Desc => "desc",
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct SortConfig {
     pub field: String,
-    pub direction: Option<String>,
+    pub direction: Option<SortDirection>,
 }
 
 #[derive(Debug, Serialize)]
@@ -244,20 +381,37 @@ pub struct SearchResponse {
     pub query_time_ms: u64,
 }
 
+/// GET /api/v1/projects/:project_id/issues/facets
+pub async fn get_facets(
+    State(state): State<AppState>,
+    auth: EitherAuth,
+    Path(project_id): Path<String>,
+) -> AppResult<Json<Facets>> {
+    crate::api::enforce_rate_limit(
+        &state,
+        &crate::api::rate_limit_key_for_auth("issues_facets", &auth),
+        60,
+    )?;
+
+    let project = ProjectRepository::find_by_id(&state.db, &project_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Project not found".to_string()))?;
+
+    if !auth.can_access_project(&state.db, &project).await {
+        return Err(AppError::Forbidden("Access denied".to_string()));
+    }
+
+    let facets = IssueRepository::get_facets(&state.db, &project_id).await?;
+    Ok(Json(facets))
+}
+
 /// GET /api/v1/projects/:project_id/issues/:issue_id
 pub async fn get(
     State(state): State<AppState>,
     auth: EitherAuth,
     Path((project_id, issue_id)): Path<(String, String)>,
 ) -> AppResult<Json<ApiResponse<IssueDetail>>> {
-    // Verify project access
-    let project = ProjectRepository::find_by_id(&state.db, &project_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound(format!("Project {} not found", project_id)))?;
-
-    if !auth.can_access_project(&state.db, &project).await {
-        return Err(AppError::Forbidden("Access denied".to_string()));
-    }
+    require_project_access(&state.db, &auth, &project_id).await?;
 
     // Get issue
     let issue = IssueRepository::find_by_id(&state.db, &issue_id)
@@ -266,10 +420,7 @@ pub async fn get(
 
     // Verify issue belongs to project
     if issue.project_id != project_id {
-        return Err(AppError::NotFound(format!(
-            "Issue {} not found in project",
-            issue_id
-        )));
+        return Err(AppError::Forbidden("Access denied".to_string()));
     }
 
     // Get recent events
@@ -341,14 +492,7 @@ pub async fn update(
     Path((project_id, issue_id)): Path<(String, String)>,
     Json(req): Json<UpdateIssueRequest>,
 ) -> AppResult<Json<ApiResponse<IssueResponse>>> {
-    // Verify project access
-    let project = ProjectRepository::find_by_id(&state.db, &project_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound(format!("Project {} not found", project_id)))?;
-
-    if !auth.can_access_project(&state.db, &project).await {
-        return Err(AppError::Forbidden("Access denied".to_string()));
-    }
+    require_project_access(&state.db, &auth, &project_id).await?;
 
     if !auth.has_permission("write") {
         return Err(AppError::Forbidden("write permission required".to_string()));
@@ -361,14 +505,11 @@ pub async fn update(
 
     // Verify issue belongs to project
     if issue.project_id != project_id {
-        return Err(AppError::NotFound(format!(
-            "Issue {} not found in project",
-            issue_id
-        )));
+        return Err(AppError::Forbidden("Access denied".to_string()));
     }
 
-    // Update status if provided
-    if let Some(status) = &req.status {
+    // Update status if provided; use RETURNING to avoid a second round-trip
+    let updated = if let Some(status) = &req.status {
         let valid_statuses = ["unresolved", "resolved", "ignored"];
         if !valid_statuses.contains(&status.as_str()) {
             return Err(AppError::Validation(format!(
@@ -376,13 +517,12 @@ pub async fn update(
                 valid_statuses.join(", ")
             )));
         }
-        IssueRepository::update_status(&state.db, &issue_id, status).await?;
-    }
-
-    // Fetch updated issue
-    let updated = IssueRepository::find_by_id(&state.db, &issue_id)
-        .await?
-        .ok_or_else(|| AppError::Internal("Failed to fetch updated issue".to_string()))?;
+        IssueRepository::update_status_returning(&state.db, &issue_id, status)
+            .await?
+            .ok_or_else(|| AppError::Internal("Failed to fetch updated issue".to_string()))?
+    } else {
+        issue
+    };
 
     Ok(Json(ApiResponse {
         data: IssueResponse::from(updated),
@@ -395,14 +535,13 @@ pub async fn delete(
     auth: EitherAuth,
     Path((project_id, issue_id)): Path<(String, String)>,
 ) -> AppResult<Json<ApiResponse<serde_json::Value>>> {
-    // Verify project access
-    let project = ProjectRepository::find_by_id(&state.db, &project_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound(format!("Project {} not found", project_id)))?;
+    crate::api::enforce_rate_limit(
+        &state,
+        &crate::api::rate_limit_key_for_auth("issues_delete", &auth),
+        10,
+    )?;
 
-    if !auth.can_access_project(&state.db, &project).await {
-        return Err(AppError::Forbidden("Access denied".to_string()));
-    }
+    require_project_access(&state.db, &auth, &project_id).await?;
 
     if !auth.has_permission("write") {
         return Err(AppError::Forbidden("write permission required".to_string()));
@@ -415,10 +554,7 @@ pub async fn delete(
 
     // Verify issue belongs to project
     if issue.project_id != project_id {
-        return Err(AppError::NotFound(format!(
-            "Issue {} not found in project",
-            issue_id
-        )));
+        return Err(AppError::Forbidden("Access denied".to_string()));
     }
 
     IssueRepository::delete(&state.db, &issue_id).await?;
@@ -434,14 +570,7 @@ pub async fn get_event(
     auth: EitherAuth,
     Path((project_id, issue_id, event_id)): Path<(String, String, String)>,
 ) -> AppResult<Json<ApiResponse<EventDetail>>> {
-    // Verify project access
-    let project = ProjectRepository::find_by_id(&state.db, &project_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound(format!("Project {} not found", project_id)))?;
-
-    if !auth.can_access_project(&state.db, &project).await {
-        return Err(AppError::Forbidden("Access denied".to_string()));
-    }
+    require_project_access(&state.db, &auth, &project_id).await?;
 
     // Get issue to verify it belongs to project
     let issue = IssueRepository::find_by_id(&state.db, &issue_id)
@@ -449,10 +578,7 @@ pub async fn get_event(
         .ok_or_else(|| AppError::NotFound(format!("Issue {} not found", issue_id)))?;
 
     if issue.project_id != project_id {
-        return Err(AppError::NotFound(format!(
-            "Issue {} not found in project",
-            issue_id
-        )));
+        return Err(AppError::Forbidden("Access denied".to_string()));
     }
 
     // Get the event
@@ -515,14 +641,13 @@ pub async fn get_frequency(
     Path((project_id, issue_id)): Path<(String, String)>,
     Query(params): Query<FrequencyParams>,
 ) -> AppResult<Json<ApiResponse<FrequencyData>>> {
-    // Verify project access
-    let project = ProjectRepository::find_by_id(&state.db, &project_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound(format!("Project {} not found", project_id)))?;
+    crate::api::enforce_rate_limit(
+        &state,
+        &crate::api::rate_limit_key_for_auth("issues_frequency", &auth),
+        60,
+    )?;
 
-    if !auth.can_access_project(&state.db, &project).await {
-        return Err(AppError::Forbidden("Access denied".to_string()));
-    }
+    require_project_access(&state.db, &auth, &project_id).await?;
 
     // Get issue to verify it belongs to project
     let issue = IssueRepository::find_by_id(&state.db, &issue_id)
@@ -530,52 +655,57 @@ pub async fn get_frequency(
         .ok_or_else(|| AppError::NotFound(format!("Issue {} not found", issue_id)))?;
 
     if issue.project_id != project_id {
-        return Err(AppError::NotFound(format!(
-            "Issue {} not found in project",
-            issue_id
-        )));
+        return Err(AppError::Forbidden("Access denied".to_string()));
     }
 
-    // Get events for the issue within the time range
     let period = params.period.as_deref().unwrap_or("24h");
+    if !matches!(period, "24h" | "7d" | "30d") {
+        return Err(AppError::BadRequest(
+            "Invalid period. Must be one of: 24h, 7d, 30d".to_string(),
+        ));
+    }
     let (hours, bucket_size_hours): (i64, i64) = match period {
-        "7d" => (168, 24),  // 7 days, daily buckets
-        "30d" => (720, 24), // 30 days, daily buckets
-        _ => (24, 1),       // 24 hours, hourly buckets
+        "7d" => (168, 24),
+        "30d" => (720, 24),
+        _ => (24, 1),
     };
 
-    let events = EventRepository::find_by_issue(&state.db, &issue_id, 1000, 0).await?;
-
-    // Group events into time buckets
     let now = chrono::Utc::now();
     let start_time = now - chrono::Duration::hours(hours);
+    let bucket_size_secs = bucket_size_hours * 3600;
     let num_buckets = (hours / bucket_size_hours) as usize;
 
+    // Aggregate counts in the DB — avoids loading up to 1000 events into memory
+    let bucket_counts = EventRepository::count_by_time_buckets(
+        &state.db,
+        &issue_id,
+        start_time,
+        now,
+        bucket_size_secs,
+    )
+    .await?;
+
     let mut buckets: Vec<FrequencyBucket> = (0..num_buckets)
-        .map(|i| {
-            let bucket_start = start_time + chrono::Duration::hours(i as i64 * bucket_size_hours);
-            FrequencyBucket {
-                timestamp: bucket_start.to_rfc3339(),
-                count: 0,
-            }
+        .map(|i| FrequencyBucket {
+            timestamp: (start_time + chrono::Duration::hours(i as i64 * bucket_size_hours))
+                .to_rfc3339(),
+            count: 0,
         })
         .collect();
 
-    // Count events in each bucket
     let mut total_in_period: u32 = 0;
-
-    for event in &events {
-        let event_time = event.timestamp;
-        if event_time >= start_time && event_time <= now {
-            let hours_since_start = (event_time - start_time).num_hours();
-            // Clamp bucket_index to valid range (0 to num_buckets-1)
-            let bucket_index = std::cmp::min(
-                (hours_since_start / bucket_size_hours) as usize,
-                buckets.len().saturating_sub(1),
+    for (idx, cnt) in bucket_counts {
+        let i = idx as usize;
+        if i >= buckets.len() {
+            tracing::warn!(
+                index = i,
+                len = buckets.len(),
+                "Bucket index out of range, skipping"
             );
-            buckets[bucket_index].count += 1;
-            total_in_period += 1;
+            continue;
         }
+        buckets[i].count = cnt as u32;
+        total_in_period += cnt as u32;
     }
 
     Ok(Json(ApiResponse {
@@ -715,7 +845,7 @@ fn parse_exception_from_payload(json: &serde_json::Value) -> Option<ExceptionDet
     let (exception_type, value, frames) =
         if let Some(values) = exception_obj.get("values").and_then(|v| v.as_array()) {
             // Sentry format
-            let exc = values.get(0)?;
+            let exc = values.first()?;
             let exc_type = exc.get("type")?.as_str()?.to_string();
             let exc_value = exc
                 .get("value")
@@ -857,31 +987,29 @@ fn parse_breadcrumbs_from_payload(json: &serde_json::Value) -> Vec<BreadcrumbDet
 
     breadcrumbs
         .iter()
-        .filter_map(|b| {
-            Some(BreadcrumbDetail {
-                timestamp: b
-                    .get("timestamp")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string(),
-                breadcrumb_type: b
-                    .get("type")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("default")
-                    .to_string(),
-                category: b
-                    .get("category")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string(),
-                message: b.get("message").and_then(|v| v.as_str()).map(String::from),
-                level: b
-                    .get("level")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("info")
-                    .to_string(),
-                data: b.get("data").cloned(),
-            })
+        .map(|b| BreadcrumbDetail {
+            timestamp: b
+                .get("timestamp")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            breadcrumb_type: b
+                .get("type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("default")
+                .to_string(),
+            category: b
+                .get("category")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            message: b.get("message").and_then(|v| v.as_str()).map(String::from),
+            level: b
+                .get("level")
+                .and_then(|v| v.as_str())
+                .unwrap_or("info")
+                .to_string(),
+            data: b.get("data").cloned(),
         })
         .collect()
 }
@@ -957,14 +1085,13 @@ pub async fn get_impact(
     auth: EitherAuth,
     Path((project_id, issue_id)): Path<(String, String)>,
 ) -> AppResult<Json<ApiResponse<ImpactData>>> {
-    // Verify project access
-    let project = ProjectRepository::find_by_id(&state.db, &project_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound(format!("Project {} not found", project_id)))?;
+    crate::api::enforce_rate_limit(
+        &state,
+        &crate::api::rate_limit_key_for_auth("issues_impact", &auth),
+        60,
+    )?;
 
-    if !auth.can_access_project(&state.db, &project).await {
-        return Err(AppError::Forbidden("Access denied".to_string()));
-    }
+    require_project_access(&state.db, &auth, &project_id).await?;
 
     // Get issue to verify it belongs to project
     let issue = IssueRepository::find_by_id(&state.db, &issue_id)
@@ -972,149 +1099,60 @@ pub async fn get_impact(
         .ok_or_else(|| AppError::NotFound(format!("Issue {} not found", issue_id)))?;
 
     if issue.project_id != project_id {
-        return Err(AppError::NotFound(format!(
-            "Issue {} not found in project",
-            issue_id
-        )));
+        return Err(AppError::Forbidden("Access denied".to_string()));
     }
-
-    // Get all events for this issue
-    let events = EventRepository::find_by_issue(&state.db, &issue_id, 1000, 0).await?;
 
     let now = chrono::Utc::now();
     let one_hour_ago = now - chrono::Duration::hours(1);
     let two_hours_ago = now - chrono::Duration::hours(2);
 
-    // Track unique values
-    let mut unique_users: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut unique_sessions: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut browser_counts: HashMap<String, u32> = HashMap::new();
-    let mut os_counts: HashMap<String, u32> = HashMap::new();
+    // Run all aggregation queries in parallel — avoids loading events into memory
+    let (unique_users, last_hour_count, prev_hour_count, browser_rows, os_rows, total_events) = tokio::try_join!(
+        EventRepository::count_unique_users(&state.db, &issue_id),
+        EventRepository::count_in_range(&state.db, &issue_id, one_hour_ago, now),
+        EventRepository::count_in_range(&state.db, &issue_id, two_hours_ago, one_hour_ago),
+        EventRepository::top_tag_values(&state.db, &issue_id, "browser", 5),
+        EventRepository::top_tag_values(&state.db, &issue_id, "os.name", 5),
+        EventRepository::count_by_issue(&state.db, &issue_id, &project_id),
+    )?;
 
-    let mut last_hour_count = 0u32;
-    let mut prev_hour_count = 0u32;
-
-    for event in &events {
-        // Parse event payload
-        if let Ok(payload) = serde_json::from_str::<serde_json::Value>(&event.payload) {
-            // Count unique users
-            if let Some(user_id) = payload
-                .get("user")
-                .and_then(|u| u.get("id"))
-                .and_then(|v| v.as_str())
-            {
-                unique_users.insert(user_id.to_string());
-            }
-
-            // Count unique sessions (use IP as proxy if no session ID)
-            if let Some(session_id) = payload.get("session_id").and_then(|v| v.as_str()) {
-                unique_sessions.insert(session_id.to_string());
-            } else if let Some(ip) = payload
-                .get("user")
-                .and_then(|u| u.get("ip_address"))
-                .and_then(|v| v.as_str())
-            {
-                unique_sessions.insert(ip.to_string());
-            }
-
-            // Browser distribution
-            if let Some(browser) = payload
-                .get("tags")
-                .and_then(|t| t.get("browser"))
-                .and_then(|v| v.as_str())
-            {
-                *browser_counts.entry(browser.to_string()).or_insert(0) += 1;
-            } else if let Some(runtime) = payload
-                .get("tags")
-                .and_then(|t| t.get("runtime"))
-                .and_then(|v| v.as_str())
-            {
-                *browser_counts.entry(runtime.to_string()).or_insert(0) += 1;
-            }
-
-            // OS distribution
-            if let Some(os) = payload
-                .get("tags")
-                .and_then(|t| t.get("os.name"))
-                .and_then(|v| v.as_str())
-            {
-                *os_counts.entry(os.to_string()).or_insert(0) += 1;
-            }
-        }
-
-        // Calculate trend
-        let event_time = event.timestamp;
-        if event_time >= one_hour_ago {
-            last_hour_count += 1;
-        } else if event_time >= two_hours_ago {
-            prev_hour_count += 1;
-        }
-    }
-
-    // Calculate trend percentage
     let trend_percent = if prev_hour_count > 0 {
         ((last_hour_count as f64 - prev_hour_count as f64) / prev_hour_count as f64 * 100.0).round()
             as i32
     } else if last_hour_count > 0 {
-        100 // New issue, 100% increase
+        100
     } else {
         0
     };
 
-    // Calculate if trending
     let is_trending = trend_percent > 50 && last_hour_count > 5;
 
-    // Convert browser/OS counts to sorted lists (top 5)
-    let mut browsers: Vec<_> = browser_counts.into_iter().collect();
-    browsers.sort_by(|a, b| b.1.cmp(&a.1));
-    let browsers: Vec<DistributionItem> = browsers
-        .into_iter()
-        .take(5)
-        .map(|(name, count)| {
-            let percentage = if events.len() > 0 {
-                (count as f64 / events.len() as f64 * 100.0).round() as u32
-            } else {
-                0
-            };
-            DistributionItem {
+    let to_distribution = |rows: Vec<(String, i64)>, total: i64| -> Vec<DistributionItem> {
+        rows.into_iter()
+            .map(|(name, count)| DistributionItem {
+                percentage: if total > 0 {
+                    (count as f64 / total as f64 * 100.0).round() as u32
+                } else {
+                    0
+                },
+                count: count as u32,
                 name,
-                count,
-                percentage,
-            }
-        })
-        .collect();
-
-    let mut oses: Vec<_> = os_counts.into_iter().collect();
-    oses.sort_by(|a, b| b.1.cmp(&a.1));
-    let oses: Vec<DistributionItem> = oses
-        .into_iter()
-        .take(5)
-        .map(|(name, count)| {
-            let percentage = if events.len() > 0 {
-                (count as f64 / events.len() as f64 * 100.0).round() as u32
-            } else {
-                0
-            };
-            DistributionItem {
-                name,
-                count,
-                percentage,
-            }
-        })
-        .collect();
+            })
+            .collect()
+    };
 
     Ok(Json(ApiResponse {
         data: ImpactData {
-            unique_users: unique_users.len() as u32,
-            unique_sessions: unique_sessions.len() as u32,
-            total_events: events.len() as u32,
+            unique_users: unique_users as u32,
+            unique_sessions: 0, // session_id is not a standardised tag; omit rather than guess
+            total_events: total_events as u32,
             first_seen: issue.first_seen.to_rfc3339(),
             last_seen: issue.last_seen.to_rfc3339(),
-            last_hour_count,
+            last_hour_count: last_hour_count as u32,
             trend_percent,
             is_trending,
-            browsers,
-            operating_systems: oses,
+            browsers: to_distribution(browser_rows, total_events),
+            operating_systems: to_distribution(os_rows, total_events),
         },
     }))
 }
@@ -1138,54 +1176,6 @@ pub struct DistributionItem {
     pub name: String,
     pub count: u32,
     pub percentage: u32,
-}
-
-/// Parse timestamp with multiple format support for flexibility
-fn parse_flexible_timestamp(timestamp: &str) -> Option<chrono::DateTime<chrono::Utc>> {
-    // Try RFC3339 first (most common) - handles 2024-01-15T14:22:00+00:00
-    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(timestamp) {
-        return Some(dt.with_timezone(&chrono::Utc));
-    }
-
-    // Try ISO 8601 formats with timezone
-    let tz_formats = [
-        "%Y-%m-%dT%H:%M:%S%.f%:z", // 2024-01-15T14:22:00.123456+00:00
-        "%Y-%m-%dT%H:%M:%S%:z",    // 2024-01-15T14:22:00+00:00
-        "%Y-%m-%dT%H:%M:%S%.f%z",  // 2024-01-15T14:22:00.123456+0000
-        "%Y-%m-%dT%H:%M:%S%z",     // 2024-01-15T14:22:00+0000
-    ];
-
-    for fmt in &tz_formats {
-        if let Ok(dt) = chrono::DateTime::parse_from_str(timestamp, fmt) {
-            return Some(dt.with_timezone(&chrono::Utc));
-        }
-    }
-
-    // Try without timezone (assume UTC)
-    let naive_formats = [
-        "%Y-%m-%dT%H:%M:%S%.f",
-        "%Y-%m-%dT%H:%M:%S",
-        "%Y-%m-%d %H:%M:%S%.f",
-        "%Y-%m-%d %H:%M:%S",
-    ];
-
-    for fmt in &naive_formats {
-        if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(timestamp, fmt) {
-            return Some(dt.and_utc());
-        }
-    }
-
-    // Handle 'Z' suffix (UTC) - some systems use this
-    if timestamp.ends_with('Z') {
-        let ts_without_z = &timestamp[..timestamp.len() - 1];
-        for fmt in &["%Y-%m-%dT%H:%M:%S%.f", "%Y-%m-%dT%H:%M:%S"] {
-            if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(ts_without_z, fmt) {
-                return Some(dt.and_utc());
-            }
-        }
-    }
-
-    None
 }
 
 // ============================================================================
@@ -1246,11 +1236,17 @@ pub async fn list_across_projects(
     x402_verified: Option<axum::Extension<crate::payments::X402PaymentVerified>>,
     Query(params): Query<AcrossProjectsParams>,
 ) -> AppResult<Json<AcrossProjectsResponse>> {
+    crate::api::enforce_rate_limit(
+        &state,
+        &crate::api::rate_limit_key_for_auth("issues_across", &auth),
+        30,
+    )?;
+
     // Gate: Pro+ tier required for cross-project issue aggregation
     // x402_verified is set by the payment middleware when a valid feature_access payment was
     // verified; bypass the tier check only when x402 is enabled AND payment was verified.
-    if !state.config.deployment_mode.is_self_hosted()
-        && !(state.config.x402_enabled && x402_verified.is_some())
+    if !(state.config.deployment_mode.is_self_hosted()
+        || state.config.x402_enabled && x402_verified.is_some())
     {
         let (org_id, tier_str) = match &*auth {
             AuthIdentity::User(user) => {
@@ -1279,16 +1275,43 @@ pub async fn list_across_projects(
         }
     }
 
-    // Get all projects based on auth type
+    // Get all projects based on auth type.
+    // Cap at 1000 to prevent unbounded fan-out while still covering every
+    // realistic tenant. If a caller is actually at the cap, log a warning so
+    // ops can spot silent truncation.
+    const CROSS_PROJECT_CAP: i64 = 1000;
     let projects = match &*auth {
         AuthIdentity::User(user) => {
-            ProjectRepository::find_by_owner(&state.db, &user.id, 100, 0).await?
+            ProjectRepository::find_by_owner(&state.db, &user.id, CROSS_PROJECT_CAP, 0).await?
         }
         AuthIdentity::Agent(agent) => {
-            ProjectRepository::find_by_organization(&state.db, &agent.organization_id, 100, 0)
-                .await?
+            ProjectRepository::find_by_organization(
+                &state.db,
+                &agent.organization_id,
+                CROSS_PROJECT_CAP,
+                0,
+            )
+            .await?
         }
     };
+    if projects.len() as i64 == CROSS_PROJECT_CAP {
+        match &*auth {
+            AuthIdentity::User(user) => {
+                tracing::warn!(
+                    user_id = %user.id,
+                    cap = CROSS_PROJECT_CAP,
+                    "project list at cap — may be truncated"
+                );
+            }
+            AuthIdentity::Agent(agent) => {
+                tracing::warn!(
+                    organization_id = %agent.organization_id,
+                    cap = CROSS_PROJECT_CAP,
+                    "project list at cap — may be truncated"
+                );
+            }
+        }
+    }
 
     if projects.is_empty() {
         return Ok(Json(AcrossProjectsResponse {
@@ -1307,8 +1330,14 @@ pub async fn list_across_projects(
         projects.iter().map(|p| (p.id.clone(), p)).collect();
 
     let page = params.page.max(1);
-    let limit = params.limit.min(100).max(1);
+    let limit = params.limit.clamp(1, 100);
     let offset = ((page - 1) * limit) as i64;
+
+    // B5: status allowlist
+    const ALLOWED_STATUSES: &[&str] = &["unresolved", "resolved", "ignored", "all"];
+    if !ALLOWED_STATUSES.contains(&params.status.as_str()) {
+        return Err(AppError::BadRequest("Invalid status filter".to_string()));
+    }
 
     let status_filter = if params.status == "all" {
         None
@@ -1316,21 +1345,23 @@ pub async fn list_across_projects(
         Some(params.status.as_str())
     };
 
-    // Get issues across all projects
-    let issues = IssueRepository::find_across_projects(
-        &state.db,
-        &project_ids,
-        status_filter,
-        limit as i64,
-        offset,
-    )
-    .await?;
-
-    let total =
-        IssueRepository::count_across_projects(&state.db, &project_ids, status_filter).await?;
+    // Run list and count in parallel — no ordering dependency between them
+    let (issues, total) = tokio::try_join!(
+        IssueRepository::find_across_projects(
+            &state.db,
+            &project_ids,
+            status_filter,
+            limit as i64,
+            offset,
+        ),
+        IssueRepository::count_across_projects(&state.db, &project_ids, status_filter),
+    )?;
     let total_pages = ((total as f64) / (limit as f64)).ceil() as u32;
 
-    // Enrich issues with project info
+    // Enrich issues with project info.
+    // Hard-cap the final aggregated vector at 500 entries as a defensive ceiling
+    // (per_page is already clamped to 100, but this protects against any future
+    // loosening of that clamp or bugs in upstream pagination math).
     let data: Vec<IssueWithProject> = issues
         .into_iter()
         .filter_map(|issue| {
@@ -1352,6 +1383,7 @@ pub async fn list_across_projects(
                 environment: issue.environment,
             })
         })
+        .take(500)
         .collect();
 
     Ok(Json(AcrossProjectsResponse {
@@ -1398,11 +1430,20 @@ pub async fn get_stats_by_project(
     auth: EitherAuth,
     x402_verified: Option<axum::Extension<crate::payments::X402PaymentVerified>>,
 ) -> AppResult<Json<ProjectStatsResponse>> {
+    // Per-identity rate limit: this endpoint fans out across every project the
+    // caller owns (one stats aggregation + one project list), so cap at 30/min
+    // to match the cross-project list endpoint's load profile.
+    crate::api::enforce_rate_limit(
+        &state,
+        &crate::api::rate_limit_key_for_auth("issues_stats_by_project", &auth),
+        30,
+    )?;
+
     // Gate: Pro+ tier required for cross-project statistics
     // x402_verified is set by the payment middleware when a valid feature_access payment was
     // verified; bypass the tier check only when x402 is enabled AND payment was verified.
-    if !state.config.deployment_mode.is_self_hosted()
-        && !(state.config.x402_enabled && x402_verified.is_some())
+    if !(state.config.deployment_mode.is_self_hosted()
+        || state.config.x402_enabled && x402_verified.is_some())
     {
         let (org_id, tier_str) = match &*auth {
             AuthIdentity::User(user) => {
@@ -1431,16 +1472,42 @@ pub async fn get_stats_by_project(
         }
     }
 
-    // Get all projects based on auth type
+    // Get all projects based on auth type.
+    // Cap at 1000 to prevent unbounded fan-out; log when we hit the cap so
+    // ops can spot silent truncation for tenants with more projects.
+    const STATS_PROJECT_CAP: i64 = 1000;
     let projects = match &*auth {
         AuthIdentity::User(user) => {
-            ProjectRepository::find_by_owner(&state.db, &user.id, 100, 0).await?
+            ProjectRepository::find_by_owner(&state.db, &user.id, STATS_PROJECT_CAP, 0).await?
         }
         AuthIdentity::Agent(agent) => {
-            ProjectRepository::find_by_organization(&state.db, &agent.organization_id, 100, 0)
-                .await?
+            ProjectRepository::find_by_organization(
+                &state.db,
+                &agent.organization_id,
+                STATS_PROJECT_CAP,
+                0,
+            )
+            .await?
         }
     };
+    if projects.len() as i64 == STATS_PROJECT_CAP {
+        match &*auth {
+            AuthIdentity::User(user) => {
+                tracing::warn!(
+                    user_id = %user.id,
+                    cap = STATS_PROJECT_CAP,
+                    "project list at cap — may be truncated"
+                );
+            }
+            AuthIdentity::Agent(agent) => {
+                tracing::warn!(
+                    organization_id = %agent.organization_id,
+                    cap = STATS_PROJECT_CAP,
+                    "project list at cap — may be truncated"
+                );
+            }
+        }
+    }
 
     if projects.is_empty() {
         return Ok(Json(ProjectStatsResponse {
@@ -1455,8 +1522,6 @@ pub async fn get_stats_by_project(
     }
 
     let project_ids: Vec<String> = projects.iter().map(|p| p.id.clone()).collect();
-    let project_map: HashMap<String, &crate::db::models::Project> =
-        projects.iter().map(|p| (p.id.clone(), p)).collect();
 
     // Get stats for all projects
     let stats = IssueRepository::get_stats_by_project(&state.db, &project_ids).await?;
@@ -1500,4 +1565,959 @@ pub async fn get_stats_by_project(
         .collect();
 
     Ok(Json(ProjectStatsResponse { data, totals }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    // ---- parse_payload_value ----
+
+    #[test]
+    fn parse_payload_value_valid_json() {
+        let v = parse_payload_value(r#"{"key":"val"}"#);
+        assert_eq!(v["key"], "val");
+    }
+
+    #[test]
+    fn parse_payload_value_invalid_json_returns_null() {
+        let v = parse_payload_value("not json");
+        assert_eq!(v, serde_json::Value::Null);
+    }
+
+    #[test]
+    fn parse_payload_value_empty_string_returns_null() {
+        let v = parse_payload_value("");
+        assert_eq!(v, serde_json::Value::Null);
+    }
+
+    // ---- parse_exception_from_payload ----
+
+    #[test]
+    fn parse_exception_sentry_format() {
+        let payload = json!({
+            "exception": {
+                "values": [{
+                    "type": "ValueError",
+                    "value": "bad input",
+                    "stacktrace": {
+                        "frames": [{
+                            "filename": "main.py",
+                            "lineno": 42,
+                            "colno": 0
+                        }]
+                    }
+                }]
+            }
+        });
+        let exc = parse_exception_from_payload(&payload).unwrap();
+        assert_eq!(exc.exception_type, "ValueError");
+        assert_eq!(exc.value, "bad input");
+        assert_eq!(exc.stacktrace[0].filename, "main.py");
+        assert_eq!(exc.stacktrace[0].lineno, 42);
+    }
+
+    #[test]
+    fn parse_exception_bugwatch_format() {
+        let payload = json!({
+            "exception": {
+                "type": "RuntimeError",
+                "value": "oops",
+                "stacktrace": [{
+                    "filename": "app.rs",
+                    "lineno": 10,
+                    "colno": 0
+                }]
+            }
+        });
+        let exc = parse_exception_from_payload(&payload).unwrap();
+        assert_eq!(exc.exception_type, "RuntimeError");
+        assert_eq!(exc.value, "oops");
+        assert_eq!(exc.stacktrace[0].filename, "app.rs");
+    }
+
+    #[test]
+    fn parse_exception_missing_returns_none() {
+        let payload = json!({"message": "no exception here"});
+        assert!(parse_exception_from_payload(&payload).is_none());
+    }
+
+    // ---- parse_tags_from_payload ----
+
+    #[test]
+    fn parse_tags_extracts_object_tags() {
+        let payload = json!({
+            "tags": {"env": "prod", "version": "1.0"}
+        });
+        let tags = parse_tags_from_payload(&payload);
+        assert_eq!(tags.get("env").map(|s| s.as_str()), Some("prod"));
+        assert_eq!(tags.get("version").map(|s| s.as_str()), Some("1.0"));
+    }
+
+    #[test]
+    fn parse_tags_extracts_environment_and_release() {
+        let payload = json!({
+            "environment": "staging",
+            "release": "v2.3.4"
+        });
+        let tags = parse_tags_from_payload(&payload);
+        assert_eq!(tags.get("environment").map(|s| s.as_str()), Some("staging"));
+        assert_eq!(tags.get("release").map(|s| s.as_str()), Some("v2.3.4"));
+    }
+
+    #[test]
+    fn parse_tags_extracts_browser_context() {
+        let payload = json!({
+            "contexts": {
+                "browser": {"name": "Chrome", "version": "120"}
+            }
+        });
+        let tags = parse_tags_from_payload(&payload);
+        assert!(tags
+            .get("browser")
+            .map(|s| s.as_str())
+            .unwrap_or("")
+            .contains("Chrome"));
+    }
+
+    #[test]
+    fn parse_tags_empty_payload_returns_empty_map() {
+        let tags = parse_tags_from_payload(&json!({}));
+        assert!(tags.is_empty());
+    }
+
+    // ---- parse_breadcrumbs_from_payload ----
+
+    #[test]
+    fn parse_breadcrumbs_extracts_fields() {
+        let payload = json!({
+            "breadcrumbs": [{
+                "timestamp": "2024-01-01T00:00:00Z",
+                "type": "http",
+                "category": "fetch",
+                "message": "GET /api",
+                "level": "info"
+            }]
+        });
+        let crumbs = parse_breadcrumbs_from_payload(&payload);
+        assert_eq!(crumbs.len(), 1);
+        assert_eq!(crumbs[0].category, "fetch");
+        assert_eq!(crumbs[0].message.as_deref(), Some("GET /api"));
+    }
+
+    #[test]
+    fn parse_breadcrumbs_missing_returns_empty() {
+        let crumbs = parse_breadcrumbs_from_payload(&json!({}));
+        assert!(crumbs.is_empty());
+    }
+
+    #[test]
+    fn parse_breadcrumbs_default_level_is_info() {
+        let payload = json!({
+            "breadcrumbs": [{"timestamp": "t", "category": "ui"}]
+        });
+        let crumbs = parse_breadcrumbs_from_payload(&payload);
+        assert_eq!(crumbs[0].level, "info");
+    }
+
+    // ---- parse_request_context_from_payload ----
+
+    #[test]
+    fn parse_request_context_extracts_url_and_method() {
+        let payload = json!({
+            "request": {"url": "https://example.com/api", "method": "POST"}
+        });
+        let ctx = parse_request_context_from_payload(&payload).unwrap();
+        assert_eq!(ctx.url.as_deref(), Some("https://example.com/api"));
+        assert_eq!(ctx.method.as_deref(), Some("POST"));
+    }
+
+    #[test]
+    fn parse_request_context_redacts_auth_header() {
+        let payload = json!({
+            "request": {
+                "url": "https://example.com",
+                "headers": {
+                    "Authorization": "Bearer secret",
+                    "Content-Type": "application/json"
+                }
+            }
+        });
+        let ctx = parse_request_context_from_payload(&payload).unwrap();
+        let headers = ctx.headers.unwrap();
+        assert_eq!(
+            headers.get("Authorization").map(|s| s.as_str()),
+            Some("[REDACTED]")
+        );
+        assert_eq!(
+            headers.get("Content-Type").map(|s| s.as_str()),
+            Some("application/json")
+        );
+    }
+
+    #[test]
+    fn parse_request_context_falls_back_to_extra_request() {
+        let payload = json!({
+            "extra": {
+                "request": {"url": "https://fallback.com", "method": "GET"}
+            }
+        });
+        let ctx = parse_request_context_from_payload(&payload).unwrap();
+        assert_eq!(ctx.url.as_deref(), Some("https://fallback.com"));
+    }
+
+    #[test]
+    fn parse_request_context_missing_returns_none() {
+        assert!(parse_request_context_from_payload(&json!({})).is_none());
+    }
+
+    // ---- parse_user_context_from_payload ----
+
+    #[test]
+    fn parse_user_context_extracts_fields() {
+        let payload = json!({
+            "user": {"id": "u1", "email": "a@b.com", "username": "alice"}
+        });
+        let user = parse_user_context_from_payload(&payload).unwrap();
+        assert_eq!(user.id.as_deref(), Some("u1"));
+        assert_eq!(user.email.as_deref(), Some("a@b.com"));
+        assert_eq!(user.username.as_deref(), Some("alice"));
+    }
+
+    #[test]
+    fn parse_user_context_missing_returns_none() {
+        assert!(parse_user_context_from_payload(&json!({})).is_none());
+    }
+
+    // ---- parse_extra_from_payload ----
+
+    #[test]
+    fn parse_extra_returns_value_when_present() {
+        let payload = json!({"extra": {"foo": "bar"}});
+        let extra = parse_extra_from_payload(&payload).unwrap();
+        assert_eq!(extra["foo"], "bar");
+    }
+
+    #[test]
+    fn parse_extra_returns_none_when_absent() {
+        assert!(parse_extra_from_payload(&json!({})).is_none());
+    }
+
+    // ---- validate_search_filters ----
+
+    fn base_filters() -> SearchFiltersRequest {
+        SearchFiltersRequest {
+            status: None,
+            level: None,
+            environment: None,
+            count_gt: None,
+            count_lt: None,
+            count_gte: None,
+            count_lte: None,
+            users_gt: None,
+            users_lt: None,
+            first_seen_after: None,
+            first_seen_before: None,
+            last_seen_after: None,
+            last_seen_before: None,
+            text: None,
+        }
+    }
+
+    #[test]
+    fn validate_search_filters_valid_status() {
+        let f = SearchFiltersRequest {
+            status: Some(vec!["unresolved".to_string()]),
+            ..base_filters()
+        };
+        assert!(validate_search_filters(&f).is_ok());
+    }
+
+    #[test]
+    fn validate_search_filters_invalid_status_rejected() {
+        let f = SearchFiltersRequest {
+            status: Some(vec!["hacked".to_string()]),
+            ..base_filters()
+        };
+        assert!(validate_search_filters(&f).is_err());
+    }
+
+    #[test]
+    fn validate_search_filters_invalid_level_rejected() {
+        let f = SearchFiltersRequest {
+            level: Some(vec!["error".to_string(), "hacked".to_string()]),
+            ..base_filters()
+        };
+        assert!(validate_search_filters(&f).is_err());
+    }
+
+    #[test]
+    fn validate_search_filters_environment_non_ascii_rejected() {
+        let f = SearchFiltersRequest {
+            environment: Some(vec!["prod\nnewline".to_string()]),
+            ..base_filters()
+        };
+        assert!(validate_search_filters(&f).is_err());
+    }
+
+    #[test]
+    fn validate_search_filters_environment_too_long_rejected() {
+        let f = SearchFiltersRequest {
+            environment: Some(vec!["a".repeat(65)]),
+            ..base_filters()
+        };
+        assert!(validate_search_filters(&f).is_err());
+    }
+
+    #[test]
+    fn validate_search_filters_valid_environment_accepted() {
+        let f = SearchFiltersRequest {
+            environment: Some(vec!["production".to_string(), "staging".to_string()]),
+            ..base_filters()
+        };
+        assert!(validate_search_filters(&f).is_ok());
+    }
+
+    // ── Integration tests ─────────────────────────────────────────────────────
+
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+    };
+    use serde_json::Value;
+    use tower::ServiceExt;
+
+    async fn make_app() -> axum::Router {
+        let state = crate::db::test_helpers::test_app_state().await;
+        axum::Router::new()
+            .nest("/api/v1", crate::api::router())
+            .with_state(state)
+    }
+
+    fn peer() -> std::net::SocketAddr {
+        "127.0.0.1:1234".parse().unwrap()
+    }
+
+    async fn signup_and_get_token(app: &axum::Router, email: &str) -> String {
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/auth/signup")
+            .header("content-type", "application/json")
+            .extension(axum::extract::ConnectInfo(peer()))
+            .body(Body::from(format!(
+                r#"{{"email":"{}","password":"StrongPass1!"}}"#,
+                email
+            )))
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        for v in resp.headers().get_all("set-cookie") {
+            let s = v.to_str().unwrap_or("");
+            if let Some(rest) = s.strip_prefix("access_token=") {
+                return rest.split(';').next().unwrap_or("").to_string();
+            }
+        }
+        panic!("no access_token in signup response");
+    }
+
+    async fn create_project_with_key(app: &axum::Router, token: &str) -> (String, String) {
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/projects")
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::from(r#"{"name":"Issues Test Project"}"#))
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        let id = json["data"]["id"].as_str().unwrap().to_string();
+        let key = json["data"]["api_key"].as_str().unwrap().to_string();
+        (id, key)
+    }
+
+    async fn ingest_event(app: &axum::Router, api_key: &str, event_id: &str) {
+        let payload = format!(
+            r#"{{"event_id":"{}","timestamp":"2024-01-01T00:00:00Z","level":"error","exception":{{"type":"TestError","value":"test error","stacktrace":[]}}}}"#,
+            event_id
+        );
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/events")
+            .header("content-type", "application/json")
+            .header("x-api-key", api_key)
+            .body(Body::from(payload))
+            .unwrap();
+        app.clone().oneshot(req).await.unwrap();
+    }
+
+    async fn list_first_issue_id(app: &axum::Router, token: &str, project_id: &str) -> String {
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!("/api/v1/projects/{}/issues", project_id))
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        json["data"][0]["id"].as_str().unwrap().to_string()
+    }
+
+    // ── auth guards ───────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn list_issues_without_auth_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/projects/p1/issues")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn search_issues_without_auth_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/projects/p1/issues/_search")
+            .header("content-type", "application/json")
+            .extension(axum::extract::ConnectInfo(peer()))
+            .body(Body::from("{}"))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn get_facets_without_auth_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/projects/p1/issues/facets")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn get_issue_without_auth_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/projects/p1/issues/i1")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn update_issue_without_auth_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("PATCH")
+            .uri("/api/v1/projects/p1/issues/i1")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"status":"resolved"}"#))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_issue_without_auth_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("DELETE")
+            .uri("/api/v1/projects/p1/issues/i1")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn get_issue_event_without_auth_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/projects/p1/issues/i1/events/e1")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn get_frequency_without_auth_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/projects/p1/issues/i1/frequency")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn get_impact_without_auth_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/projects/p1/issues/i1/impact")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn list_across_projects_without_auth_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/issues/across-projects")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn get_stats_by_project_without_auth_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/issues/stats/by-project")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    // ── happy path ────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn list_issues_empty_initially() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "issues_empty@example.com").await;
+        let (project_id, _) = create_project_with_key(&app, &token).await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!("/api/v1/projects/{}/issues", project_id))
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["data"].as_array().unwrap().len(), 0);
+        assert_eq!(json["pagination"]["total"], 0);
+    }
+
+    #[tokio::test]
+    async fn list_issues_after_ingest_returns_issue() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "issues_list@example.com").await;
+        let (project_id, api_key) = create_project_with_key(&app, &token).await;
+        ingest_event(&app, &api_key, "evt-list-001").await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!("/api/v1/projects/{}/issues", project_id))
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["pagination"]["total"], 1);
+        assert_eq!(json["data"][0]["level"].as_str(), Some("error"));
+    }
+
+    #[tokio::test]
+    async fn get_issue_not_found_returns_404() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "issues_404@example.com").await;
+        let (project_id, _) = create_project_with_key(&app, &token).await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!(
+                "/api/v1/projects/{}/issues/nonexistent",
+                project_id
+            ))
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+
+    #[tokio::test]
+    async fn get_issue_after_ingest_returns_200() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "issues_get@example.com").await;
+        let (project_id, api_key) = create_project_with_key(&app, &token).await;
+        ingest_event(&app, &api_key, "evt-get-001").await;
+        let issue_id = list_first_issue_id(&app, &token, &project_id).await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!(
+                "/api/v1/projects/{}/issues/{}",
+                project_id, issue_id
+            ))
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["data"]["id"].as_str(), Some(issue_id.as_str()));
+        assert_eq!(json["data"]["level"].as_str(), Some("error"));
+    }
+
+    #[tokio::test]
+    async fn update_issue_status_resolved_succeeds() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "issues_update@example.com").await;
+        let (project_id, api_key) = create_project_with_key(&app, &token).await;
+        ingest_event(&app, &api_key, "evt-update-001").await;
+        let issue_id = list_first_issue_id(&app, &token, &project_id).await;
+
+        let req = Request::builder()
+            .method("PATCH")
+            .uri(format!(
+                "/api/v1/projects/{}/issues/{}",
+                project_id, issue_id
+            ))
+            .header("authorization", format!("Bearer {}", token))
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"status":"resolved"}"#))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["data"]["status"].as_str(), Some("resolved"));
+    }
+
+    #[tokio::test]
+    async fn update_issue_invalid_status_returns_422() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "issues_badstatus@example.com").await;
+        let (project_id, api_key) = create_project_with_key(&app, &token).await;
+        ingest_event(&app, &api_key, "evt-badst-001").await;
+        let issue_id = list_first_issue_id(&app, &token, &project_id).await;
+
+        let req = Request::builder()
+            .method("PATCH")
+            .uri(format!(
+                "/api/v1/projects/{}/issues/{}",
+                project_id, issue_id
+            ))
+            .header("authorization", format!("Bearer {}", token))
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"status":"deleted"}"#))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_issue_not_found_returns_404() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "issues_del404@example.com").await;
+        let (project_id, _) = create_project_with_key(&app, &token).await;
+
+        let req = Request::builder()
+            .method("DELETE")
+            .uri(format!(
+                "/api/v1/projects/{}/issues/nonexistent",
+                project_id
+            ))
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_issue_succeeds() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "issues_delete@example.com").await;
+        let (project_id, api_key) = create_project_with_key(&app, &token).await;
+        ingest_event(&app, &api_key, "evt-del-001").await;
+        let issue_id = list_first_issue_id(&app, &token, &project_id).await;
+
+        let req = Request::builder()
+            .method("DELETE")
+            .uri(format!(
+                "/api/v1/projects/{}/issues/{}",
+                project_id, issue_id
+            ))
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.clone().oneshot(req).await.unwrap().status(),
+            StatusCode::OK
+        );
+
+        // Verify issue is gone
+        let req2 = Request::builder()
+            .method("GET")
+            .uri(format!(
+                "/api/v1/projects/{}/issues/{}",
+                project_id, issue_id
+            ))
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req2).await.unwrap().status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+
+    #[tokio::test]
+    async fn search_issues_returns_results() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "issues_search@example.com").await;
+        let (project_id, api_key) = create_project_with_key(&app, &token).await;
+        ingest_event(&app, &api_key, "evt-srch-001").await;
+
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("/api/v1/projects/{}/issues/_search", project_id))
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .extension(axum::extract::ConnectInfo(peer()))
+            .body(Body::from(r#"{}"#))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(json["data"].is_array());
+        assert_eq!(json["pagination"]["total"], 1);
+    }
+
+    #[tokio::test]
+    async fn get_facets_after_ingest_returns_200() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "issues_facets@example.com").await;
+        let (project_id, api_key) = create_project_with_key(&app, &token).await;
+        ingest_event(&app, &api_key, "evt-facets-001").await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!("/api/v1/projects/{}/issues/facets", project_id))
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(json["level"].is_object());
+        assert_eq!(json["level"]["error"], 1);
+    }
+
+    #[tokio::test]
+    async fn list_across_projects_returns_200() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "issues_across@example.com").await;
+        let (project_id, api_key) = create_project_with_key(&app, &token).await;
+        ingest_event(&app, &api_key, "evt-across-001").await;
+        drop(project_id);
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/issues/across-projects")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(json["data"].is_array());
+        assert_eq!(json["pagination"]["total"], 1);
+    }
+
+    #[tokio::test]
+    async fn get_stats_by_project_returns_200() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "issues_stats@example.com").await;
+        let _ = create_project_with_key(&app, &token).await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/issues/stats/by-project")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(json["data"].is_array());
+        assert_eq!(json["data"].as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn get_impact_after_ingest_returns_200() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "issues_impact@example.com").await;
+        let (project_id, api_key) = create_project_with_key(&app, &token).await;
+        ingest_event(&app, &api_key, "evt-impact-001").await;
+        let issue_id = list_first_issue_id(&app, &token, &project_id).await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!(
+                "/api/v1/projects/{}/issues/{}/impact",
+                project_id, issue_id
+            ))
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["data"]["total_events"], 1);
+    }
+
+    #[tokio::test]
+    async fn get_event_not_found_returns_404() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "issues_evnt404@example.com").await;
+        let (project_id, api_key) = create_project_with_key(&app, &token).await;
+        ingest_event(&app, &api_key, "evt-evnt404-001").await;
+        let issue_id = list_first_issue_id(&app, &token, &project_id).await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!(
+                "/api/v1/projects/{}/issues/{}/events/nonexistent-event-db-id",
+                project_id, issue_id
+            ))
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+
+    #[tokio::test]
+    async fn get_event_after_ingest_returns_200() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "issues_event@example.com").await;
+        let (project_id, api_key) = create_project_with_key(&app, &token).await;
+        ingest_event(&app, &api_key, "evt-event-001").await;
+        let issue_id = list_first_issue_id(&app, &token, &project_id).await;
+
+        // Get the event DB id from issue detail
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!(
+                "/api/v1/projects/{}/issues/{}",
+                project_id, issue_id
+            ))
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        let event_db_id = json["data"]["recent_events"][0]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!(
+                "/api/v1/projects/{}/issues/{}/events/{}",
+                project_id, issue_id, event_db_id
+            ))
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["data"]["event_id"].as_str(), Some("evt-event-001"));
+    }
 }

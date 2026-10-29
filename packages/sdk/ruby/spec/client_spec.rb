@@ -68,7 +68,7 @@ RSpec.describe Bugwatch::Client do
     end
 
     it "drops event if before_send returns nil" do
-      config.before_send = proc { |_event| nil }
+      config.before_send = proc {}
 
       exception = RuntimeError.new("test")
       exception.set_backtrace([])

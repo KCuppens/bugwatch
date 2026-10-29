@@ -1,4 +1,4 @@
-import type { FastifyRequest, FastifyReply } from "fastify";
+import type { FastifyRequest } from "fastify";
 import type { UserContext, BugwatchClient } from "@bugwatch/core";
 
 /**

@@ -8,9 +8,7 @@ module Bugwatch
       end
 
       config.after_initialize do
-        if Bugwatch.configured?
-          Bugwatch.configuration.environment ||= ::Rails.env.to_s
-        end
+        Bugwatch.configuration.environment ||= Rails.env.to_s if Bugwatch.configured?
       end
     end
   end

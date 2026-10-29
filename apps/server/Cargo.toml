@@ -17,14 +17,14 @@ axum = { version = "0.7", features = ["macros"] }
 axum-extra = { version = "0.9", features = ["typed-header"] }
 tokio = { version = "1.43", features = ["rt-multi-thread", "macros", "sync", "net", "time", "signal", "io-util", "fs"] }
 tower = "0.5"
-tower-http = { version = "0.6", features = ["cors", "trace", "request-id"] }
+tower-http = { version = "0.6", features = ["cors", "trace", "request-id", "timeout"] }
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
 # Database
-sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "uuid", "chrono", "migrate"] }
+sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "sqlite", "any", "uuid", "chrono", "migrate"] }
 
 # Authentication
 jsonwebtoken = "9.3"
@@ -48,11 +48,14 @@ dotenvy = "0.15"
 
 # Async utilities
 async-trait = "0.1"
+futures-util = "0.3"
 
 # Cryptography
 hex = "0.4"
 hmac = "0.12"
 aes-gcm = "0.10"
+rand = "0.8"
+subtle = "2"
 
 # Rate limiting
 dashmap = "6"
@@ -79,6 +82,11 @@ bugwatch = { version = "0.2", features = ["async"] }
 
 [dev-dependencies]
 tokio-test = "0.4"
+
+[profile.dev]
+# Reduce debug info to avoid MSVC LNK1318 PDB file limit on Windows.
+# Line-table info is enough for stack traces; full DWARF is not needed in dev.
+debug = 1
 
 [profile.release]
 # Full link-time optimization; slower builds, ~20-30% smaller binary and

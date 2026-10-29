@@ -1,19 +1,15 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import { motion } from "framer-motion";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import {
-  ArrowLeft,
-  Check,
-  Loader2,
-  AlertCircle,
-  ExternalLink,
-  PartyPopper,
-} from "lucide-react";
+import { ArrowLeft, Check, AlertCircle, ExternalLink } from "lucide-react";
 import { CodeBlock } from "../CodeBlock";
 import { getSDKContent, interpolateApiKey } from "@/lib/sdk-config";
 import { projectsApi } from "@/lib/api";
 import type { Platform, Framework } from "@/lib/api";
+import { useConfetti } from "@/hooks/useConfetti";
 
 interface VerificationStepProps {
   projectId: string;
@@ -25,7 +21,7 @@ interface VerificationStepProps {
   backDisabled?: boolean;
 }
 
-type VerificationStatus = "idle" | "checking" | "success" | "timeout";
+type VerificationStatus = "idle" | "checking" | "success" | "timeout" | "error";
 
 export function VerificationStep({
   projectId,
@@ -40,26 +36,28 @@ export function VerificationStep({
   const [eventCount, setEventCount] = useState(0);
   const [pollCount, setPollCount] = useState(0);
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const mountedRef = useRef(true);
+
+  const canvasRef = useConfetti({ trigger: status === "success" });
 
   const sdkContent = getSDKContent(platform, framework);
 
-  const checkForEvents = useCallback(async () => {
+  const checkForEvents = useCallback(async (): Promise<"found" | "pending" | "error"> => {
     try {
       const response = await projectsApi.verifyEvents(projectId);
       if (response.data.status === "success" && response.data.event_count > 0) {
         setEventCount(response.data.event_count);
         setStatus("success");
-        return true;
+        return "found";
       }
-      return false;
+      return "pending";
     } catch (error) {
       console.error("Error checking for events:", error);
-      return false;
+      return "error";
     }
   }, [projectId]);
 
   const startVerification = useCallback(async () => {
-    // Clear any existing interval
     if (pollIntervalRef.current) {
       clearInterval(pollIntervalRef.current);
       pollIntervalRef.current = null;
@@ -68,33 +66,39 @@ export function VerificationStep({
     setStatus("checking");
     setPollCount(0);
 
-    // Check immediately first
     const immediate = await checkForEvents();
-    if (immediate) return;
+    if (immediate === "found") return;
+    if (immediate === "error") {
+      if (mountedRef.current) setStatus("error");
+      return;
+    }
 
-    // Poll every 2 seconds for up to 120 seconds (60 attempts)
     let attempts = 0;
     const maxAttempts = 60;
 
     pollIntervalRef.current = setInterval(async () => {
       attempts++;
+      if (!mountedRef.current) return;
       setPollCount(attempts);
 
-      const found = await checkForEvents();
-      if (found || attempts >= maxAttempts) {
+      const result = await checkForEvents();
+      if (!mountedRef.current) return;
+      if (result !== "pending" || attempts >= maxAttempts) {
         if (pollIntervalRef.current) {
           clearInterval(pollIntervalRef.current);
           pollIntervalRef.current = null;
         }
-        if (!found) setStatus("timeout");
+        if (result === "error") setStatus("error");
+        else if (result !== "found") setStatus("timeout");
       }
     }, 2000);
   }, [checkForEvents]);
 
-  // Auto-start verification on mount
   useEffect(() => {
+    mountedRef.current = true;
     startVerification();
     return () => {
+      mountedRef.current = false;
       if (pollIntervalRef.current) {
         clearInterval(pollIntervalRef.current);
         pollIntervalRef.current = null;
@@ -105,46 +109,58 @@ export function VerificationStep({
   const handleSkip = async () => {
     try {
       await projectsApi.completeOnboarding(projectId);
-      onComplete();
     } catch (error) {
       console.error("Error completing onboarding:", error);
-      onComplete();
+      toast.error("Could not save onboarding progress — you can finish setup from Settings.");
     }
+    onComplete();
   };
 
   const handleFinish = async () => {
     try {
       await projectsApi.completeOnboarding(projectId);
-      onComplete();
     } catch (error) {
       console.error("Error completing onboarding:", error);
-      onComplete();
+      toast.error("Could not save onboarding progress — you can finish setup from Settings.");
     }
+    onComplete();
   };
 
   if (status === "success") {
     return (
       <div className="space-y-8">
-        <div className="flex flex-col items-center justify-center space-y-4 py-12">
-          <div className="flex h-20 w-20 items-center justify-center rounded-full bg-green-100 dark:bg-green-900/30">
-            <PartyPopper className="h-10 w-10 text-green-600 dark:text-green-400" />
+        {/* Canvas confetti overlay */}
+        <canvas
+          ref={canvasRef}
+          className="pointer-events-none fixed inset-0 z-50"
+          aria-hidden="true"
+          role="presentation"
+        />
+
+        <div className="flex flex-col items-center justify-center space-y-6 py-12">
+          <div className="flex h-20 w-20 items-center justify-center rounded-full bg-[hsl(var(--accent))]/10 border border-[hsl(var(--accent))]/30">
+            <Check className="h-10 w-10 text-[hsl(var(--accent))]" />
           </div>
-          <div className="text-center space-y-2">
-            <h2 className="font-display text-heading-lg">You&apos;re All Set!</h2>
-            <p className="text-muted-foreground max-w-md">
-              We received {eventCount} event{eventCount > 1 ? "s" : ""} from your
-              application. Bugwatch is now monitoring your project for errors.
+          <div className="text-center space-y-3">
+            <h2 className="font-sans text-3xl font-bold text-[hsl(var(--foreground))]">You&apos;re live.</h2>
+            <p className="text-[hsl(var(--muted-foreground))] max-w-md">
+              We received {eventCount} event{eventCount > 1 ? "s" : ""} from your application. BugWatch is now
+              monitoring your project for errors.
             </p>
           </div>
-          <div className="flex items-center gap-2 text-sm text-green-600 dark:text-green-400">
+          <div className="flex items-center gap-2 text-sm text-[hsl(var(--accent))]">
             <Check className="h-4 w-4" />
             Integration verified successfully
           </div>
         </div>
 
         <div className="flex justify-center pt-4">
-          <Button onClick={handleFinish} size="lg" className="px-8">
-            Go to Dashboard
+          <Button
+            onClick={handleFinish}
+            size="lg"
+            className="px-8 bg-[#2ed573] text-[#080B10] hover:bg-[#1a9e52] font-sans font-semibold border-0"
+          >
+            Go to Dashboard →
           </Button>
         </div>
       </div>
@@ -154,21 +170,38 @@ export function VerificationStep({
   return (
     <div className="space-y-8">
       <div className="space-y-2 text-center">
-        <h2 className="font-display text-heading-lg">Verify Your Installation</h2>
-        <p className="text-muted-foreground">
-          Send a test error to confirm everything is working
-        </p>
+        <h2 className="font-sans text-2xl font-bold">Verify Your Installation</h2>
+        <p className="text-[hsl(var(--muted-foreground))]">Send a test error to confirm everything is working</p>
       </div>
 
       <div className="max-w-2xl mx-auto space-y-6">
         {/* Status indicator */}
-        <div className="flex flex-col items-center justify-center space-y-4 py-8 rounded-lg border bg-muted/30">
+        <div className="flex flex-col items-center justify-center space-y-4 py-8 rounded-lg border bg-[hsl(var(--surface-2))]">
           {status === "checking" && (
             <>
-              <Loader2 className="h-12 w-12 animate-spin text-accent-2" />
+              {/* Health fingerprint — SVG oscilloscope */}
+              <div className="w-48 h-16 relative">
+                <svg viewBox="0 0 200 60" className="w-full h-full overflow-visible">
+                  <motion.path
+                    d="M0 30 Q25 30 50 30 Q75 30 100 30 Q125 30 150 30 Q175 30 200 30"
+                    fill="none"
+                    stroke="hsl(var(--muted-foreground))"
+                    strokeWidth="1.5"
+                    strokeLinecap="round"
+                    animate={{
+                      d: [
+                        "M0 30 Q25 30 50 30 Q75 30 100 30 Q125 30 150 30 Q175 30 200 30",
+                        "M0 30 Q25 25 50 30 Q75 35 100 30 Q125 25 150 30 Q175 35 200 30",
+                        "M0 30 Q25 30 50 30 Q75 30 100 30 Q125 30 150 30 Q175 30 200 30",
+                      ],
+                    }}
+                    transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
+                  />
+                </svg>
+              </div>
               <div className="text-center">
                 <p className="font-medium">Listening for events...</p>
-                <p className="text-sm text-muted-foreground">
+                <p className="text-sm text-[hsl(var(--muted-foreground))]">
                   Waiting for your first error ({pollCount * 2}s)
                 </p>
                 {pollCount * 2 >= 60 && (
@@ -176,7 +209,7 @@ export function VerificationStep({
                     href={sdkContent?.docsUrl || "/docs"}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="text-sm text-accent hover:underline mt-2 inline-flex items-center gap-1"
+                    className="text-sm text-[hsl(var(--accent))] hover:underline mt-2 inline-flex items-center gap-1"
                   >
                     Still waiting? Check the installation guide
                     <ExternalLink className="h-3 w-3" />
@@ -190,8 +223,22 @@ export function VerificationStep({
               <AlertCircle className="h-12 w-12 text-amber-500" />
               <div className="text-center">
                 <p className="font-medium">No events received yet</p>
-                <p className="text-sm text-muted-foreground">
+                <p className="text-sm text-[hsl(var(--muted-foreground))]">
                   Make sure you&apos;ve sent a test error from your application
+                </p>
+              </div>
+              <Button variant="outline" onClick={() => startVerification()}>
+                Try Again
+              </Button>
+            </>
+          )}
+          {status === "error" && (
+            <>
+              <AlertCircle className="h-12 w-12 text-destructive" />
+              <div className="text-center">
+                <p className="font-medium">Verification check failed</p>
+                <p className="text-sm text-[hsl(var(--muted-foreground))]">
+                  Could not reach the server. Check your connection and try again.
                 </p>
               </div>
               <Button variant="outline" onClick={() => startVerification()}>
@@ -201,8 +248,8 @@ export function VerificationStep({
           )}
           {status === "idle" && (
             <>
-              <div className="h-12 w-12 rounded-full border-4 border-muted" />
-              <p className="text-muted-foreground">Ready to verify</p>
+              <div className="h-12 w-12 rounded-full border-4 border-[hsl(var(--border))]" />
+              <p className="text-[hsl(var(--muted-foreground))]">Ready to verify</p>
             </>
           )}
         </div>
@@ -212,19 +259,11 @@ export function VerificationStep({
           <div className="space-y-3">
             <div className="flex items-center justify-between">
               <h3 className="font-semibold">Send a Test Error</h3>
-              <span className="text-xs text-muted-foreground">
-                Run this code in your application
-              </span>
+              <span className="text-xs text-[hsl(var(--muted-foreground))]">Run this code in your application</span>
             </div>
             <CodeBlock
               code={interpolateApiKey(sdkContent.verificationCode, apiKey)}
-              language={
-                platform === "python"
-                  ? "python"
-                  : platform === "rust"
-                    ? "rust"
-                    : "javascript"
-              }
+              language={platform === "python" ? "python" : platform === "rust" ? "rust" : "javascript"}
             />
           </div>
         )}
@@ -235,7 +274,7 @@ export function VerificationStep({
             href={sdkContent?.docsUrl || "/docs"}
             target="_blank"
             rel="noopener noreferrer"
-            className="text-sm text-muted-foreground hover:text-foreground transition-colors inline-flex items-center gap-1"
+            className="text-sm text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] transition-colors inline-flex items-center gap-1"
           >
             Having trouble? View troubleshooting guide
             <ExternalLink className="h-3 w-3" />

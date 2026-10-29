@@ -1,20 +1,20 @@
 import type { Metadata } from "next";
-import { GeistSans } from "geist/font/sans";
-import { GeistMono } from "geist/font/mono";
-import { Urbanist } from "next/font/google";
-
-const urbanist = Urbanist({
-  subsets: ["latin"],
-  variable: "--font-display",
-  display: "swap",
-  weight: ["400", "500", "600", "700", "800"],
-});
+import { Space_Mono } from "next/font/google";
 import { ThemeProvider } from "@/components/theme-provider";
 import { AuthProvider } from "@/lib/auth-context";
 import { BugwatchProvider } from "@/components/bugwatch-provider";
 import { ErrorBoundary } from "@/components/error-boundary";
+import { ErrorFallback } from "@/components/error-fallback";
 import { Toaster } from "@/components/ui/sonner";
 import "./globals.css";
+
+const spaceMono = Space_Mono({
+  subsets: ["latin"],
+  variable: "--font-mono",
+  display: "swap",
+  weight: ["400", "700"],
+  adjustFontFallback: true,
+});
 
 const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || "https://bugwatch.dev";
 if (process.env.NODE_ENV === "production" && !process.env.NEXT_PUBLIC_SITE_URL) {
@@ -32,11 +32,13 @@ export const metadata: Metadata = {
     url: siteUrl,
     siteName: "Bugwatch",
     type: "website",
+    images: [{ url: "/og-image.png", width: 1200, height: 630, alt: "Bugwatch - AI-Powered Error Tracking" }],
   },
   twitter: {
     card: "summary_large_image",
     title: "Bugwatch - AI-Powered Error Tracking",
     description: "Watch your bugs. Fix them faster. Free unlimited error logging with AI-powered fixes.",
+    images: ["/og-image.png"],
   },
   robots: {
     index: true,
@@ -51,24 +53,9 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body className={`${GeistSans.variable} ${GeistMono.variable} ${urbanist.variable} font-sans antialiased`}>
+      <body className={`${spaceMono.variable} font-sans antialiased bg-gradient-mesh`}>
         <ThemeProvider attribute="class" defaultTheme="dark" enableSystem={false} disableTransitionOnChange>
-          <ErrorBoundary
-            fallback={
-              <div className="min-h-screen flex items-center justify-center p-8 text-center">
-                <div>
-                  <p className="text-lg font-semibold mb-2">Something went wrong</p>
-                  <p className="text-sm text-muted-foreground mb-4">Please refresh the page to try again.</p>
-                  <button
-                    onClick={() => window.location.reload()}
-                    className="px-4 py-2 rounded-lg bg-accent text-accent-foreground text-sm font-medium hover:bg-accent/90 transition-colors"
-                  >
-                    Refresh
-                  </button>
-                </div>
-              </div>
-            }
-          >
+          <ErrorBoundary fallback={<ErrorFallback />}>
             <AuthProvider>
               <BugwatchProvider>
                 {children}

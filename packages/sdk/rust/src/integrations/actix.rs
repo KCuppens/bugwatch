@@ -192,7 +192,8 @@ where
         let path = req.path().to_string();
 
         // Store request context in extensions for error handlers
-        req.extensions_mut().insert(BugwatchRequestContext(request_context.clone()));
+        req.extensions_mut()
+            .insert(BugwatchRequestContext(request_context.clone()));
 
         Box::pin(async move {
             let response = service.call(req).await?;
@@ -202,32 +203,33 @@ where
             // Add breadcrumb for the request
             if add_breadcrumbs {
                 let mut data = HashMap::new();
-                data.insert("status_code".to_string(), serde_json::json!(status.as_u16()));
+                data.insert(
+                    "status_code".to_string(),
+                    serde_json::json!(status.as_u16()),
+                );
                 if let Some(ref url) = request_context.url {
                     data.insert("url".to_string(), serde_json::json!(url));
                 }
 
                 add_breadcrumb(
-                    Breadcrumb::new("http", format!("{} {} -> {}", method, path, status.as_u16()))
-                        .with_level(if status.is_server_error() {
-                            Level::Error
-                        } else if status.is_client_error() {
-                            Level::Warning
-                        } else {
-                            Level::Info
-                        })
-                        .with_data(data),
+                    Breadcrumb::new(
+                        "http",
+                        format!("{} {} -> {}", method, path, status.as_u16()),
+                    )
+                    .with_level(if status.is_server_error() {
+                        Level::Error
+                    } else if status.is_client_error() {
+                        Level::Warning
+                    } else {
+                        Level::Info
+                    })
+                    .with_data(data),
                 );
             }
 
             // Capture server errors
             if capture_server_errors && status.is_server_error() {
-                let message = format!(
-                    "HTTP {} {} returned {}",
-                    method,
-                    path,
-                    status.as_u16()
-                );
+                let message = format!("HTTP {} {} returned {}", method, path, status.as_u16());
 
                 if let Some(client) = get_client() {
                     let mut tags = HashMap::new();
@@ -238,9 +240,17 @@ where
                     }
 
                     let mut extra = HashMap::new();
-                    extra.insert("request".to_string(), serde_json::to_value(&request_context).unwrap_or_default());
+                    extra.insert(
+                        "request".to_string(),
+                        serde_json::to_value(&request_context).unwrap_or_default(),
+                    );
 
-                    client.capture_message_with_options(&message, Level::Error, Some(tags), Some(extra));
+                    client.capture_message_with_options(
+                        &message,
+                        Level::Error,
+                        Some(tags),
+                        Some(extra),
+                    );
                 }
             }
 
@@ -260,7 +270,10 @@ fn extract_request_context(req: &ServiceRequest) -> RequestContext {
         .headers()
         .iter()
         .filter_map(|(name, value)| {
-            value.to_str().ok().map(|v| (name.to_string(), v.to_string()))
+            value
+                .to_str()
+                .ok()
+                .map(|v| (name.to_string(), v.to_string()))
         })
         .collect();
 
@@ -272,7 +285,11 @@ fn extract_request_context(req: &ServiceRequest) -> RequestContext {
             conn_info.scheme(),
             conn_info.host(),
             req.path(),
-            if req.query_string().is_empty() { None } else { Some(req.query_string()) },
+            if req.query_string().is_empty() {
+                None
+            } else {
+                Some(req.query_string())
+            },
         )),
         method: Some(req.method().to_string()),
         headers: Some(filtered_headers),
@@ -317,7 +334,10 @@ pub fn capture_actix_error<E: std::error::Error>(
             .headers()
             .iter()
             .filter_map(|(name, value)| {
-                value.to_str().ok().map(|v| (name.to_string(), v.to_string()))
+                value
+                    .to_str()
+                    .ok()
+                    .map(|v| (name.to_string(), v.to_string()))
             })
             .collect();
 
@@ -330,7 +350,11 @@ pub fn capture_actix_error<E: std::error::Error>(
                 conn_info.scheme(),
                 conn_info.host(),
                 req.path(),
-                if req.query_string().is_empty() { None } else { Some(req.query_string()) },
+                if req.query_string().is_empty() {
+                    None
+                } else {
+                    Some(req.query_string())
+                },
             )),
             method: Some(req.method().to_string()),
             headers: Some(filtered_headers),
@@ -350,7 +374,10 @@ pub fn capture_actix_error<E: std::error::Error>(
         }
 
         let mut extra = HashMap::new();
-        extra.insert("request".to_string(), serde_json::to_value(&request_context).unwrap_or_default());
+        extra.insert(
+            "request".to_string(),
+            serde_json::to_value(&request_context).unwrap_or_default(),
+        );
 
         client.capture_error_with_options(error, Level::Error, Some(tags), Some(extra))
     } else {

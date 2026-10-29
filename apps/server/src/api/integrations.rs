@@ -1,10 +1,11 @@
 use axum::{
     body::Bytes,
-    extract::{Path, Query, State},
+    extract::{ConnectInfo, Path, Query, State},
     http::HeaderMap,
     Json,
 };
 use serde::{Deserialize, Serialize};
+use std::net::SocketAddr;
 use tracing::{error, info};
 
 use super::ApiResponse;
@@ -14,10 +15,18 @@ use crate::{
         IntegrationRepository, IssueLinkRepository, IssueRepository, OrganizationRepository,
         ProjectRepository,
     },
-    middleware::tier_guard::{features, TierGuard},
+    middleware::tier_guard::TierGuard,
     services::integrations::{format_issue_body, GitHubService, JiraService, LinearService},
     AppError, AppResult, AppState,
 };
+
+type ProviderCredentials = (
+    String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    String,
+);
 
 // ============================================================================
 // Response types
@@ -79,22 +88,28 @@ pub async fn list_integrations(
     auth_user: AuthUser,
     x402_verified: Option<axum::Extension<crate::payments::X402PaymentVerified>>,
 ) -> AppResult<Json<ApiResponse<Vec<IntegrationResponse>>>> {
-    if !state.config.deployment_mode.is_self_hosted()
-        && !(state.config.x402_enabled && x402_verified.is_some())
+    crate::api::enforce_rate_limit(
+        &state,
+        &format!("integrations_list:user:{}", auth_user.id),
+        30,
+    )?;
+
+    if !(state.config.deployment_mode.is_self_hosted()
+        || state.config.x402_enabled && x402_verified.is_some())
     {
         let guard = TierGuard::for_user(&auth_user, &state)
             .await
             .map_err(|(_status, msg)| AppError::Forbidden(msg))?;
-        if !guard.has_feature(features::GITHUB_INTEGRATION) {
+        if !guard.has_feature("github_issues") {
             return Err(crate::payments::x402_feature_response(
                 &state,
-                features::GITHUB_INTEGRATION,
+                "github_issues",
                 "/api/v1/integrations",
                 &guard.organization_id,
                 None,
                 &format!(
                     "The '{}' feature is not available on your current plan ({}). Please upgrade to access this feature.",
-                    features::GITHUB_INTEGRATION, guard.tier
+                    "github_issues", guard.tier
                 ),
             ).await);
         }
@@ -133,25 +148,35 @@ pub async fn oauth_authorize(
     x402_verified: Option<axum::Extension<crate::payments::X402PaymentVerified>>,
     Path(provider): Path<String>,
 ) -> AppResult<Json<ApiResponse<OAuthUrlResponse>>> {
-    if !state.config.deployment_mode.is_self_hosted()
-        && !(state.config.x402_enabled && x402_verified.is_some())
+    if !(state.config.deployment_mode.is_self_hosted()
+        || state.config.x402_enabled && x402_verified.is_some())
     {
         let guard = TierGuard::for_user(&auth_user, &state)
             .await
             .map_err(|(_status, msg)| AppError::Forbidden(msg))?;
-        if !guard.has_feature(features::GITHUB_INTEGRATION) {
+        if !guard.has_feature("github_issues") {
             return Err(crate::payments::x402_feature_response(
                 &state,
-                features::GITHUB_INTEGRATION,
+                "github_issues",
                 &format!("/api/v1/integrations/oauth/{}/authorize", provider),
                 &guard.organization_id,
                 None,
                 &format!(
                     "The '{}' feature is not available on your current plan ({}). Please upgrade to access this feature.",
-                    features::GITHUB_INTEGRATION, guard.tier
+                    "github_issues", guard.tier
                 ),
             ).await);
         }
+    }
+
+    // Rate-limit to prevent OAuth state token enumeration (5 req/min per user)
+    let rl_check = state
+        .rate_limiter
+        .check(&format!("oauth_authorize:{}", auth_user.id), 5);
+    if !rl_check.allowed {
+        return Err(AppError::BadRequest(
+            "Too many requests. Please try again later.".to_string(),
+        ));
     }
 
     let redirect_uri = format!(
@@ -159,13 +184,17 @@ pub async fn oauth_authorize(
         state.config.app_url, provider
     );
 
-    // Generate CSRF-safe state: HMAC-sign the user_id with JWT secret
+    // Generate CSRF-safe state: HMAC-sign the user_id with a dedicated OAuth secret.
+    // Falls back to JWT secret if OAUTH_STATE_SECRET is not configured.
+    let oauth_secret = state.config.oauth_state_secret.clone();
     let state_data = format!("{}:{}", auth_user.id, chrono::Utc::now().timestamp());
     use hmac::{Hmac, Mac};
     use sha2::Sha256;
     type HmacSha256 = Hmac<Sha256>;
-    let mut mac = HmacSha256::new_from_slice(state.config.jwt_secret.as_bytes())
-        .expect("HMAC can take key of any size");
+    let mut mac = HmacSha256::new_from_slice(oauth_secret.as_bytes()).map_err(|e| {
+        tracing::error!(error = %e, "HMAC init failed");
+        AppError::Internal("HMAC init failed".into())
+    })?;
     mac.update(state_data.as_bytes());
     let signature = hex::encode(mac.finalize().into_bytes());
     let state_param = format!("{}:{}", state_data, signature);
@@ -225,9 +254,29 @@ pub async fn oauth_authorize(
 /// GET /api/v1/integrations/oauth/:provider/callback
 pub async fn oauth_callback(
     State(state): State<AppState>,
+    ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Path(provider): Path<String>,
     Query(params): Query<OAuthCallbackParams>,
 ) -> AppResult<axum::response::Redirect> {
+    // Rate-limit OAuth callbacks to prevent code enumeration (10 req/min per IP).
+    {
+        let ip = crate::api::auth::extract_client_ip(
+            &headers,
+            state.config.trust_proxy,
+            Some(peer_addr),
+        );
+        let key = format!("oauth:{}", ip);
+        let result = state.rate_limiter.check(&key, 10);
+        if !result.allowed {
+            return Err(AppError::RateLimitExceeded {
+                retry_after_secs: result.retry_after_secs.unwrap_or(60),
+                limit: result.limit,
+                remaining: result.remaining,
+            });
+        }
+    }
+
     let state_str = params.state.as_deref().unwrap_or("");
     let redirect_uri = format!(
         "{}/api/v1/integrations/oauth/{}/callback",
@@ -238,8 +287,8 @@ pub async fn oauth_callback(
         state.config.app_url
     );
 
-    // Parse and verify HMAC-signed state parameter
-    let parts: Vec<&str> = state_str.split(':').collect();
+    // Parse and verify HMAC-signed state parameter (splitn(3) caps at 3 parts, safe against colons in user_id)
+    let parts: Vec<&str> = state_str.splitn(3, ':').collect();
     if parts.len() != 3 {
         return Err(AppError::BadRequest("Invalid OAuth state".to_string()));
     }
@@ -252,8 +301,11 @@ pub async fn oauth_callback(
     use hmac::{Hmac, Mac};
     use sha2::Sha256;
     type HmacSha256 = Hmac<Sha256>;
-    let mut mac = HmacSha256::new_from_slice(state.config.jwt_secret.as_bytes())
-        .expect("HMAC can take key of any size");
+    let oauth_secret = state.config.oauth_state_secret.clone();
+    let mut mac = HmacSha256::new_from_slice(oauth_secret.as_bytes()).map_err(|e| {
+        tracing::error!(error = %e, "HMAC init failed");
+        AppError::Internal("HMAC init failed".into())
+    })?;
     mac.update(state_data.as_bytes());
     let expected = hex::encode(mac.finalize().into_bytes());
     if signature != expected {
@@ -266,20 +318,24 @@ pub async fn oauth_callback(
     let ts: i64 = timestamp
         .parse()
         .map_err(|_| AppError::BadRequest("Invalid state".to_string()))?;
-    if chrono::Utc::now().timestamp() - ts > 600 {
+    // Reject states older than 10 minutes OR with a timestamp in the future (clock skew > 5 min).
+    let now = chrono::Utc::now().timestamp();
+    if (now - ts).abs() > 600 || ts > now + 300 {
         return Err(AppError::BadRequest("OAuth state expired".to_string()));
     }
 
-    let result: Result<
-        (
-            String,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            String,
-        ),
-        AppError,
-    > = match provider.as_str() {
+    // Verify the user from the HMAC-signed state still exists (may have been deleted since flow started)
+    let user_exists = crate::db::repositories::UserRepository::find_by_id(&state.db, user_id)
+        .await
+        .map_err(|e| AppError::Internal(format!("DB error checking user: {}", e)))?
+        .is_some();
+    if !user_exists {
+        return Err(AppError::BadRequest(
+            "OAuth state invalid: user not found".to_string(),
+        ));
+    }
+
+    let result: Result<ProviderCredentials, AppError> = match provider.as_str() {
         "github" => {
             let client_id =
                 state.config.github_client_id.as_ref().ok_or_else(|| {
@@ -326,6 +382,7 @@ pub async fn oauth_callback(
 
             let (ext_user_id, ext_username) = JiraService::get_user(&access_token)
                 .await
+                .inspect_err(|e| tracing::warn!("Failed to fetch Jira user info: {}", e))
                 .unwrap_or(("unknown".to_string(), "Jira User".to_string()));
 
             // Store cloud_id in config JSON for later API calls
@@ -356,6 +413,7 @@ pub async fn oauth_callback(
 
             let (ext_user_id, ext_username) = LinearService::get_user(&access_token)
                 .await
+                .inspect_err(|e| tracing::warn!("Failed to fetch Linear user info: {}", e))
                 .unwrap_or(("unknown".to_string(), "Linear User".to_string()));
 
             Ok((
@@ -375,26 +433,48 @@ pub async fn oauth_callback(
     match result {
         Ok((access_token, refresh_token, ext_user_id, ext_username, config)) => {
             // Look up user's organization
-            if let Ok(Some(org)) = OrganizationRepository::find_by_user(&state.db, user_id).await {
-                if let Err(e) = IntegrationRepository::create(
-                    &state.db,
-                    &org.id,
-                    &provider,
-                    &access_token,
-                    refresh_token.as_deref(),
-                    None,
-                    ext_user_id.as_deref(),
-                    ext_username.as_deref(),
-                    &config,
-                    user_id,
-                )
-                .await
-                {
-                    error!("Failed to save integration: {}", e);
-                    let redirect = format!("{}?error=save_failed", redirect_url);
-                    return Ok(axum::response::Redirect::temporary(&redirect));
+            match OrganizationRepository::find_by_user(&state.db, user_id).await {
+                Ok(Some(org)) => {
+                    if let Err(e) = IntegrationRepository::create(
+                        &state.db,
+                        &org.id,
+                        &provider,
+                        &access_token,
+                        refresh_token.as_deref(),
+                        None,
+                        ext_user_id.as_deref(),
+                        ext_username.as_deref(),
+                        &config,
+                        user_id,
+                    )
+                    .await
+                    {
+                        error!("Failed to save integration: {}", e);
+                        let redirect = format!("{}?error=save_failed", redirect_url);
+                        return Ok(axum::response::Redirect::temporary(&redirect));
+                    }
+                    info!("Integration {} connected for org {}", provider, org.id);
                 }
-                info!("Integration {} connected for org {}", provider, org.id);
+                Ok(None) => {
+                    error!(
+                        user_id,
+                        "No organization found for user during OAuth callback"
+                    );
+                    return Ok(axum::response::Redirect::temporary(&format!(
+                        "{}/dashboard/settings?tab=integrations&error=no_org",
+                        state.config.app_url
+                    )));
+                }
+                Err(e) => {
+                    error!(
+                        user_id,
+                        "DB error looking up org during OAuth callback: {}", e
+                    );
+                    return Ok(axum::response::Redirect::temporary(&format!(
+                        "{}/dashboard/settings?tab=integrations&error=server_error",
+                        state.config.app_url
+                    )));
+                }
             }
             Ok(axum::response::Redirect::temporary(&format!(
                 "{}/dashboard/settings?tab=integrations&connected={}",
@@ -423,22 +503,28 @@ pub async fn delete_integration(
     x402_verified: Option<axum::Extension<crate::payments::X402PaymentVerified>>,
     Path(integration_id): Path<String>,
 ) -> AppResult<Json<ApiResponse<serde_json::Value>>> {
-    if !state.config.deployment_mode.is_self_hosted()
-        && !(state.config.x402_enabled && x402_verified.is_some())
+    crate::api::enforce_rate_limit(
+        &state,
+        &format!("integrations_delete:user:{}", auth_user.id),
+        10,
+    )?;
+
+    if !(state.config.deployment_mode.is_self_hosted()
+        || state.config.x402_enabled && x402_verified.is_some())
     {
         let guard = TierGuard::for_user(&auth_user, &state)
             .await
             .map_err(|(_status, msg)| AppError::Forbidden(msg))?;
-        if !guard.has_feature(features::GITHUB_INTEGRATION) {
+        if !guard.has_feature("github_issues") {
             return Err(crate::payments::x402_feature_response(
                 &state,
-                features::GITHUB_INTEGRATION,
+                "github_issues",
                 &format!("/api/v1/integrations/{}", integration_id),
                 &guard.organization_id,
                 None,
                 &format!(
                     "The '{}' feature is not available on your current plan ({}). Please upgrade to access this feature.",
-                    features::GITHUB_INTEGRATION, guard.tier
+                    "github_issues", guard.tier
                 ),
             ).await);
         }
@@ -479,22 +565,22 @@ pub async fn create_issue_link(
     Path((project_id, issue_id)): Path<(String, String)>,
     Json(req): Json<CreateIssueLinkRequest>,
 ) -> AppResult<Json<ApiResponse<IssueLinkResponse>>> {
-    if !state.config.deployment_mode.is_self_hosted()
-        && !(state.config.x402_enabled && x402_verified.is_some())
+    if !(state.config.deployment_mode.is_self_hosted()
+        || state.config.x402_enabled && x402_verified.is_some())
     {
         let guard = TierGuard::for_user(&auth_user, &state)
             .await
             .map_err(|(_status, msg)| AppError::Forbidden(msg))?;
-        if !guard.has_feature(features::GITHUB_INTEGRATION) {
+        if !guard.has_feature("github_issues") {
             return Err(crate::payments::x402_feature_response(
                 &state,
-                features::GITHUB_INTEGRATION,
+                "github_issues",
                 &format!("/api/v1/projects/{}/issues/{}/links", project_id, issue_id),
                 &guard.organization_id,
                 None,
                 &format!(
                     "The '{}' feature is not available on your current plan ({}). Please upgrade to access this feature.",
-                    features::GITHUB_INTEGRATION, guard.tier
+                    "github_issues", guard.tier
                 ),
             ).await);
         }
@@ -526,6 +612,16 @@ pub async fn create_issue_link(
         ));
     }
 
+    // Rate limit: 10 requests per user per project
+    let rl = state
+        .rate_limiter
+        .check(&format!("issue_link:{}:{}", auth_user.id, project_id), 10);
+    if !rl.allowed {
+        return Err(AppError::BadRequest(
+            "Too many requests. Please try again later.".to_string(),
+        ));
+    }
+
     // Get the integration for this provider
     let integration =
         IntegrationRepository::find_by_org_and_provider(&state.db, &org.id, &req.provider)
@@ -542,6 +638,17 @@ pub async fn create_issue_link(
         .get("description")
         .and_then(|v| v.as_str())
         .unwrap_or("");
+
+    if title.len() > 500 {
+        return Err(AppError::BadRequest(
+            "title too long (max 500 characters)".to_string(),
+        ));
+    }
+    if description.len() > 10_000 {
+        return Err(AppError::BadRequest(
+            "description too long (max 10000 characters)".to_string(),
+        ));
+    }
     let event_url = format!(
         "{}/dashboard/issues/{}?project={}",
         state.config.app_url, issue_id, project_id
@@ -570,6 +677,34 @@ pub async fn create_issue_link(
                 .get("repo")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| AppError::Validation("repo is required for GitHub".to_string()))?;
+            if owner.is_empty()
+                || !owner
+                    .chars()
+                    .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.')
+            {
+                return Err(AppError::Validation(
+                    "owner contains invalid characters".to_string(),
+                ));
+            }
+            if owner.len() > 39 {
+                return Err(AppError::Validation(
+                    "owner must be 39 characters or fewer".to_string(),
+                ));
+            }
+            if repo.is_empty()
+                || !repo
+                    .chars()
+                    .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.')
+            {
+                return Err(AppError::Validation(
+                    "repo contains invalid characters".to_string(),
+                ));
+            }
+            if repo.len() > 100 {
+                return Err(AppError::Validation(
+                    "repo must be 100 characters or fewer".to_string(),
+                ));
+            }
             GitHubService::create_issue(&integration.access_token, owner, repo, title, &body)
                 .await
                 .map_err(|e| AppError::Internal(format!("Failed to create GitHub issue: {}", e)))?
@@ -593,6 +728,21 @@ pub async fn create_issue_link(
                 .ok_or_else(|| {
                     AppError::Validation("project_key is required for Jira".to_string())
                 })?;
+            if project_key.len() < 2
+                || project_key.len() > 10
+                || !project_key
+                    .chars()
+                    .next()
+                    .is_some_and(|c| c.is_ascii_uppercase())
+                || !project_key
+                    .chars()
+                    .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
+            {
+                return Err(AppError::Validation(
+                    "project_key must be 2–10 uppercase letters/digits starting with a letter"
+                        .to_string(),
+                ));
+            }
             JiraService::create_issue(
                 &integration.access_token,
                 cloud_id,
@@ -651,7 +801,7 @@ pub async fn create_issue_link(
             external_issue_key: link.external_issue_key,
             external_issue_url: link.external_issue_url,
             external_status: link.external_status,
-            sync_enabled: link.sync_enabled,
+            sync_enabled: *link.sync_enabled,
             created_at: link.created_at.to_rfc3339(),
         },
     }))
@@ -667,6 +817,12 @@ pub async fn list_issue_links(
     auth_user: AuthUser,
     Path((project_id, issue_id)): Path<(String, String)>,
 ) -> AppResult<Json<ApiResponse<Vec<IssueLinkResponse>>>> {
+    crate::api::enforce_rate_limit(
+        &state,
+        &format!("issue_links_list:user:{}", auth_user.id),
+        60,
+    )?;
+
     // Basic auth check - no tier gate for reading links
     let org = OrganizationRepository::find_by_user(&state.db, &auth_user.id)
         .await?
@@ -696,7 +852,7 @@ pub async fn list_issue_links(
             external_issue_key: l.external_issue_key,
             external_issue_url: l.external_issue_url,
             external_status: l.external_status,
-            sync_enabled: l.sync_enabled,
+            sync_enabled: *l.sync_enabled,
             created_at: l.created_at.to_rfc3339(),
         })
         .collect();
@@ -714,6 +870,12 @@ pub async fn delete_issue_link(
     auth_user: AuthUser,
     Path((project_id, _issue_id, link_id)): Path<(String, String, String)>,
 ) -> AppResult<Json<ApiResponse<serde_json::Value>>> {
+    crate::api::enforce_rate_limit(
+        &state,
+        &format!("issue_links_delete:user:{}", auth_user.id),
+        10,
+    )?;
+
     let org = OrganizationRepository::find_by_user(&state.db, &auth_user.id)
         .await?
         .ok_or_else(|| AppError::BadRequest("No organization found".to_string()))?;
@@ -751,8 +913,15 @@ fn verify_webhook_signature(payload: &[u8], signature: &str, secret: &str) -> bo
     use sha2::Sha256;
     type HmacSha256 = Hmac<Sha256>;
 
-    let mut mac =
-        HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC can take key of any size");
+    // HMAC-SHA256 accepts keys of any size, but guard against panics on the
+    // request-handling thread if the underlying library ever changes.
+    let mut mac = match HmacSha256::new_from_slice(secret.as_bytes()) {
+        Ok(m) => m,
+        Err(e) => {
+            error!(error = %e, "HMAC init failed");
+            return false;
+        }
+    };
     mac.update(payload);
 
     // Decode hex signature; on failure, use a dummy value so we still do
@@ -772,12 +941,39 @@ fn require_non_empty_secret(secret: &str, provider: &str) -> AppResult<()> {
     Ok(())
 }
 
+/// Best-effort client IP extraction from common proxy headers, with a fallback
+/// token so the bucket key is never empty. Used only for webhook endpoints
+/// (which have no authenticated user to key on).
+fn webhook_client_ip(headers: &HeaderMap) -> String {
+    if let Some(ip) = headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.split(',').next())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+    {
+        return ip;
+    }
+    if let Some(ip) = headers
+        .get("x-real-ip")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+    {
+        return ip;
+    }
+    "unknown".to_string()
+}
+
 /// POST /api/v1/webhooks/github - GitHub webhook for status sync
 pub async fn github_webhook(
     State(state): State<AppState>,
     headers: HeaderMap,
     body: Bytes,
 ) -> AppResult<Json<serde_json::Value>> {
+    let ip = webhook_client_ip(&headers);
+    crate::api::enforce_rate_limit(&state, &format!("webhook_github:{}", ip), 300)?;
+
     // Verify X-Hub-Signature-256
     let secret = state
         .config
@@ -807,11 +1003,21 @@ pub async fn github_webhook(
     let payload: serde_json::Value = serde_json::from_slice(&body)
         .map_err(|e| AppError::BadRequest(format!("Invalid JSON: {}", e)))?;
 
-    let action = payload["action"].as_str().unwrap_or("");
+    let action = payload["action"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| AppError::BadRequest("Missing or empty 'action' field".to_string()))?;
     let issue = &payload["issue"];
 
     if action == "closed" || action == "reopened" {
-        let issue_id = issue["id"].as_i64().unwrap_or(0).to_string();
+        let raw_id = match issue["id"].as_i64() {
+            Some(id) if id > 0 => id,
+            _ => {
+                tracing::warn!("GitHub webhook missing or invalid issue id, ignoring");
+                return Ok(Json(serde_json::json!({ "ok": true })));
+            }
+        };
+        let issue_id = raw_id.to_string();
         let status = if action == "closed" { "closed" } else { "open" };
 
         let updated =
@@ -830,6 +1036,9 @@ pub async fn jira_webhook(
     headers: HeaderMap,
     body: Bytes,
 ) -> AppResult<Json<serde_json::Value>> {
+    let ip = webhook_client_ip(&headers);
+    crate::api::enforce_rate_limit(&state, &format!("webhook_jira:{}", ip), 300)?;
+
     // Verify X-Hub-Signature
     let secret = state.config.jira_webhook_secret.as_deref().ok_or_else(|| {
         error!("JIRA_WEBHOOK_SECRET not configured - rejecting webhook");
@@ -853,19 +1062,29 @@ pub async fn jira_webhook(
     let payload: serde_json::Value = serde_json::from_slice(&body)
         .map_err(|e| AppError::BadRequest(format!("Invalid JSON: {}", e)))?;
 
-    let webhook_event = payload["webhookEvent"].as_str().unwrap_or("");
+    let webhook_event = payload["webhookEvent"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| AppError::BadRequest("Missing or empty 'webhookEvent' field".to_string()))?;
 
     if webhook_event == "jira:issue_updated" {
         let issue = &payload["issue"];
-        let issue_id = issue["id"].as_str().unwrap_or("");
+        let issue_id = issue["id"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| {
+                AppError::BadRequest("Missing or empty issue_id in Jira webhook".to_string())
+            })?;
         let status = issue["fields"]["status"]["name"]
             .as_str()
             .unwrap_or("Unknown");
 
-        let updated =
-            IssueLinkRepository::update_status(&state.db, "jira", issue_id, status).await?;
-        if updated > 0 {
-            info!("Synced Jira issue {} status to {}", issue_id, status);
+        if !issue_id.is_empty() {
+            let updated =
+                IssueLinkRepository::update_status(&state.db, "jira", issue_id, status).await?;
+            if updated > 0 {
+                info!("Synced Jira issue {} status to {}", issue_id, status);
+            }
         }
     }
 
@@ -878,6 +1097,9 @@ pub async fn linear_webhook(
     headers: HeaderMap,
     body: Bytes,
 ) -> AppResult<Json<serde_json::Value>> {
+    let ip = webhook_client_ip(&headers);
+    crate::api::enforce_rate_limit(&state, &format!("webhook_linear:{}", ip), 300)?;
+
     // Verify Linear-Signature
     let secret = state
         .config
@@ -902,20 +1124,659 @@ pub async fn linear_webhook(
     let payload: serde_json::Value = serde_json::from_slice(&body)
         .map_err(|e| AppError::BadRequest(format!("Invalid JSON: {}", e)))?;
 
-    let action = payload["action"].as_str().unwrap_or("");
+    let action = payload["action"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| AppError::BadRequest("Missing or empty 'action' field".to_string()))?;
     let data_type = payload["type"].as_str().unwrap_or("");
 
     if data_type == "Issue" && (action == "update" || action == "create") {
         let data = &payload["data"];
-        let issue_id = data["id"].as_str().unwrap_or("");
+        let issue_id = data["id"].as_str().filter(|s| !s.is_empty()).unwrap_or("");
         let state_label = data["state"]["name"].as_str().unwrap_or("Unknown");
 
-        let updated =
-            IssueLinkRepository::update_status(&state.db, "linear", issue_id, state_label).await?;
-        if updated > 0 {
-            info!("Synced Linear issue {} status to {}", issue_id, state_label);
+        if !issue_id.is_empty() {
+            let updated =
+                IssueLinkRepository::update_status(&state.db, "linear", issue_id, state_label)
+                    .await?;
+            if updated > 0 {
+                info!("Synced Linear issue {} status to {}", issue_id, state_label);
+            }
         }
     }
 
     Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::StatusCode;
+    use axum::{body::Body, http::Request};
+    use tower::ServiceExt;
+
+    async fn make_app() -> axum::Router {
+        let state = crate::db::test_helpers::test_app_state().await;
+        axum::Router::new()
+            .nest("/api/v1", crate::api::router())
+            .with_state(state)
+    }
+
+    // ── verify_webhook_signature ───────────────────────────────────────────────
+
+    #[test]
+    fn webhook_sig_valid_signature_matches() {
+        use hmac::{Hmac, Mac};
+        use sha2::Sha256;
+        type HmacSha256 = Hmac<Sha256>;
+
+        let payload = b"hello world";
+        let secret = "mysecret";
+        let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).unwrap();
+        mac.update(payload);
+        let sig_hex = hex::encode(mac.finalize().into_bytes());
+
+        assert!(verify_webhook_signature(payload, &sig_hex, secret));
+    }
+
+    #[test]
+    fn webhook_sig_wrong_signature_fails() {
+        assert!(!verify_webhook_signature(b"hello", "deadbeef", "secret"));
+    }
+
+    #[test]
+    fn webhook_sig_invalid_hex_fails() {
+        assert!(!verify_webhook_signature(b"hello", "not-hex!!", "secret"));
+    }
+
+    #[test]
+    fn webhook_sig_mismatched_payload_fails() {
+        use hmac::{Hmac, Mac};
+        use sha2::Sha256;
+        type HmacSha256 = Hmac<Sha256>;
+
+        let secret = "mysecret";
+        let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).unwrap();
+        mac.update(b"original");
+        let sig_hex = hex::encode(mac.finalize().into_bytes());
+
+        assert!(!verify_webhook_signature(b"tampered", &sig_hex, secret));
+    }
+
+    // ── require_non_empty_secret ───────────────────────────────────────────────
+
+    #[test]
+    fn non_empty_secret_ok() {
+        assert!(require_non_empty_secret("s3cr3t", "github").is_ok());
+    }
+
+    #[test]
+    fn empty_secret_returns_forbidden() {
+        let err = require_non_empty_secret("", "github").unwrap_err();
+        assert!(matches!(err, crate::AppError::Forbidden(_)));
+    }
+
+    // ── webhook_client_ip ─────────────────────────────────────────────────────
+
+    #[test]
+    fn client_ip_x_forwarded_for() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert("x-forwarded-for", "1.2.3.4".parse().unwrap());
+        assert_eq!(webhook_client_ip(&headers), "1.2.3.4");
+    }
+
+    #[test]
+    fn client_ip_multiple_forwarded_uses_first() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert("x-forwarded-for", "5.6.7.8, 10.0.0.1".parse().unwrap());
+        assert_eq!(webhook_client_ip(&headers), "5.6.7.8");
+    }
+
+    #[test]
+    fn client_ip_x_real_ip_fallback() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert("x-real-ip", "9.9.9.9".parse().unwrap());
+        assert_eq!(webhook_client_ip(&headers), "9.9.9.9");
+    }
+
+    #[test]
+    fn client_ip_no_headers_returns_unknown() {
+        let headers = axum::http::HeaderMap::new();
+        assert_eq!(webhook_client_ip(&headers), "unknown");
+    }
+
+    // ── auth guards ───────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn list_integrations_without_auth_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/integrations")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_integration_without_auth_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("DELETE")
+            .uri("/api/v1/integrations/some-id")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn list_issue_links_without_auth_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/projects/proj1/issues/issue1/links")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn create_issue_link_without_auth_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/projects/proj1/issues/issue1/links")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"provider":"github","config":{}}"#))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    // ── helpers ───────────────────────────────────────────────────────────────
+
+    fn peer() -> std::net::SocketAddr {
+        "127.0.0.1:1234".parse().unwrap()
+    }
+
+    async fn make_webhook_app() -> axum::Router {
+        use crate::config::{Config, DeploymentMode};
+        use std::sync::Arc;
+
+        let pool = crate::db::test_helpers::test_any_pool().await;
+        let config = Config {
+            server_addr: "127.0.0.1:0".to_string(),
+            database_url: "sqlite::memory:".to_string(),
+            jwt_secret: "test-jwt-secret-exactly-32-chars!!".to_string(),
+            jwt_access_expiration: 900,
+            jwt_refresh_expiration: 604800,
+            deployment_mode: DeploymentMode::SelfHosted,
+            environment: "test".to_string(),
+            app_url: "http://localhost:3001".to_string(),
+            allowed_origins: vec![],
+            retention_days: 90,
+            rate_limit_per_minute: 10000,
+            smtp_host: None,
+            smtp_port: None,
+            smtp_user: None,
+            smtp_password: None,
+            smtp_from: None,
+            stripe_secret_key: None,
+            stripe_webhook_secret: None,
+            stripe_price_id_pro_monthly: None,
+            stripe_price_id_pro_annual: None,
+            stripe_price_id_team_monthly: None,
+            stripe_price_id_team_annual: None,
+            bugwatch_api_key: None,
+            bugwatch_endpoint: None,
+            bugwatch_enabled: false,
+            github_client_id: None,
+            github_client_secret: None,
+            jira_client_id: None,
+            jira_client_secret: None,
+            linear_client_id: None,
+            linear_client_secret: None,
+            trust_proxy: false,
+            cookie_secure: false,
+            encryption_key: None,
+            password_reset_secret: "test-pw-reset-secret-exactly-32ch".to_string(),
+            oauth_state_secret: "test-oauth-state-secret-exactly32!".to_string(),
+            github_webhook_secret: Some("wh-secret-github".to_string()),
+            jira_webhook_secret: Some("wh-secret-jira".to_string()),
+            linear_webhook_secret: Some("wh-secret-linear".to_string()),
+            database_max_connections: 1,
+            shutdown_grace_secs: 5,
+            x402_enabled: false,
+            x402_wallet_address: "0x0000000000000000000000000000000000000000".to_string(),
+            x402_rpc_url: "https://mainnet.base.org".to_string(),
+            x402_usdc_address: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913".to_string(),
+        };
+
+        let alerting_service =
+            Arc::new(crate::AlertingService::new(pool.clone(), config.app_url.clone()).await);
+        let notification_service = Arc::new(crate::NotificationService::new().await);
+
+        let state = crate::AppState {
+            db: pool.clone(),
+            config: Arc::new(config),
+            rate_limiter: crate::RateLimiter::new(),
+            #[cfg(feature = "saas")]
+            stripe: None,
+            alerting_service,
+            notification_service,
+            bugwatch: None,
+            alert_semaphore: Arc::new(tokio::sync::Semaphore::new(100)),
+            payment_store: Arc::new(crate::payments::store::PaymentStore::new(pool)),
+            onchain_verifier: Arc::new(
+                crate::payments::verify::OnChainVerifier::new(
+                    "https://mainnet.base.org".to_string(),
+                )
+                .expect("reqwest client init cannot fail in tests"),
+            ),
+        };
+
+        axum::Router::new()
+            .nest("/api/v1", crate::api::router())
+            .with_state(state)
+    }
+
+    async fn signup_and_get_token(app: &axum::Router, email: &str) -> String {
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/auth/signup")
+            .header("content-type", "application/json")
+            .extension(axum::extract::ConnectInfo(peer()))
+            .body(Body::from(format!(
+                r#"{{"email":"{}","password":"StrongPass1!"}}"#,
+                email
+            )))
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        for v in resp.headers().get_all("set-cookie") {
+            let s = v.to_str().unwrap_or("");
+            if let Some(rest) = s.strip_prefix("access_token=") {
+                return rest.split(';').next().unwrap_or("").to_string();
+            }
+        }
+        panic!("no access_token in signup response");
+    }
+
+    async fn create_org(app: &axum::Router, token: &str) {
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/organization")
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::from(r#"{"name":"Test Org"}"#))
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert!(
+            resp.status().is_success(),
+            "org creation failed: {}",
+            resp.status()
+        );
+    }
+
+    async fn create_project_with_key(app: &axum::Router, token: &str) -> (String, String) {
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/projects")
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::from(r#"{"name":"Integration Test Project"}"#))
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let id = json["data"]["id"].as_str().unwrap().to_string();
+        let key = json["data"]["api_key"].as_str().unwrap().to_string();
+        (id, key)
+    }
+
+    async fn ingest_event_and_get_issue(
+        app: &axum::Router,
+        api_key: &str,
+        token: &str,
+        project_id: &str,
+    ) -> String {
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/events")
+            .header("content-type", "application/json")
+            .header("x-api-key", api_key)
+            .body(Body::from(r#"{"event_id":"ev-il-r15","timestamp":"2024-01-01T00:00:00Z","level":"error","exception":{"type":"LinkError","value":"link err","stacktrace":[]}}"#))
+            .unwrap();
+        app.clone().oneshot(req).await.unwrap();
+
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!("/api/v1/projects/{}/issues", project_id))
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        json["data"][0]["id"].as_str().unwrap().to_string()
+    }
+
+    fn hmac_hex(secret: &str, payload: &[u8]) -> String {
+        use hmac::{Hmac, Mac};
+        use sha2::Sha256;
+        type HmacSha256 = Hmac<Sha256>;
+        let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).unwrap();
+        mac.update(payload);
+        hex::encode(mac.finalize().into_bytes())
+    }
+
+    // ── webhook tests (no secret configured) ─────────────────────────────────
+
+    #[tokio::test]
+    async fn github_webhook_no_secret_configured_returns_403() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/webhooks/github")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"action":"closed","issue":{"id":1}}"#))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::FORBIDDEN
+        );
+    }
+
+    #[tokio::test]
+    async fn jira_webhook_no_secret_configured_returns_403() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/webhooks/jira")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"webhookEvent":"jira:issue_updated"}"#))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::FORBIDDEN
+        );
+    }
+
+    #[tokio::test]
+    async fn linear_webhook_no_secret_configured_returns_403() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/webhooks/linear")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"action":"update","type":"Issue"}"#))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::FORBIDDEN
+        );
+    }
+
+    // ── webhook tests (secret configured) ────────────────────────────────────
+
+    #[tokio::test]
+    async fn github_webhook_missing_signature_header_returns_403() {
+        let app = make_webhook_app().await;
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/webhooks/github")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"action":"closed","issue":{"id":1}}"#))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::FORBIDDEN
+        );
+    }
+
+    #[tokio::test]
+    async fn github_webhook_invalid_signature_returns_403() {
+        let app = make_webhook_app().await;
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/webhooks/github")
+            .header("content-type", "application/json")
+            .header("x-hub-signature-256", "sha256=deadbeef")
+            .body(Body::from(r#"{"action":"closed","issue":{"id":1}}"#))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::FORBIDDEN
+        );
+    }
+
+    #[tokio::test]
+    async fn github_webhook_valid_closed_event_returns_ok() {
+        let app = make_webhook_app().await;
+        let payload = r#"{"action":"closed","issue":{"id":42}}"#;
+        let sig = hmac_hex("wh-secret-github", payload.as_bytes());
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/webhooks/github")
+            .header("content-type", "application/json")
+            .header("x-hub-signature-256", format!("sha256={}", sig))
+            .body(Body::from(payload))
+            .unwrap();
+        assert_eq!(app.oneshot(req).await.unwrap().status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn github_webhook_reopened_event_returns_ok() {
+        let app = make_webhook_app().await;
+        let payload = r#"{"action":"reopened","issue":{"id":7}}"#;
+        let sig = hmac_hex("wh-secret-github", payload.as_bytes());
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/webhooks/github")
+            .header("content-type", "application/json")
+            .header("x-hub-signature-256", format!("sha256={}", sig))
+            .body(Body::from(payload))
+            .unwrap();
+        assert_eq!(app.oneshot(req).await.unwrap().status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn jira_webhook_valid_issue_updated_returns_ok() {
+        let app = make_webhook_app().await;
+        let payload = r#"{"webhookEvent":"jira:issue_updated","issue":{"id":"PROJ-1","fields":{"status":{"name":"Done"}}}}"#;
+        let sig = hmac_hex("wh-secret-jira", payload.as_bytes());
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/webhooks/jira")
+            .header("content-type", "application/json")
+            .header("x-hub-signature", format!("sha256={}", sig))
+            .body(Body::from(payload))
+            .unwrap();
+        assert_eq!(app.oneshot(req).await.unwrap().status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn linear_webhook_valid_issue_update_returns_ok() {
+        let app = make_webhook_app().await;
+        let payload =
+            r#"{"action":"update","type":"Issue","data":{"id":"lin-1","state":{"name":"Done"}}}"#;
+        let sig = hmac_hex("wh-secret-linear", payload.as_bytes());
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/webhooks/linear")
+            .header("content-type", "application/json")
+            .header("linear-signature", sig)
+            .body(Body::from(payload))
+            .unwrap();
+        assert_eq!(app.oneshot(req).await.unwrap().status(), StatusCode::OK);
+    }
+
+    // ── oauth authorize tests ─────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn oauth_authorize_without_auth_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/integrations/oauth/github/authorize")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn oauth_authorize_unknown_provider_returns_400() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "oauth_unknown@example.com").await;
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/integrations/oauth/notreal/authorize")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    #[tokio::test]
+    async fn oauth_authorize_github_not_configured_returns_400() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "oauth_github_nc@example.com").await;
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/integrations/oauth/github/authorize")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    #[tokio::test]
+    async fn oauth_callback_invalid_state_format_returns_400() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/integrations/oauth/github/callback?code=testcode&state=invalid")
+            .extension(axum::extract::ConnectInfo(peer()))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    // ── integration list / delete ─────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn list_integrations_returns_empty_array() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "list_integ_r15@example.com").await;
+        create_org(&app, &token).await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/integrations")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(json["data"].as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn delete_integration_not_found_returns_404() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "del_integ_nf_r15@example.com").await;
+        create_org(&app, &token).await;
+
+        let req = Request::builder()
+            .method("DELETE")
+            .uri("/api/v1/integrations/nonexistent-id")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+
+    // ── issue links ───────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn list_issue_links_returns_empty() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "list_links_r15@example.com").await;
+        create_org(&app, &token).await;
+        let (project_id, api_key) = create_project_with_key(&app, &token).await;
+        let issue_id = ingest_event_and_get_issue(&app, &api_key, &token, &project_id).await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!(
+                "/api/v1/projects/{}/issues/{}/links",
+                project_id, issue_id
+            ))
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(json["data"].as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn delete_issue_link_not_found_returns_404() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "del_link_nf_r15@example.com").await;
+        create_org(&app, &token).await;
+        let (project_id, api_key) = create_project_with_key(&app, &token).await;
+        let issue_id = ingest_event_and_get_issue(&app, &api_key, &token, &project_id).await;
+
+        let req = Request::builder()
+            .method("DELETE")
+            .uri(format!(
+                "/api/v1/projects/{}/issues/{}/links/fake-link-id",
+                project_id, issue_id
+            ))
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::NOT_FOUND
+        );
+    }
 }

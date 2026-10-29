@@ -7,7 +7,9 @@
   "license": "FSL-1.1-Apache-2.0",
   "scripts": {
     "build": "tsc",
-    "dev": "tsc --watch"
+    "dev": "tsc --watch",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@bugwatch/core": "^0.4.1",

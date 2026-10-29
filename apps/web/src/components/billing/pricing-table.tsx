@@ -1,21 +1,15 @@
-'use client';
+"use client";
 
-import { useState, Fragment } from 'react';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
-import { Loader2, Check, X, Crown, Sparkles, AlertCircle } from 'lucide-react';
-import { billingApi } from '@/lib/api';
-import { isValidHttpUrl } from '@/lib/url-utils';
-import { getTierDisplayName, type Tier } from '@/hooks/use-feature';
-import {
-  TIER_PRICING,
-  FEATURE_COMPARISON,
-  TIER_ORDER,
-  isUpgrade,
-  getAnnualSavings
-} from '@/lib/pricing-data';
-import { cn } from '@/lib/utils';
+import { useState, Fragment } from "react";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Loader2, Check, X, Crown, Sparkles, AlertCircle } from "lucide-react";
+import { billingApi } from "@/lib/api";
+import { isStripeCheckoutUrl } from "@/lib/url-utils";
+import { getTierDisplayName, type Tier } from "@/hooks/use-feature";
+import { TIER_PRICING, FEATURE_COMPARISON, TIER_ORDER, isUpgrade, getAnnualSavings } from "@/lib/pricing-data";
+import { cn } from "@/lib/utils";
 
 interface PricingTableProps {
   currentTier: Tier;
@@ -40,23 +34,19 @@ export function PricingTable({ currentTier, isOwner }: PricingTableProps) {
         `${window.location.origin}/dashboard/settings?tab=billing&success=true&session_id={CHECKOUT_SESSION_ID}`,
         `${window.location.origin}/dashboard/settings?tab=billing&canceled=true`
       );
-      if (!isValidHttpUrl(response.checkout_url)) return;
+      if (!isStripeCheckoutUrl(response.checkout_url)) return;
       window.location.href = response.checkout_url;
     } catch (err) {
-      console.error('Failed to create checkout:', err);
-      setError('Failed to start checkout. Please try again.');
+      console.error("Failed to create checkout:", err);
+      setError("Failed to start checkout. Please try again.");
     } finally {
       setLoadingTier(null);
     }
   };
 
   const renderFeatureValue = (value: string | boolean) => {
-    if (typeof value === 'boolean') {
-      return value ? (
-        <Check className="h-4 w-4 text-green-500" />
-      ) : (
-        <X className="h-4 w-4 text-muted-foreground/40" />
-      );
+    if (typeof value === "boolean") {
+      return value ? <Check className="h-4 w-4 text-green-500" /> : <X className="h-4 w-4 text-muted-foreground/40" />;
     }
     return <span className="text-sm">{value}</span>;
   };
@@ -67,7 +57,7 @@ export function PricingTable({ currentTier, isOwner }: PricingTableProps) {
     return isAnnual ? pricing.annual : pricing.monthly;
   };
 
-  const annualSavings = getAnnualSavings('pro'); // All tiers have same % savings
+  const annualSavings = getAnnualSavings("pro"); // All tiers have same % savings
 
   return (
     <div className="space-y-6">
@@ -76,10 +66,7 @@ export function PricingTable({ currentTier, isOwner }: PricingTableProps) {
         <div className="flex items-center gap-2 p-4 rounded-lg bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-800 text-red-800 dark:text-red-200">
           <AlertCircle className="h-5 w-5 shrink-0" />
           <span>{error}</span>
-          <button
-            onClick={() => setError(null)}
-            className="ml-auto text-red-600 hover:text-red-800 dark:text-red-400"
-          >
+          <button onClick={() => setError(null)} className="ml-auto text-red-600 hover:text-red-800 dark:text-red-400">
             <X className="h-4 w-4" />
           </button>
         </div>
@@ -89,9 +76,7 @@ export function PricingTable({ currentTier, isOwner }: PricingTableProps) {
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <h3 className="text-lg font-semibold">Choose Your Plan</h3>
-          <p className="text-sm text-muted-foreground">
-            Select the plan that best fits your needs
-          </p>
+          <p className="text-sm text-muted-foreground">Select the plan that best fits your needs</p>
         </div>
 
         {/* Billing Toggle */}
@@ -100,9 +85,7 @@ export function PricingTable({ currentTier, isOwner }: PricingTableProps) {
             onClick={() => setIsAnnual(false)}
             className={cn(
               "px-4 py-2 text-sm font-medium rounded-md transition-colors",
-              !isAnnual
-                ? "bg-background text-foreground shadow-sm"
-                : "text-muted-foreground hover:text-foreground"
+              !isAnnual ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
             )}
           >
             Monthly
@@ -111,13 +94,14 @@ export function PricingTable({ currentTier, isOwner }: PricingTableProps) {
             onClick={() => setIsAnnual(true)}
             className={cn(
               "px-4 py-2 text-sm font-medium rounded-md transition-colors flex items-center gap-2",
-              isAnnual
-                ? "bg-background text-foreground shadow-sm"
-                : "text-muted-foreground hover:text-foreground"
+              isAnnual ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
             )}
           >
             Annual
-            <Badge variant="secondary" className="text-xs bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300">
+            <Badge
+              variant="secondary"
+              className="text-xs bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300"
+            >
               Save {annualSavings}%
             </Badge>
           </button>
@@ -155,33 +139,29 @@ export function PricingTable({ currentTier, isOwner }: PricingTableProps) {
               <CardHeader className={cn("pb-4", isPopular && "pt-6")}>
                 <div className="flex items-center justify-between">
                   <CardTitle className="text-lg flex items-center gap-2">
-                    {tier === 'enterprise' && <Crown className="h-4 w-4 text-amber-500" />}
+                    {tier === "enterprise" && <Crown className="h-4 w-4 text-amber-500" />}
                     {getTierDisplayName(tier)}
                   </CardTitle>
                   {isCurrent && (
-                    <Badge variant="outline" className="text-xs">Current</Badge>
+                    <Badge variant="outline" className="text-xs">
+                      Current
+                    </Badge>
                   )}
                 </div>
-                <CardDescription className="text-xs">
-                  {pricing.description}
-                </CardDescription>
+                <CardDescription className="text-xs">{pricing.description}</CardDescription>
 
                 {/* Price */}
                 <div className="pt-2">
                   {price !== null ? (
                     <div className="flex items-baseline gap-1">
                       <span className="font-display text-3xl font-semibold tabular-nums">${price}</span>
-                      <span className="text-muted-foreground text-sm">
-                        /seat/{isAnnual ? 'mo' : 'month'}
-                      </span>
+                      <span className="text-muted-foreground text-sm">/seat/{isAnnual ? "mo" : "month"}</span>
                     </div>
                   ) : (
                     <div className="font-display text-2xl font-semibold">Custom</div>
                   )}
                   {isAnnual && price !== null && price > 0 && (
-                    <p className="text-xs text-muted-foreground mt-1">
-                      Billed annually (${price * 12}/seat/year)
-                    </p>
+                    <p className="text-xs text-muted-foreground mt-1">Billed annually (${price * 12}/seat/year)</p>
                   )}
                 </div>
               </CardHeader>
@@ -189,12 +169,10 @@ export function PricingTable({ currentTier, isOwner }: PricingTableProps) {
               <CardContent className="flex-1 flex flex-col">
                 {/* Key Features */}
                 <ul className="space-y-2 mb-6 flex-1">
-                  {FEATURE_COMPARISON.filter(f => f.category === 'limits').map((feature) => (
+                  {FEATURE_COMPARISON.filter((f) => f.category === "limits").map((feature) => (
                     <li key={feature.name} className="flex items-center gap-2 text-sm">
                       <Check className="h-3.5 w-3.5 text-green-500 shrink-0" />
-                      <span className="text-muted-foreground">
-                        {feature[tier]}
-                      </span>
+                      <span className="text-muted-foreground">{feature[tier]}</span>
                       <span className="text-muted-foreground/60">{feature.name.toLowerCase()}</span>
                     </li>
                   ))}
@@ -205,11 +183,11 @@ export function PricingTable({ currentTier, isOwner }: PricingTableProps) {
                   <Button variant="outline" className="w-full" disabled>
                     Current Plan
                   </Button>
-                ) : tier === 'enterprise' ? (
+                ) : tier === "enterprise" ? (
                   <Button
                     variant="outline"
                     className="w-full"
-                    onClick={() => window.open('mailto:sales@bugwatch.dev', '_blank')}
+                    onClick={() => window.open("mailto:sales@bugwatch.dev", "_blank")}
                   >
                     Contact Sales
                   </Button>
@@ -228,10 +206,8 @@ export function PricingTable({ currentTier, isOwner }: PricingTableProps) {
                   </Button>
                 )}
 
-                {!isOwner && canUpgrade && tier !== 'enterprise' && (
-                  <p className="text-xs text-muted-foreground text-center mt-2">
-                    Only organization owners can upgrade
-                  </p>
+                {!isOwner && canUpgrade && tier !== "enterprise" && (
+                  <p className="text-xs text-muted-foreground text-center mt-2">Only organization owners can upgrade</p>
                 )}
               </CardContent>
             </Card>
@@ -251,10 +227,10 @@ export function PricingTable({ currentTier, isOwner }: PricingTableProps) {
                 <tr className="border-b">
                   <th className="text-left py-3 pr-4 font-medium">Feature</th>
                   {TIER_ORDER.map((tier) => (
-                    <th key={tier} className={cn(
-                      "text-center py-3 px-4 font-medium",
-                      tier === currentTier && "bg-muted/50"
-                    )}>
+                    <th
+                      key={tier}
+                      className={cn("text-center py-3 px-4 font-medium", tier === currentTier && "bg-muted/50")}
+                    >
                       {getTierDisplayName(tier)}
                     </th>
                   ))}
@@ -262,28 +238,23 @@ export function PricingTable({ currentTier, isOwner }: PricingTableProps) {
               </thead>
               <tbody>
                 {/* Group by category */}
-                {(['limits', 'features', 'support'] as const).map((category) => (
+                {(["limits", "features", "support"] as const).map((category) => (
                   <Fragment key={category}>
                     <tr className="bg-muted/30">
                       <td colSpan={5} className="py-2 px-2 font-medium capitalize text-muted-foreground text-xs">
                         {category}
                       </td>
                     </tr>
-                    {FEATURE_COMPARISON
-                      .filter((f) => f.category === category)
-                      .map((feature) => (
-                        <tr key={feature.name} className="border-b border-muted/50">
-                          <td className="py-3 pr-4 text-muted-foreground">{feature.name}</td>
-                          {TIER_ORDER.map((tier) => (
-                            <td key={tier} className={cn(
-                              "text-center py-3 px-4",
-                              tier === currentTier && "bg-muted/50"
-                            )}>
-                              {renderFeatureValue(feature[tier])}
-                            </td>
-                          ))}
-                        </tr>
-                      ))}
+                    {FEATURE_COMPARISON.filter((f) => f.category === category).map((feature) => (
+                      <tr key={feature.name} className="border-b border-muted/50">
+                        <td className="py-3 pr-4 text-muted-foreground">{feature.name}</td>
+                        {TIER_ORDER.map((tier) => (
+                          <td key={tier} className={cn("text-center py-3 px-4", tier === currentTier && "bg-muted/50")}>
+                            {renderFeatureValue(feature[tier])}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
                   </Fragment>
                 ))}
               </tbody>

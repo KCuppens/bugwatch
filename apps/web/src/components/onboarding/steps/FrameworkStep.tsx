@@ -15,28 +15,17 @@ interface FrameworkStepProps {
   isValid: boolean;
 }
 
-export function FrameworkStep({
-  platform,
-  value,
-  onChange,
-  onNext,
-  onBack,
-  isValid,
-}: FrameworkStepProps) {
+export function FrameworkStep({ platform, value, onChange, onNext, onBack, isValid }: FrameworkStepProps) {
   const platformConfig = getPlatformConfig(platform);
   const frameworks = platformConfig?.frameworks || [];
 
   return (
     <div className="space-y-8">
       <div className="space-y-2 text-center">
-        <h2 className="font-display text-heading-lg">Select Your Framework</h2>
+        <h2 className="font-sans text-2xl font-bold">Select Your Framework</h2>
         <p className="text-muted-foreground">
           Choose the specific framework you&apos;re using
-          {platformConfig && (
-            <span className="ml-1 text-foreground">
-              for {platformConfig.name}
-            </span>
-          )}
+          {platformConfig && <span className="ml-1 text-foreground">for {platformConfig.name}</span>}
         </p>
       </div>
 

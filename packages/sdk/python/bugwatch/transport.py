@@ -1,10 +1,11 @@
 """HTTP transport for sending error events to Bugwatch."""
+
 import json
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import asdict
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Optional, cast
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -50,7 +51,7 @@ class HttpTransport(Transport):
                     "Authorization": f"Bearer {self.options.api_key}",
                     "User-Agent": "bugwatch-python/0.1.0",
                 },
-                method="POST"
+                method="POST",
             )
 
             with urlopen(request, timeout=10) as response:
@@ -72,9 +73,10 @@ class HttpTransport(Transport):
             logger.error(f"Error sending event: {e}")
             return False
 
-    def _serialize_event(self, event: ErrorEvent) -> Dict[str, Any]:
+    def _serialize_event(self, event: ErrorEvent) -> dict[str, Any]:
         """Serialize an event to a JSON-compatible dict."""
         from enum import Enum
+
         data = asdict(event)
 
         # Convert datetime/enum objects and remove None values
@@ -90,7 +92,7 @@ class HttpTransport(Transport):
                 return [convert_and_clean(item) for item in obj]
             return obj
 
-        return convert_and_clean(data)
+        return cast("dict[str, Any]", convert_and_clean(data))
 
 
 class AsyncHttpTransport(Transport):
@@ -106,12 +108,13 @@ class AsyncHttpTransport(Transport):
         if self._client is None:
             try:
                 import httpx
+
                 self._client = httpx.AsyncClient(timeout=10.0)
-            except ImportError:
+            except ImportError as err:
                 raise ImportError(
                     "httpx is required for async transport. "
                     "Install it with: pip install bugwatch-sdk[async]"
-                )
+                ) from err
         return self._client
 
     async def send_async(self, event: ErrorEvent) -> bool:
@@ -134,7 +137,7 @@ class AsyncHttpTransport(Transport):
                 headers={
                     "Authorization": f"Bearer {self.options.api_key}",
                     "User-Agent": "bugwatch-python/0.1.0",
-                }
+                },
             )
 
             if response.status_code in (200, 201):
@@ -157,7 +160,7 @@ class AsyncHttpTransport(Transport):
             loop = asyncio.get_event_loop()
             if loop.is_running():
                 # If we're in an async context, schedule as a task
-                future = asyncio.ensure_future(self.send_async(event))
+                asyncio.ensure_future(self.send_async(event))
                 return True  # Optimistic return
             else:
                 return loop.run_until_complete(self.send_async(event))

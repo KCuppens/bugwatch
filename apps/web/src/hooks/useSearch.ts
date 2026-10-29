@@ -42,11 +42,7 @@ interface UseSearchReturn {
   addToHistory: (query: string) => void;
 }
 
-export function useSearch({
-  projectId,
-  initialQuery = "",
-  debounceMs = 300,
-}: UseSearchOptions): UseSearchReturn {
+export function useSearch({ projectId, initialQuery = "", debounceMs = 300 }: UseSearchOptions): UseSearchReturn {
   // Query state
   const [query, setQuery] = useState(initialQuery);
   const [parsedQuery, setParsedQuery] = useState<ParsedQuery | null>(null);
@@ -75,9 +71,7 @@ export function useSearch({
   const suggestions = useMemo(() => {
     if (!isAutocompleteOpen) return [];
 
-    const existingFilters = parsedQuery?.tokens
-      .filter((t) => t.type === "field" && t.field)
-      .map((t) => t.field!) || [];
+    const existingFilters = parsedQuery?.tokens.filter((t) => t.type === "field" && t.field).map((t) => t.field!) || [];
 
     return getSuggestions(
       {
@@ -153,35 +147,69 @@ export function useSearch({
   const queryRef = useRef(query);
   queryRef.current = query;
 
-  // Search function that can be called directly
-  const performSearch = useCallback(async (searchQuery: string) => {
-    if (!projectId) {
-      setResults([]);
-      setFacets(null);
-      return;
-    }
-
-    setIsLoading(true);
-    setError(null);
-
-    try {
-      const parsed = parseQuery(searchQuery);
-      const response = await issuesApi.search(projectId, {
-        filters: convertFilters(parsed),
-        sort: parsed.sort
-          ? { field: parsed.sort.field, direction: parsed.sort.direction }
-          : undefined,
+  // Fetch facets independently from search — facets are project-wide and filter-agnostic,
+  // so they only need to refresh when the project changes, not on every search.
+  useEffect(() => {
+    if (!projectId) return;
+    const controller = new AbortController();
+    issuesApi
+      .getFacets(projectId, { signal: controller.signal })
+      .then((data) => setFacets(data))
+      .catch((err) => {
+        if (err instanceof DOMException && err.name === "AbortError") return;
       });
+    return () => controller.abort();
+  }, [projectId]);
 
-      setResults(response.data);
-      setFacets(response.facets);
-    } catch (err) {
-      console.error("Search failed:", err);
-      setError("Search failed. Please try again.");
-    } finally {
-      setIsLoading(false);
-    }
-  }, [projectId, convertFilters]);
+  // Single shared controller — cancels whichever search (immediate or debounced) is
+  // in-flight, preventing a stale debounced result from overwriting a newer immediate one.
+  const activeSearchControllerRef = useRef<AbortController | null>(null);
+
+  // Inner helper that runs the actual fetch + state update for a given query/signal.
+  // Both performSearch and the debounced effect delegate here.
+  const runSearch = useCallback(
+    async (searchQuery: string, signal: AbortSignal) => {
+      setIsLoading(true);
+      setError(null);
+      try {
+        const parsed = parseQuery(searchQuery);
+        const response = await issuesApi.search(
+          projectId!,
+          {
+            filters: convertFilters(parsed),
+            sort: parsed.sort ? { field: parsed.sort.field, direction: parsed.sort.direction } : undefined,
+          },
+          { signal }
+        );
+        setResults(response.data);
+      } catch (err) {
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        console.error("Search failed:", err);
+        setError("Search failed. Please try again.");
+      } finally {
+        if (!signal.aborted) {
+          setIsLoading(false);
+        }
+      }
+    },
+    [projectId, convertFilters]
+  );
+
+  // Search function that can be called directly (bypasses debounce)
+  const performSearch = useCallback(
+    async (searchQuery: string) => {
+      if (!projectId) {
+        setResults([]);
+        setFacets(null);
+        return;
+      }
+      activeSearchControllerRef.current?.abort();
+      const controller = new AbortController();
+      activeSearchControllerRef.current = controller;
+      await runSearch(searchQuery, controller.signal);
+    },
+    [projectId, runSearch]
+  );
 
   // Execute search when debounced query changes
   useEffect(() => {
@@ -191,49 +219,24 @@ export function useSearch({
       return;
     }
 
+    activeSearchControllerRef.current?.abort();
     const controller = new AbortController();
-
-    const search = async () => {
-      setIsLoading(true);
-      setError(null);
-
-      try {
-        const parsed = parseQuery(debouncedQuery);
-        const response = await issuesApi.search(projectId, {
-          filters: convertFilters(parsed),
-          sort: parsed.sort
-            ? { field: parsed.sort.field, direction: parsed.sort.direction }
-            : undefined,
-        }, { signal: controller.signal });
-
-        setResults(response.data);
-        setFacets(response.facets);
-      } catch (err) {
-        // Ignore AbortError - expected when effect cleanup runs
-        if (err instanceof DOMException && err.name === "AbortError") return;
-        console.error("Search failed:", err);
-        setError("Search failed. Please try again.");
-      } finally {
-        if (!controller.signal.aborted) {
-          setIsLoading(false);
-        }
-      }
-    };
-
-    search();
+    activeSearchControllerRef.current = controller;
+    runSearch(debouncedQuery, controller.signal);
 
     return () => {
       controller.abort();
     };
-  }, [projectId, debouncedQuery, convertFilters]);
+  }, [projectId, debouncedQuery, runSearch]);
 
-  // Execute search (manual trigger)
+  // Execute search (manual trigger — bypasses debounce for instant response on Enter)
   const executeSearch = useCallback(() => {
     if (query.trim()) {
       addToHistory(query.trim());
+      performSearch(query.trim());
     }
     setAutocompleteOpen(false);
-  }, [query, addToHistory]);
+  }, [query, addToHistory, performSearch]);
 
   // Clear search
   const clearSearch = useCallback(() => {
@@ -243,59 +246,59 @@ export function useSearch({
   }, []);
 
   // Select a suggestion
-  const selectSuggestion = useCallback((suggestion: Suggestion) => {
-    let newQuery: string;
+  const selectSuggestion = useCallback(
+    (suggestion: Suggestion) => {
+      let newQuery: string;
 
-    if (suggestion.type === "history" || suggestion.type === "saved") {
-      // Replace entire query
-      newQuery = suggestion.value;
-    } else {
-      // Append to query
-      const currentQuery = query.trim();
-
-      // If the suggestion is a field completion (e.g., "level:")
-      // and we're already typing that field, replace the partial
-      const words = currentQuery.split(/\s+/);
-      const lastWord = words[words.length - 1] || "";
-
-      if (suggestion.type === "field" && lastWord && !lastWord.includes(":")) {
-        // Replace partial field name with complete one
-        words[words.length - 1] = suggestion.value;
-        newQuery = words.join(" ");
-      } else if (suggestion.type === "value") {
-        // Replace the current field:partial with field:value
-        if (lastWord.includes(":")) {
-          words[words.length - 1] = suggestion.value;
-          newQuery = words.join(" ") + " ";
-        } else {
-          newQuery = currentQuery + (currentQuery ? " " : "") + suggestion.value + " ";
-        }
+      if (suggestion.type === "history" || suggestion.type === "saved") {
+        // Replace entire query
+        newQuery = suggestion.value;
       } else {
-        newQuery = currentQuery + (currentQuery ? " " : "") + suggestion.value;
+        // Append to query
+        const currentQuery = query.trim();
+
+        // If the suggestion is a field completion (e.g., "level:")
+        // and we're already typing that field, replace the partial
+        const words = currentQuery.split(/\s+/);
+        const lastWord = words[words.length - 1] || "";
+
+        if (suggestion.type === "field" && lastWord && !lastWord.includes(":")) {
+          // Replace partial field name with complete one
+          words[words.length - 1] = suggestion.value;
+          newQuery = words.join(" ");
+        } else if (suggestion.type === "value") {
+          // Replace the current field:partial with field:value
+          if (lastWord.includes(":")) {
+            words[words.length - 1] = suggestion.value;
+            newQuery = words.join(" ") + " ";
+          } else {
+            newQuery = currentQuery + (currentQuery ? " " : "") + suggestion.value + " ";
+          }
+        } else {
+          newQuery = currentQuery + (currentQuery ? " " : "") + suggestion.value;
+        }
       }
-    }
 
-    setQuery(newQuery);
-    setAutocompleteOpen(false);
+      setQuery(newQuery);
+      setAutocompleteOpen(false);
 
-    // Trigger immediate search for value suggestions (complete filters)
-    if (suggestion.type === "value" || suggestion.type === "history" || suggestion.type === "saved") {
-      // Use setTimeout to ensure state is updated before search
-      setTimeout(() => {
+      // Trigger immediate search for value suggestions (complete filters)
+      if (suggestion.type === "value" || suggestion.type === "history" || suggestion.type === "saved") {
         performSearch(newQuery.trim());
-      }, 0);
-    }
-  }, [query, performSearch]);
+      }
+    },
+    [query, performSearch]
+  );
 
   // Trigger search with a specific query (for quick filters)
-  const triggerSearch = useCallback((searchQuery: string) => {
-    setQuery(searchQuery);
-    setAutocompleteOpen(false);
-    // Use setTimeout to ensure state is updated
-    setTimeout(() => {
+  const triggerSearch = useCallback(
+    (searchQuery: string) => {
+      setQuery(searchQuery);
+      setAutocompleteOpen(false);
       performSearch(searchQuery.trim());
-    }, 0);
-  }, [performSearch]);
+    },
+    [performSearch]
+  );
 
   return {
     query,

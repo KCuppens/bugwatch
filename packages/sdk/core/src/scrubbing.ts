@@ -60,7 +60,7 @@ const DEFAULT_VALUE_PATTERNS: readonly RegExp[] = [
 ];
 
 const EMAIL_PATTERN = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/;
-const CREDIT_CARD_PATTERN = /\b(?:\d[ -]*?){13,19}\b/;
+const CREDIT_CARD_PATTERN = /\b(?:\d{4}[- ]?){3}\d{4}\b/;
 
 interface CompiledOptions {
   keySet: string[];

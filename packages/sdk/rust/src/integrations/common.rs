@@ -44,7 +44,10 @@ pub fn is_sensitive_header(name: &str) -> bool {
 /// Returns `None` if no valid IP address is found.
 pub fn extract_client_ip(headers: &HashMap<String, String>) -> Option<IpAddr> {
     // X-Forwarded-For: client, proxy1, proxy2
-    if let Some(forwarded) = headers.get("x-forwarded-for").or_else(|| headers.get("X-Forwarded-For")) {
+    if let Some(forwarded) = headers
+        .get("x-forwarded-for")
+        .or_else(|| headers.get("X-Forwarded-For"))
+    {
         if let Some(first_ip) = forwarded.split(',').next() {
             if let Ok(ip) = first_ip.trim().parse() {
                 return Some(ip);
@@ -53,21 +56,30 @@ pub fn extract_client_ip(headers: &HashMap<String, String>) -> Option<IpAddr> {
     }
 
     // X-Real-IP
-    if let Some(real_ip) = headers.get("x-real-ip").or_else(|| headers.get("X-Real-IP")) {
+    if let Some(real_ip) = headers
+        .get("x-real-ip")
+        .or_else(|| headers.get("X-Real-IP"))
+    {
         if let Ok(ip) = real_ip.trim().parse() {
             return Some(ip);
         }
     }
 
     // CF-Connecting-IP (Cloudflare)
-    if let Some(cf_ip) = headers.get("cf-connecting-ip").or_else(|| headers.get("CF-Connecting-IP")) {
+    if let Some(cf_ip) = headers
+        .get("cf-connecting-ip")
+        .or_else(|| headers.get("CF-Connecting-IP"))
+    {
         if let Ok(ip) = cf_ip.trim().parse() {
             return Some(ip);
         }
     }
 
     // True-Client-IP (Akamai)
-    if let Some(true_ip) = headers.get("true-client-ip").or_else(|| headers.get("True-Client-IP")) {
+    if let Some(true_ip) = headers
+        .get("true-client-ip")
+        .or_else(|| headers.get("True-Client-IP"))
+    {
         if let Ok(ip) = true_ip.trim().parse() {
             return Some(ip);
         }
@@ -126,7 +138,10 @@ mod tests {
     #[test]
     fn test_extract_client_ip() {
         let mut headers = HashMap::new();
-        headers.insert("X-Forwarded-For".to_string(), "192.168.1.1, 10.0.0.1".to_string());
+        headers.insert(
+            "X-Forwarded-For".to_string(),
+            "192.168.1.1, 10.0.0.1".to_string(),
+        );
 
         let ip = extract_client_ip(&headers);
         assert_eq!(ip, Some("192.168.1.1".parse().unwrap()));

@@ -1,25 +1,9 @@
 "use client";
 
-import {
-  createContext,
-  useContext,
-  useEffect,
-  useMemo,
-  useState,
-  useCallback,
-  type ReactNode,
-} from "react";
-import {
-  authApi,
-  type User,
-  ApiError,
-  saveTokens as apiSaveTokens,
-  clearTokens as apiClearTokens,
-  refreshTokens,
-  isTokenExpired,
-} from "./api";
+import { createContext, useContext, useEffect, useMemo, useState, useCallback, useRef, type ReactNode } from "react";
+import { authApi, type User, ApiError, clearTokens as apiClearTokens, refreshTokens } from "./api";
 
-interface AuthContextType {
+export interface AuthContextType {
   user: User | null;
   isLoading: boolean;
   isAuthenticated: boolean;
@@ -31,155 +15,155 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-// Refresh 5 minutes before expiry (backend default is 1 hour = 3600s)
-// Refresh at 55 minutes to be safe
-const TOKEN_REFRESH_INTERVAL = 55 * 60 * 1000; // 55 minutes
+// Refresh 2 minutes before expiry. Backend default: 15 minutes / 900 s (keep in
+// sync with apps/server/src/config.rs jwt_access_expiration). Refresh at 13 min.
+const TOKEN_REFRESH_INTERVAL = 13 * 60 * 1000; // 13 minutes
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+
+  const isFetchingRef = useRef(false);
+  const isInitializedRef = useRef(false);
+  // Keep a ref in sync with user state — event handlers read this to avoid
+  // stale-closure issues without re-registering listeners on every state change.
+  const userRef = useRef<User | null>(user);
+  userRef.current = user;
 
   const clearTokens = useCallback(() => {
     apiClearTokens();
     setUser(null);
   }, []);
 
-  const saveTokens = useCallback((accessToken: string, refreshToken: string) => {
-    apiSaveTokens(accessToken, refreshToken);
-  }, []);
-
   // Use the deduplicated refresh from api.ts
   const refreshAccessToken = useCallback(async () => {
     const success = await refreshTokens();
     if (!success) {
-      // If refresh failed due to invalid token, user state will be cleared
-      // by the clearTokens call in refreshTokens
-      const hasRefreshToken = localStorage.getItem("refresh_token");
-      if (!hasRefreshToken) {
-        setUser(null);
-      }
+      setUser(null);
     }
     return success;
   }, []);
 
   const fetchCurrentUser = useCallback(async () => {
+    if (isFetchingRef.current) return false;
+    isFetchingRef.current = true;
     try {
-      // The api.ts fetchWithAuth will automatically handle 401 retry
       const response = await authApi.me();
       setUser(response.data);
       return true;
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) {
-        // Token refresh already attempted by fetchWithAuth and failed
         clearTokens();
+      } else {
+        console.debug("[Auth] Failed to fetch current user:", error);
       }
-      // For network errors or server errors, keep existing user state
       return false;
+    } finally {
+      isFetchingRef.current = false;
     }
   }, [clearTokens]);
 
-  // Initialize auth state on mount
+  // Initialize auth state on mount.
+  // httpOnly cookies are opaque to JS, so we try to fetch the current user
+  // directly — the browser sends cookies automatically.
   useEffect(() => {
+    let cancelled = false;
     const initAuth = async () => {
-      const accessToken = localStorage.getItem("access_token");
-      const refreshToken = localStorage.getItem("refresh_token");
+      // Clean up any legacy localStorage tokens from before httpOnly migration
+      apiClearTokens();
 
-      if (!accessToken && !refreshToken) {
-        setIsLoading(false);
-        return;
-      }
-
-      // If access token is expired but refresh token exists, try refresh first
-      if (!accessToken || isTokenExpired(accessToken)) {
-        if (refreshToken) {
-          // Try to refresh - if it fails due to network error, we'll still try
-          // to fetch the user (the API might come back online).
-          // If it fails due to 401, refreshTokens() already cleared tokens.
-          const refreshed = await refreshTokens();
-          if (!refreshed) {
-            // Check if tokens were cleared by refreshTokens (401 case)
-            const stillHasRefreshToken = localStorage.getItem("refresh_token");
-            if (!stillHasRefreshToken) {
-              // Token was invalid, already cleared
-              setIsLoading(false);
-              return;
-            }
-            // Network error - tokens still exist, try to proceed anyway
-            // The user might see a brief loading state while server starts
-          }
-        } else {
-          // No refresh token - clear any stale access token
-          apiClearTokens();
-          setIsLoading(false);
-          return;
-        }
-      }
-
+      // Try to fetch the current user — cookies are sent automatically.
+      // If no valid session cookie exists, this returns 401 and we stay logged out.
       await fetchCurrentUser();
-      setIsLoading(false);
+      if (!cancelled) {
+        isInitializedRef.current = true;
+        setIsLoading(false);
+      }
     };
 
     initAuth();
+    return () => {
+      cancelled = true;
+    };
   }, [fetchCurrentUser]);
 
-  // Set up token refresh interval
+  // Stable boolean — dep array uses this instead of `!!user` inline to satisfy
+  // exhaustive-deps while preventing the interval from resetting on every
+  // refreshUser() call that returns a new object reference.
+  const isAuthenticated = !!user;
+
+  // Set up token refresh interval.
+  // If refresh fails, refreshAccessToken calls setUser(null), which triggers the
+  // effect cleanup (clearInterval) — so the interval self-cancels on first failure.
+  // No explicit backoff needed: a failed refresh means the session is gone.
   useEffect(() => {
-    if (!user) return;
+    if (!isAuthenticated) return;
 
     const interval = setInterval(() => {
-      refreshAccessToken();
+      void refreshAccessToken().catch((e) => console.debug("[Auth] Token refresh failed:", e));
     }, TOKEN_REFRESH_INTERVAL);
 
     return () => clearInterval(interval);
-  }, [user, refreshAccessToken]);
+  }, [isAuthenticated, refreshAccessToken]);
 
-  // Cross-tab synchronization via storage events
+  // When fetchWithAuth gets a persistent 401 (refresh failed — session fully
+  // expired), it dispatches this event so the auth context can clear local state
+  // and let AuthGuard redirect to /login instead of showing a raw auth error.
   useEffect(() => {
-    const handleStorageChange = (e: StorageEvent) => {
-      if (e.key === "access_token" || e.key === "refresh_token") {
-        if (!e.newValue) {
-          // Token removed in another tab - logout
-          setUser(null);
-        } else if (!user && e.key === "access_token") {
-          // Token added in another tab - fetch user
-          fetchCurrentUser();
-        }
-      }
+    const handleSessionExpired = () => {
+      // Re-check the session before clearing — another tab may have already
+      // refreshed the httpOnly cookies, making this session still valid.
+      // fetchCurrentUser handles both outcomes: on success it updates the user
+      // state; on 401 it calls clearTokens() internally. The isFetchingRef guard
+      // prevents re-entrant calls if this event fires while a fetch is in flight.
+      void fetchCurrentUser();
+    };
+    window.addEventListener("bugwatch-auth-expired", handleSessionExpired);
+    return () => window.removeEventListener("bugwatch-auth-expired", handleSessionExpired);
+  }, [fetchCurrentUser]);
+
+  // Cross-tab synchronization: httpOnly cookies are shared across tabs automatically.
+  // Listen for visibility changes to re-check auth state when user returns to tab.
+  // userRef avoids stale closure — the handler reads the latest value without
+  // needing `user` in deps, which would re-register the listener on every login/logout.
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (document.hidden) return;
+      if (!isInitializedRef.current) return;
+      if (userRef.current === null) return;
+      void fetchCurrentUser().catch((e) => console.debug("[Auth] Visibility re-check failed:", e));
     };
 
-    window.addEventListener("storage", handleStorageChange);
-    return () => window.removeEventListener("storage", handleStorageChange);
-  }, [user, fetchCurrentUser]);
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () => document.removeEventListener("visibilitychange", handleVisibility);
+  }, [fetchCurrentUser]);
 
-  const login = useCallback(
-    async (email: string, password: string) => {
+  const login = useCallback(async (email: string, password: string) => {
+    try {
       const response = await authApi.login(email, password);
-      saveTokens(
-        response.data.tokens.access_token,
-        response.data.tokens.refresh_token
-      );
       setUser(response.data.user);
-    },
-    [saveTokens]
-  );
+    } catch (error) {
+      if (error instanceof ApiError) throw error; // Pass through — callers handle specific codes
+      throw new ApiError(0, "network_error", "Unable to connect. Please check your connection and try again.");
+    }
+  }, []);
 
-  const signup = useCallback(
-    async (email: string, password: string, name?: string) => {
+  const signup = useCallback(async (email: string, password: string, name?: string) => {
+    try {
       const response = await authApi.signup(email, password, name);
-      saveTokens(
-        response.data.tokens.access_token,
-        response.data.tokens.refresh_token
-      );
       setUser(response.data.user);
-    },
-    [saveTokens]
-  );
+    } catch (error) {
+      if (error instanceof ApiError) throw error;
+      throw new ApiError(0, "network_error", "Unable to connect. Please check your connection and try again.");
+    }
+  }, []);
 
   const logout = useCallback(async () => {
     try {
       await authApi.logout();
-    } catch {
-      // Ignore logout errors - clear tokens anyway
+    } catch (e) {
+      // Ignore logout errors — clear local session regardless
+      console.debug("Logout API call failed:", e);
     }
     clearTokens();
   }, [clearTokens]);

@@ -72,6 +72,46 @@ The frontend checks `NEXT_PUBLIC_DEPLOYMENT_MODE` (default: `self-hosted`). Set 
    ```
 5. Open a Pull Request against `main`
 
+## CI
+
+CI runs on [HookCI](https://ci.hookci.com) on infrauno, as the `hookci/<job>` checks on every pull
+request and on pushes to `main` (`checks` in `.hookci.yml`). A push to `main` deploys production once
+every check passes (`deployments.production`, see [deploy/infrauno/README.md](deploy/infrauno/README.md)).
+GitHub Actions no longer runs CI or deploys; it still publishes images (`docker-publish.yml`) and
+releases (`release.yml`, `publish-*.yml`). Every job is a script in `scripts/ci/` that can be run by
+hand from the repo root (`bash scripts/ci/setup.sh`, then `bash scripts/ci/web-check.sh`):
+
+| job | script | what |
+|---|---|---|
+| `rust-check` | `rust-check.sh` | `apps/server` fmt, clippy, tests against postgres, `cargo audit` |
+| `web-check` | `web-check.sh` | typecheck, lint, SDK and workspace builds, `audit-ci`, unit tests |
+| `e2e-test` | `e2e-test.sh` | build, then Playwright in chromium, firefox and webkit |
+| `python-sdk-check` | `python-sdk-check.sh` | ruff, mypy, pytest |
+| `rust-sdk-check` | `rust-sdk-check.sh` | fmt, clippy, tests |
+| `go-sdk-check` | `go-sdk-check.sh` | vet, golangci-lint, `go test -race` |
+| `ruby-sdk-check` | `ruby-sdk-check.sh` | rubocop, rspec |
+| `php-sdk-check` | `php-sdk-check.sh` | php-cs-fixer, phpstan, phpunit |
+| `java-sdk-check` | `java-sdk-check.sh` | `mvn verify` |
+| `docker-build` | `docker-build.sh` | `apps/web/package-lock.json` is in sync with `apps/web/package.json` |
+
+`e2e-test` starts after `web-check` and `rust-check` pass, `docker-build` after all the others. The
+checks run on the same box as production, as the sandboxed `hookci-run` user (no docker, no sudo),
+each held to 2 cores and 8 GB; independent jobs run in parallel. Because of that:
+
+- Toolchains aren't installed on the host. `scripts/ci/tools.sh` fetches pinned, checksummed copies
+  (Node, Rust with rustfmt, clippy and cargo-audit, Go and golangci-lint, Python, JDK and Maven, PHP
+  with composer, phpstan and php-cs-fixer) into `.hookci/cache/tools`, which `checks.setup` caches;
+  bump a version and its checksum in that file. Only apt packages (Ruby 3.2 and bundler, the
+  Playwright browsers' libraries) need root: `scripts/ci/setup-host.sh`.
+- Jobs reach the network only through HookCI's egress proxy, for the hosts in `checks.egress`. A
+  job that fails to download something usually needs its host added there.
+- The `rust-check` tests use HookCI's `postgres` service (its socket, `PGHOST`). Run by hand, they use
+  `TEST_DATABASE_URL`, or a local postgres on `/var/run/postgresql`.
+- No check builds docker images: jobs can't reach docker. The production deploy builds them on the
+  host (`scripts/deploy/build-images.sh`); `docker-publish.yml` still builds the published images and
+  `docker/Dockerfile.web` on pushes to `main`.
+- A red check on a push to `main` means that push never deploys; fix the check and push again.
+
 ## Code Style
 
 - **Rust**: `cargo fmt` for formatting, `cargo clippy` for lints

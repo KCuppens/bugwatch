@@ -4,6 +4,9 @@ pub mod comments;
 pub mod events;
 pub mod integrations;
 pub mod issues;
+pub mod log_alert_rules;
+pub mod log_saved_searches;
+pub mod logs;
 pub mod monitors;
 pub mod organizations;
 pub mod performance;
@@ -19,10 +22,11 @@ pub use comments::CommentRepository;
 pub use events::EventRepository;
 pub use integrations::{IntegrationRepository, IssueLinkRepository};
 pub use issues::IssueRepository;
+pub use log_alert_rules::LogAlertRuleRepository;
+pub use log_saved_searches::LogSavedSearchRepository;
+pub use logs::{LogInsert, LogListParams, LogRepository};
 pub use monitors::{MonitorCheckRepository, MonitorIncidentRepository, MonitorRepository};
-pub use organizations::{
-    BillingEventRepository, OrganizationMemberRepository, OrganizationRepository, UsageRepository,
-};
+pub use organizations::{OrganizationMemberRepository, OrganizationRepository};
 pub use performance::PerformanceRepository;
 pub use projects::ProjectRepository;
 pub use replay::ReplayRepository;
