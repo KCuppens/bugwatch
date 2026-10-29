@@ -62,8 +62,8 @@ pub fn router() -> Router<AppState> {
             "/agent-keys",
             get(agent_keys::list).post(agent_keys::create),
         )
-        .route("/agent-keys/:key_id", delete(agent_keys::revoke))
-        .route("/agent-keys/:key_id/audit-log", get(agent_keys::audit_log))
+        .route("/agent-keys/{key_id}", delete(agent_keys::revoke))
+        .route("/agent-keys/{key_id}/audit-log", get(agent_keys::audit_log))
         // OpenAPI spec
         .route("/openapi.yaml", get(serve_openapi_spec))
         // Event ingestion
@@ -75,46 +75,46 @@ pub fn router() -> Router<AppState> {
         // Log ingestion (SDK → server, API key auth)
         .route("/logs", post(logs::ingest))
         // Log monitoring (dashboard, JWT auth, tier gated)
-        .route("/projects/:project_id/logs", get(logs::list_logs))
-        .route("/projects/:project_id/logs/stats", get(logs::get_stats))
-        .route("/projects/:project_id/logs/tail", get(logs::tail_logs))
-        .route("/projects/:project_id/logs/facets", get(logs::get_facets))
+        .route("/projects/{project_id}/logs", get(logs::list_logs))
+        .route("/projects/{project_id}/logs/stats", get(logs::get_stats))
+        .route("/projects/{project_id}/logs/tail", get(logs::tail_logs))
+        .route("/projects/{project_id}/logs/facets", get(logs::get_facets))
         .route(
-            "/projects/:project_id/logs/:log_entry_id/issue",
+            "/projects/{project_id}/logs/{log_entry_id}/issue",
             post(logs::link_issue).delete(logs::unlink_issue),
         )
         // Log saved searches (Pro+)
         .route(
-            "/projects/:project_id/log-saved-searches",
+            "/projects/{project_id}/log-saved-searches",
             get(log_saved_searches::list).post(log_saved_searches::create),
         )
         .route(
-            "/projects/:project_id/log-saved-searches/:search_id",
+            "/projects/{project_id}/log-saved-searches/{search_id}",
             delete(log_saved_searches::delete),
         )
         // Log alert rules (Pro+)
         .route(
-            "/projects/:project_id/log-alert-rules",
+            "/projects/{project_id}/log-alert-rules",
             get(log_alert_rules::list).post(log_alert_rules::create),
         )
         .route(
-            "/projects/:project_id/log-alert-rules/:rule_id",
+            "/projects/{project_id}/log-alert-rules/{rule_id}",
             patch(log_alert_rules::update).delete(log_alert_rules::delete),
         )
         // Projects
         .route("/projects", get(projects::list).post(projects::create))
         .route(
-            "/projects/:id",
+            "/projects/{id}",
             get(projects::get)
                 .patch(projects::update)
                 .delete(projects::delete),
         )
-        .route("/projects/:id/keys", post(projects::rotate_key))
+        .route("/projects/{id}/keys", post(projects::rotate_key))
         .route(
-            "/projects/:id/onboarding/complete",
+            "/projects/{id}/onboarding/complete",
             post(projects::complete_onboarding),
         )
-        .route("/projects/:id/verify", get(projects::verify_events))
+        .route("/projects/{id}/verify", get(projects::verify_events))
         // Cross-project routes (must come before project-specific routes)
         .route("/issues/across-projects", get(issues::list_across_projects))
         .route(
@@ -130,158 +130,164 @@ pub fn router() -> Router<AppState> {
             get(monitors::list_across_projects),
         )
         // Issues - specific routes MUST come before parameterized :issue_id route
-        .route("/projects/:project_id/issues", get(issues::list))
-        .route("/projects/:project_id/issues/_search", post(issues::search))
+        .route("/projects/{project_id}/issues", get(issues::list))
         .route(
-            "/projects/:project_id/issues/facets",
+            "/projects/{project_id}/issues/_search",
+            post(issues::search),
+        )
+        .route(
+            "/projects/{project_id}/issues/facets",
             get(issues::get_facets),
         )
         // Nested issue routes with :issue_id
         .route(
-            "/projects/:project_id/issues/:issue_id/events/:event_id",
+            "/projects/{project_id}/issues/{issue_id}/events/{event_id}",
             get(issues::get_event),
         )
         .route(
-            "/projects/:project_id/issues/:issue_id/frequency",
+            "/projects/{project_id}/issues/{issue_id}/frequency",
             get(issues::get_frequency),
         )
         .route(
-            "/projects/:project_id/issues/:issue_id/impact",
+            "/projects/{project_id}/issues/{issue_id}/impact",
             get(issues::get_impact),
         )
         // Generic :issue_id route LAST (catches "search" if above doesn't match)
         .route(
-            "/projects/:project_id/issues/:issue_id",
+            "/projects/{project_id}/issues/{issue_id}",
             get(issues::get)
                 .patch(issues::update)
                 .delete(issues::delete),
         )
         // Issue Comments
         .route(
-            "/projects/:project_id/issues/:issue_id/comments",
+            "/projects/{project_id}/issues/{issue_id}/comments",
             get(comments::list).post(comments::create),
         )
         .route(
-            "/projects/:project_id/issues/:issue_id/comments/:comment_id",
+            "/projects/{project_id}/issues/{issue_id}/comments/{comment_id}",
             patch(comments::update).delete(comments::delete),
         )
         // Monitors
         .route(
-            "/projects/:project_id/monitors",
+            "/projects/{project_id}/monitors",
             get(monitors::list).post(monitors::create),
         )
         .route(
-            "/projects/:project_id/monitors/:monitor_id",
+            "/projects/{project_id}/monitors/{monitor_id}",
             get(monitors::get)
                 .patch(monitors::update)
                 .delete(monitors::delete),
         )
         .route(
-            "/projects/:project_id/monitors/:monitor_id/checks",
+            "/projects/{project_id}/monitors/{monitor_id}/checks",
             get(monitors::list_checks),
         )
         // Server monitoring
-        .route("/projects/:project_id/servers", get(metrics::list_servers))
+        .route("/projects/{project_id}/servers", get(metrics::list_servers))
         .route(
-            "/projects/:project_id/servers/status",
+            "/projects/{project_id}/servers/status",
             get(metrics::servers_status),
         )
         .route(
-            "/projects/:project_id/servers/:server_id/metrics",
+            "/projects/{project_id}/servers/{server_id}/metrics",
             get(metrics::get_server_metrics),
         )
         .route(
-            "/projects/:project_id/servers/:server_id/metrics/latest",
+            "/projects/{project_id}/servers/{server_id}/metrics/latest",
             get(metrics::get_latest_metrics),
         )
         // Performance monitoring
         .route(
-            "/projects/:project_id/performance/summary",
+            "/projects/{project_id}/performance/summary",
             get(performance::get_summary),
         )
         .route(
-            "/projects/:project_id/performance/transactions",
+            "/projects/{project_id}/performance/transactions",
             get(performance::list_transactions),
         )
         .route(
-            "/projects/:project_id/performance/charts",
+            "/projects/{project_id}/performance/charts",
             get(performance::get_charts),
         )
         // Alerts
         .route(
-            "/projects/:project_id/alerts",
+            "/projects/{project_id}/alerts",
             get(alerts::list_alert_rules).post(alerts::create_alert_rule),
         )
         .route(
-            "/projects/:project_id/alerts/logs",
+            "/projects/{project_id}/alerts/logs",
             get(alerts::list_alert_logs),
         )
         .route(
-            "/projects/:project_id/alerts/:alert_id",
+            "/projects/{project_id}/alerts/{alert_id}",
             patch(alerts::update_alert_rule).delete(alerts::delete_alert_rule),
         )
         .route(
-            "/projects/:project_id/alerts/:alert_id/mute",
+            "/projects/{project_id}/alerts/{alert_id}/mute",
             post(alerts::mute_alert_rule),
         )
         .route(
-            "/projects/:project_id/alerts/:alert_id/unmute",
+            "/projects/{project_id}/alerts/{alert_id}/unmute",
             post(alerts::unmute_alert_rule),
         )
         .route(
-            "/projects/:project_id/alerts/:alert_id/test",
+            "/projects/{project_id}/alerts/{alert_id}/test",
             post(alerts::test_alert_rule),
         )
         // Notification Channels
         .route(
-            "/projects/:project_id/channels",
+            "/projects/{project_id}/channels",
             get(alerts::list_channels).post(alerts::create_channel),
         )
         .route(
-            "/projects/:project_id/channels/:channel_id",
+            "/projects/{project_id}/channels/{channel_id}",
             patch(alerts::update_channel).delete(alerts::delete_channel),
         )
         .route(
-            "/projects/:project_id/channels/:channel_id/test",
+            "/projects/{project_id}/channels/{channel_id}/test",
             post(alerts::test_channel),
         )
         // Session Replay (SDK ingestion - API key auth)
         .route("/replay/segments", post(replay::ingest_segment))
         .route("/replay/finish", post(replay::finish_recording))
         // Session Replay (dashboard - user auth, tier gated)
-        .route("/projects/:project_id/replay", get(replay::list_recordings))
         .route(
-            "/projects/:project_id/replay/:recording_id",
+            "/projects/{project_id}/replay",
+            get(replay::list_recordings),
+        )
+        .route(
+            "/projects/{project_id}/replay/{recording_id}",
             get(replay::get_recording),
         )
         .route(
-            "/projects/:project_id/replay/:recording_id/segments",
+            "/projects/{project_id}/replay/{recording_id}/segments",
             get(replay::get_segments),
         )
         .route(
-            "/projects/:project_id/issues/:issue_id/replay",
+            "/projects/{project_id}/issues/{issue_id}/replay",
             get(replay::get_issue_replay),
         )
         // Integrations
         .route("/integrations", get(integrations::list_integrations))
         .route(
-            "/integrations/oauth/:provider/authorize",
+            "/integrations/oauth/{provider}/authorize",
             get(integrations::oauth_authorize),
         )
         .route(
-            "/integrations/oauth/:provider/callback",
+            "/integrations/oauth/{provider}/callback",
             get(integrations::oauth_callback),
         )
         .route(
-            "/integrations/:integration_id",
+            "/integrations/{integration_id}",
             delete(integrations::delete_integration),
         )
         .route(
-            "/projects/:project_id/issues/:issue_id/links",
+            "/projects/{project_id}/issues/{issue_id}/links",
             get(integrations::list_issue_links).post(integrations::create_issue_link),
         )
         .route(
-            "/projects/:project_id/issues/:issue_id/links/:link_id",
+            "/projects/{project_id}/issues/{issue_id}/links/{link_id}",
             delete(integrations::delete_issue_link),
         )
         // Integration webhooks (no auth)
@@ -301,7 +307,7 @@ pub fn router() -> Router<AppState> {
             get(billing::list_members).post(billing::add_member),
         )
         .route(
-            "/organization/members/:member_user_id",
+            "/organization/members/{member_user_id}",
             patch(billing::update_member_role).delete(billing::remove_member),
         );
 
@@ -323,7 +329,7 @@ pub fn router() -> Router<AppState> {
         .route("/billing/seats", post(billing::update_seats))
         // Invoices
         .route("/billing/invoices", get(billing::list_invoices))
-        .route("/billing/invoices/:invoice_id", get(billing::get_invoice))
+        .route("/billing/invoices/{invoice_id}", get(billing::get_invoice))
         // Payment methods
         .route(
             "/billing/payment-methods",
@@ -335,7 +341,7 @@ pub fn router() -> Router<AppState> {
             post(billing::set_default_payment_method),
         )
         .route(
-            "/billing/payment-methods/:payment_method_id",
+            "/billing/payment-methods/{payment_method_id}",
             delete(billing::delete_payment_method),
         )
         // Coupons

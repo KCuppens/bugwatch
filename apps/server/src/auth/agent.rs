@@ -1,5 +1,4 @@
 use axum::{
-    async_trait,
     extract::FromRequestParts,
     http::{header::AUTHORIZATION, request::Parts, HeaderName},
 };
@@ -59,7 +58,6 @@ pub fn key_prefix(key: &str) -> String {
     }
 }
 
-#[async_trait]
 impl FromRequestParts<AppState> for AgentAuth {
     type Rejection = AppError;
 
