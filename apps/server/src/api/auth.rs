@@ -351,11 +351,6 @@ pub async fn login(
     // Reset failed attempts on successful login
     UserRepository::reset_failed_attempts(&state.db, &user.id).await?;
 
-    // Revoke prior sessions to enforce single active session per user.
-    if let Err(e) = SessionRepository::delete_by_user(&state.db, &user.id).await {
-        tracing::warn!(user_id = %user.id, error = %e, "Failed to clear prior sessions on login");
-    }
-
     // Create session, generate tokens, set cookies
     let session_expires = Utc::now() + Duration::seconds(state.config.jwt_refresh_expiration);
     let client_ip = extract_client_ip(&headers, state.config.trust_proxy, Some(peer_addr));
@@ -680,6 +675,8 @@ pub async fn change_password(
         .await
         .map_err(|e| AppError::Internal(format!("Failed to update password: {}", e)))?;
 
+    UserRepository::reset_failed_attempts(&state.db, &user.id).await?;
+
     // Invalidate all sessions so hijacked sessions cannot survive a password change.
     // The current request's session is already authenticated — the user must re-login.
     SessionRepository::delete_by_user(&state.db, &user.id).await?;
@@ -767,7 +764,7 @@ pub async fn forgot_password(
     sqlx::query(
         r#"
         INSERT INTO password_reset_tokens (id, user_id, token_hash, expires_at)
-        VALUES (?, ?, ?, ?)
+        VALUES ($1, $2, $3, $4)
         ON CONFLICT (user_id) DO UPDATE
             SET id = EXCLUDED.id,
                 token_hash = EXCLUDED.token_hash,
@@ -778,7 +775,7 @@ pub async fn forgot_password(
     .bind(&id)
     .bind(&user.id)
     .bind(&token_hash)
-    .bind(expires_at.to_rfc3339())
+    .bind(expires_at)
     .execute(&state.db)
     .await
     .map_err(|e| AppError::Internal(format!("Failed to create reset token: {}", e)))?;
@@ -802,10 +799,18 @@ pub async fn forgot_password(
             tracing::info!(user_id = %user.id, outcome = "reset_email_sent", "Password reset email sent");
         }
     } else {
+        let web_base = state
+            .config
+            .app_url
+            .trim_end_matches('/')
+            .trim_end_matches("/api")
+            .trim_end_matches('/');
+        let reset_url = format!("{}/reset-password?token={}", web_base, plain_token);
         tracing::info!(
             user_id = %user.id,
             outcome = "token_created",
-            "SMTP not configured — password reset token created (expires {}). Configure SMTP to deliver reset links.",
+            reset_url = %reset_url,
+            "SMTP not configured — use this link to reset the password (expires {})",
             expires_at
         );
     }
@@ -847,7 +852,7 @@ pub async fn reset_password(
         r#"
         UPDATE password_reset_tokens
         SET used_at = NOW()
-        WHERE token_hash = ? AND used_at IS NULL AND expires_at > NOW()
+        WHERE token_hash = $1 AND used_at IS NULL AND expires_at > NOW()
         RETURNING user_id
         "#,
     )
@@ -868,6 +873,11 @@ pub async fn reset_password(
     UserRepository::update_password(&state.db, &user_id, &new_hash)
         .await
         .map_err(|e| AppError::Internal(format!("Failed to update password: {}", e)))?;
+
+    // Clear any lockout so the user can immediately log in with the new password.
+    // Without this, a user who hit the failed-attempt limit before resetting would
+    // still see "Account is temporarily locked" even with the correct new password.
+    UserRepository::reset_failed_attempts(&state.db, &user_id).await?;
 
     // Invalidate all existing sessions for this user (force re-login with new password)
     SessionRepository::delete_by_user(&state.db, &user_id).await?;

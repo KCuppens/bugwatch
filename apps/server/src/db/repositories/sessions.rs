@@ -57,6 +57,7 @@ impl SessionRepository {
 
     /// Create a session using a caller-supplied ID so that tokens can be
     /// generated before the INSERT, eliminating the two-step placeholder write.
+    #[allow(clippy::too_many_arguments)]
     pub async fn create_with_id(
         pool: &DbPool,
         id: &str,
@@ -78,7 +79,7 @@ impl SessionRepository {
         .bind(id)
         .bind(user_id)
         .bind(&token_hash)
-        .bind(expires_at.to_rfc3339())
+        .bind(expires_at)
         .bind(ip_address)
         .bind(user_agent)
         .fetch_one(pool)
@@ -93,6 +94,7 @@ impl SessionRepository {
     /// Returns `Ok(true)` on success, `Ok(false)` if the session was not found or has already
     /// expired. The `AND expires_at > NOW()` predicate enforces expiry inside the transaction,
     /// closing the TOCTOU window between the caller's pre-check and the actual rotation.
+    #[allow(clippy::too_many_arguments)]
     pub async fn rotate(
         pool: &DbPool,
         old_session_id: &str,
@@ -130,7 +132,7 @@ impl SessionRepository {
         .bind(new_id)
         .bind(user_id)
         .bind(&token_hash)
-        .bind(expires_at.to_rfc3339())
+        .bind(expires_at)
         .bind(ip_address)
         .bind(user_agent)
         .execute(&mut *tx)
@@ -190,6 +192,7 @@ mod tests {
         Utc::now() + Duration::hours(1)
     }
 
+    #[allow(dead_code)]
     fn past() -> DateTime<Utc> {
         Utc::now() - Duration::hours(1)
     }

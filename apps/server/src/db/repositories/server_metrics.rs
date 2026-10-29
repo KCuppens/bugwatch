@@ -38,8 +38,8 @@ impl ServerRepository {
         .bind(hostname)
         .bind(os)
         .bind(kernel)
-        .bind(now.to_rfc3339())
-        .bind(now.to_rfc3339())
+        .bind(now)
+        .bind(now)
         .fetch_one(pool)
         .await?;
 
@@ -115,7 +115,7 @@ impl ServerRepository {
              WHERE is_active = TRUE AND last_seen < $1
              RETURNING *",
         )
-        .bind(threshold.to_rfc3339())
+        .bind(threshold)
         .fetch_all(pool)
         .await?;
 
@@ -127,6 +127,7 @@ pub struct ServerMetricsRepository;
 
 impl ServerMetricsRepository {
     /// Insert a new metrics snapshot
+    #[allow(clippy::too_many_arguments)]
     pub async fn create(
         pool: &DbPool,
         server_db_id: &str,
@@ -177,7 +178,7 @@ impl ServerMetricsRepository {
         .bind(disks_json)
         .bind(processes_json)
         .bind(docker_json)
-        .bind(now.to_rfc3339())
+        .bind(now)
         .fetch_one(pool)
         .await?;
 
@@ -210,8 +211,8 @@ impl ServerMetricsRepository {
              LIMIT 10000",
         )
         .bind(server_db_id)
-        .bind(from.to_rfc3339())
-        .bind(to.to_rfc3339())
+        .bind(from)
+        .bind(to)
         .fetch_all(pool)
         .await?;
 
@@ -220,8 +221,7 @@ impl ServerMetricsRepository {
 
     /// Cleanup metrics older than given number of days
     pub async fn cleanup_old_metrics(pool: &DbPool, retention_days: i32) -> Result<u64> {
-        let cutoff =
-            (chrono::Utc::now() - chrono::Duration::days(retention_days as i64)).to_rfc3339();
+        let cutoff = chrono::Utc::now() - chrono::Duration::days(retention_days as i64);
         let mut total_deleted: u64 = 0;
         loop {
             let result = sqlx::query(
@@ -231,7 +231,7 @@ impl ServerMetricsRepository {
                     LIMIT 5000
                 )",
             )
-            .bind(&cutoff)
+            .bind(cutoff)
             .execute(pool)
             .await?;
             let deleted = result.rows_affected();

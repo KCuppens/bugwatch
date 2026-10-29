@@ -12,7 +12,7 @@ use tokio::sync::Semaphore;
 use tracing::{info, warn};
 
 use crate::{
-    db::repositories::{BillingEventRepository, OrganizationRepository},
+    db::repositories::{organizations::BillingEventRepository, OrganizationRepository},
     AppState,
 };
 
@@ -281,7 +281,7 @@ fn verify_stripe_signature(payload: &[u8], signature_header: &str, secret: &str)
         let delta = now - ts;
         // delta > 0  => event is in the past (allow up to 300s)
         // delta < 0  => event is in the future (allow up to 60s of skew)
-        if delta > 300 || delta < -60 {
+        if !(-60..=300).contains(&delta) {
             tracing::warn!("Stripe webhook rejected: timestamp out of window ({ts})");
             return false;
         }
@@ -610,9 +610,9 @@ async fn handle_invoice_payment_failed(
                 org.stripe_subscription_id.as_deref(),
                 "past_due",
                 org.billing_interval.as_deref(),
-                org.current_period_start,
-                org.current_period_end,
-                org.cancel_at_period_end,
+                org.current_period_start.map(|t| t.0),
+                org.current_period_end.map(|t| t.0),
+                org.cancel_at_period_end.0,
             )
             .await
             {

@@ -135,7 +135,7 @@ impl PerformanceRepository {
             })
             .collect();
 
-        let mut qb: sqlx::QueryBuilder<sqlx::Any> = sqlx::QueryBuilder::new(
+        let mut qb: sqlx::QueryBuilder<sqlx::Postgres> = sqlx::QueryBuilder::new(
             "INSERT INTO spans (id, transaction_id, span_id, parent_span_id, op, description, status, duration_ms, started_at, finished_at, data, created_at) ",
         );
 
@@ -148,10 +148,10 @@ impl PerformanceRepository {
                 .push_bind(row.description)
                 .push_bind(row.status)
                 .push_bind(row.duration_ms)
-                .push_bind(row.started_at.to_rfc3339())
-                .push_bind(row.finished_at.to_rfc3339())
+                .push_bind(row.started_at)
+                .push_bind(row.finished_at)
                 .push_bind(row.data_str)
-                .push_bind(row.created_at.to_rfc3339());
+                .push_bind(row.created_at);
         });
 
         qb.build().execute(pool).await?;
@@ -189,8 +189,8 @@ impl PerformanceRepository {
             "#,
         )
         .bind(project_id)
-        .bind(start.to_rfc3339())
-        .bind(end.to_rfc3339())
+        .bind(start)
+        .bind(end)
         .fetch_one(pool)
         .await?;
 
@@ -220,7 +220,7 @@ impl PerformanceRepository {
         end: DateTime<Utc>,
         limit: i64,
     ) -> Result<Vec<TransactionAggregate>> {
-        let limit = limit.max(1).min(10_000);
+        let limit = limit.clamp(1, 10_000);
         let rows = sqlx::query_as::<
             _,
             (
@@ -248,8 +248,8 @@ impl PerformanceRepository {
             "#,
         )
         .bind(project_id)
-        .bind(start.to_rfc3339())
-        .bind(end.to_rfc3339())
+        .bind(start)
+        .bind(end)
         .bind(limit)
         .fetch_all(pool)
         .await?;
@@ -314,7 +314,7 @@ impl PerformanceRepository {
                 AVG(duration_ms) as p75,
                 MAX(duration_ms) as p95,
                 MAX(duration_ms) as p99,
-                CAST(COUNT(*) AS REAL) as throughput,
+                CAST(COUNT(*) AS FLOAT8) as throughput,
                 SUM(CASE WHEN status != 'ok' THEN 1 ELSE 0 END) as error_count
             FROM transactions
             WHERE project_id = $3 AND started_at >= $4 AND started_at <= $5
@@ -325,8 +325,8 @@ impl PerformanceRepository {
         .bind(interval_secs)
         .bind(interval_secs)
         .bind(project_id)
-        .bind(start.to_rfc3339())
-        .bind(end.to_rfc3339())
+        .bind(start)
+        .bind(end)
         .fetch_all(pool)
         .await?;
 
@@ -334,7 +334,7 @@ impl PerformanceRepository {
             .into_iter()
             .map(|r| {
                 let ts = chrono::DateTime::from_timestamp(r.0, 0)
-                    .unwrap_or_else(|| chrono::DateTime::UNIX_EPOCH);
+                    .unwrap_or(chrono::DateTime::UNIX_EPOCH);
                 TimeSeriesPoint {
                     timestamp: ts,
                     p50: r.1.unwrap_or(0.0),
@@ -352,7 +352,7 @@ impl PerformanceRepository {
 
     pub async fn cleanup_old_transactions(pool: &DbPool, days: i32) -> Result<u64> {
         // Spans are cascade-deleted via FK
-        let cutoff = (chrono::Utc::now() - chrono::Duration::days(days as i64)).to_rfc3339();
+        let cutoff = chrono::Utc::now() - chrono::Duration::days(days as i64);
         let mut total_deleted: u64 = 0;
         loop {
             let result = sqlx::query(
@@ -362,7 +362,7 @@ impl PerformanceRepository {
                     LIMIT 5000
                 )",
             )
-            .bind(&cutoff)
+            .bind(cutoff)
             .execute(pool)
             .await?;
             let deleted = result.rows_affected();

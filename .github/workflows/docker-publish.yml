@@ -4,13 +4,22 @@ on:
   push:
     branches: [main]
     tags: ["v*"]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.gitignore'
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
 
 env:
   REGISTRY: ghcr.io
 
 jobs:
   build-and-push:
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-4
+    timeout-minutes: 20
     permissions:
       contents: read
       packages: write
@@ -21,12 +30,18 @@ jobs:
           - image: ghcr.io/kcuppens/bugwatch-server
             dockerfile: apps/server/Dockerfile
             cache_scope: server
+            build_args: ""
           # apps/web/Dockerfile — pnpm monorepo build, published to GHCR for
           # managed/cloud deployments. For self-hosted installs, docker/Dockerfile.web
-          # is the standalone npm build (validated by ci.yml docker-build job).
+          # is the standalone npm build (validate-self-hosted-dockerfile below; the
+          # HookCI docker-build check keeps apps/web/package-lock.json in sync).
+          # NEXT_PUBLIC_API_URL is inlined at build time; single-origin deploy
+          # (Caddy routes /api/* to the server) → point at https://bugwatch.dev.
           - image: ghcr.io/kcuppens/bugwatch-web
             dockerfile: apps/web/Dockerfile
             cache_scope: web
+            build_args: |
+              NEXT_PUBLIC_API_URL=https://bugwatch.dev
 
     steps:
       - name: Checkout repository
@@ -59,13 +74,15 @@ jobs:
           context: .
           file: ${{ matrix.dockerfile }}
           push: true
+          build-args: ${{ matrix.build_args }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=${{ matrix.cache_scope }}
           cache-to: type=gha,mode=max,scope=${{ matrix.cache_scope }}
 
   validate-self-hosted-dockerfile:
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-4
+    timeout-minutes: 15
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4

@@ -1,5 +1,5 @@
 use anyhow::Result;
-use sqlx::{any::AnyPoolOptions, postgres::PgPoolOptions, AnyPool};
+use sqlx::postgres::PgPoolOptions;
 use std::time::Duration;
 use tracing::info;
 
@@ -9,12 +9,10 @@ pub mod repositories;
 pub mod test_helpers;
 pub mod types;
 
-pub type DbPool = AnyPool;
+pub type DbPool = sqlx::PgPool;
 
 /// Initialize the database connection pool with a configurable max size
 pub async fn init_with_pool_size(database_url: &str, max_connections: u32) -> Result<DbPool> {
-    sqlx::any::install_default_drivers();
-
     // Keep a warm floor of connections so bursty traffic doesn't pay the
     // full handshake cost on the first few requests. ~15% of max, clamped.
     let min_connections = max_connections.saturating_div(7).clamp(2, 25);
@@ -23,7 +21,7 @@ pub async fn init_with_pool_size(database_url: &str, max_connections: u32) -> Re
         max_connections, min_connections, database_url
     );
 
-    let pool = AnyPoolOptions::new()
+    let pool = PgPoolOptions::new()
         .max_connections(max_connections)
         .min_connections(min_connections)
         .acquire_timeout(Duration::from_secs(30))
@@ -32,12 +30,7 @@ pub async fn init_with_pool_size(database_url: &str, max_connections: u32) -> Re
         .connect(database_url)
         .await?;
 
-    // Run migrations using a direct PgPool for Postgres-specific migration SQL
-    let pg_pool = PgPoolOptions::new()
-        .max_connections(1)
-        .connect(database_url)
-        .await?;
-    run_migrations(&pg_pool).await?;
+    run_migrations(&pool).await?;
 
     info!("Database initialized successfully");
     Ok(pool)
@@ -147,6 +140,62 @@ pub(crate) async fn run_migrations(pool: &sqlx::PgPool) -> Result<()> {
             "022_perf_indexes",
             include_str!("../../migrations/022_perf_indexes_pg.sql"),
         ),
+        (
+            "023_server_metrics_chart_index",
+            include_str!("../../migrations/023_server_metrics_chart_index_pg.sql"),
+        ),
+        (
+            "024_password_reset_tokens",
+            include_str!("../../migrations/024_password_reset_tokens_pg.sql"),
+        ),
+        (
+            "025_password_reset_unique_user",
+            include_str!("../../migrations/025_password_reset_unique_user_pg.sql"),
+        ),
+        (
+            "026_nextjs_digest_index",
+            include_str!("../../migrations/026_nextjs_digest_index_pg.sql"),
+        ),
+        (
+            "027_alert_logs_project_index",
+            include_str!("../../migrations/027_alert_logs_project_index_pg.sql"),
+        ),
+        (
+            "028_issues_trgm_index",
+            include_str!("../../migrations/028_issues_trgm_index_pg.sql"),
+        ),
+        (
+            "029_billing_events_stripe_event_unique",
+            include_str!("../../migrations/029_billing_events_stripe_event_unique_pg.sql"),
+        ),
+        (
+            "030_alert_logs_sent_index",
+            include_str!("../../migrations/030_alert_logs_sent_index.sql"),
+        ),
+        (
+            "031_sessions_expires_at_index",
+            include_str!("../../migrations/031_sessions_expires_at_index.sql"),
+        ),
+        (
+            "032_issues_trgm_index",
+            include_str!("../../migrations/032_issues_trgm_index.sql"),
+        ),
+        (
+            "033_server_metrics_composite_index",
+            include_str!("../../migrations/033_server_metrics_composite_index.sql"),
+        ),
+        (
+            "034_log_monitoring",
+            include_str!("../../migrations/034_log_monitoring_pg.sql"),
+        ),
+        (
+            "035_project_logo_url",
+            include_str!("../../migrations/035_project_logo_url_pg.sql"),
+        ),
+        (
+            "036_project_organization_backfill",
+            include_str!("../../migrations/036_project_organization_backfill_pg.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {
@@ -158,15 +207,28 @@ pub(crate) async fn run_migrations(pool: &sqlx::PgPool) -> Result<()> {
                 .unwrap_or(false);
 
         if !already_applied {
-            // Atomic: SQL + migration record in one transaction so a crash between
-            // the two steps cannot cause the migration to re-run on the next start.
-            let mut tx = pool.begin().await?;
-            sqlx::raw_sql(sql).execute(&mut *tx).await?;
-            sqlx::query("INSERT INTO _migrations (name) VALUES ($1)")
-                .bind(name)
-                .execute(&mut *tx)
-                .await?;
-            tx.commit().await?;
+            if sql.to_ascii_uppercase().contains("CONCURRENTLY") {
+                // CREATE INDEX CONCURRENTLY cannot run inside a transaction block,
+                // so run the migration directly on the pool (auto-commit) and
+                // record it separately. These migrations use IF NOT EXISTS, so a
+                // crash between the two steps is safe to retry on next start.
+                sqlx::raw_sql(sql).execute(pool).await?;
+                sqlx::query("INSERT INTO _migrations (name) VALUES ($1)")
+                    .bind(name)
+                    .execute(pool)
+                    .await?;
+            } else {
+                // Atomic: SQL + migration record in one transaction so a crash
+                // between the two steps cannot cause the migration to re-run on
+                // the next start.
+                let mut tx = pool.begin().await?;
+                sqlx::raw_sql(sql).execute(&mut *tx).await?;
+                sqlx::query("INSERT INTO _migrations (name) VALUES ($1)")
+                    .bind(name)
+                    .execute(&mut *tx)
+                    .await?;
+                tx.commit().await?;
+            }
             info!("Migration {} completed", name);
         } else {
             info!("Migration {} skipped (already applied)", name);

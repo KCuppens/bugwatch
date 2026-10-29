@@ -64,7 +64,7 @@ pub async fn list(
     }
 
     let page = params.page.max(1);
-    let per_page = params.per_page.min(100).max(1);
+    let per_page = params.per_page.clamp(1, 100);
     let offset = ((page - 1) * per_page) as i64;
 
     let comments =

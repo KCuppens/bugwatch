@@ -100,6 +100,10 @@ export interface BugwatchOptions {
       | "browser_noise"
       | "session_rate_limit"
   ) => void;
+  /** Server or hostname where this process is running */
+  serverName?: string;
+  /** Runtime info (name + version) to attach to all events */
+  runtime?: RuntimeInfo;
 }
 
 /**
