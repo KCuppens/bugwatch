@@ -911,7 +911,7 @@ fn generate_reset_token() -> String {
 }
 
 fn hash_reset_token(token: &str, secret: &[u8]) -> String {
-    use hmac::{Hmac, Mac};
+    use hmac::{Hmac, KeyInit, Mac};
     use sha2::Sha256;
     type HmacSha256 = Hmac<Sha256>;
     let mut mac = HmacSha256::new_from_slice(secret).expect("HMAC accepts keys of any length");

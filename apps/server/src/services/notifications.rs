@@ -1198,7 +1198,7 @@ fn html_escape(s: &str) -> String {
 
 /// Compute HMAC-SHA256 signature for webhook payloads
 pub(crate) fn compute_hmac_signature(payload: &str, secret: &str) -> Result<String> {
-    use hmac::{Hmac, Mac};
+    use hmac::{Hmac, KeyInit, Mac};
     use sha2::Sha256;
 
     type HmacSha256 = Hmac<Sha256>;

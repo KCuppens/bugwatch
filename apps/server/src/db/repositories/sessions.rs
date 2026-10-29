@@ -1,7 +1,7 @@
 use crate::db::{models::Session, DbPool};
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
 use uuid::Uuid;
 
