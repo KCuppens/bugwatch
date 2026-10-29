@@ -1,6 +1,6 @@
 "use client";
 
-import { Component, useEffect, useMemo, type ReactNode, type ErrorInfo } from "react";
+import { Component, useEffect, useMemo, type ReactNode, type ReactElement, type ErrorInfo } from "react";
 import {
   init as coreInit,
   captureException,
@@ -141,6 +141,7 @@ function setupGlobalErrorHandler(): () => void {
   const originalOnError = window.onerror;
 
   window.onerror = (message, source, lineno, colno, error) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     if (error && !(error as any).__bugwatch_captured && !isBrowserExtensionError(error)) {
       captureException(error, {
         tags: { mechanism: "onerror" },
@@ -166,6 +167,7 @@ function setupGlobalErrorHandler(): () => void {
 function setupUnhandledRejectionHandler(): () => void {
   const handler = (event: PromiseRejectionEvent) => {
     // Skip if already captured by fetch instrumentation
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     if (event.reason && (event.reason as any).__bugwatch_captured) {
       return;
     }
@@ -464,6 +466,7 @@ function setupFetchInstrumentation(options: ClientOptions): () => void {
 
       // Mark as already captured so unhandledrejection handler skips it
       if (error instanceof Error) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         (error as any).__bugwatch_captured = true;
       }
 
@@ -576,7 +579,7 @@ interface BugwatchProviderProps {
 export function BugwatchProvider({
   options,
   children,
-}: BugwatchProviderProps): JSX.Element {
+}: BugwatchProviderProps): ReactElement {
   // Serialize options to a stable string so useEffect doesn't re-run
   // on every render when options object is passed inline.
   const optionsKey = useMemo(
@@ -602,7 +605,6 @@ export function BugwatchProvider({
     return () => {
       closeClient();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [optionsKey]);
 
   return <BugwatchErrorBoundary>{children}</BugwatchErrorBoundary>;

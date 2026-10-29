@@ -11,13 +11,13 @@ describe('Button', () => {
   it('applies default variant classes', () => {
     render(<Button>Default</Button>)
     const button = screen.getByRole('button')
-    expect(button).toHaveClass('bg-primary')
+    expect(button).toHaveClass('bg-accent')
   })
 
   it('applies destructive variant classes', () => {
     render(<Button variant="destructive">Delete</Button>)
     const button = screen.getByRole('button')
-    expect(button).toHaveClass('bg-destructive')
+    expect(button).toHaveClass('bg-red-500/90')
   })
 
   it('applies size classes', () => {

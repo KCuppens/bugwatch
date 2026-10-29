@@ -56,6 +56,7 @@ pub struct IntegrationRepository;
 
 impl IntegrationRepository {
     /// Create a new integration
+    #[allow(clippy::too_many_arguments)]
     pub async fn create(
         pool: &DbPool,
         organization_id: &str,
@@ -92,7 +93,7 @@ impl IntegrationRepository {
         .bind(provider)
         .bind(&encrypted_access)
         .bind(encrypted_refresh.as_deref())
-        .bind(token_expires_at.map(|dt| dt.to_rfc3339()))
+        .bind(token_expires_at)
         .bind(external_user_id)
         .bind(external_username)
         .bind(config)
@@ -171,7 +172,7 @@ impl IntegrationRepository {
         )
         .bind(&encrypted_access)
         .bind(encrypted_refresh.as_deref())
-        .bind(token_expires_at.map(|dt| dt.to_rfc3339()))
+        .bind(token_expires_at)
         .bind(id)
         .execute(pool)
         .await?;
@@ -188,6 +189,7 @@ pub struct IssueLinkRepository;
 
 impl IssueLinkRepository {
     /// Create a new issue link
+    #[allow(clippy::too_many_arguments)]
     pub async fn create(
         pool: &DbPool,
         issue_id: &str,

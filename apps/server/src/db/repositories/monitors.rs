@@ -9,6 +9,7 @@ use uuid::Uuid;
 pub struct MonitorRepository;
 
 impl MonitorRepository {
+    #[allow(clippy::too_many_arguments)]
     pub async fn create(
         pool: &DbPool,
         project_id: &str,
@@ -41,7 +42,7 @@ impl MonitorRepository {
         .bind(expected_status)
         .bind(headers)
         .bind(body)
-        .bind(now.to_rfc3339())
+        .bind(now)
         .fetch_one(pool)
         .await
         .map_err(Into::into)
@@ -126,9 +127,10 @@ impl MonitorRepository {
         Ok((monitors, total.0))
     }
 
+    #[allow(dead_code)]
     pub async fn list_active(pool: &DbPool) -> Result<Vec<Monitor>> {
         sqlx::query_as::<_, Monitor>(
-            "SELECT * FROM monitors WHERE is_active = 1 ORDER BY created_at DESC",
+            "SELECT * FROM monitors WHERE is_active = TRUE ORDER BY created_at DESC",
         )
         .fetch_all(pool)
         .await
@@ -147,9 +149,12 @@ impl MonitorRepository {
                 WHERE is_active = TRUE
                   AND (
                       last_checked_at IS NULL
-                      OR (julianday(CURRENT_TIMESTAMP) - julianday(last_checked_at)) * 86400.0 >= interval_seconds
+                      OR EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - last_checked_at)) >= interval_seconds
                   )
-                ORDER BY last_checked_at ASC
+                -- NULLS FIRST: never-checked monitors must win the batch, otherwise a
+                -- standing backlog of due monitors starves new ones of their first check
+                -- forever (Postgres sorts NULLs last under plain ASC).
+                ORDER BY last_checked_at ASC NULLS FIRST
                 LIMIT $1
             )
             RETURNING *
@@ -186,6 +191,7 @@ impl MonitorRepository {
         q.fetch_all(pool).await.map_err(Into::into)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn update(
         pool: &DbPool,
         id: &str,
@@ -244,7 +250,7 @@ impl MonitorRepository {
     ) -> Result<()> {
         sqlx::query("UPDATE monitors SET current_status = $1, last_checked_at = $2 WHERE id = $3")
             .bind(status)
-            .bind(checked_at.to_rfc3339())
+            .bind(checked_at)
             .bind(id)
             .execute(pool)
             .await?;
@@ -279,7 +285,7 @@ impl MonitorCheckRepository {
         .bind(response_time_ms)
         .bind(status_code)
         .bind(error_message)
-        .bind(now.to_rfc3339())
+        .bind(now)
         .fetch_one(pool)
         .await
         .map_err(Into::into)
@@ -312,20 +318,20 @@ impl MonitorCheckRepository {
     ) -> Result<(i64, i64, Option<f64>)> {
         // Get total checks and up checks in the time window
         // Use COALESCE to ensure SUM never returns NULL (which can't deserialize to i64)
-        let cutoff = (chrono::Utc::now() - chrono::Duration::hours(hours as i64)).to_rfc3339();
+        let cutoff = chrono::Utc::now() - chrono::Duration::hours(hours as i64);
         let stats: (i64, i64, Option<f64>) = sqlx::query_as(
             r#"
             SELECT
                 COUNT(*) as total,
                 COALESCE(SUM(CASE WHEN status = 'up' THEN 1 ELSE 0 END), 0) as up_count,
-                AVG(response_time_ms) as avg_response
+                AVG(response_time_ms)::double precision as avg_response
             FROM monitor_checks
             WHERE monitor_id = $1
             AND checked_at >= $2
             "#,
         )
         .bind(monitor_id)
-        .bind(&cutoff)
+        .bind(cutoff)
         .fetch_one(pool)
         .await?;
 
@@ -343,7 +349,7 @@ impl MonitorCheckRepository {
             return Ok(std::collections::HashMap::new());
         }
 
-        let cutoff = (chrono::Utc::now() - chrono::Duration::hours(hours as i64)).to_rfc3339();
+        let cutoff = chrono::Utc::now() - chrono::Duration::hours(hours as i64);
         let n = monitor_ids.len();
         let placeholders = (1..=n)
             .map(|i| format!("${}", i))
@@ -355,7 +361,7 @@ impl MonitorCheckRepository {
                 monitor_id,
                 COUNT(*) as total,
                 COALESCE(SUM(CASE WHEN status = 'up' THEN 1 ELSE 0 END), 0) as up_count,
-                AVG(response_time_ms) as avg_response
+                AVG(response_time_ms)::double precision as avg_response
             FROM monitor_checks
             WHERE monitor_id IN ({})
               AND checked_at >= ${}
@@ -368,7 +374,7 @@ impl MonitorCheckRepository {
         for mid in monitor_ids {
             q = q.bind(mid);
         }
-        let rows = q.bind(&cutoff).fetch_all(pool).await?;
+        let rows = q.bind(cutoff).fetch_all(pool).await?;
 
         Ok(rows
             .into_iter()
@@ -414,9 +420,9 @@ impl MonitorCheckRepository {
     }
 
     pub async fn cleanup_old_checks(pool: &DbPool, days: i32) -> Result<u64> {
-        let cutoff = (chrono::Utc::now() - chrono::Duration::days(days as i64)).to_rfc3339();
+        let cutoff = chrono::Utc::now() - chrono::Duration::days(days as i64);
         let result = sqlx::query("DELETE FROM monitor_checks WHERE checked_at < $1")
-            .bind(&cutoff)
+            .bind(cutoff)
             .execute(pool)
             .await?;
 
@@ -461,9 +467,9 @@ impl MonitorIncidentRepository {
         )
         .bind(&id)
         .bind(monitor_id)
-        .bind(now.to_rfc3339())
+        .bind(now)
         .bind(cause)
-        .bind(now.to_rfc3339())
+        .bind(now)
         .fetch_one(pool)
         .await
         .map_err(Into::into)
@@ -480,7 +486,7 @@ impl MonitorIncidentRepository {
             RETURNING *
             "#,
         )
-        .bind(now.to_rfc3339())
+        .bind(now)
         .bind(id)
         .fetch_one(pool)
         .await
@@ -815,7 +821,7 @@ mod tests {
     #[tokio::test]
     async fn count_by_owner() {
         let pool = test_any_pool().await;
-        sqlx::query("INSERT INTO projects (id, name, slug, api_key, api_key_hash, owner_id) VALUES (?, ?, ?, ?, '', ?)")
+        sqlx::query("INSERT INTO projects (id, name, slug, api_key, api_key_hash, owner_id) VALUES ($1, $2, $3, $4, '', $5)")
             .bind("proj-cbo").bind("P").bind("slug-cbo").bind("key-cbo").bind("owner-x")
             .execute(&pool).await.unwrap();
         MonitorRepository::create(
@@ -845,7 +851,7 @@ mod tests {
     #[tokio::test]
     async fn count_by_organization() {
         let pool = test_any_pool().await;
-        sqlx::query("INSERT INTO projects (id, name, slug, api_key, api_key_hash, owner_id, organization_id) VALUES (?, ?, ?, ?, '', ?, ?)")
+        sqlx::query("INSERT INTO projects (id, name, slug, api_key, api_key_hash, owner_id, organization_id) VALUES ($1, $2, $3, $4, '', $5, $6)")
             .bind("proj-cborg").bind("P").bind("slug-cborg").bind("key-cborg").bind("u1").bind("org-x")
             .execute(&pool).await.unwrap();
         MonitorRepository::create(

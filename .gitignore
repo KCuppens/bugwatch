@@ -39,6 +39,9 @@ test-results/
 # Turbo
 .turbo/
 
+# HookCI caches (scripts/ci/tools.sh, scripts/ci/setup.sh)
+.hookci/
+
 # Rust
 Cargo.lock
 *.rs.bk

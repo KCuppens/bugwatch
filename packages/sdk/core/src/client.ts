@@ -70,12 +70,22 @@ class RingBuffer<T> {
 }
 
 const SDK_NAME = "@bugwatch/core";
-const SDK_VERSION = "0.1.0";
+const SDK_VERSION = "0.4.1";
 
 /**
  * Generate a unique event ID
  */
 function generateEventId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID().replace(/-/g, "");
+  }
+  // Fallback: use getRandomValues if available (cryptographically secure)
+  if (typeof crypto !== "undefined" && typeof crypto.getRandomValues === "function") {
+    const arr = new Uint8Array(16);
+    crypto.getRandomValues(arr);
+    return Array.from(arr, (b) => b.toString(16).padStart(2, "0")).join("");
+  }
+  // Last resort fallback (not cryptographically secure)
   const timestamp = Date.now().toString(36);
   const random = Math.random().toString(36).substring(2, 10);
   return `${timestamp}${random}`;
@@ -118,6 +128,11 @@ export class Bugwatch implements BugwatchClient {
       throw new Error(
         `[Bugwatch] Invalid maxErrorsPerSession: ${mes}. Must be a non-negative integer (use 0 to disable).`
       );
+    }
+
+    const key = this.options.apiKey?.trim();
+    if (key && !key.startsWith("bw_")) {
+      console.warn('[Bugwatch] apiKey does not start with "bw_" — verify the correct project key is being used.');
     }
 
     const ep = this.options.endpoint ?? "";
@@ -164,10 +179,11 @@ export class Bugwatch implements BugwatchClient {
   }
 
   /**
-   * Get SDK options
+   * Get SDK options (apiKey is masked — use only for non-secret config)
    */
   getOptions(): BugwatchOptions {
-    return this.options;
+    const { apiKey, ...rest } = this.options;
+    return { ...rest, apiKey: apiKey ? "[Filtered]" : "" };
   }
 
   /**
@@ -200,16 +216,18 @@ export class Bugwatch implements BugwatchClient {
       return "";
     }
 
-    this.transport.send(processedEvent).catch((err) => {
+    // Narrow to const so the closure captures the non-null type
+    const sentEvent: ErrorEvent = processedEvent;
+    this.transport.send(sentEvent).catch((err) => {
       if (this.options.debug) console.error("[Bugwatch] transport.send failed:", err);
       try {
-        this.options.onDropped?.(processedEvent.event_id, "network_error");
+        this.options.onDropped?.(sentEvent.event_id, "network_error");
       } catch (e) {
         if (this.options.debug) console.error("[Bugwatch] onDropped callback threw:", e);
       }
     });
 
-    return processedEvent.event_id;
+    return sentEvent.event_id;
   }
 
   /**
@@ -470,6 +488,9 @@ export class Bugwatch implements BugwatchClient {
     // Request context takes precedence over global context
     const mergedContext = getMergedContext(this.user, this.tags, this.extra, this.breadcrumbs.toArray());
 
+    // Destructure fields that need merging so ...restPartial doesn't overwrite them
+    const { tags: partialTags, extra: partialExtra, breadcrumbs: partialBreadcrumbs, ...restPartial } = partial;
+
     const event: ErrorEvent = {
       event_id: generateEventId(),
       timestamp: new Date().toISOString(),
@@ -478,14 +499,16 @@ export class Bugwatch implements BugwatchClient {
       message: partial.message || "",
       environment: this.options.environment,
       release: this.options.release,
-      tags: { ...mergedContext.tags, ...partial.tags },
-      extra: { ...mergedContext.extra, ...partial.extra },
-      breadcrumbs: mergedContext.breadcrumbs,
+      ...(this.options.serverName && { server_name: this.options.serverName }),
+      ...(this.options.runtime && { runtime: this.options.runtime }),
+      tags: { ...mergedContext.tags, ...partialTags },
+      extra: { ...mergedContext.extra, ...partialExtra },
+      breadcrumbs: partialBreadcrumbs ?? mergedContext.breadcrumbs,
       sdk: {
         name: SDK_NAME,
         version: SDK_VERSION,
       },
-      ...partial,
+      ...restPartial,
     };
 
     // Add user context (merged context user + partial user)
@@ -498,10 +521,9 @@ export class Bugwatch implements BugwatchClient {
       event.session_id = this.sessionId;
     }
 
-    // Generate fingerprint if exception exists
+    // Generate fingerprint if exception exists (stored top-level so server uses it for grouping)
     if (event.exception) {
-      const fingerprint = fingerprintFromException(event.exception);
-      event.tags = { ...event.tags, fingerprint };
+      event.fingerprint = fingerprintFromException(event.exception);
     }
 
     return event;
@@ -562,8 +584,8 @@ export class Bugwatch implements BugwatchClient {
 
       // Send via transport (sendTransaction is optional on the Transport interface)
       if (this.transport.sendTransaction) {
-        this.transport.sendTransaction(event).catch(() => {
-          // Errors are logged by transport
+        this.transport.sendTransaction(event).catch((err) => {
+          if (this.options.debug) console.error("[Bugwatch] sendTransaction failed:", err);
         });
       }
     };

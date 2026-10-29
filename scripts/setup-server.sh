@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Bugwatch server setup script
-# Run once on a fresh server to configure boot recovery and directory structure.
+# Bugwatch server setup script (generic single-server reference).
+# NOTE: production runs as the `buguno` cell on the shared infrauno host, not this
+# standalone layout. See deploy/infrauno/README.md for the real deployment.
+# Run once on a fresh (dedicated) server to configure boot recovery and dirs.
 #
 # Usage: sudo bash scripts/setup-server.sh
 
@@ -38,6 +40,12 @@ JWT_SECRET=CHANGE_ME_MIN_32_CHARS
 
 # Database
 POSTGRES_PASSWORD=CHANGE_ME
+
+# Hosted MCP (bugwatch.dev/mcp)
+# Required for the bugwatch-mcp container to start. Single shared agent key.
+BUGWATCH_AGENT_KEY=CHANGE_ME_bw_agent_key
+# Shared bearer secret gating /mcp. Strongly recommended (empty = open endpoint).
+MCP_AUTH_TOKEN=CHANGE_ME_random_secret
 
 # SMTP (optional)
 SMTP_HOST=

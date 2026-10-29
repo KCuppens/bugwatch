@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Generic single-server blue-green reference (the "gold pattern"). NOTE: production
+# does NOT use this — it runs as the `buguno` cell on the shared infrauno host via
+# /opt/infrauno/scripts/deploy-cell.sh. See deploy/infrauno/README.md.
 set -euo pipefail
 
 DEPLOY_DIR="/opt/bugwatch"
@@ -101,6 +104,15 @@ fi
 # Only check web if server is healthy (avoid wasting 60s)
 if [[ "$HEALTHY" == true ]]; then
     if ! wait_for_healthy "bugwatch-web-${NEXT_COLOR}"; then
+        HEALTHY=false
+    fi
+fi
+
+# Hosted MCP server. Its healthcheck fails if BUGWATCH_AGENT_KEY is missing from
+# .env, so a misconfigured deploy rolls back cleanly instead of shipping a broken
+# /mcp endpoint.
+if [[ "$HEALTHY" == true ]]; then
+    if ! wait_for_healthy "bugwatch-mcp-${NEXT_COLOR}"; then
         HEALTHY=false
     fi
 fi

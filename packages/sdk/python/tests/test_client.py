@@ -98,11 +98,13 @@ class TestBugwatchClient:
 
     def test_user_context(self) -> None:
         """Should include user context in events."""
-        self.client.set_user(UserContext(
-            id="user-123",
-            email="test@example.com",
-            username="testuser",
-        ))
+        self.client.set_user(
+            UserContext(
+                id="user-123",
+                email="test@example.com",
+                username="testuser",
+            )
+        )
 
         self.client.capture_message("test")
 
@@ -145,6 +147,7 @@ class TestBugwatchClient:
 
     def test_before_send_hook(self) -> None:
         """Should call before_send hook."""
+
         def before_send(event):
             event.tags["modified"] = "true"
             return event
@@ -159,6 +162,7 @@ class TestBugwatchClient:
 
     def test_before_send_can_drop_event(self) -> None:
         """before_send returning None should drop event."""
+
         def before_send(event):
             return None
 
@@ -177,6 +181,7 @@ class TestGlobalFunctions:
     def setup_method(self) -> None:
         """Reset global client."""
         import bugwatch
+
         bugwatch._client = None
 
     def test_init_returns_client(self) -> None:

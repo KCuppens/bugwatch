@@ -57,7 +57,7 @@ fn evaluate_metric_condition(
         } => {
             let applies = server_id.is_none() || server_id.as_deref() == Some(server_db_id);
             applies
-                .then(|| metric.cpu_usage_percent)
+                .then_some(metric.cpu_usage_percent)
                 .flatten()
                 .filter(|&cpu| cpu >= *threshold_percent)
                 .map(|cpu| {
@@ -73,7 +73,7 @@ fn evaluate_metric_condition(
         } => {
             let applies = server_id.is_none() || server_id.as_deref() == Some(server_db_id);
             applies
-                .then(|| metric.mem_usage_percent)
+                .then_some(metric.mem_usage_percent)
                 .flatten()
                 .filter(|&mem| mem >= *threshold_percent)
                 .map(|mem| {
@@ -545,7 +545,7 @@ impl AlertingService {
                     trigger_id: Some(server.id.clone()),
                     url: Some(format!(
                         "{}/dashboard/server?project={}",
-                        app_url, &server.project_id
+                        app_url, server.project_id
                     )),
                     timestamp: chrono::Utc::now().to_rfc3339(),
                     project_id: None,

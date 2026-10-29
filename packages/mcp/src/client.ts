@@ -30,13 +30,18 @@ export class BugwatchClient {
   private baseUrl: string;
   private apiKey: string;
 
-  constructor() {
-    const apiKey = process.env.BUGWATCH_API_KEY;
+  constructor(config?: { apiKey?: string; baseUrl?: string }) {
+    // Accept an explicit key (used by the hosted HTTP server) or fall back to
+    // the environment (stdio mode). BUGWATCH_AGENT_KEY is accepted as an alias
+    // so the documented `bw_agent_*` env name works too.
+    const apiKey = config?.apiKey ?? process.env.BUGWATCH_API_KEY ?? process.env.BUGWATCH_AGENT_KEY;
     if (!apiKey) {
-      throw new Error("BUGWATCH_API_KEY environment variable is required. " + "Set it to your Bugwatch API key.");
+      throw new Error(
+        "A Bugwatch API key is required. Set BUGWATCH_API_KEY (or BUGWATCH_AGENT_KEY), or pass one to BugwatchClient."
+      );
     }
     this.apiKey = apiKey;
-    this.baseUrl = (process.env.BUGWATCH_URL || "https://api.bugwatch.dev").replace(/\/+$/, "");
+    this.baseUrl = (config?.baseUrl ?? process.env.BUGWATCH_URL ?? "https://api.bugwatch.dev").replace(/\/+$/, "");
   }
 
   private async request<T>(path: string, options: RequestInit = {}): Promise<T> {
@@ -120,7 +125,7 @@ export class BugwatchClient {
   async searchIssues(
     projectId: string,
     query: string,
-    filters?: { status?: string; level?: string }
+    filters?: { status?: string; level?: string; page?: number; perPage?: number }
   ): Promise<PaginatedResponse<Issue>> {
     const body: Record<string, unknown> = {
       filters: {
@@ -128,7 +133,9 @@ export class BugwatchClient {
         status: filters?.status ? [filters.status] : undefined,
         level: filters?.level ? [filters.level] : undefined,
       },
-      per_page: 50,
+      // Server clamps per_page to a max of 100.
+      page: filters?.page ?? 1,
+      per_page: filters?.perPage ?? 50,
     };
     return this.request<PaginatedResponse<Issue>>(`/api/v1/projects/${projectId}/issues/_search`, {
       method: "POST",
