@@ -322,7 +322,6 @@ mod tests {
         body::Body,
         http::{Request, StatusCode},
     };
-    use serde_json::Value;
     use tower::ServiceExt;
 
     async fn make_app() -> axum::Router {

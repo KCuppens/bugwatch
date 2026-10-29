@@ -213,7 +213,7 @@ describe("withBugwatchApi", () => {
     await expect(
       wrapped({ method: "GET", url: "/api", headers: { authorization: "Bearer s", "content-type": "json" } }, {})
     ).rejects.toThrow();
-    const callArgs = vi.mocked(core.captureException).mock.calls[0][1];
+    const callArgs = vi.mocked(core.captureException).mock.calls[0]![1];
     expect(callArgs?.request?.headers?.authorization).toBe("[Filtered]");
     expect(callArgs?.request?.headers?.["content-type"]).toBe("json");
   });

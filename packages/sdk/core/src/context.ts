@@ -56,6 +56,7 @@ function getAsyncLocalStorage(): import("async_hooks").AsyncLocalStorage<ScopedC
 
   try {
     // Dynamic import for Node.js environments
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const asyncHooks = require("async_hooks") as typeof import("async_hooks");
     asyncLocalStorage = new asyncHooks.AsyncLocalStorage<ScopedContext>();
     return asyncLocalStorage;
