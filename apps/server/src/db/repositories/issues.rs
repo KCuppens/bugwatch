@@ -35,8 +35,8 @@ impl IssueRepository {
         .bind(fingerprint)
         .bind(title)
         .bind(level)
-        .bind(now.to_rfc3339())
-        .bind(now.to_rfc3339())
+        .bind(now)
+        .bind(now)
         .bind(environment)
         .fetch_one(pool)
         .await?;
@@ -54,6 +54,7 @@ impl IssueRepository {
             .map_err(Into::into)
     }
 
+    #[allow(dead_code)]
     pub async fn find_by_fingerprint(
         pool: &DbPool,
         project_id: &str,
@@ -69,6 +70,7 @@ impl IssueRepository {
         .map_err(Into::into)
     }
 
+    #[allow(dead_code)]
     pub async fn update_status(pool: &DbPool, id: &str, status: &str) -> Result<()> {
         sqlx::query("UPDATE issues SET status = $1 WHERE id = $2")
             .bind(status)
@@ -87,13 +89,13 @@ impl IssueRepository {
         limit: i64,
         offset: i64,
     ) -> Result<Vec<Issue>> {
-        let limit = limit.max(1).min(1000);
-        let offset = offset.max(0).min(100_000);
+        let limit = limit.clamp(1, 1000);
+        let offset = offset.clamp(0, 100_000);
 
         // Use QueryBuilder instead of manual placeholder tracking —
         // every value goes through push_bind so there's no risk of a stray
         // filter string bypassing parameterisation.
-        let mut qb: sqlx::QueryBuilder<sqlx::Any> =
+        let mut qb: sqlx::QueryBuilder<sqlx::Postgres> =
             sqlx::QueryBuilder::new("SELECT * FROM issues WHERE project_id = ");
         qb.push_bind(project_id);
 
@@ -359,7 +361,7 @@ fn build_filter_clauses(
         (filters.users_lt, "user_count <"),
     ] {
         if let Some(v) = opt_val {
-            query.push_str(&format!(" AND {} ${}", clause, *param_idx));
+            query.push_str(&format!(" AND {} ${}::bigint", clause, *param_idx));
             *param_idx += 1;
             params.push(v.to_string());
         }
@@ -541,10 +543,10 @@ impl IssueRepository {
             r#"
             SELECT
                 project_id,
-                SUM(CASE WHEN status = 'unresolved' THEN 1 ELSE 0 END) as unresolved_count,
-                COALESCE(SUM(count), 0) as total_events,
-                COALESCE(SUM(user_count), 0) as total_users,
-                SUM(CASE WHEN status = 'unresolved' AND (level = 'fatal' OR level = 'error') THEN 1 ELSE 0 END) as critical_count
+                CAST(SUM(CASE WHEN status = 'unresolved' THEN 1 ELSE 0 END) AS BIGINT) as unresolved_count,
+                CAST(COALESCE(SUM(count), 0) AS BIGINT) as total_events,
+                CAST(COALESCE(SUM(user_count), 0) AS BIGINT) as total_users,
+                CAST(SUM(CASE WHEN status = 'unresolved' AND (level = 'fatal' OR level = 'error') THEN 1 ELSE 0 END) AS BIGINT) as critical_count
             FROM issues
             WHERE project_id IN ({})
             GROUP BY project_id

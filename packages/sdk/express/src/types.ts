@@ -1,4 +1,4 @@
-import type { Request, Response, NextFunction, RequestHandler, ErrorRequestHandler } from "express";
+import type { Request, Response, NextFunction } from "express";
 import type { UserContext } from "@bugwatch/core";
 
 /**
@@ -51,6 +51,8 @@ export interface BugwatchRequest extends Request {
   bugwatch?: {
     eventId?: string;
     startTime: number;
+    /** Per-request correlation ID included in all breadcrumbs and error events */
+    requestId?: string;
   };
 }
 

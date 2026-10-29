@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, act } from "@testing-library/react";
-import React from "react";
 
 // vi.mock factories are hoisted — use vi.hoisted() for variables referenced in them
 const {
@@ -432,7 +431,7 @@ describe("BugwatchProvider fetch instrumentation", () => {
   beforeEach(() => {
     savedFetch = window.fetch;
     mockOriginalFetch = vi.fn();
-    window.fetch = mockOriginalFetch;
+    window.fetch = mockOriginalFetch as unknown as typeof window.fetch;
   });
 
   afterEach(() => {

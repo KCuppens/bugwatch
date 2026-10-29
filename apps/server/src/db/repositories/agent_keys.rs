@@ -78,7 +78,7 @@ impl AgentKeyRepository {
     pub async fn revoke(pool: &DbPool, id: &str) -> Result<()> {
         let now = chrono::Utc::now();
         sqlx::query("UPDATE agent_keys SET revoked_at = $1 WHERE id = $2")
-            .bind(now.to_rfc3339())
+            .bind(now)
             .bind(id)
             .execute(pool)
             .await?;
@@ -89,7 +89,7 @@ impl AgentKeyRepository {
     pub async fn touch(pool: &DbPool, id: &str) -> Result<()> {
         let now = chrono::Utc::now();
         sqlx::query("UPDATE agent_keys SET last_used_at = $1 WHERE id = $2")
-            .bind(now.to_rfc3339())
+            .bind(now)
             .bind(id)
             .execute(pool)
             .await?;
@@ -137,7 +137,7 @@ impl AgentAuditLogRepository {
         agent_key_id: &str,
         limit: i64,
     ) -> Result<Vec<AgentAuditLog>> {
-        let limit = limit.max(1).min(10_000);
+        let limit = limit.clamp(1, 10_000);
         sqlx::query_as::<_, AgentAuditLog>(
             "SELECT * FROM agent_audit_log WHERE agent_key_id = $1 ORDER BY created_at DESC LIMIT $2",
         )
@@ -154,7 +154,7 @@ impl AgentAuditLogRepository {
         organization_id: &str,
         limit: i64,
     ) -> Result<Vec<AgentAuditLog>> {
-        let limit = limit.max(1).min(10_000);
+        let limit = limit.clamp(1, 10_000);
         sqlx::query_as::<_, AgentAuditLog>(
             r#"
             SELECT al.* FROM agent_audit_log al

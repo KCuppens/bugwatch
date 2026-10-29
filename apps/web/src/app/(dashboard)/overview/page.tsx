@@ -180,6 +180,7 @@ export default function OverviewPage() {
   });
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [tierGated, setTierGated] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [hoveredIssue, setHoveredIssue] = useState<string | null>(null);
   const [resolvingIssue, setResolvingIssue] = useState<string | null>(null);
@@ -215,8 +216,14 @@ export default function OverviewPage() {
 
       // Core data — if these fail, show error
       const [issuesRes, statsRes] = await Promise.all([
-        overviewApi.getIssuesAcrossProjects({ status: "unresolved", limit: 10 }),
-        overviewApi.getStatsByProject(),
+        overviewApi.getIssuesAcrossProjects({ status: "unresolved", limit: 10 }).catch((e) => {
+          console.error("[Overview] /issues/across-projects failed:", e);
+          throw e;
+        }),
+        overviewApi.getStatsByProject().catch((e) => {
+          console.error("[Overview] /issues/stats/by-project failed:", e);
+          throw e;
+        }),
       ]);
 
       if (controller.signal.aborted || !mountedRef.current) return;
@@ -250,8 +257,15 @@ export default function OverviewPage() {
       // 401 means session expired — bugwatch-auth-expired already fired so the
       // redirect to /login is in flight. Don't set error state (no flash of auth text).
       if (err instanceof ApiError && err.status === 401) return;
-      setError("Failed to load overview data. Please try again.");
+      // 402 means the overview feature requires a higher plan
+      if (err instanceof ApiError && err.status === 402) {
+        setTierGated(true);
+        return;
+      }
+      const detail = err instanceof ApiError ? ` (${err.status}: ${err.message})` : "";
+      setError(`Failed to load overview data. Please try again.${detail}`);
       toast.error("Failed to load overview data");
+      console.error("[Overview] fetch failed:", err);
     } finally {
       if (mountedRef.current) setIsLoading(false);
     }
@@ -316,6 +330,28 @@ export default function OverviewPage() {
     },
     [fetchData]
   );
+
+  if (tierGated) {
+    return (
+      <div className="flex items-center justify-center min-h-[600px]">
+        <div className="text-center max-w-md">
+          <div className="mx-auto w-16 h-16 rounded-2xl bg-gradient-to-br from-[hsl(var(--accent))]/20 to-[hsl(var(--accent))]/5 flex items-center justify-center mb-6">
+            <Zap className="h-8 w-8 text-[hsl(var(--accent))]" />
+          </div>
+          <h2 className="font-sans text-heading-lg mb-2">Pro plan required</h2>
+          <p className="text-muted-foreground mb-6">
+            The Overview page aggregates data across all your projects and requires a Pro plan or higher.
+          </p>
+          <Link href="/dashboard/settings?tab=billing">
+            <Button size="lg" className="gap-2">
+              <Zap className="h-4 w-4" />
+              Upgrade to Pro
+            </Button>
+          </Link>
+        </div>
+      </div>
+    );
+  }
 
   if (error && stats.length === 0) {
     return (

@@ -26,6 +26,11 @@ services:
     restart: always
     networks:
       - bugwatch
+    # Caddy resolves {$DOMAIN} in the Caddyfile from its own environment at
+    # runtime (compose substitution does not reach into the mounted Caddyfile),
+    # so DOMAIN must be passed through here for automatic HTTPS to work.
+    environment:
+      DOMAIN: ${DOMAIN:-localhost}
     ports:
       - "80:80"
       - "443:443"

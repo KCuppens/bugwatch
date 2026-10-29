@@ -113,8 +113,8 @@ pub async fn ingest_segment(
             .as_ref()
             .map(|o| o.tier.clone())
             .unwrap_or_else(|| "free".to_string());
-        if !crate::billing::tiers::can_access_feature(&tier_str, "session_replay")
-            && !(state.config.x402_enabled && x402_verified.is_some())
+        if !(crate::billing::tiers::can_access_feature(&tier_str, "session_replay")
+            || state.config.x402_enabled && x402_verified.is_some())
         {
             let org_id = project.organization_id.as_deref().unwrap_or("");
             return Err(crate::payments::x402_feature_response(
@@ -373,8 +373,8 @@ pub async fn list_recordings(
 
     // Tier gate
     {
-        if !state.config.deployment_mode.is_self_hosted()
-            && !(state.config.x402_enabled && x402_verified.is_some())
+        if !(state.config.deployment_mode.is_self_hosted()
+            || state.config.x402_enabled && x402_verified.is_some())
         {
             let org = OrganizationRepository::find_by_user(&state.db, &user.id)
                 .await
@@ -406,7 +406,7 @@ pub async fn list_recordings(
     }
 
     let limit = params.limit.min(100);
-    let offset = params.offset.max(0).min(1_000_000);
+    let offset = params.offset.clamp(0, 1_000_000);
 
     let recordings =
         ReplayRepository::list_recordings(&state.db, &project_id, limit, offset).await?;
@@ -430,8 +430,8 @@ pub async fn get_recording(
     crate::api::enforce_rate_limit(&state, &format!("replay_get:user:{}", user.id), 60)?;
 
     {
-        if !state.config.deployment_mode.is_self_hosted()
-            && !(state.config.x402_enabled && x402_verified.is_some())
+        if !(state.config.deployment_mode.is_self_hosted()
+            || state.config.x402_enabled && x402_verified.is_some())
         {
             let org = OrganizationRepository::find_by_user(&state.db, &user.id)
                 .await
@@ -485,8 +485,8 @@ pub async fn get_segments(
     crate::api::enforce_rate_limit(&state, &format!("replay_segments:user:{}", user.id), 60)?;
 
     {
-        if !state.config.deployment_mode.is_self_hosted()
-            && !(state.config.x402_enabled && x402_verified.is_some())
+        if !(state.config.deployment_mode.is_self_hosted()
+            || state.config.x402_enabled && x402_verified.is_some())
         {
             let org = OrganizationRepository::find_by_user(&state.db, &user.id)
                 .await
@@ -552,8 +552,8 @@ pub async fn get_issue_replay(
     crate::api::enforce_rate_limit(&state, &format!("replay_issue:user:{}", user.id), 60)?;
 
     {
-        if !state.config.deployment_mode.is_self_hosted()
-            && !(state.config.x402_enabled && x402_verified.is_some())
+        if !(state.config.deployment_mode.is_self_hosted()
+            || state.config.x402_enabled && x402_verified.is_some())
         {
             let org = OrganizationRepository::find_by_user(&state.db, &user.id)
                 .await

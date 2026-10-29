@@ -6,7 +6,7 @@
  * export async function register() {
  *   if (process.env.NEXT_RUNTIME === 'nodejs') {
  *     const { registerBugwatch } = await import('@bugwatch/nextjs/instrumentation');
- *     registerBugwatch();
+ *     await registerBugwatch();
  *   }
  * }
  */
@@ -28,6 +28,16 @@ export interface RegisterOptions {
   captureUnhandledRejections?: boolean;
   /** Capture errors logged via console.error as warning-level events (default: true) */
   captureConsoleErrors?: boolean;
+  /**
+   * Patterns to drop before sending, matched against the error message. Without
+   * this, the uncaught-exception / unhandled-rejection handlers report every
+   * error — including noisy runtime internals (e.g. Node/undici's
+   * `transformAlgorithm is not a function`) that surface as unhandled rejections
+   * and never reach the onRequestError filter.
+   */
+  ignoreErrors?: (string | RegExp)[];
+  /** Called with each event before send; return null to drop it. */
+  beforeSend?: (event: import("@bugwatch/core").ErrorEvent) => import("@bugwatch/core").ErrorEvent | null;
 }
 
 const DEFAULT_OPTIONS: RegisterOptions = {
@@ -52,7 +62,7 @@ export function reset(): void {
  * Call this in your project's instrumentation.ts file
  * to enable server-side error tracking.
  */
-export function registerBugwatch(options: RegisterOptions = {}): void {
+export async function registerBugwatch(options: RegisterOptions = {}): Promise<void> {
   if (registered) {
     return;
   }
@@ -63,7 +73,7 @@ export function registerBugwatch(options: RegisterOptions = {}): void {
   const endpoint = mergedOptions.endpoint || envConfig.endpoint;
 
   if (!apiKey) {
-    if (process.env.NODE_ENV === "development") {
+    if (process.env.NODE_ENV !== "production") {
       console.warn(
         "[Bugwatch] No API key provided. Set NEXT_PUBLIC_BUGWATCH_API_KEY environment variable."
       );
@@ -74,9 +84,9 @@ export function registerBugwatch(options: RegisterOptions = {}): void {
   const runtime = mergedOptions.runtime || detectRuntime();
 
   if (runtime === "edge") {
-    initEdge(apiKey, endpoint, mergedOptions);
+    await initEdge(apiKey, endpoint, mergedOptions);
   } else {
-    initNode(apiKey, endpoint, mergedOptions);
+    await initNode(apiKey, endpoint, mergedOptions);
   }
 
   registered = true;
@@ -104,8 +114,12 @@ declare const EdgeRuntime: string | undefined;
 /**
  * Initialize for Node.js runtime
  */
-function initNode(apiKey: string, endpoint: string | undefined, options: RegisterOptions): void {
-  const { init } = require("./index");
+async function initNode(apiKey: string, endpoint: string | undefined, options: RegisterOptions): Promise<void> {
+  const { init } = await import("./index");
+  const os = await import("os");
+
+  let hostname: string | undefined;
+  try { hostname = os.hostname(); } catch { /* ignore */ }
 
   init({
     apiKey,
@@ -114,12 +128,16 @@ function initNode(apiKey: string, endpoint: string | undefined, options: Registe
     debug: options.debug || process.env.BUGWATCH_DEBUG === "true",
     captureUncaughtExceptions: options.captureUncaughtExceptions,
     captureUnhandledRejections: options.captureUnhandledRejections,
+    ...(options.ignoreErrors && { ignoreErrors: options.ignoreErrors }),
+    ...(options.beforeSend && { beforeSend: options.beforeSend }),
+    ...(hostname && { serverName: hostname }),
+    runtime: { name: "node", version: process.version },
   });
 
   // Hook console.error to auto-capture server-side errors that are
   // caught by application code (try-catch) and only logged, never thrown.
   if (options.captureConsoleErrors !== false) {
-    setupConsoleErrorCapture();
+    await setupConsoleErrorCapture();
   }
 
   if (options.debug || process.env.BUGWATCH_DEBUG === "true") {
@@ -130,14 +148,16 @@ function initNode(apiKey: string, endpoint: string | undefined, options: Registe
 /**
  * Initialize for Edge runtime
  */
-function initEdge(apiKey: string, endpoint: string | undefined, options: RegisterOptions): void {
-  const { init } = require("@bugwatch/core");
+async function initEdge(apiKey: string, endpoint: string | undefined, options: RegisterOptions): Promise<void> {
+  const { init } = await import("@bugwatch/core");
 
   init({
     apiKey,
     ...(endpoint && { endpoint }),
     environment: process.env.NODE_ENV || "production",
     debug: options.debug || process.env.BUGWATCH_DEBUG === "true",
+    ...(options.ignoreErrors && { ignoreErrors: options.ignoreErrors }),
+    ...(options.beforeSend && { beforeSend: options.beforeSend }),
   });
 
   if (options.debug || process.env.BUGWATCH_DEBUG === "true") {
@@ -152,7 +172,21 @@ function initEdge(apiKey: string, endpoint: string | undefined, options: Registe
  * via console.error (e.g., API timeouts, cache permission errors).
  * This hook detects Error objects in the arguments and reports them.
  */
-function setupConsoleErrorCapture(): void {
+async function setupConsoleErrorCapture(): Promise<void> {
+  // Await the import before patching so no console.error calls are dropped
+  // during the resolution window (eliminates the fire-and-forget race).
+  let captureException: (err: Error, ctx?: object) => string;
+  let captureMessage: (msg: string, level?: import("@bugwatch/core").ErrorEvent["level"]) => string;
+  let getClient: () => import("@bugwatch/core").BugwatchClient | null;
+  try {
+    const core = await import("@bugwatch/core");
+    captureException = core.captureException;
+    captureMessage = core.captureMessage;
+    getClient = core.getClient;
+  } catch {
+    return; // If core can't be imported, don't install the hook
+  }
+
   const originalConsoleError = console.error;
   let inCapture = false;
 
@@ -165,7 +199,6 @@ function setupConsoleErrorCapture(): void {
     inCapture = true;
 
     try {
-      const { captureException, captureMessage, getClient } = require("@bugwatch/core");
       if (!getClient()) return;
 
       // Look for an Error object in the arguments
@@ -247,7 +280,7 @@ export function isRegistered(): boolean {
  * export async function register() {
  *   if (process.env.NEXT_RUNTIME === 'nodejs') {
  *     const { registerBugwatch } = await import('@bugwatch/nextjs/instrumentation');
- *     registerBugwatch();
+ *     await registerBugwatch();
  *   }
  * }
  * ```
@@ -272,27 +305,41 @@ export async function onRequestError(
   // Lazy-import to avoid issues if core isn't initialized yet
   const { captureException, getClient } = await import("@bugwatch/core");
 
-  captureException(err, {
-    level: "error",
-    tags: {
-      mechanism: "nextjs.onRequestError",
-      "next.routerKind": context.routerKind,
-      "next.routePath": context.routePath,
-      "next.routeType": context.routeType,
-      ...(context.renderSource && { "next.renderSource": context.renderSource }),
-      ...(err.digest && { "next.digest": err.digest }),
-    },
-    request: {
-      url: request.path,
-      method: request.method,
-      headers: sanitizeHeaders(request.headers),
-    },
-  });
+  const clientIp =
+    request.headers["x-forwarded-for"]?.split(",")[0]?.trim() ||
+    request.headers["x-real-ip"] ||
+    request.headers["cf-connecting-ip"];
+
+  try {
+    captureException(err, {
+      level: "error",
+      tags: {
+        mechanism: "nextjs.onRequestError",
+        "next.routerKind": context.routerKind,
+        "next.routePath": context.routePath,
+        "next.routeType": context.routeType,
+        ...(context.renderSource && { "next.renderSource": context.renderSource }),
+        ...(err.digest && { "next.digest": err.digest }),
+      },
+      request: {
+        url: request.path,
+        method: request.method,
+        headers: sanitizeHeaders(request.headers),
+      },
+      ...(clientIp && { user: { ip_address: clientIp } }),
+    });
+  } catch {
+    // Never let SDK logic interfere with Next.js error handling
+  }
 
   // Best-effort flush so the event is sent before the response completes
-  const client = getClient();
-  if (client) {
-    await client.flush().catch(() => {});
+  try {
+    const client = getClient();
+    if (client) {
+      await client.flush().catch(() => {});
+    }
+  } catch {
+    // Never let flush errors interfere with Next.js error handling
   }
 }
 
@@ -302,9 +349,12 @@ export async function onRequestError(
 const SENSITIVE_HEADER_KEYS = new Set([
   "authorization",
   "cookie",
+  "set-cookie",
   "x-api-key",
   "x-auth-token",
   "x-csrf-token",
+  "x-xsrf-token",
+  "proxy-authorization",
 ]);
 
 function sanitizeHeaders(

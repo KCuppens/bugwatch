@@ -1,0 +1,118 @@
+# hookci (https://ci.hookci.com) runs CI and deploys production on infrauno: checks on every pull
+# request and on pushes to main, then a push to main deploys production once every check passes
+# (hookci's rule, not configurable). GitHub Actions no longer runs CI or deploys; it still builds
+# and publishes images (docker-publish.yml) and releases (release.yml, publish-*.yml). See
+# CONTRIBUTING.md "CI" and deploy/infrauno/README.md.
+#
+# Each job is a plain script in scripts/ci/ (run from the repo root, `set -euo pipefail`), so it
+# can also be run by hand. Toolchains (Node 20, Rust, Go 1.21, Python 3.11, JDK 17, Maven, PHP 8.2)
+# are fetched by the pinned scripts/ci/tools.sh into the setup cache; only apt packages (Ruby 3.2,
+# the Playwright browsers' libraries) come from scripts/ci/setup-host.sh.
+version: 1
+
+checks:
+  on:
+    pull_request: true
+    push:
+      branches: [main]
+  # The agent shares infrauno with production, so every job is guaranteed 2 cores and held to
+  # 8 GB; independent jobs run in parallel. Rust builds start cold; jobs below raise the timeout
+  # where needed.
+  limits:
+    cpus: 2
+    memory: 8G
+    timeout: 20m
+    # cargo, Next.js, the JVM and three browsers start many threads.
+    tasks: 4096
+  egress:
+    # Toolchains (scripts/ci/tools.sh). GitHub release downloads redirect to the
+    # *.githubusercontent.com hosts.
+    - nodejs.org
+    - static.rust-lang.org
+    - dl.google.com
+    - github.com
+    - objects.githubusercontent.com
+    - release-assets.githubusercontent.com
+    # dl.static-php.dev redirects to its DigitalOcean Spaces bucket.
+    - dl.static-php.dev
+    - static-php-cli.fra1.digitaloceanspaces.com
+    - getcomposer.org
+    # npm ci (setup) and audit-ci (web-check).
+    - registry.npmjs.org
+    # cargo: the registry, and cargo audit's advisory database (a git clone from github.com).
+    - crates.io
+    - index.crates.io
+    - static.crates.io
+    # The Playwright browser downloads (scripts/ci/setup.sh).
+    - cdn.playwright.dev
+    - playwright.download.prss.microsoft.com
+    - storage.googleapis.com
+    # next/font/google (apps/web/src/app/layout.tsx) fetches Space Mono at build and dev start.
+    - fonts.googleapis.com
+    - fonts.gstatic.com
+    # The Chillax @import in apps/web/src/app/globals.css, loaded by the e2e browsers.
+    - api.fontshare.com
+    - cdn.fontshare.com
+    # SDK dependencies: pip, go modules, gems, composer packages, Maven Central.
+    - pypi.org
+    - files.pythonhosted.org
+    - proxy.golang.org
+    - sum.golang.org
+    - rubygems.org
+    - index.rubygems.org
+    - repo.packagist.org
+    - packagist.org
+    - codeload.github.com
+    - api.github.com
+    - repo.maven.apache.org
+    - repo1.maven.org
+  services:
+    postgres:
+      # The apps/server tests (rust-check) use the service's socket (PGHOST).
+      image: postgres:16-alpine
+  # Setup has the network (through the egress proxy); the jobs run with what it leaves in the run dir.
+  setup:
+    - run: bash scripts/ci/tools.sh all
+      cache:
+        key: [scripts/ci/tools.sh]
+        paths: [.hookci/cache/tools]
+    - run: bash scripts/ci/setup.sh
+      cache:
+        key: [package-lock.json, scripts/ci/tools.sh]
+        paths: [.hookci/cache/npm, .hookci/cache/playwright]
+  jobs:
+    rust-check:
+      run: bash scripts/ci/rust-check.sh
+      # Two cold builds (clippy, then tests) of the server with every feature.
+      timeout: 60m
+    web-check:
+      run: bash scripts/ci/web-check.sh
+    e2e-test:
+      needs: [web-check, rust-check]
+      run: bash scripts/ci/e2e-test.sh
+    python-sdk-check:
+      run: bash scripts/ci/python-sdk-check.sh
+    rust-sdk-check:
+      run: bash scripts/ci/rust-sdk-check.sh
+    go-sdk-check:
+      run: bash scripts/ci/go-sdk-check.sh
+    ruby-sdk-check:
+      run: bash scripts/ci/ruby-sdk-check.sh
+    php-sdk-check:
+      run: bash scripts/ci/php-sdk-check.sh
+    java-sdk-check:
+      run: bash scripts/ci/java-sdk-check.sh
+    docker-build:
+      needs: [rust-check, web-check, e2e-test, python-sdk-check, rust-sdk-check, go-sdk-check,
+        ruby-sdk-check, php-sdk-check, java-sdk-check]
+      run: bash scripts/ci/docker-build.sh
+
+deployments:
+  production:
+    on:
+      push: main
+    strategy: script
+    # Builds bugwatch-{server,web,mcp}:sha-<12 hex> as hookci-deploy, then the root-owned wrapper on
+    # infrauno (deploy/infrauno/hookci-deploy-prod.sh, the only command hookci-deploy may sudo)
+    # switches production to them.
+    run: bash scripts/deploy/build-images.sh && sudo -n /opt/buguno/hookci-deploy-prod.sh "$(git rev-parse HEAD)"

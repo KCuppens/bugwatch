@@ -15,8 +15,8 @@ impl CommentRepository {
         offset: i64,
     ) -> AppResult<Vec<IssueComment>> {
         // Clamp user-supplied pagination to safe bounds.
-        let limit = limit.max(1).min(1000);
-        let offset = offset.max(0).min(100_000);
+        let limit = limit.clamp(1, 1000);
+        let offset = offset.clamp(0, 100_000);
 
         let comments = sqlx::query_as::<_, IssueComment>(
             r#"
@@ -71,8 +71,8 @@ impl CommentRepository {
         .bind(issue_id)
         .bind(user_id)
         .bind(content)
-        .bind(now.to_rfc3339())
-        .bind(now.to_rfc3339())
+        .bind(now)
+        .bind(now)
         .fetch_one(db)
         .await?;
 
@@ -90,7 +90,7 @@ impl CommentRepository {
             "#,
         )
         .bind(content)
-        .bind(now.to_rfc3339())
+        .bind(now)
         .bind(id)
         .bind(issue_id)
         .execute(db)
