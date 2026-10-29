@@ -590,7 +590,7 @@ export default function ServerPage() {
                         borderRadius: "8px",
                       }}
                       labelStyle={{ color: "#888" }}
-                      formatter={(value: number) => formatBytes(value) + "/s"}
+                      formatter={(value) => formatBytes(Number(value)) + "/s"}
                     />
                     <Area type="monotone" dataKey="netRx" stroke="#10b981" fill="#10b981" fillOpacity={0.1} name="RX" />
                     <Area type="monotone" dataKey="netTx" stroke="#f59e0b" fill="#f59e0b" fillOpacity={0.1} name="TX" />

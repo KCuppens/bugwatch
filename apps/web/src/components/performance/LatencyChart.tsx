@@ -76,8 +76,8 @@ function LatencyChartImpl({ data }: LatencyChartProps) {
             borderRadius: "8px",
             fontSize: "12px",
           }}
-          labelFormatter={formatTime}
-          formatter={(value: number, name: string) => [formatMs(value), name]}
+          labelFormatter={(label) => formatTime(String(label))}
+          formatter={(value, name) => [formatMs(Number(value)), name]}
         />
         <Legend />
         <Area

@@ -208,7 +208,7 @@ function MonitorDetail({ projectId, monitorId }: { projectId: string; monitorId:
                     borderRadius: "6px",
                     fontSize: "12px",
                   }}
-                  formatter={(value: number) => [`${value}ms`, "Response Time"]}
+                  formatter={(value) => [`${value}ms`, "Response Time"]}
                 />
                 <Area
                   type="monotone"
