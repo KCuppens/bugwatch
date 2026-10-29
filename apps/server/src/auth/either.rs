@@ -1,4 +1,4 @@
-use axum::{async_trait, extract::FromRequestParts, http::request::Parts};
+use axum::{extract::FromRequestParts, http::request::Parts};
 
 use crate::{
     auth::{agent::AgentAuth, middleware::AuthUser},
@@ -80,7 +80,6 @@ impl AuthIdentity {
     }
 }
 
-#[async_trait]
 impl FromRequestParts<AppState> for EitherAuth {
     type Rejection = AppError;
 
