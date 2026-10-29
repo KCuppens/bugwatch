@@ -6,7 +6,7 @@ services:
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: bugwatch
-      POSTGRES_PASSWORD: bugwatch_dev
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-bugwatch_dev}
       POSTGRES_DB: bugwatch
     ports:
       - "5432:5432"
@@ -20,7 +20,9 @@ services:
 
   server:
     image: rust:latest
-    working_dir: /app
+    # Mount the full repo at /workspace so include_str!("../../../apps/agent/*.sh")
+    # in apps/server/src/main.rs resolves to /workspace/apps/agent/*.sh at build time.
+    working_dir: /workspace/apps/server
     command: >
       bash -c "
         apt-get update && apt-get install -y pkg-config libssl-dev curl &&
@@ -30,23 +32,39 @@ services:
     ports:
       - "3000:3000"
     volumes:
-      - ./apps/server:/app
+      - .:/workspace
       - cargo-cache:/usr/local/cargo/registry
-      - target-cache:/app/target
+      - target-cache:/workspace/apps/server/target
     environment:
       - SERVER_ADDR=0.0.0.0:3000
-      - DATABASE_URL=postgres://bugwatch:bugwatch_dev@postgres:5432/bugwatch
-      - JWT_SECRET=development-secret
+      - DATABASE_URL=postgres://bugwatch:${POSTGRES_PASSWORD:-bugwatch_dev}@postgres:5432/bugwatch
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET must be set — copy .env.example to .env and fill it in}
       - ENVIRONMENT=development
       - RUST_LOG=debug
+    restart: on-failure
     depends_on:
       postgres:
         condition: service_healthy
+    healthcheck:
+      # curl is installed by the startup command; wget is the fallback for the
+      # brief window before apt-get completes (start_period covers this gap).
+      test: ["CMD-SHELL", "curl -fsS http://localhost:3000/health 2>/dev/null || wget -qO- http://localhost:3000/health 2>/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      # First-time cargo build of this server takes several minutes; give it room.
+      start_period: 900s
 
   web:
     image: node:20-alpine
     working_dir: /app
-    command: sh -c "npm install && npm run dev --workspace=@bugwatch/web"
+    # next.config.ts imports the @bugwatch/nextjs workspace package, which in turn
+    # requires the compiled dist/ of @bugwatch/core and @bugwatch/node. Build those
+    # once before `next dev` so module resolution succeeds.
+    command: >
+      sh -c "npm install &&
+             npm run build --workspace=@bugwatch/core --workspace=@bugwatch/node --workspace=@bugwatch/nextjs &&
+             npm run dev --workspace=@bugwatch/web"
     ports:
       - "3001:3001"
     volumes:
@@ -55,8 +73,15 @@ services:
       - web_node_modules:/app/apps/web/node_modules
     environment:
       - NEXT_PUBLIC_API_URL=http://localhost:3000
+      # On Windows, Docker Desktop does not relay inotify events into the
+      # container, so webpack's native watcher never fires. Polling is slower
+      # but reliable — changes are picked up within ~1–2 seconds.
+      - WATCHPACK_POLLING=true
+      - CHOKIDAR_USEPOLLING=true
+      - CHOKIDAR_INTERVAL=1000
     depends_on:
-      - server
+      server:
+        condition: service_healthy
 
 volumes:
   postgres-data:

@@ -12,15 +12,31 @@ use crate::billing::StripeClient;
 #[cfg(feature = "saas")]
 use crate::db::models::UsageRecord;
 #[cfg(feature = "saas")]
-use crate::db::repositories::UsageRepository;
+use crate::db::repositories::organizations::UsageRepository;
 use crate::{
     auth::AuthUser,
     db::{
         models::{Organization, OrganizationMember},
-        repositories::{OrganizationMemberRepository, OrganizationRepository, UserRepository},
+        repositories::{
+            OrganizationMemberRepository, OrganizationRepository, ProjectRepository, UserRepository,
+        },
     },
     AppState,
 };
+
+// ============================================================================
+// Helpers
+// ============================================================================
+
+/// Map any internal/DB error to a sanitized HTTP 500 response, logging the raw
+/// detail server-side so it never leaks to the caller.
+fn db_err(e: impl std::fmt::Display) -> (StatusCode, String) {
+    tracing::error!("Billing internal error: {}", e);
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "A server error occurred".to_string(),
+    )
+}
 
 // ============================================================================
 // Response Types
@@ -131,12 +147,12 @@ pub async fn get_organization(
 ) -> Result<Json<OrganizationResponse>, (StatusCode, String)> {
     let org = OrganizationRepository::find_by_user(&state.db, &user.id)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(db_err)?
         .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
 
     let members_count = OrganizationMemberRepository::count(&state.db, &org.id)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(db_err)?;
 
     Ok(Json(OrganizationResponse {
         is_owner: org.owner_id == user.id,
@@ -145,36 +161,71 @@ pub async fn get_organization(
     }))
 }
 
+fn generate_org_slug(name: &str) -> String {
+    let base = name
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c } else { '-' })
+        .collect::<String>();
+    format!("{}-{}", base, &uuid::Uuid::new_v4().to_string()[..8])
+}
+
+/// Steps every newly created organization needs: the owner becomes a member (so
+/// list_members and seat counts are consistent) and the owner's projects that have
+/// no organization yet move into it.
+async fn set_up_new_org(
+    db: &crate::db::DbPool,
+    org_id: &str,
+    owner_id: &str,
+) -> Result<(), (StatusCode, String)> {
+    OrganizationMemberRepository::add(db, org_id, owner_id, "owner")
+        .await
+        .map_err(db_err)?;
+    ProjectRepository::attach_orphans_to_org(db, owner_id, org_id)
+        .await
+        .map_err(db_err)?;
+    Ok(())
+}
+
 /// Create a new organization (only if user doesn't have one)
 pub async fn create_organization(
     user: AuthUser,
     State(state): State<AppState>,
     Json(req): Json<CreateOrganizationRequest>,
 ) -> Result<Json<OrganizationResponse>, (StatusCode, String)> {
-    // Check if user already has an organization
-    let existing = OrganizationRepository::find_by_user(&state.db, &user.id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    if existing.is_some() {
+    // Rate limit: 5 create_organization requests per user per minute
+    let rl = state
+        .rate_limiter
+        .check(&format!("create_org:{}", user.id), 5);
+    if !rl.allowed {
         return Err((
-            StatusCode::CONFLICT,
-            "User already has an organization".to_string(),
+            StatusCode::TOO_MANY_REQUESTS,
+            "Too many requests".to_string(),
         ));
     }
 
-    // Generate slug from name (lowercase, hyphenated, with random suffix for uniqueness)
-    let base_slug = req
-        .name
-        .to_lowercase()
-        .chars()
-        .map(|c| if c.is_alphanumeric() { c } else { '-' })
-        .collect::<String>();
-    let slug = format!("{}-{}", base_slug, &uuid::Uuid::new_v4().to_string()[..8]);
+    let name = req.name.trim().to_string();
+    if name.is_empty() || name.len() > 255 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Organization name must be 1–255 characters".to_string(),
+        ));
+    }
 
-    let org = OrganizationRepository::create(&state.db, &user.id, &req.name, &slug)
+    let slug = generate_org_slug(&name);
+
+    // Atomic create: INSERT WHERE NOT EXISTS prevents TOCTOU if two requests race
+    let org = OrganizationRepository::create_if_owner_not_exists(&state.db, &user.id, &name, &slug)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(db_err)?
+        .ok_or((
+            StatusCode::CONFLICT,
+            "User already has an organization".to_string(),
+        ))?;
+
+    set_up_new_org(&state.db, &org.id, &user.id).await?;
+
+    tracing::info!(org_id = %org.id, owner_id = %user.id, org_name = %name, "Organization created");
 
     Ok(Json(OrganizationResponse {
         is_owner: true,
@@ -191,7 +242,7 @@ pub async fn update_organization(
 ) -> Result<Json<OrganizationResponse>, (StatusCode, String)> {
     let org = OrganizationRepository::find_by_user(&state.db, &user.id)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(db_err)?
         .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
 
     // Only owner can update
@@ -202,13 +253,21 @@ pub async fn update_organization(
         ));
     }
 
-    let updated = OrganizationRepository::update_name(&state.db, &org.id, &req.name)
+    let name = req.name.trim().to_string();
+    if name.is_empty() || name.len() > 255 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Organization name must be 1–255 characters".to_string(),
+        ));
+    }
+
+    let updated = OrganizationRepository::update_name(&state.db, &org.id, &name)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(db_err)?;
 
     let members_count = OrganizationMemberRepository::count(&state.db, &org.id)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(db_err)?;
 
     Ok(Json(OrganizationResponse {
         is_owner: true,
@@ -228,22 +287,33 @@ pub async fn list_members(
 ) -> Result<Json<Vec<MemberResponse>>, (StatusCode, String)> {
     let org = OrganizationRepository::find_by_user(&state.db, &user.id)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(db_err)?
         .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
 
     let members = OrganizationMemberRepository::list(&state.db, &org.id)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(db_err)?;
 
-    // Fetch user info for each member
+    let user_ids: Vec<String> = members.iter().map(|m| m.user_id.clone()).collect();
+    let users = UserRepository::find_by_ids(&state.db, &user_ids)
+        .await
+        .map_err(db_err)?;
+
+    let user_map: std::collections::HashMap<&str, &crate::db::models::User> =
+        users.iter().map(|u| (u.id.as_str(), u)).collect();
+
     let mut response = Vec::new();
-    for member in members {
-        if let Ok(Some(u)) = UserRepository::find_by_id(&state.db, &member.user_id).await {
-            response.push(MemberResponse {
-                member,
-                user_email: u.email,
-                user_name: u.name,
-            });
+    for member in &members {
+        match user_map.get(member.user_id.as_str()) {
+            Some(u) => response.push(MemberResponse {
+                member: member.clone(),
+                user_email: u.email.clone(),
+                user_name: u.name.clone(),
+            }),
+            None => tracing::warn!(
+                user_id = %member.user_id,
+                "Member has no matching user record — orphaned membership"
+            ),
         }
     }
 
@@ -258,15 +328,14 @@ pub async fn add_member(
 ) -> Result<Json<MemberResponse>, (StatusCode, String)> {
     let org = OrganizationRepository::find_by_user(&state.db, &user.id)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(db_err)?
         .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
 
     // Only owner/admin can add members
-    let user_member = OrganizationMemberRepository::list(&state.db, &org.id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .into_iter()
-        .find(|m| m.user_id == user.id);
+    let user_member =
+        OrganizationMemberRepository::find_by_user_in_org(&state.db, &org.id, &user.id)
+            .await
+            .map_err(db_err)?;
 
     let can_manage =
         org.owner_id == user.id || user_member.map(|m| m.role == "admin").unwrap_or(false);
@@ -278,37 +347,76 @@ pub async fn add_member(
         ));
     }
 
-    // Check seat limit
-    let current_count = OrganizationMemberRepository::count(&state.db, &org.id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    if current_count >= org.seats {
+    // Rate limit: 20 add_member requests per user
+    let rl = state
+        .rate_limiter
+        .check(&format!("add_member:{}", user.id), 20);
+    if !rl.allowed {
         return Err((
-            StatusCode::PAYMENT_REQUIRED,
-            "Seat limit reached. Please upgrade your subscription.".to_string(),
+            StatusCode::TOO_MANY_REQUESTS,
+            "Too many requests".to_string(),
+        ));
+    }
+
+    if req.email.len() > 256 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Email too long (max 256 characters)".to_string(),
         ));
     }
 
     // Find user by email
     let target_user = UserRepository::find_by_email(&state.db, &req.email)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(db_err)?
         .ok_or((StatusCode::NOT_FOUND, "User not found".to_string()))?;
 
     // Check if already a member
     let is_member = OrganizationMemberRepository::is_member(&state.db, &org.id, &target_user.id)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(db_err)?;
 
     if is_member {
         return Err((StatusCode::CONFLICT, "User is already a member".to_string()));
     }
 
     let role = req.role.unwrap_or_else(|| "member".to_string());
-    let member = OrganizationMemberRepository::add(&state.db, &org.id, &target_user.id, &role)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    if !matches!(role.as_str(), "member" | "admin") {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Invalid role. Must be 'member' or 'admin'.".to_string(),
+        ));
+    }
+
+    // Atomically insert only if the seat limit has not been reached — prevents TOCTOU
+    // where two concurrent add_member calls both pass a separate count check.
+    // SelfHosted mode has no seat limits.
+    let seat_limit = if state.config.deployment_mode.is_self_hosted() {
+        i32::MAX
+    } else {
+        org.seats
+    };
+    let member = OrganizationMemberRepository::add_if_seat_available(
+        &state.db,
+        &org.id,
+        &target_user.id,
+        &role,
+        seat_limit,
+    )
+    .await
+    .map_err(db_err)?
+    .ok_or((
+        StatusCode::PAYMENT_REQUIRED,
+        "Seat limit reached. Please upgrade your subscription.".to_string(),
+    ))?;
+
+    tracing::info!(
+        org_id = %org.id,
+        inviter_id = %user.id,
+        new_member_id = %target_user.id,
+        role = %role,
+        "Member added to organization"
+    );
 
     Ok(Json(MemberResponse {
         member,
@@ -325,7 +433,7 @@ pub async fn remove_member(
 ) -> Result<StatusCode, (StatusCode, String)> {
     let org = OrganizationRepository::find_by_user(&state.db, &user.id)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(db_err)?
         .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
 
     // Cannot remove owner
@@ -337,14 +445,12 @@ pub async fn remove_member(
     }
 
     // Only owner/admin can remove members
-    let can_manage = org.owner_id == user.id
-        || OrganizationMemberRepository::list(&state.db, &org.id)
+    let caller_member =
+        OrganizationMemberRepository::find_by_user_in_org(&state.db, &org.id, &user.id)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-            .into_iter()
-            .find(|m| m.user_id == user.id)
-            .map(|m| m.role == "admin")
-            .unwrap_or(false);
+            .map_err(db_err)?;
+    let can_manage =
+        org.owner_id == user.id || caller_member.map(|m| m.role == "admin").unwrap_or(false);
 
     if !can_manage {
         return Err((
@@ -355,7 +461,14 @@ pub async fn remove_member(
 
     OrganizationMemberRepository::remove(&state.db, &org.id, &member_user_id)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(db_err)?;
+
+    tracing::info!(
+        org_id = %org.id,
+        removed_by = %user.id,
+        removed_user_id = %member_user_id,
+        "Member removed from organization"
+    );
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -369,7 +482,7 @@ pub async fn update_member_role(
 ) -> Result<Json<MemberResponse>, (StatusCode, String)> {
     let org = OrganizationRepository::find_by_user(&state.db, &user.id)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(db_err)?
         .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
 
     // Only owner can change roles
@@ -388,24 +501,36 @@ pub async fn update_member_role(
         ));
     }
 
+    if !matches!(req.role.as_str(), "member" | "admin") {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Invalid role. Must be 'member' or 'admin'.".to_string(),
+        ));
+    }
+
     OrganizationMemberRepository::update_role(&state.db, &org.id, &member_user_id, &req.role)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(db_err)?;
 
-    // Fetch the member after update
-    let members = OrganizationMemberRepository::list(&state.db, &org.id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    let member = members
-        .into_iter()
-        .find(|m| m.user_id == member_user_id)
-        .ok_or((StatusCode::NOT_FOUND, "Member not found".to_string()))?;
+    // Fetch the updated member row via point-lookup (avoids full list scan)
+    let member =
+        OrganizationMemberRepository::find_by_user_in_org(&state.db, &org.id, &member_user_id)
+            .await
+            .map_err(db_err)?
+            .ok_or((StatusCode::NOT_FOUND, "Member not found".to_string()))?;
 
     let target_user = UserRepository::find_by_id(&state.db, &member_user_id)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(db_err)?
         .ok_or((StatusCode::NOT_FOUND, "User not found".to_string()))?;
+
+    tracing::info!(
+        org_id = %org.id,
+        changed_by = %user.id,
+        target_user_id = %member_user_id,
+        new_role = %req.role,
+        "Member role updated"
+    );
 
     Ok(Json(MemberResponse {
         member,
@@ -428,7 +553,7 @@ mod saas_billing {
     ) -> Result<Json<SubscriptionResponse>, (StatusCode, String)> {
         let org = OrganizationRepository::find_by_user(&state.db, &user.id)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .map_err(db_err)?
             .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
 
         Ok(Json(SubscriptionResponse {
@@ -436,9 +561,9 @@ mod saas_billing {
             seats: org.seats,
             subscription_status: org.subscription_status,
             billing_interval: org.billing_interval,
-            current_period_start: org.current_period_start,
-            current_period_end: org.current_period_end,
-            cancel_at_period_end: org.cancel_at_period_end,
+            current_period_start: org.current_period_start.map(|t| t.0),
+            current_period_end: org.current_period_end.map(|t| t.0),
+            cancel_at_period_end: org.cancel_at_period_end.0,
             has_stripe: org.stripe_subscription_id.is_some(),
         }))
     }
@@ -449,6 +574,24 @@ mod saas_billing {
         State(state): State<AppState>,
         Json(req): Json<CreateCheckoutRequest>,
     ) -> Result<Json<CheckoutResponse>, (StatusCode, String)> {
+        // Rate limit: 5 checkout requests per user per minute
+        let rl = state
+            .rate_limiter
+            .check(&format!("checkout:{}", user.id), 5);
+        if !rl.allowed {
+            return Err((
+                StatusCode::TOO_MANY_REQUESTS,
+                "Too many requests".to_string(),
+            ));
+        }
+
+        if !matches!(req.tier.as_str(), "pro" | "team" | "enterprise") {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "Invalid tier. Must be 'pro', 'team', or 'enterprise'.".to_string(),
+            ));
+        }
+
         let stripe = state.stripe.as_ref().ok_or((
             StatusCode::SERVICE_UNAVAILABLE,
             "Stripe not configured".to_string(),
@@ -461,31 +604,37 @@ mod saas_billing {
                 // Auto-create organization for user
                 let u = UserRepository::find_by_id(&state.db, &user.id)
                     .await
-                    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+                    .map_err(db_err)?
                     .ok_or((StatusCode::NOT_FOUND, "User not found".to_string()))?;
 
                 let org_name = u
                     .name
                     .clone()
                     .unwrap_or_else(|| u.email.split('@').next().unwrap_or("My").to_string());
-                let slug = format!(
-                    "{}-{}",
-                    org_name
-                        .to_lowercase()
-                        .chars()
-                        .map(|c| if c.is_alphanumeric() { c } else { '-' })
-                        .collect::<String>(),
-                    &uuid::Uuid::new_v4().to_string()[..8]
-                );
+                let display_name = format!("{}'s Organization", org_name);
+                let slug = generate_org_slug(&org_name);
 
-                OrganizationRepository::create(
+                // Atomic create: prevents duplicate orgs from concurrent checkout requests
+                let new_org = OrganizationRepository::create_if_owner_not_exists(
                     &state.db,
                     &user.id,
-                    &format!("{}'s Organization", org_name),
+                    &display_name,
                     &slug,
                 )
                 .await
-                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+                .map_err(db_err)?
+                .ok_or_else(|| {
+                    // Race: another concurrent request already created the org; re-fetch it
+                    // The outer match will hit Ok(Some(org)) on retry; return a retriable error.
+                    (
+                        StatusCode::CONFLICT,
+                        "Organization already exists".to_string(),
+                    )
+                })?;
+
+                set_up_new_org(&state.db, &new_org.id, &user.id).await?;
+
+                new_org
             }
             Err(e) => return Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
         };
@@ -497,29 +646,58 @@ mod saas_billing {
                 // Get user email
                 let u = UserRepository::find_by_id(&state.db, &user.id)
                     .await
-                    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+                    .map_err(db_err)?
                     .ok_or((StatusCode::NOT_FOUND, "User not found".to_string()))?;
 
                 let customer = stripe
                     .create_customer(&org.id, &u.email, &org.name)
                     .await
-                    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+                    .map_err(db_err)?;
 
-                // Save customer ID
+                // Save customer ID — if this DB write fails the Stripe customer is orphaned;
+                // log the ID prominently so it can be manually reconciled.
                 OrganizationRepository::set_stripe_customer(
                     &state.db,
                     &org.id,
-                    &customer.id.to_string(),
+                    customer.id.as_ref(),
                 )
                 .await
-                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+                .map_err(|e| {
+                    tracing::error!(
+                        org_id = %org.id,
+                        stripe_customer_id = %customer.id,
+                        "CRITICAL: Stripe customer created but DB persist failed — orphaned customer: {}",
+                        e
+                    );
+                    (StatusCode::INTERNAL_SERVER_ERROR, "Failed to save billing information".to_string())
+                })?;
 
                 customer.id.to_string()
             }
         };
 
-        let seats = req.seats.unwrap_or(1).max(1) as i64;
+        let seats_req = req.seats.unwrap_or(1);
+        // Reject nonsensical seat values up-front. Callers can only legitimately
+        // request 1..=10_000 seats; anything else is almost certainly a crafted
+        // request (overflow/abuse) and would cause Stripe to reject the session
+        // with a less helpful error.
+        if !(1..=10_000).contains(&seats_req) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "seats must be 1..=10000".to_string(),
+            ));
+        }
+        let seats = seats_req as i64;
         let annual = req.annual.unwrap_or(false);
+
+        // Validate redirect URLs — require exact origin prefix with trailing slash to prevent
+        // subdomain spoofing (e.g. app.example.com.evil.com passing a bare starts_with check).
+        let allowed_origin = format!("{}/", state.config.app_url.trim_end_matches('/'));
+        if !req.success_url.starts_with(&allowed_origin)
+            || !req.cancel_url.starts_with(&allowed_origin)
+        {
+            return Err((StatusCode::BAD_REQUEST, "Invalid redirect URL".to_string()));
+        }
 
         let session = stripe
             .create_checkout_session(
@@ -531,12 +709,25 @@ mod saas_billing {
                 &req.cancel_url,
             )
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            .map_err(|e| {
+                tracing::error!(org_id = %org.id, tier = %req.tier, "Stripe checkout session creation failed: {}", e);
+                (StatusCode::INTERNAL_SERVER_ERROR, "Failed to create checkout session. Please try again.".to_string())
+            })?;
 
-        let url = session.url.ok_or((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "No checkout URL".to_string(),
-        ))?;
+        let url = session.url.ok_or_else(|| {
+            tracing::error!(session_id = %session.id, org_id = %org.id, "Stripe returned checkout session with no URL");
+            (StatusCode::INTERNAL_SERVER_ERROR, "Failed to create checkout session. Please try again.".to_string())
+        })?;
+
+        tracing::info!(
+            org_id = %org.id,
+            user_id = %user.id,
+            tier = %req.tier,
+            seats = seats,
+            annual = annual,
+            session_id = %session.id,
+            "Checkout session created"
+        );
 
         Ok(Json(CheckoutResponse { checkout_url: url }))
     }
@@ -572,14 +763,18 @@ mod saas_billing {
         // Get user's organization
         let org = OrganizationRepository::find_by_user(&state.db, &user.id)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .map_err(db_err)?
             .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
 
         // Retrieve the checkout session from Stripe
         let session = stripe
             .retrieve_checkout_session(&req.session_id)
             .await
-            .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid session: {}", e)))?;
+            .map_err(|e| {
+                tracing::warn!(session_id = %req.session_id, "Stripe session retrieval failed: {}", e);
+                // Use 503 for API/network errors (retryable), 400 only for parse failures
+                (StatusCode::SERVICE_UNAVAILABLE, "Unable to verify checkout session. Please try again or contact support.".to_string())
+            })?;
 
         // Verify the session belongs to this organization's customer
         let session_customer_id = session
@@ -598,15 +793,9 @@ mod saas_billing {
             ));
         }
 
-        // Check session status
-        let status = session
-            .status
-            .as_ref()
-            .map(|s| format!("{:?}", s))
-            .unwrap_or_else(|| "unknown".to_string());
-
-        match status.as_str() {
-            "Complete" => {
+        // Check session status using the typed enum to avoid Debug-repr fragility
+        match session.status {
+            Some(stripe::CheckoutSessionStatus::Complete) => {
                 // Session completed successfully - extract subscription details
                 let subscription_id = session
                     .subscription
@@ -617,9 +806,8 @@ mod saas_billing {
                         "No subscription in completed session".to_string(),
                     ))?;
 
-                // Check if we've already processed this subscription
+                // Idempotency check (snapshot-based; the atomic write below is the true guard)
                 if org.stripe_subscription_id.as_ref() == Some(&subscription_id) {
-                    // Already processed - return current data
                     return Ok(Json(VerifyCheckoutResponse {
                         success: true,
                         subscription: Some(SubscriptionResponse {
@@ -627,9 +815,9 @@ mod saas_billing {
                             seats: org.seats,
                             subscription_status: org.subscription_status,
                             billing_interval: org.billing_interval,
-                            current_period_start: org.current_period_start,
-                            current_period_end: org.current_period_end,
-                            cancel_at_period_end: org.cancel_at_period_end,
+                            current_period_start: org.current_period_start.map(|t| t.0),
+                            current_period_end: org.current_period_end.map(|t| t.0),
+                            cancel_at_period_end: org.cancel_at_period_end.0,
                             has_stripe: true,
                         }),
                         message: "Subscription already active".to_string(),
@@ -642,35 +830,48 @@ mod saas_billing {
                     .retrieve_subscription(&subscription_id)
                     .await
                     .map_err(|e| {
+                        tracing::error!(
+                            org_id = %org.id,
+                            subscription_id = %subscription_id,
+                            "Failed to retrieve Stripe subscription: {}",
+                            e
+                        );
                         (
                             StatusCode::INTERNAL_SERVER_ERROR,
-                            format!("Failed to retrieve subscription: {}", e),
+                            "Subscription verification failed. Please contact support.".to_string(),
                         )
                     })?;
 
+                // Extract common subscription item fields once to avoid repeated .first() calls
+                let sub_item = stripe_subscription.items.data.first();
+
                 // Extract tier from the subscription price ID or session metadata
-                let tier = stripe_subscription
-                    .items
-                    .data
-                    .first()
+                let price_id = sub_item
                     .and_then(|item| item.price.as_ref())
-                    .and_then(|price| stripe.get_tier_from_price_id(&price.id.to_string()))
+                    .map(|price| price.id.to_string());
+                let tier = price_id
+                    .as_deref()
+                    .and_then(|pid| stripe.get_tier_from_price_id(pid))
                     .or_else(|| extract_tier_from_session(&session))
-                    .unwrap_or_else(|| "pro".to_string());
+                    .ok_or_else(|| {
+                        tracing::error!(
+                            org_id = %org.id,
+                            subscription_id = %subscription_id,
+                            price_id = ?price_id,
+                            "Could not determine tier from price ID or session metadata"
+                        );
+                        (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "Unable to determine subscription tier. Please contact support."
+                                .to_string(),
+                        )
+                    })?;
 
                 // Calculate seats from quantity
-                let seats = stripe_subscription
-                    .items
-                    .data
-                    .first()
-                    .and_then(|item| item.quantity)
-                    .unwrap_or(1) as i32;
+                let seats = sub_item.and_then(|item| item.quantity).unwrap_or(1) as i32;
 
                 // Determine billing interval
-                let billing_interval = stripe_subscription
-                    .items
-                    .data
-                    .first()
+                let billing_interval = sub_item
                     .and_then(|item| item.price.as_ref())
                     .and_then(|price| price.recurring.as_ref())
                     .map(|r| match r.interval {
@@ -687,13 +888,35 @@ mod saas_billing {
                     chrono::DateTime::from_timestamp(stripe_subscription.current_period_end, 0)
                         .map(|dt| dt.with_timezone(&chrono::Utc));
 
-                // Update the organization with subscription details
-                OrganizationRepository::update_subscription(
+                // G1: Enforce member-count floor — cannot activate a subscription whose
+                // seat count is below the current member count.
+                let current_members = OrganizationMemberRepository::count(&state.db, &org.id)
+                    .await
+                    .map_err(|e| {
+                        tracing::error!(org_id = %org.id, "Failed to count members for seat check: {}", e);
+                        (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "Failed to verify seat count".to_string(),
+                        )
+                    })?;
+                if seats < current_members {
+                    return Err((
+                        StatusCode::BAD_REQUEST,
+                        format!(
+                            "Seat count ({}) is less than current member count ({})",
+                            seats, current_members
+                        ),
+                    ));
+                }
+
+                // Atomically activate only if not already recorded — prevents concurrent
+                // verify_checkout calls from double-processing the same session.
+                let updated = OrganizationRepository::activate_subscription_if_new(
                     &state.db,
                     &org.id,
+                    &subscription_id,
                     &tier,
                     seats,
-                    Some(&subscription_id),
                     "active",
                     Some(&billing_interval),
                     period_start,
@@ -702,19 +925,45 @@ mod saas_billing {
                 )
                 .await
                 .map_err(|e| {
+                    tracing::error!(org_id = %org.id, "Failed to activate subscription: {}", e);
                     (
                         StatusCode::INTERNAL_SERVER_ERROR,
-                        format!("Failed to update subscription: {}", e),
+                        "Failed to update subscription. Please contact support.".to_string(),
                     )
                 })?;
 
+                if !updated {
+                    // A concurrent request already activated this subscription; re-fetch for
+                    // fresh state so the client doesn't receive a null subscription.
+                    let fresh_org = OrganizationRepository::find_by_user(&state.db, &user.id)
+                        .await
+                        .ok()
+                        .flatten();
+                    let fresh_sub = fresh_org.as_ref().map(|o| SubscriptionResponse {
+                        tier: o.tier.clone(),
+                        seats: o.seats,
+                        subscription_status: o.subscription_status.clone(),
+                        billing_interval: o.billing_interval.clone(),
+                        current_period_start: o.current_period_start.map(|t| t.0),
+                        current_period_end: o.current_period_end.map(|t| t.0),
+                        cancel_at_period_end: o.cancel_at_period_end.0,
+                        has_stripe: o.stripe_subscription_id.is_some(),
+                    });
+                    return Ok(Json(VerifyCheckoutResponse {
+                        success: true,
+                        subscription: fresh_sub,
+                        message: "Subscription already active".to_string(),
+                        already_processed: true,
+                    }));
+                }
+
                 tracing::info!(
-                    "Verified checkout session {} for org {}: tier={}, seats={}, subscription={}",
-                    req.session_id,
-                    org.id,
-                    tier,
-                    seats,
-                    subscription_id
+                    session_id = %req.session_id,
+                    org_id = %org.id,
+                    tier = %tier,
+                    seats = seats,
+                    subscription_id = %subscription_id,
+                    "Checkout session verified successfully"
                 );
 
                 Ok(Json(VerifyCheckoutResponse {
@@ -733,38 +982,58 @@ mod saas_billing {
                     already_processed: false,
                 }))
             }
-            "Expired" => Ok(Json(VerifyCheckoutResponse {
-                success: false,
-                subscription: None,
-                message: "Checkout session has expired".to_string(),
-                already_processed: false,
-            })),
-            "Open" => Ok(Json(VerifyCheckoutResponse {
-                success: false,
-                subscription: None,
-                message: "Checkout is still in progress".to_string(),
-                already_processed: false,
-            })),
-            _ => Ok(Json(VerifyCheckoutResponse {
-                success: false,
-                subscription: None,
-                message: format!("Unknown session status: {}", status),
-                already_processed: false,
-            })),
+            Some(stripe::CheckoutSessionStatus::Expired) => {
+                tracing::info!(session_id = %req.session_id, org_id = %org.id, "Checkout session expired");
+                Ok(Json(VerifyCheckoutResponse {
+                    success: false,
+                    subscription: None,
+                    message: "Checkout session has expired".to_string(),
+                    already_processed: false,
+                }))
+            }
+            Some(stripe::CheckoutSessionStatus::Open) => {
+                tracing::debug!(session_id = %req.session_id, "Checkout session still open");
+                Ok(Json(VerifyCheckoutResponse {
+                    success: false,
+                    subscription: None,
+                    message: "Checkout is still in progress".to_string(),
+                    already_processed: false,
+                }))
+            }
+            status => {
+                tracing::warn!(session_id = %req.session_id, ?status, "Unknown checkout session status");
+                Ok(Json(VerifyCheckoutResponse {
+                    success: false,
+                    subscription: None,
+                    message: "Unknown session status".to_string(),
+                    already_processed: false,
+                }))
+            }
         }
     }
 
-    /// Extract tier from checkout session based on price ID or metadata
+    /// Extract tier from checkout session based on price ID or metadata.
+    /// G7: Only returns the tier if it is in the allowed set to prevent spoofed metadata
+    /// from injecting arbitrary tier strings into the database.
     fn extract_tier_from_session(session: &stripe::CheckoutSession) -> Option<String> {
+        const ALLOWED_TIERS: &[&str] = &["pro", "team", "enterprise"];
+
         // Try to get from metadata first
         if let Some(metadata) = &session.metadata {
             if let Some(tier) = metadata.get("tier") {
-                return Some(tier.clone());
+                if ALLOWED_TIERS.contains(&tier.as_str()) {
+                    return Some(tier.clone());
+                } else {
+                    tracing::error!(
+                        tier = %tier,
+                        "Invalid tier in Stripe session metadata — ignoring"
+                    );
+                    return None;
+                }
             }
         }
 
-        // Otherwise, we'll default to determining by price later in the webhook
-        // For now, return None and let the caller default to "pro"
+        // No tier in session metadata; caller will attempt to derive from price ID.
         None
     }
 
@@ -781,7 +1050,7 @@ mod saas_billing {
 
         let org = OrganizationRepository::find_by_user(&state.db, &user.id)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .map_err(db_err)?
             .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
 
         let customer_id = org.stripe_customer_id.ok_or((
@@ -789,10 +1058,22 @@ mod saas_billing {
             "No Stripe customer. Please upgrade first.".to_string(),
         ))?;
 
+        // Validate return_url — require exact origin prefix with trailing slash to prevent
+        // subdomain spoofing (e.g. app.example.com.evil.com passing a bare starts_with check).
+        let allowed_origin = format!("{}/", state.config.app_url.trim_end_matches('/'));
+        if !req.return_url.starts_with(&allowed_origin) {
+            return Err((StatusCode::BAD_REQUEST, "Invalid redirect URL".to_string()));
+        }
+
         let session = stripe
             .create_billing_portal_session(&customer_id, &req.return_url)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            .map_err(|e| {
+                tracing::error!(org_id = %org.id, "Stripe billing portal session creation failed: {}", e);
+                (StatusCode::INTERNAL_SERVER_ERROR, "Failed to create billing portal session. Please try again.".to_string())
+            })?;
+
+        tracing::info!(org_id = %org.id, user_id = %user.id, "Billing portal session created");
 
         Ok(Json(PortalResponse {
             portal_url: session.url,
@@ -805,6 +1086,17 @@ mod saas_billing {
         State(state): State<AppState>,
         Json(req): Json<CancelSubscriptionRequest>,
     ) -> Result<StatusCode, (StatusCode, String)> {
+        // Rate limit: 5 cancel_subscription requests per user per minute
+        let rl = state
+            .rate_limiter
+            .check(&format!("cancel_sub:{}", user.id), 5);
+        if !rl.allowed {
+            return Err((
+                StatusCode::TOO_MANY_REQUESTS,
+                "Too many requests".to_string(),
+            ));
+        }
+
         let stripe = state.stripe.as_ref().ok_or((
             StatusCode::SERVICE_UNAVAILABLE,
             "Stripe not configured".to_string(),
@@ -812,7 +1104,7 @@ mod saas_billing {
 
         let org = OrganizationRepository::find_by_user(&state.db, &user.id)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .map_err(db_err)?
             .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
 
         // Only owner can cancel
@@ -828,10 +1120,58 @@ mod saas_billing {
             "No active subscription".to_string(),
         ))?;
 
+        let immediately = req.immediately.unwrap_or(false);
         stripe
-            .cancel_subscription(&subscription_id, req.immediately.unwrap_or(false))
+            .cancel_subscription(&subscription_id, immediately)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            .map_err(|e| {
+                tracing::error!(
+                    org_id = %org.id,
+                    subscription_id = %subscription_id,
+                    immediately = immediately,
+                    "Stripe subscription cancellation failed: {}",
+                    e
+                );
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Failed to cancel subscription. Please try again.".to_string(),
+                )
+            })?;
+
+        // Update local DB immediately so the dashboard reflects cancellation before
+        // the Stripe webhook fires. The webhook is still the authoritative safety net.
+        let (new_status, cancel_flag) = if immediately {
+            ("canceled", false)
+        } else {
+            ("active", true) // active but scheduled to cancel at period end
+        };
+        if let Err(e) = OrganizationRepository::update_subscription(
+            &state.db,
+            &org.id,
+            &org.tier,
+            org.seats,
+            Some(&subscription_id),
+            new_status,
+            org.billing_interval.as_deref(),
+            org.current_period_start.map(|t| t.0),
+            org.current_period_end.map(|t| t.0),
+            cancel_flag,
+        )
+        .await
+        {
+            tracing::error!(
+                org_id = %org.id,
+                "cancel_subscription: Stripe succeeded but local DB update failed — webhook will correct: {}",
+                e
+            );
+        }
+
+        tracing::info!(
+            org_id = %org.id,
+            subscription_id = %subscription_id,
+            immediately = immediately,
+            "Subscription cancelled"
+        );
 
         Ok(StatusCode::NO_CONTENT)
     }
@@ -847,14 +1187,14 @@ mod saas_billing {
     ) -> Result<Json<UsageResponse>, (StatusCode, String)> {
         let org = OrganizationRepository::find_by_user(&state.db, &user.id)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .map_err(db_err)?
             .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
 
         // Determine current period (from org or default to current month)
         let now = chrono::Utc::now();
         let (period_start, period_end) = match (&org.current_period_start, &org.current_period_end)
         {
-            (Some(start), Some(end)) => (*start, *end),
+            (Some(start), Some(end)) => (start.0, end.0),
             _ => {
                 // Default to current calendar month - use beginning of current month
                 use chrono::{Datelike, TimeZone};
@@ -862,14 +1202,28 @@ mod saas_billing {
                     .with_ymd_and_hms(now.year(), now.month(), 1, 0, 0, 0)
                     .single()
                     .unwrap_or(now);
-                let end = start + chrono::Duration::days(30);
+                // Compute first day of next month as the exclusive period end
+                let next_month = if now.month() == 12 {
+                    1
+                } else {
+                    now.month() + 1
+                };
+                let next_year = if now.month() == 12 {
+                    now.year() + 1
+                } else {
+                    now.year()
+                };
+                let end = chrono::Utc
+                    .with_ymd_and_hms(next_year, next_month, 1, 0, 0, 0)
+                    .single()
+                    .unwrap_or(now);
                 (start, end)
             }
         };
 
         let usage = UsageRepository::list_current(&state.db, &org.id, period_start)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            .map_err(db_err)?;
 
         Ok(Json(UsageResponse {
             usage,
@@ -911,6 +1265,24 @@ mod saas_billing {
         State(state): State<AppState>,
         Json(req): Json<ChangePlanRequest>,
     ) -> Result<Json<ChangePlanResponse>, (StatusCode, String)> {
+        // Rate limit: 5 change_plan requests per user per minute
+        let rl = state
+            .rate_limiter
+            .check(&format!("change_plan:{}", user.id), 5);
+        if !rl.allowed {
+            return Err((
+                StatusCode::TOO_MANY_REQUESTS,
+                "Too many requests".to_string(),
+            ));
+        }
+
+        if !matches!(req.tier.as_str(), "pro" | "team" | "enterprise") {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "Invalid tier. Must be 'pro', 'team', or 'enterprise'.".to_string(),
+            ));
+        }
+
         let stripe = state.stripe.as_ref().ok_or((
             StatusCode::SERVICE_UNAVAILABLE,
             "Stripe not configured".to_string(),
@@ -918,7 +1290,7 @@ mod saas_billing {
 
         let org = OrganizationRepository::find_by_user(&state.db, &user.id)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .map_err(db_err)?
             .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
 
         // Check if user is owner
@@ -935,7 +1307,31 @@ mod saas_billing {
             "No active subscription to modify".to_string(),
         ))?;
 
-        let seats = req.seats.unwrap_or(org.seats) as i64;
+        // Explicit seats range check — must be 1..=10_000. Reject overflow/abuse early
+        // (Stripe would reject with a less helpful error). Mirrors the checkout validator.
+        let seats_req = req.seats.unwrap_or(org.seats);
+        if !(1..=10_000).contains(&seats_req) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "seats must be 1..=10000".to_string(),
+            ));
+        }
+
+        // G3: Enforce member-count floor — cannot reduce seats below current member count.
+        let current_members = OrganizationMemberRepository::count(&state.db, &org.id)
+            .await
+            .map_err(db_err)?;
+        if seats_req < current_members {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "Cannot reduce seats below current member count ({})",
+                    current_members
+                ),
+            ));
+        }
+
+        let seats = seats_req as i64;
         let annual = req
             .annual
             .unwrap_or(org.billing_interval.as_deref() == Some("annual"));
@@ -944,7 +1340,10 @@ mod saas_billing {
         let subscription = stripe
             .update_subscription_tier(subscription_id, &req.tier, annual, seats)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            .map_err(|e| {
+                tracing::error!(org_id = %org.id, tier = %req.tier, "Stripe plan update failed: {}", e);
+                (StatusCode::INTERNAL_SERVER_ERROR, "Failed to update plan. Please try again or contact support.".to_string())
+            })?;
 
         // Update local database
         let period_start = chrono::DateTime::from_timestamp(subscription.current_period_start, 0)
@@ -957,7 +1356,7 @@ mod saas_billing {
             &org.id,
             &req.tier,
             seats as i32,
-            Some(&subscription.id.to_string()),
+            Some(subscription.id.as_ref()),
             "active",
             Some(if annual { "annual" } else { "monthly" }),
             period_start,
@@ -965,7 +1364,26 @@ mod saas_billing {
             subscription.cancel_at_period_end,
         )
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|e| {
+            tracing::error!(
+                org_id = %org.id,
+                subscription_id = %subscription.id,
+                new_tier = %req.tier,
+                "CRITICAL: Stripe plan updated but local DB sync failed — manual reconciliation needed: {}",
+                e
+            );
+            (StatusCode::INTERNAL_SERVER_ERROR, "Plan updated in Stripe but failed to sync locally. Please contact support.".to_string())
+        })?;
+
+        tracing::info!(
+            org_id = %org.id,
+            user_id = %user.id,
+            new_tier = %req.tier,
+            seats = seats,
+            annual = annual,
+            subscription_id = %subscription.id,
+            "Subscription plan changed"
+        );
 
         Ok(Json(ChangePlanResponse {
             success: true,
@@ -981,6 +1399,24 @@ mod saas_billing {
         State(state): State<AppState>,
         Json(req): Json<ChangePlanRequest>,
     ) -> Result<Json<ProrationPreviewResponse>, (StatusCode, String)> {
+        // Rate limit: 20 preview_plan_change requests per user per minute
+        let rl = state
+            .rate_limiter
+            .check(&format!("preview_plan:{}", user.id), 20);
+        if !rl.allowed {
+            return Err((
+                StatusCode::TOO_MANY_REQUESTS,
+                "Too many requests".to_string(),
+            ));
+        }
+
+        if !matches!(req.tier.as_str(), "pro" | "team" | "enterprise") {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "Invalid tier. Must be 'pro', 'team', or 'enterprise'.".to_string(),
+            ));
+        }
+
         let stripe = state.stripe.as_ref().ok_or((
             StatusCode::SERVICE_UNAVAILABLE,
             "Stripe not configured".to_string(),
@@ -988,21 +1424,44 @@ mod saas_billing {
 
         let org = OrganizationRepository::find_by_user(&state.db, &user.id)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .map_err(db_err)?
             .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
+
+        if org.owner_id != user.id {
+            return Err((
+                StatusCode::FORBIDDEN,
+                "Only owner can preview plan changes".to_string(),
+            ));
+        }
 
         let subscription_id = org.stripe_subscription_id.as_ref().ok_or((
             StatusCode::BAD_REQUEST,
             "No active subscription".to_string(),
         ))?;
 
-        let seats = req.seats.unwrap_or(org.seats) as i64;
-        let annual = req.annual.unwrap_or(false);
+        let seats_req = req.seats.unwrap_or(org.seats);
+        if !(1..=10_000).contains(&seats_req) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "seats must be 1..=10000".to_string(),
+            ));
+        }
+        let seats = seats_req as i64;
+        // Mirror change_plan: inherit the current billing interval rather than defaulting to monthly
+        let annual = req
+            .annual
+            .unwrap_or(org.billing_interval.as_deref() == Some("annual"));
 
         let preview = stripe
             .preview_proration(subscription_id, &req.tier, annual, seats)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            .map_err(|e| {
+                tracing::error!(org_id = %org.id, "Proration preview failed: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Failed to calculate proration preview. Please try again.".to_string(),
+                )
+            })?;
 
         Ok(Json(ProrationPreviewResponse {
             current_amount_cents: preview.current_amount_cents,
@@ -1023,6 +1482,17 @@ mod saas_billing {
         State(state): State<AppState>,
         Json(req): Json<UpdateSeatsRequest>,
     ) -> Result<Json<ChangePlanResponse>, (StatusCode, String)> {
+        // Rate limit: 10 update_seats requests per user per minute
+        let rl = state
+            .rate_limiter
+            .check(&format!("update_seats:{}", user.id), 10);
+        if !rl.allowed {
+            return Err((
+                StatusCode::TOO_MANY_REQUESTS,
+                "Too many requests".to_string(),
+            ));
+        }
+
         let stripe = state.stripe.as_ref().ok_or((
             StatusCode::SERVICE_UNAVAILABLE,
             "Stripe not configured".to_string(),
@@ -1030,7 +1500,7 @@ mod saas_billing {
 
         let org = OrganizationRepository::find_by_user(&state.db, &user.id)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .map_err(db_err)?
             .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
 
         if org.owner_id != user.id {
@@ -1045,20 +1515,61 @@ mod saas_billing {
             "No active subscription".to_string(),
         ))?;
 
-        // Update in Stripe
+        // Seat request must be within the allowed range. Capping at 10_000
+        // mirrors the checkout validator and prevents an attacker from
+        // attempting a huge-number integer-overflow style request.
+        if !(1..=10_000).contains(&req.seats) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "seats must be 1..=10000".to_string(),
+            ));
+        }
+
+        // Guard: cannot reduce seats below occupied count.
+        let current_count = OrganizationMemberRepository::count(&state.db, &org.id)
+            .await
+            .map_err(db_err)?;
+        if req.seats < current_count {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "Cannot reduce seats below current member count ({})",
+                    current_count
+                ),
+            ));
+        }
+
+        // Update in Stripe (outside the transaction — Stripe is an external system).
         stripe
             .update_subscription_seats(subscription_id, req.seats as i64)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            .map_err(|e| {
+                tracing::error!(org_id = %org.id, seats = req.seats, "Stripe seat update failed: {}", e);
+                (StatusCode::INTERNAL_SERVER_ERROR, "Failed to update seats. Please try again.".to_string())
+            })?;
 
-        // Update local database
-        OrganizationRepository::update_seats(&state.db, &org.id, req.seats)
+        // Update local database atomically — guard rejects if a concurrent add_member
+        // slipped in between the check above and now, keeping seats >= member count.
+        let updated_org = OrganizationRepository::update_seats(&state.db, &org.id, req.seats)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            .map_err(|e| {
+                tracing::error!(
+                    org_id = %org.id,
+                    subscription_id = %subscription_id,
+                    new_seats = req.seats,
+                    "CRITICAL: Stripe seats updated but local DB sync failed — manual reconciliation needed: {}",
+                    e
+                );
+                (StatusCode::INTERNAL_SERVER_ERROR, "Seats updated in Stripe but failed to sync locally. Please contact support.".to_string())
+            })?
+            .ok_or_else(|| {
+                tracing::warn!(org_id = %org.id, new_seats = req.seats, "Seat update rejected: member count exceeds new seat value (concurrent add_member race)");
+                (StatusCode::CONFLICT, "Cannot reduce seats below current member count.".to_string())
+            })?;
 
         Ok(Json(ChangePlanResponse {
             success: true,
-            tier: org.tier,
+            tier: updated_org.tier,
             seats: req.seats,
             message: "Seats updated successfully".to_string(),
         }))
@@ -1080,6 +1591,17 @@ mod saas_billing {
         user: AuthUser,
         State(state): State<AppState>,
     ) -> Result<Json<InvoicesResponse>, (StatusCode, String)> {
+        // Rate limit: 20 list_invoices requests per user per minute
+        let rl = state
+            .rate_limiter
+            .check(&format!("list_invoices:{}", user.id), 20);
+        if !rl.allowed {
+            return Err((
+                StatusCode::TOO_MANY_REQUESTS,
+                "Too many requests".to_string(),
+            ));
+        }
+
         let stripe = state.stripe.as_ref().ok_or((
             StatusCode::SERVICE_UNAVAILABLE,
             "Stripe not configured".to_string(),
@@ -1087,7 +1609,7 @@ mod saas_billing {
 
         let org = OrganizationRepository::find_by_user(&state.db, &user.id)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .map_err(db_err)?
             .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
 
         let customer_id = org
@@ -1098,32 +1620,77 @@ mod saas_billing {
         let invoices = stripe
             .list_invoices(customer_id, Some(100))
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            .map_err(|e| {
+                tracing::error!(org_id = %org.id, "Failed to list invoices: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Failed to retrieve invoices. Please try again.".to_string(),
+                )
+            })?;
 
         Ok(Json(InvoicesResponse { invoices }))
     }
 
     /// Get single invoice details
+    ///
+    /// IDOR-safe ordering: we must avoid distinguishing "invoice exists but
+    /// belongs to another org" from "invoice does not exist". Both branches
+    /// return the exact same status code and message ("Invoice not found"),
+    /// and we do the ownership check inline so that timing differences
+    /// between the two paths are minimized.
     pub async fn get_invoice(
         user: AuthUser,
         State(state): State<AppState>,
         Path(invoice_id): Path<String>,
     ) -> Result<Json<InvoiceDetail>, (StatusCode, String)> {
+        // Generic, identical "not found" response used for every failure mode
+        // so an attacker can't distinguish cases by response code or message.
+        let not_found = || (StatusCode::NOT_FOUND, "Invoice not found".to_string());
+
         let stripe = state.stripe.as_ref().ok_or((
             StatusCode::SERVICE_UNAVAILABLE,
             "Stripe not configured".to_string(),
         ))?;
 
-        // Verify user has an org (access control)
-        let _org = OrganizationRepository::find_by_user(&state.db, &user.id)
-            .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-            .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
+        // Cheap syntactic check — Stripe invoice IDs start with "in_". Anything
+        // else never needs to reach Stripe and is safely rejected as NOT_FOUND.
+        if !invoice_id.starts_with("in_") {
+            return Err(not_found());
+        }
 
-        let invoice = stripe
-            .get_invoice(&invoice_id)
+        let org = OrganizationRepository::find_by_user(&state.db, &user.id)
             .await
-            .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
+            .map_err(db_err)?
+            .ok_or_else(not_found)?;
+
+        // Determine the org's Stripe customer first. If we don't have one we
+        // short-circuit with the same not-found response (no org can own any
+        // invoice without a customer mapping).
+        let customer_id = match org.stripe_customer_id.as_deref() {
+            Some(cid) if !cid.is_empty() => cid.to_string(),
+            _ => return Err(not_found()),
+        };
+
+        // Now fetch from Stripe. Both "Stripe returned an error" and
+        // "Stripe returned an invoice belonging to a different customer"
+        // collapse into the same generic not_found response.
+        let invoice = match stripe.get_invoice(&invoice_id).await {
+            Ok(inv) => inv,
+            Err(e) => {
+                tracing::error!(org_id = %org.id, invoice_id = %invoice_id, "Failed to fetch invoice: {}", e);
+                return Err(not_found());
+            }
+        };
+
+        // Ownership check: must match this org's Stripe customer ID.
+        if invoice.customer_id.as_deref() != Some(customer_id.as_str()) {
+            tracing::warn!(
+                org_id = %org.id,
+                invoice_id = %invoice_id,
+                "invoice ownership mismatch — rejecting as not-found"
+            );
+            return Err(not_found());
+        }
 
         Ok(Json(invoice))
     }
@@ -1162,7 +1729,7 @@ mod saas_billing {
 
         let org = OrganizationRepository::find_by_user(&state.db, &user.id)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .map_err(db_err)?
             .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
 
         let customer_id = org
@@ -1173,13 +1740,22 @@ mod saas_billing {
         let methods = stripe
             .list_payment_methods(customer_id)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            .map_err(|e| {
+                tracing::error!(org_id = %org.id, "Failed to list payment methods: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Failed to retrieve payment methods. Please try again.".to_string(),
+                )
+            })?;
 
         // Get default payment method from customer
-        let customer = stripe
-            .get_customer(customer_id)
-            .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        let customer = stripe.get_customer(customer_id).await.map_err(|e| {
+            tracing::error!(org_id = %org.id, "Failed to retrieve Stripe customer: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to retrieve payment methods. Please try again.".to_string(),
+            )
+        })?;
 
         let default_pm = customer
             .invoice_settings
@@ -1197,6 +1773,17 @@ mod saas_billing {
         user: AuthUser,
         State(state): State<AppState>,
     ) -> Result<Json<SetupIntentResponse>, (StatusCode, String)> {
+        // Rate limit: 10 create_setup_intent requests per user per minute
+        let rl = state
+            .rate_limiter
+            .check(&format!("setup_intent:{}", user.id), 10);
+        if !rl.allowed {
+            return Err((
+                StatusCode::TOO_MANY_REQUESTS,
+                "Too many requests".to_string(),
+            ));
+        }
+
         let stripe = state.stripe.as_ref().ok_or((
             StatusCode::SERVICE_UNAVAILABLE,
             "Stripe not configured".to_string(),
@@ -1204,7 +1791,7 @@ mod saas_billing {
 
         let org = OrganizationRepository::find_by_user(&state.db, &user.id)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .map_err(db_err)?
             .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
 
         let customer_id = org
@@ -1212,10 +1799,13 @@ mod saas_billing {
             .as_ref()
             .ok_or((StatusCode::BAD_REQUEST, "No Stripe customer".to_string()))?;
 
-        let intent = stripe
-            .create_setup_intent(customer_id)
-            .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        let intent = stripe.create_setup_intent(customer_id).await.map_err(|e| {
+            tracing::error!(org_id = %org.id, "Failed to create setup intent: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to create payment setup. Please try again.".to_string(),
+            )
+        })?;
 
         let client_secret = intent.client_secret.ok_or((
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -1231,6 +1821,17 @@ mod saas_billing {
         State(state): State<AppState>,
         Json(req): Json<SetDefaultPaymentMethodRequest>,
     ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+        // Rate limit: 10 set_default_payment_method requests per user per minute
+        let rl = state
+            .rate_limiter
+            .check(&format!("set_default_pm:{}", user.id), 10);
+        if !rl.allowed {
+            return Err((
+                StatusCode::TOO_MANY_REQUESTS,
+                "Too many requests".to_string(),
+            ));
+        }
+
         let stripe = state.stripe.as_ref().ok_or((
             StatusCode::SERVICE_UNAVAILABLE,
             "Stripe not configured".to_string(),
@@ -1238,7 +1839,7 @@ mod saas_billing {
 
         let org = OrganizationRepository::find_by_user(&state.db, &user.id)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .map_err(db_err)?
             .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
 
         if org.owner_id != user.id {
@@ -1253,10 +1854,32 @@ mod saas_billing {
             .as_ref()
             .ok_or((StatusCode::BAD_REQUEST, "No Stripe customer".to_string()))?;
 
+        // IDOR guard: verify the payment method belongs to this org's Stripe customer
+        // before setting it as default (prevents cross-customer payment method hijacking).
+        let pm = stripe
+            .get_payment_method(&req.payment_method_id)
+            .await
+            .map_err(|_| {
+                (
+                    StatusCode::NOT_FOUND,
+                    "Payment method not found".to_string(),
+                )
+            })?;
+        let pm_customer = pm.customer.as_ref().map(|c| c.id().to_string());
+        if pm_customer.as_deref() != Some(customer_id.as_str()) {
+            return Err((
+                StatusCode::NOT_FOUND,
+                "Payment method not found".to_string(),
+            ));
+        }
+
         stripe
             .set_default_payment_method(customer_id, &req.payment_method_id)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            .map_err(|e| {
+                tracing::error!(org_id = %org.id, pm_id = %req.payment_method_id, "Failed to set default payment method: {}", e);
+                (StatusCode::INTERNAL_SERVER_ERROR, "Failed to update default payment method. Please try again.".to_string())
+            })?;
 
         Ok(Json(serde_json::json!({ "success": true })))
     }
@@ -1267,6 +1890,17 @@ mod saas_billing {
         State(state): State<AppState>,
         Path(payment_method_id): Path<String>,
     ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+        // Rate limit: 10 delete_payment_method requests per user per minute
+        let rl = state
+            .rate_limiter
+            .check(&format!("delete_pm:{}", user.id), 10);
+        if !rl.allowed {
+            return Err((
+                StatusCode::TOO_MANY_REQUESTS,
+                "Too many requests".to_string(),
+            ));
+        }
+
         let stripe = state.stripe.as_ref().ok_or((
             StatusCode::SERVICE_UNAVAILABLE,
             "Stripe not configured".to_string(),
@@ -1274,7 +1908,7 @@ mod saas_billing {
 
         let org = OrganizationRepository::find_by_user(&state.db, &user.id)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .map_err(db_err)?
             .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
 
         if org.owner_id != user.id {
@@ -1284,10 +1918,37 @@ mod saas_billing {
             ));
         }
 
+        let customer_id = org
+            .stripe_customer_id
+            .as_ref()
+            .ok_or((StatusCode::BAD_REQUEST, "No Stripe customer".to_string()))?;
+
+        // IDOR guard: verify the payment method belongs to this org's Stripe customer
+        // before detaching (prevents cross-customer payment method deletion).
+        let pm = stripe
+            .get_payment_method(&payment_method_id)
+            .await
+            .map_err(|_| {
+                (
+                    StatusCode::NOT_FOUND,
+                    "Payment method not found".to_string(),
+                )
+            })?;
+        let pm_customer = pm.customer.as_ref().map(|c| c.id().to_string());
+        if pm_customer.as_deref() != Some(customer_id.as_str()) {
+            return Err((
+                StatusCode::NOT_FOUND,
+                "Payment method not found".to_string(),
+            ));
+        }
+
         stripe
             .detach_payment_method(&payment_method_id)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            .map_err(|e| {
+                tracing::error!(org_id = %org.id, pm_id = %payment_method_id, "Failed to detach payment method: {}", e);
+                (StatusCode::INTERNAL_SERVER_ERROR, "Failed to remove payment method. Please try again.".to_string())
+            })?;
 
         Ok(Json(serde_json::json!({ "success": true })))
     }
@@ -1305,27 +1966,38 @@ mod saas_billing {
 
     /// Validate a coupon code
     pub async fn validate_coupon(
-        user: AuthUser,
+        _user: AuthUser,
         State(state): State<AppState>,
         Json(req): Json<ValidateCouponRequest>,
     ) -> Result<Json<CouponInfo>, (StatusCode, String)> {
+        // Rate limit: 10 validate_coupon requests per user
+        let rl = state
+            .rate_limiter
+            .check(&format!("validate_coupon:{}", _user.id), 10);
+        if !rl.allowed {
+            return Err((
+                StatusCode::TOO_MANY_REQUESTS,
+                "Too many requests".to_string(),
+            ));
+        }
+
         let stripe = state.stripe.as_ref().ok_or((
             StatusCode::SERVICE_UNAVAILABLE,
             "Stripe not configured".to_string(),
         ))?;
 
-        // Verify user exists (basic auth check)
-        let _org = OrganizationRepository::find_by_user(&state.db, &user.id)
-            .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-        let coupon = stripe
-            .validate_coupon(&req.code)
-            .await
-            .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
+        let coupon = stripe.validate_coupon(&req.code).await.map_err(|_| {
+            (
+                StatusCode::NOT_FOUND,
+                "Coupon not found or invalid".to_string(),
+            )
+        })?;
 
         if !coupon.valid {
-            return Err((StatusCode::BAD_REQUEST, "Coupon is not valid".to_string()));
+            return Err((
+                StatusCode::NOT_FOUND,
+                "Coupon not found or invalid".to_string(),
+            ));
         }
 
         Ok(Json(coupon))
@@ -1343,6 +2015,7 @@ mod saas_billing {
     }
 
     #[derive(Deserialize)]
+    #[allow(dead_code)]
     pub struct AddTaxIdRequest {
         #[serde(rename = "type")]
         pub type_: String,
@@ -1361,7 +2034,7 @@ mod saas_billing {
 
         let org = OrganizationRepository::find_by_user(&state.db, &user.id)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .map_err(db_err)?
             .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
 
         let customer_id = org
@@ -1369,10 +2042,13 @@ mod saas_billing {
             .as_ref()
             .ok_or((StatusCode::NOT_FOUND, "No billing setup".to_string()))?;
 
-        let tax_ids = stripe
-            .list_tax_ids(customer_id)
-            .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        let tax_ids = stripe.list_tax_ids(customer_id).await.map_err(|e| {
+            tracing::error!(org_id = %org.id, "Failed to list tax IDs: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to retrieve tax information. Please try again.".to_string(),
+            )
+        })?;
 
         Ok(Json(TaxIdsResponse { tax_ids }))
     }
@@ -1390,7 +2066,7 @@ mod saas_billing {
 
         let org = OrganizationRepository::find_by_user(&state.db, &user.id)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .map_err(db_err)?
             .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
 
         if org.owner_id != user.id {
@@ -1405,26 +2081,13 @@ mod saas_billing {
             .as_ref()
             .ok_or((StatusCode::BAD_REQUEST, "No Stripe customer".to_string()))?;
 
-        let tax_id = stripe
-            .add_tax_id(customer_id, &req.type_, &req.value)
-            .await
-            .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
-
-        // Also store in local database
-        OrganizationRepository::update_tax_info(&state.db, &org.id, Some(&req.value), None, None)
-            .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-        Ok(Json(TaxIdInfo {
-            id: tax_id.id.to_string(),
-            type_: format!("{:?}", tax_id.type_),
-            value: tax_id.value.unwrap_or_default(),
-            verification_status: tax_id
-                .verification
-                .as_ref()
-                .map(|v| format!("{:?}", v.status)),
-            country: tax_id.country,
-        }))
+        // Tax ID management requires async-stripe 0.39+ — not yet available.
+        // Return 501 so the frontend can show a "coming soon" message.
+        let _ = (stripe, customer_id, req);
+        Err((
+            StatusCode::NOT_IMPLEMENTED,
+            "Tax ID management is not yet available.".to_string(),
+        ))
     }
 
     // ============================================================================
@@ -1448,19 +2111,50 @@ mod saas_billing {
         user: AuthUser,
         State(state): State<AppState>,
     ) -> Result<Json<BillingDashboardResponse>, (StatusCode, String)> {
+        // Rate limit: 30 get_billing_dashboard requests per user per minute
+        let rl = state
+            .rate_limiter
+            .check(&format!("billing_dashboard:{}", user.id), 30);
+        if !rl.allowed {
+            return Err((
+                StatusCode::TOO_MANY_REQUESTS,
+                "Too many requests".to_string(),
+            ));
+        }
+
         let org = OrganizationRepository::find_by_user(&state.db, &user.id)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .map_err(db_err)?
             .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
 
         let members_count = OrganizationMemberRepository::count(&state.db, &org.id)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            .map_err(db_err)?;
 
-        // Calculate monthly cost based on tier and seats
+        // WARNING: these unit prices must stay in sync with the Stripe price objects
+        // AND with billing/tiers.rs get_price_per_seat().
+        // Annual prices reflect the effective monthly cost (annual total / 12),
+        // applying the 30% annual discount: monthly * 0.7 / 1 = monthly * 0.7.
+        const PRICE_PRO_MONTHLY_CENTS: i64 = 1200; // $12/seat/month (tiers.rs: Pro => 1200)
+        const PRICE_PRO_ANNUAL_MONTHLY_CENTS: i64 = 840; // $12 * 0.7 = $8.40/seat/month
+        const PRICE_TEAM_MONTHLY_CENTS: i64 = 2500; // $25/seat/month (tiers.rs: Team => 2500)
+        const PRICE_TEAM_ANNUAL_MONTHLY_CENTS: i64 = 1750; // $25 * 0.7 = $17.50/seat/month
+        let annual = org.billing_interval.as_deref() == Some("annual");
         let monthly_cost_cents = match org.tier.as_str() {
-            "pro" => 1200 * org.seats as i64,  // $12/seat/month
-            "team" => 2100 * org.seats as i64, // $21/seat/month
+            "pro" => {
+                if annual {
+                    PRICE_PRO_ANNUAL_MONTHLY_CENTS * org.seats as i64
+                } else {
+                    PRICE_PRO_MONTHLY_CENTS * org.seats as i64
+                }
+            }
+            "team" => {
+                if annual {
+                    PRICE_TEAM_ANNUAL_MONTHLY_CENTS * org.seats as i64
+                } else {
+                    PRICE_TEAM_MONTHLY_CENTS * org.seats as i64
+                }
+            }
             _ => 0,
         };
 
@@ -1469,10 +2163,10 @@ mod saas_billing {
             monthly_cost_cents,
             seats_used: members_count,
             seats_total: org.seats,
-            billing_period_start: org.current_period_start,
-            billing_period_end: org.current_period_end,
+            billing_period_start: org.current_period_start.map(|t| t.0),
+            billing_period_end: org.current_period_end.map(|t| t.0),
             is_past_due: org.subscription_status == "past_due",
-            cancel_at_period_end: org.cancel_at_period_end,
+            cancel_at_period_end: org.cancel_at_period_end.0,
         }))
     }
 
@@ -1486,14 +2180,25 @@ mod saas_billing {
         user: AuthUser,
         State(state): State<AppState>,
     ) -> Result<Json<UsageHistoryResponse>, (StatusCode, String)> {
+        // Rate limit: 20 get_usage_history requests per user per minute
+        let rl = state
+            .rate_limiter
+            .check(&format!("usage_history:{}", user.id), 20);
+        if !rl.allowed {
+            return Err((
+                StatusCode::TOO_MANY_REQUESTS,
+                "Too many requests".to_string(),
+            ));
+        }
+
         let org = OrganizationRepository::find_by_user(&state.db, &user.id)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .map_err(db_err)?
             .ok_or((StatusCode::NOT_FOUND, "No organization found".to_string()))?;
 
         let history = UsageRepository::list_all(&state.db, &org.id)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            .map_err(db_err)?;
 
         Ok(Json(UsageHistoryResponse { history }))
     }
@@ -1509,3 +2214,355 @@ mod saas_billing {
 
 #[cfg(feature = "saas")]
 pub use saas_billing::*;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generate_org_slug_lowercases_name() {
+        let slug = generate_org_slug("MyOrg");
+        assert!(slug.starts_with("myorg-"));
+    }
+
+    #[test]
+    fn generate_org_slug_replaces_special_chars_with_dashes() {
+        let slug = generate_org_slug("Acme Corp!");
+        assert!(slug.starts_with("acme-corp--"));
+    }
+
+    #[test]
+    fn generate_org_slug_has_unique_suffix() {
+        let s1 = generate_org_slug("same");
+        let s2 = generate_org_slug("same");
+        assert_ne!(s1, s2);
+    }
+
+    #[test]
+    fn generate_org_slug_suffix_length_is_eight() {
+        let slug = generate_org_slug("test");
+        let suffix = slug.split('-').next_back().unwrap();
+        assert_eq!(suffix.len(), 8);
+    }
+
+    // ── integration helpers ───────────────────────────────────────────────────
+
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+    };
+    use serde_json::Value;
+    use tower::ServiceExt;
+
+    async fn make_app() -> axum::Router {
+        let state = crate::db::test_helpers::test_app_state().await;
+        axum::Router::new()
+            .nest("/api/v1", crate::api::router())
+            .with_state(state)
+    }
+
+    fn peer() -> std::net::SocketAddr {
+        "127.0.0.1:1234".parse().unwrap()
+    }
+
+    async fn signup_and_token(app: &axum::Router, email: &str) -> String {
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/auth/signup")
+            .header("content-type", "application/json")
+            .extension(axum::extract::ConnectInfo(peer()))
+            .body(Body::from(format!(
+                r#"{{"email":"{}","password":"StrongPass1!"}}"#,
+                email
+            )))
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        for v in resp.headers().get_all("set-cookie") {
+            let s = v.to_str().unwrap_or("");
+            if let Some(rest) = s.strip_prefix("access_token=") {
+                return rest.split(';').next().unwrap_or("").to_string();
+            }
+        }
+        panic!("no access_token in signup response");
+    }
+
+    async fn create_org(app: &axum::Router, token: &str, name: &str) -> Value {
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/organization")
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::from(format!(r#"{{"name":"{}"}}"#, name)))
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
+    // ── auth guards ───────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn get_organization_without_auth_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/organization")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn create_organization_without_auth_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/organization")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"name":"test"}"#))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn list_members_without_auth_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/organization/members")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn add_member_without_auth_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/organization/members")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"email":"a@b.com"}"#))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn remove_member_without_auth_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("DELETE")
+            .uri("/api/v1/organization/members/some-user-id")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    // ── organization CRUD ─────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn get_organization_without_org_returns_404() {
+        let app = make_app().await;
+        let token = signup_and_token(&app, "billing_noorg@example.com").await;
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/organization")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+
+    #[tokio::test]
+    async fn create_organization_succeeds() {
+        let app = make_app().await;
+        let token = signup_and_token(&app, "billing_createorg@example.com").await;
+        let json = create_org(&app, &token, "My Company").await;
+        assert_eq!(json["organization"]["name"], "My Company");
+        assert_eq!(json["is_owner"], true);
+        assert_eq!(json["members_count"], 1);
+    }
+
+    #[tokio::test]
+    async fn create_organization_duplicate_returns_conflict() {
+        let app = make_app().await;
+        let token = signup_and_token(&app, "billing_duporg@example.com").await;
+        create_org(&app, &token, "First Org").await;
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/organization")
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::from(r#"{"name":"Second Org"}"#))
+            .unwrap();
+        let status = app.oneshot(req).await.unwrap().status();
+        assert_eq!(status, StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn create_organization_empty_name_returns_400() {
+        let app = make_app().await;
+        let token = signup_and_token(&app, "billing_emptyorg@example.com").await;
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/organization")
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::from(r#"{"name":"   "}"#))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    #[tokio::test]
+    async fn get_organization_returns_org_after_create() {
+        let app = make_app().await;
+        let token = signup_and_token(&app, "billing_getorg@example.com").await;
+        create_org(&app, &token, "Get Org Test").await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/organization")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["organization"]["name"], "Get Org Test");
+        assert_eq!(json["is_owner"], true);
+    }
+
+    #[tokio::test]
+    async fn update_organization_name_succeeds() {
+        let app = make_app().await;
+        let token = signup_and_token(&app, "billing_updateorg@example.com").await;
+        create_org(&app, &token, "Old Name").await;
+
+        let req = Request::builder()
+            .method("PATCH")
+            .uri("/api/v1/organization")
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::from(r#"{"name":"New Name"}"#))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["organization"]["name"], "New Name");
+    }
+
+    // ── member management ─────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn list_members_returns_members_after_create() {
+        let app = make_app().await;
+        let token = signup_and_token(&app, "billing_listmembers@example.com").await;
+        create_org(&app, &token, "Members Org").await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/organization/members")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(json.as_array().is_some());
+        assert!(!json.as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn add_member_nonexistent_user_returns_404() {
+        let app = make_app().await;
+        let token = signup_and_token(&app, "billing_addmember@example.com").await;
+        create_org(&app, &token, "Add Member Org").await;
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/organization/members")
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::from(r#"{"email":"nobody@notexist.example"}"#))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+
+    #[tokio::test]
+    async fn add_and_remove_member_succeeds() {
+        let app = make_app().await;
+        let owner_token = signup_and_token(&app, "billing_owner_ar@example.com").await;
+        let member_token = signup_and_token(&app, "billing_member_ar@example.com").await;
+        let _ = member_token; // member just needs to exist in DB
+
+        let org_json = create_org(&app, &owner_token, "AR Org").await;
+        let _org_id = org_json["organization"]["id"].as_str().unwrap().to_string();
+
+        // Add the member
+        let add_req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/organization/members")
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", owner_token))
+            .body(Body::from(r#"{"email":"billing_member_ar@example.com"}"#))
+            .unwrap();
+        let add_resp = app.clone().oneshot(add_req).await.unwrap();
+        assert_eq!(add_resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(add_resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let member_json: Value = serde_json::from_slice(&bytes).unwrap();
+        let member_user_id = member_json["member"]["user_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        // Remove the member
+        let del_req = Request::builder()
+            .method("DELETE")
+            .uri(format!("/api/v1/organization/members/{}", member_user_id))
+            .header("authorization", format!("Bearer {}", owner_token))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(del_req).await.unwrap().status(),
+            StatusCode::NO_CONTENT
+        );
+    }
+}

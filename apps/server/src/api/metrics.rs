@@ -17,6 +17,21 @@ use crate::{
 
 use super::events::extract_api_key;
 
+/// Verify the authenticated user owns `project_id`. Returns Forbidden otherwise.
+async fn require_project_owner(
+    db: &crate::db::DbPool,
+    user_id: &str,
+    project_id: &str,
+) -> AppResult<crate::db::models::Project> {
+    let project = ProjectRepository::find_by_id(db, project_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Project not found".to_string()))?;
+    if project.owner_id != user_id {
+        return Err(AppError::Forbidden("Access denied".to_string()));
+    }
+    Ok(project)
+}
+
 // ============================================================================
 // Ingestion Payload Types
 // ============================================================================
@@ -127,29 +142,7 @@ pub async fn ingest_metrics(
         .await?
         .ok_or_else(|| AppError::Unauthorized("Invalid API key".to_string()))?;
 
-    // 3. Check tier — server monitoring is Pro+ only (bypassed in self-hosted mode or valid x402 payment)
-    if !state.config.deployment_mode.is_self_hosted()
-        && !(state.config.x402_enabled && x402_verified.is_some())
-    {
-        let tier_str = OrganizationRepository::get_project_tier(&state.db, &project.id)
-            .await
-            .unwrap_or_else(|_| "free".to_string());
-        if !can_access_feature(&tier_str, "server_monitoring") {
-            let org_id = project.organization_id.as_deref().unwrap_or("");
-            let resource = "/api/v1/metrics";
-            return Err(crate::payments::x402_feature_response(
-                &state,
-                "server_monitoring",
-                &resource,
-                org_id,
-                None,
-                "Server monitoring requires a Pro plan or higher. Upgrade to access this feature.",
-            )
-            .await);
-        }
-    }
-
-    // 4. Rate limit
+    // 3. Rate limit — checked before the expensive tier/org DB lookup (E4)
     let rate_limit_result = state
         .rate_limiter
         .check_with_tier_lookup(
@@ -165,6 +158,65 @@ pub async fn ingest_metrics(
             limit: rate_limit_result.limit,
             remaining: rate_limit_result.remaining,
         });
+    }
+
+    // 4. Check tier — server monitoring is Pro+ only (bypassed in self-hosted mode or valid x402 payment)
+    if !(state.config.deployment_mode.is_self_hosted()
+        || state.config.x402_enabled && x402_verified.is_some())
+    {
+        let tier_str = OrganizationRepository::get_project_tier(&state.db, &project.id)
+            .await
+            .unwrap_or_else(|_| "free".to_string());
+        if !can_access_feature(&tier_str, "server_monitoring") {
+            let org_id = project.organization_id.as_deref().unwrap_or("");
+            let resource = "/api/v1/metrics";
+            return Err(crate::payments::x402_feature_response(
+                &state,
+                "server_monitoring",
+                resource,
+                org_id,
+                None,
+                "Server monitoring requires a Pro plan or higher. Upgrade to access this feature.",
+            )
+            .await);
+        }
+    }
+
+    // 5. Validate field lengths (B3)
+    if payload.server_id.len() > 128 {
+        return Err(AppError::BadRequest(
+            "server_id too long (max 128 bytes)".to_string(),
+        ));
+    }
+    if payload.hostname.len() > 253 {
+        return Err(AppError::BadRequest(
+            "hostname too long (max 253 bytes)".to_string(),
+        ));
+    }
+    if payload.os.as_deref().map(|s| s.len()).unwrap_or(0) > 128 {
+        return Err(AppError::BadRequest(
+            "os too long (max 128 bytes)".to_string(),
+        ));
+    }
+    if payload.kernel.as_deref().map(|s| s.len()).unwrap_or(0) > 128 {
+        return Err(AppError::BadRequest(
+            "kernel too long (max 128 bytes)".to_string(),
+        ));
+    }
+
+    // B6: cap Vec counts
+    if payload.disks.as_ref().map(|v| v.len()).unwrap_or(0) > 100 {
+        return Err(AppError::BadRequest("Too many disks (max 100)".to_string()));
+    }
+    if payload.processes.as_ref().map(|v| v.len()).unwrap_or(0) > 500 {
+        return Err(AppError::BadRequest(
+            "Too many processes (max 500)".to_string(),
+        ));
+    }
+    if payload.docker.as_ref().map(|v| v.len()).unwrap_or(0) > 200 {
+        return Err(AppError::BadRequest(
+            "Too many docker containers (max 200)".to_string(),
+        ));
     }
 
     // 5. Upsert server record
@@ -215,17 +267,25 @@ pub async fn ingest_metrics(
     )
     .await?;
 
-    // 8. Async alert evaluation
+    // 8. Async alert evaluation (bounded by a timeout to prevent runaway tasks)
     let alerting = state.alerting_service.clone();
     let project_id = project.id.clone();
     let server_id_clone = server.id.clone();
     let metric_clone = metric.clone();
     tokio::spawn(async move {
-        if let Err(e) = alerting
-            .on_metrics_threshold(&project_id, &server_id_clone, &metric_clone)
-            .await
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            alerting.on_metrics_threshold(&project_id, &server_id_clone, &metric_clone),
+        )
+        .await
         {
-            tracing::error!("Failed to evaluate server metric alerts: {}", e);
+            Ok(Err(e)) => {
+                tracing::error!("Failed to evaluate server metric alerts: {}", e);
+            }
+            Err(_elapsed) => {
+                tracing::error!("Server metric alert evaluation timed out after 30s");
+            }
+            Ok(Ok(())) => {}
         }
     });
 
@@ -248,14 +308,8 @@ pub async fn list_servers(
     auth_user: AuthUser,
     Path(project_id): Path<String>,
 ) -> AppResult<Json<serde_json::Value>> {
-    let project = ProjectRepository::find_by_id(&state.db, &project_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound("Project not found".to_string()))?;
-
-    if project.owner_id != auth_user.id {
-        return Err(AppError::Forbidden("Access denied".to_string()));
-    }
-
+    crate::api::enforce_rate_limit(&state, &format!("servers_list:user:{}", auth_user.id), 30)?;
+    require_project_owner(&state.db, &auth_user.id, &project_id).await?;
     let servers = ServerRepository::list_by_project(&state.db, &project_id).await?;
 
     Ok(Json(serde_json::json!({ "data": servers })))
@@ -267,13 +321,8 @@ pub async fn servers_status(
     auth_user: AuthUser,
     Path(project_id): Path<String>,
 ) -> AppResult<Json<serde_json::Value>> {
-    let project = ProjectRepository::find_by_id(&state.db, &project_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound("Project not found".to_string()))?;
-
-    if project.owner_id != auth_user.id {
-        return Err(AppError::Forbidden("Access denied".to_string()));
-    }
+    crate::api::enforce_rate_limit(&state, &format!("servers_status:user:{}", auth_user.id), 60)?;
+    require_project_owner(&state.db, &auth_user.id, &project_id).await?;
 
     let has_agent = ServerRepository::has_servers(&state.db, &project_id).await?;
     let server_count = if has_agent {
@@ -305,13 +354,8 @@ pub async fn get_server_metrics(
     Path((project_id, server_id)): Path<(String, String)>,
     Query(params): Query<MetricsQuery>,
 ) -> AppResult<Json<serde_json::Value>> {
-    let project = ProjectRepository::find_by_id(&state.db, &project_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound("Project not found".to_string()))?;
-
-    if project.owner_id != auth_user.id {
-        return Err(AppError::Forbidden("Access denied".to_string()));
-    }
+    crate::api::enforce_rate_limit(&state, &format!("server_metrics:user:{}", auth_user.id), 60)?;
+    require_project_owner(&state.db, &auth_user.id, &project_id).await?;
 
     // server_id here is the DB id of the server
     let server = ServerRepository::find_by_id(&state.db, &server_id)
@@ -329,7 +373,7 @@ pub async fn get_server_metrics(
         "6h" => Duration::hours(6),
         "24h" => Duration::hours(24),
         "7d" => Duration::days(7),
-        _ => Duration::hours(1),
+        _ => return Err(AppError::BadRequest("Invalid period".to_string())),
     };
 
     let now = Utc::now();
@@ -389,13 +433,12 @@ pub async fn get_latest_metrics(
     auth_user: AuthUser,
     Path((project_id, server_id)): Path<(String, String)>,
 ) -> AppResult<Json<serde_json::Value>> {
-    let project = ProjectRepository::find_by_id(&state.db, &project_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound("Project not found".to_string()))?;
-
-    if project.owner_id != auth_user.id {
-        return Err(AppError::Forbidden("Access denied".to_string()));
-    }
+    crate::api::enforce_rate_limit(
+        &state,
+        &format!("server_metrics_latest:user:{}", auth_user.id),
+        60,
+    )?;
+    require_project_owner(&state.db, &auth_user.id, &project_id).await?;
 
     let server = ServerRepository::find_by_id(&state.db, &server_id)
         .await?
@@ -455,5 +498,645 @@ pub async fn get_latest_metrics(
             "data": null,
             "server": server
         }))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+    };
+    use serde_json::Value;
+    use tower::ServiceExt;
+
+    async fn make_app() -> axum::Router {
+        let state = crate::db::test_helpers::test_app_state().await;
+        axum::Router::new()
+            .nest("/api/v1", crate::api::router())
+            .with_state(state)
+    }
+
+    fn peer() -> std::net::SocketAddr {
+        "127.0.0.1:1234".parse().unwrap()
+    }
+
+    async fn signup_and_get_token(app: &axum::Router, email: &str) -> String {
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/auth/signup")
+            .header("content-type", "application/json")
+            .extension(axum::extract::ConnectInfo(peer()))
+            .body(Body::from(format!(
+                r#"{{"email":"{}","password":"StrongPass1!"}}"#,
+                email
+            )))
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        for v in resp.headers().get_all("set-cookie") {
+            let s = v.to_str().unwrap_or("");
+            if let Some(rest) = s.strip_prefix("access_token=") {
+                return rest.split(';').next().unwrap_or("").to_string();
+            }
+        }
+        panic!("no access_token in signup response");
+    }
+
+    async fn create_project_with_key(app: &axum::Router, token: &str) -> (String, String) {
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/projects")
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::from(r#"{"name":"Metrics Test Project"}"#))
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        let id = json["data"]["id"].as_str().unwrap().to_string();
+        let key = json["data"]["api_key"].as_str().unwrap().to_string();
+        (id, key)
+    }
+
+    // ── ingest_metrics auth guards ────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn ingest_metrics_without_api_key_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/metrics")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"server_id":"srv1","hostname":"host1"}"#))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn ingest_metrics_invalid_api_key_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/metrics")
+            .header("content-type", "application/json")
+            .header("x-api-key", "bad-key")
+            .body(Body::from(r#"{"server_id":"srv1","hostname":"host1"}"#))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    // ── dashboard endpoints auth guards ───────────────────────────────────────
+
+    #[tokio::test]
+    async fn list_servers_without_auth_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/projects/proj1/servers")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn servers_status_without_auth_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/projects/proj1/servers/status")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn get_server_metrics_without_auth_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/projects/proj1/servers/srv1/metrics")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn get_latest_metrics_without_auth_returns_401() {
+        let app = make_app().await;
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/projects/proj1/servers/srv1/metrics/latest")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    // ── ingest_metrics success ─────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn ingest_metrics_succeeds_with_valid_key() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "metrics_ingest@example.com").await;
+        let (_, api_key) = create_project_with_key(&app, &token).await;
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/metrics")
+            .header("content-type", "application/json")
+            .header("x-api-key", &api_key)
+            .body(Body::from(r#"{"server_id":"srv1","hostname":"web-01"}"#))
+            .unwrap();
+        let status = app.oneshot(req).await.unwrap().status();
+        assert!(
+            status == StatusCode::OK
+                || status == StatusCode::ACCEPTED
+                || status == StatusCode::CREATED,
+            "expected 2xx, got {}",
+            status
+        );
+    }
+
+    // ── list_servers with auth ─────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn list_servers_returns_200_when_authenticated() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "metrics_list@example.com").await;
+        let (project_id, _) = create_project_with_key(&app, &token).await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!("/api/v1/projects/{}/servers", project_id))
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(app.oneshot(req).await.unwrap().status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn servers_status_no_agents_returns_200() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "status_noagent@example.com").await;
+        let (project_id, _) = create_project_with_key(&app, &token).await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!("/api/v1/projects/{}/servers/status", project_id))
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["has_agent"], false);
+        assert_eq!(json["server_count"], 0);
+    }
+
+    #[tokio::test]
+    async fn servers_status_with_agent_returns_200() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "status_agent@example.com").await;
+        let (project_id, api_key) = create_project_with_key(&app, &token).await;
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/metrics")
+            .header("content-type", "application/json")
+            .header("x-api-key", &api_key)
+            .body(Body::from(
+                r#"{"server_id":"srv-status","hostname":"web-01"}"#,
+            ))
+            .unwrap();
+        app.clone().oneshot(req).await.unwrap();
+
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!("/api/v1/projects/{}/servers/status", project_id))
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["has_agent"], true);
+        assert_eq!(json["server_count"], 1);
+    }
+
+    #[tokio::test]
+    async fn get_server_metrics_project_not_found_returns_404() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "metrics_404proj@example.com").await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/projects/nonexistent-proj/servers/srv1/metrics")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+
+    #[tokio::test]
+    async fn get_server_metrics_server_not_found_returns_404() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "metrics_404srv@example.com").await;
+        let (project_id, _) = create_project_with_key(&app, &token).await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!(
+                "/api/v1/projects/{}/servers/nonexistent-srv/metrics",
+                project_id
+            ))
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+
+    #[tokio::test]
+    async fn get_server_metrics_after_ingest_returns_200() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "metrics_range@example.com").await;
+        let (project_id, api_key) = create_project_with_key(&app, &token).await;
+
+        let ingest_req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/metrics")
+            .header("content-type", "application/json")
+            .header("x-api-key", &api_key)
+            .body(Body::from(
+                r#"{"server_id":"srv-range","hostname":"web-01","cpu":{"usage_percent":42.5}}"#,
+            ))
+            .unwrap();
+        let ingest_resp = app.clone().oneshot(ingest_req).await.unwrap();
+        let bytes = axum::body::to_bytes(ingest_resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        let server_db_id = json["server_db_id"].as_str().unwrap().to_string();
+
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!(
+                "/api/v1/projects/{}/servers/{}/metrics?period=1h",
+                project_id, server_db_id
+            ))
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(json["data"].is_array());
+    }
+
+    #[tokio::test]
+    async fn get_latest_metrics_after_ingest_returns_200() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "metrics_latest@example.com").await;
+        let (project_id, api_key) = create_project_with_key(&app, &token).await;
+
+        let ingest_req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/metrics")
+            .header("content-type", "application/json")
+            .header("x-api-key", &api_key)
+            .body(Body::from(
+                r#"{"server_id":"srv-latest","hostname":"web-01","memory":{"total_bytes":8589934592,"used_bytes":4294967296,"available_bytes":4294967296,"usage_percent":50.0}}"#,
+            ))
+            .unwrap();
+        let ingest_resp = app.clone().oneshot(ingest_req).await.unwrap();
+        let bytes = axum::body::to_bytes(ingest_resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        let server_db_id = json["server_db_id"].as_str().unwrap().to_string();
+
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!(
+                "/api/v1/projects/{}/servers/{}/metrics/latest",
+                project_id, server_db_id
+            ))
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(!json["data"].is_null());
+        assert_eq!(json["data"]["mem_usage_percent"], 50.0);
+    }
+
+    #[tokio::test]
+    async fn ingest_metrics_server_id_too_long_returns_400() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "metrics_srvid@example.com").await;
+        let (_, api_key) = create_project_with_key(&app, &token).await;
+
+        let long_id = "s".repeat(129);
+        let payload = format!(r#"{{"server_id":"{}","hostname":"host1"}}"#, long_id);
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/metrics")
+            .header("content-type", "application/json")
+            .header("x-api-key", &api_key)
+            .body(Body::from(payload))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    #[tokio::test]
+    async fn get_server_metrics_invalid_period_returns_400() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "metrics_period@example.com").await;
+        let (project_id, api_key) = create_project_with_key(&app, &token).await;
+
+        let ingest_req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/metrics")
+            .header("content-type", "application/json")
+            .header("x-api-key", &api_key)
+            .body(Body::from(
+                r#"{"server_id":"srv-period","hostname":"web-01"}"#,
+            ))
+            .unwrap();
+        let ingest_resp = app.clone().oneshot(ingest_req).await.unwrap();
+        let bytes = axum::body::to_bytes(ingest_resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        let server_db_id = json["server_db_id"].as_str().unwrap().to_string();
+
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!(
+                "/api/v1/projects/{}/servers/{}/metrics?period=30m",
+                project_id, server_db_id
+            ))
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    // ── ingest_metrics validation ─────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn ingest_metrics_hostname_too_long_returns_400() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "metrics_longhost@example.com").await;
+        let (_, api_key) = create_project_with_key(&app, &token).await;
+
+        let long_hostname = "h".repeat(257);
+        let payload = format!(r#"{{"server_id":"srv1","hostname":"{}"}}"#, long_hostname);
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/metrics")
+            .header("content-type", "application/json")
+            .header("x-api-key", &api_key)
+            .body(Body::from(payload))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    #[tokio::test]
+    async fn ingest_metrics_kernel_too_long_returns_400() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "metrics_longkernel@example.com").await;
+        let (_, api_key) = create_project_with_key(&app, &token).await;
+
+        let long_kernel = "k".repeat(129);
+        let payload = format!(
+            r#"{{"server_id":"srv1","hostname":"host1","kernel":"{}"}}"#,
+            long_kernel
+        );
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/metrics")
+            .header("content-type", "application/json")
+            .header("x-api-key", &api_key)
+            .body(Body::from(payload))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    #[tokio::test]
+    async fn ingest_metrics_too_many_disks_returns_400() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "metrics_disks@example.com").await;
+        let (_, api_key) = create_project_with_key(&app, &token).await;
+
+        let disks: Vec<serde_json::Value> = (0..101)
+            .map(|i| {
+                serde_json::json!({
+                    "mount": format!("/mnt/{}", i),
+                    "total_bytes": 1000,
+                    "used_bytes": 500,
+                    "available_bytes": 500,
+                    "usage_percent": 50.0,
+                    "fs_type": "ext4"
+                })
+            })
+            .collect();
+        let payload = serde_json::json!({
+            "server_id": "srv1",
+            "hostname": "host1",
+            "disks": disks,
+        })
+        .to_string();
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/metrics")
+            .header("content-type", "application/json")
+            .header("x-api-key", &api_key)
+            .body(Body::from(payload))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    #[tokio::test]
+    async fn ingest_metrics_too_many_processes_returns_400() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "metrics_procs@example.com").await;
+        let (_, api_key) = create_project_with_key(&app, &token).await;
+
+        let processes: Vec<serde_json::Value> = (0..501)
+            .map(|i| {
+                serde_json::json!({
+                    "pid": i,
+                    "name": format!("proc{}", i),
+                    "cpu_percent": 0.1,
+                    "mem_bytes": 1024
+                })
+            })
+            .collect();
+        let payload = serde_json::json!({
+            "server_id": "srv1",
+            "hostname": "host1",
+            "processes": processes,
+        })
+        .to_string();
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/metrics")
+            .header("content-type", "application/json")
+            .header("x-api-key", &api_key)
+            .body(Body::from(payload))
+            .unwrap();
+        let status = app.oneshot(req).await.unwrap().status();
+        assert!(
+            status == StatusCode::BAD_REQUEST || status == StatusCode::UNPROCESSABLE_ENTITY,
+            "expected 400 or 422, got {}",
+            status
+        );
+    }
+
+    #[tokio::test]
+    async fn ingest_metrics_too_many_docker_containers_returns_400() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "metrics_docker@example.com").await;
+        let (_, api_key) = create_project_with_key(&app, &token).await;
+
+        let docker: Vec<serde_json::Value> = (0..201)
+            .map(|i| {
+                serde_json::json!({
+                    "id": format!("ctr{}", i),
+                    "name": format!("container{}", i),
+                    "image": "nginx",
+                    "status": "running",
+                    "cpu_percent": 0.5,
+                    "mem_bytes": 2048
+                })
+            })
+            .collect();
+        let payload = serde_json::json!({
+            "server_id": "srv1",
+            "hostname": "host1",
+            "docker": docker,
+        })
+        .to_string();
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/metrics")
+            .header("content-type", "application/json")
+            .header("x-api-key", &api_key)
+            .body(Body::from(payload))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    // ── get_latest_metrics not-found paths ────────────────────────────────────
+
+    #[tokio::test]
+    async fn get_latest_metrics_project_not_found_returns_404() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "latest_404proj@example.com").await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/projects/nonexistent-proj/servers/srv1/metrics/latest")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+
+    #[tokio::test]
+    async fn get_latest_metrics_server_not_found_returns_404() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "latest_404srv@example.com").await;
+        let (project_id, _) = create_project_with_key(&app, &token).await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!(
+                "/api/v1/projects/{}/servers/nonexistent-srv/metrics/latest",
+                project_id
+            ))
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+
+    #[tokio::test]
+    async fn list_servers_project_not_found_returns_404() {
+        let app = make_app().await;
+        let token = signup_and_get_token(&app, "servers_list_404@example.com").await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/projects/nonexistent-proj/servers")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::NOT_FOUND
+        );
     }
 }

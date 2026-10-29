@@ -1,5 +1,6 @@
 use anyhow::Result;
-use tracing::info;
+use tracing::{error, info};
+use uuid::Uuid;
 
 use crate::db::{
     repositories::{
@@ -68,94 +69,205 @@ impl RetentionService {
     }
 
     /// Run all cleanup tasks. Retention values of -1 skip cleanup (unlimited).
+    /// Each step runs independently — a failure in one step is logged but does not
+    /// prevent subsequent steps from running.
     pub async fn run_cleanup(&self) -> Result<()> {
-        info!("Running data retention cleanup...");
+        let run_id = Uuid::new_v4();
+        info!(run_id = %run_id, "Running data retention cleanup...");
+        let mut first_err: Option<anyhow::Error> = None;
 
         // Cleanup old events using per-org effective retention:
         // each org's cutoff is (event_retention_days + org.x402_extra_retention_days) days.
         if self.event_retention_days >= 0 {
-            let events_deleted =
-                EventRepository::cleanup_old_events(&self.pool, self.event_retention_days).await?;
-            if events_deleted > 0 {
-                info!(
+            match EventRepository::cleanup_old_events(&self.pool, self.event_retention_days).await {
+                Ok(n) if n > 0 => info!(
+                    run_id = %run_id,
                     "Cleaned up {} old events (per-org effective retention, {} day base)",
-                    events_deleted, self.event_retention_days
-                );
+                    n, self.event_retention_days
+                ),
+                Ok(_) => {}
+                Err(e) => {
+                    error!(run_id = %run_id, "Failed to cleanup old events: {}", e);
+                    first_err.get_or_insert(e);
+                }
             }
         }
 
         // Cleanup old monitor checks
         if self.monitor_check_retention_days >= 0 {
-            let checks_deleted = MonitorCheckRepository::cleanup_old_checks(
+            match MonitorCheckRepository::cleanup_old_checks(
                 &self.pool,
                 self.monitor_check_retention_days,
             )
-            .await?;
-            if checks_deleted > 0 {
-                info!(
+            .await
+            {
+                Ok(n) if n > 0 => info!(
+                    run_id = %run_id,
                     "Cleaned up {} old monitor checks (older than {} days)",
-                    checks_deleted, self.monitor_check_retention_days
-                );
+                    n, self.monitor_check_retention_days
+                ),
+                Ok(_) => {}
+                Err(e) => {
+                    error!(run_id = %run_id, "Failed to cleanup old monitor checks: {}", e);
+                    first_err.get_or_insert(e);
+                }
             }
         }
 
         // Cleanup old alert logs
         if self.alert_log_retention_days >= 0 {
-            let logs_deleted =
-                AlertLogRepository::cleanup_old_logs(&self.pool, self.alert_log_retention_days)
-                    .await?;
-            if logs_deleted > 0 {
-                info!(
+            match AlertLogRepository::cleanup_old_logs(&self.pool, self.alert_log_retention_days)
+                .await
+            {
+                Ok(n) if n > 0 => info!(
+                    run_id = %run_id,
                     "Cleaned up {} old alert logs (older than {} days)",
-                    logs_deleted, self.alert_log_retention_days
-                );
+                    n, self.alert_log_retention_days
+                ),
+                Ok(_) => {}
+                Err(e) => {
+                    error!(run_id = %run_id, "Failed to cleanup old alert logs: {}", e);
+                    first_err.get_or_insert(e);
+                }
             }
         }
 
         // Cleanup old server metrics
         if self.server_metrics_retention_days >= 0 {
-            let metrics_deleted = ServerMetricsRepository::cleanup_old_metrics(
+            match ServerMetricsRepository::cleanup_old_metrics(
                 &self.pool,
                 self.server_metrics_retention_days,
             )
-            .await?;
-            if metrics_deleted > 0 {
-                info!(
+            .await
+            {
+                Ok(n) if n > 0 => info!(
+                    run_id = %run_id,
                     "Cleaned up {} old server metrics (older than {} days)",
-                    metrics_deleted, self.server_metrics_retention_days
-                );
+                    n, self.server_metrics_retention_days
+                ),
+                Ok(_) => {}
+                Err(e) => {
+                    error!(run_id = %run_id, "Failed to cleanup old server metrics: {}", e);
+                    first_err.get_or_insert(e);
+                }
             }
         }
 
         // Cleanup old transactions (and their spans via cascade)
         if self.transaction_retention_days >= 0 {
-            let txns_deleted = PerformanceRepository::cleanup_old_transactions(
+            match PerformanceRepository::cleanup_old_transactions(
                 &self.pool,
                 self.transaction_retention_days,
             )
-            .await?;
-            if txns_deleted > 0 {
-                info!(
+            .await
+            {
+                Ok(n) if n > 0 => info!(
+                    run_id = %run_id,
                     "Cleaned up {} old transactions (older than {} days)",
-                    txns_deleted, self.transaction_retention_days
-                );
+                    n, self.transaction_retention_days
+                ),
+                Ok(_) => {}
+                Err(e) => {
+                    error!(run_id = %run_id, "Failed to cleanup old transactions: {}", e);
+                    first_err.get_or_insert(e);
+                }
             }
         }
 
         // Cleanup old session recordings (and their segments via cascade)
         if self.recording_retention_days >= 0 {
-            let recordings_deleted =
-                ReplayRepository::cleanup_old_recordings(&self.pool, self.recording_retention_days)
-                    .await?;
-            if recordings_deleted > 0 {
-                info!(
+            match ReplayRepository::cleanup_old_recordings(
+                &self.pool,
+                self.recording_retention_days,
+            )
+            .await
+            {
+                Ok(n) if n > 0 => info!(
+                    run_id = %run_id,
                     "Cleaned up {} old session recordings (older than {} days)",
-                    recordings_deleted, self.recording_retention_days
-                );
+                    n, self.recording_retention_days
+                ),
+                Ok(_) => {}
+                Err(e) => {
+                    error!(run_id = %run_id, "Failed to cleanup old session recordings: {}", e);
+                    first_err.get_or_insert(e);
+                }
             }
         }
 
-        info!("Data retention cleanup completed");
-        Ok(())
+        info!(run_id = %run_id, "Data retention cleanup completed");
+        match first_err {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::test_helpers::test_any_pool;
+
+    #[tokio::test]
+    async fn new_has_default_retention_days() {
+        let pool = test_any_pool().await;
+        let svc = RetentionService::new(pool);
+        assert_eq!(svc.event_retention_days, 90);
+        assert_eq!(svc.monitor_check_retention_days, 30);
+        assert_eq!(svc.alert_log_retention_days, 30);
+        assert_eq!(svc.server_metrics_retention_days, 7);
+        assert_eq!(svc.transaction_retention_days, 30);
+        assert_eq!(svc.recording_retention_days, 30);
+    }
+
+    #[tokio::test]
+    async fn with_retention_days_caps_at_type_limits() {
+        let pool = test_any_pool().await;
+        let svc = RetentionService::with_retention_days(pool, 50);
+        assert_eq!(svc.event_retention_days, 50);
+        assert_eq!(svc.monitor_check_retention_days, 30);
+        assert_eq!(svc.alert_log_retention_days, 30);
+        assert_eq!(svc.server_metrics_retention_days, 7);
+        assert_eq!(svc.transaction_retention_days, 30);
+        assert_eq!(svc.recording_retention_days, 30);
+    }
+
+    #[tokio::test]
+    async fn with_retention_days_below_cap_uses_value() {
+        let pool = test_any_pool().await;
+        let svc = RetentionService::with_retention_days(pool, 5);
+        assert_eq!(svc.event_retention_days, 5);
+        assert_eq!(svc.monitor_check_retention_days, 5);
+        assert_eq!(svc.alert_log_retention_days, 5);
+        assert_eq!(svc.server_metrics_retention_days, 5);
+        assert_eq!(svc.transaction_retention_days, 5);
+        assert_eq!(svc.recording_retention_days, 5);
+    }
+
+    #[tokio::test]
+    async fn with_retention_days_minus_one_disables_all() {
+        let pool = test_any_pool().await;
+        let svc = RetentionService::with_retention_days(pool, -1);
+        assert_eq!(svc.event_retention_days, -1);
+        assert_eq!(svc.monitor_check_retention_days, -1);
+        assert_eq!(svc.alert_log_retention_days, -1);
+        assert_eq!(svc.server_metrics_retention_days, -1);
+        assert_eq!(svc.transaction_retention_days, -1);
+        assert_eq!(svc.recording_retention_days, -1);
+    }
+
+    #[tokio::test]
+    #[ignore = "cleanup_old_events uses Postgres-specific INTERVAL with per-org column; tested against real DB"]
+    async fn run_cleanup_on_empty_db() {
+        let pool = test_any_pool().await;
+        let svc = RetentionService::new(pool);
+        svc.run_cleanup().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn run_cleanup_disabled_skips_all() {
+        let pool = test_any_pool().await;
+        let svc = RetentionService::with_retention_days(pool, -1);
+        svc.run_cleanup().await.unwrap();
     }
 }

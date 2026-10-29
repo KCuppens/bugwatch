@@ -18,3 +18,29 @@ export function isValidHttpUrl(url: string): boolean {
 export function sanitizeUrl(url: string): string | undefined {
   return isValidHttpUrl(url) ? url : undefined;
 }
+
+/**
+ * Returns true only for https URLs on billing.stripe.com.
+ * Prevents open-redirect if the billing API ever returns an unexpected URL.
+ */
+export function isStripeBillingUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "https:" && parsed.hostname === "billing.stripe.com";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Returns true only for https URLs on checkout.stripe.com.
+ * Prevents open-redirect if the checkout API ever returns an unexpected URL.
+ */
+export function isStripeCheckoutUrl(url: string): boolean {
+  try {
+    const u = new URL(url);
+    return u.hostname === "checkout.stripe.com" && u.protocol === "https:";
+  } catch {
+    return false;
+  }
+}

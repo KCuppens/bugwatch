@@ -15,7 +15,6 @@ import {
   Check,
   ChevronRight,
   Activity,
-  Clock,
   Flame,
   Search,
   Bookmark,
@@ -23,14 +22,8 @@ import {
   X,
   Keyboard,
 } from "lucide-react";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-} from "@/components/ui/dialog";
-import { issuesApi, type Issue, type Facets } from "@/lib/api";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { issuesApi, ApiError, type Issue, type Facets } from "@/lib/api";
 import { ENVIRONMENT_COLORS } from "@/lib/search";
 import { useProject } from "@/lib/project-context";
 import { IssueSearchBar } from "@/components/search";
@@ -38,7 +31,11 @@ import { Sparkline, generateSparklineData } from "@/components/sparkline";
 import { IssueListSkeleton } from "@/components/skeletons/issue-list-skeleton";
 import { useListKeyboardNavigation } from "@/hooks/useListKeyboardNavigation";
 import { useSavedSearches } from "@/hooks/useSavedSearches";
+import { formatRelativeTime } from "@/lib/format";
 import { toast } from "sonner";
+import { OnboardingEmptyState } from "@/components/onboarding/OnboardingEmptyState";
+import { FirstErrorCelebration } from "@/components/onboarding/FirstErrorCelebration";
+import { useFirstError } from "@/hooks/useFirstError";
 
 const levelConfig = {
   fatal: {
@@ -79,24 +76,6 @@ const levelConfig = {
   },
 };
 
-function formatRelativeTime(dateString: string): string {
-  const date = new Date(dateString);
-  if (isNaN(date.getTime())) return "-";
-
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  const diffSec = Math.floor(diffMs / 1000);
-  const diffMins = Math.floor(diffMs / 60000);
-  const diffHours = Math.floor(diffMs / 3600000);
-  const diffDays = Math.floor(diffMs / 86400000);
-
-  if (diffSec < 60) return "just now";
-  if (diffMins < 60) return `${diffMins}m ago`;
-  if (diffHours < 24) return `${diffHours}h ago`;
-  if (diffDays < 7) return `${diffDays}d ago`;
-  return date.toLocaleDateString();
-}
-
 type SortOption = "recent" | "frequent" | "users" | "trending";
 
 interface IssueRowProps {
@@ -117,7 +96,6 @@ interface IssueRowProps {
 
 const IssueRow = memo(function IssueRow({
   issue,
-  index,
   isHovered,
   isFocused,
   isSelected,
@@ -126,31 +104,31 @@ const IssueRow = memo(function IssueRow({
   density,
   projectId,
   onHover,
-  onFocus,
   onToggleSelect,
   onResolve,
 }: IssueRowProps) {
   const config = levelConfig[issue.level as keyof typeof levelConfig] || levelConfig.error;
   const Icon = config.icon;
   const isRecent = Date.now() - new Date(issue.last_seen).getTime() < 1000 * 60 * 5;
-  const isSevere = issue.level === "fatal" || issue.level === "error";
 
   return (
     <div
       data-issue-row
-      className={`group relative flex items-center gap-4 rounded-lg border-l-4 ${config.border} bg-card transition-all duration-200
-        ${isHovered && isSevere ? `shadow-lg ${config.glow}` : isHovered ? "shadow-md" : "hover:bg-muted/30"}
+      className={`group relative flex items-center gap-4 rounded-lg border-l-4 ${config.border} bg-[hsl(var(--surface-1))] border border-[hsl(var(--border-subtle))] transition-all duration-150
+        ${isHovered ? "bg-[hsl(var(--surface-2))] border-[hsl(var(--border-strong))]" : ""}
         ${isFocused ? `ring-2 ${config.focusRing}` : ""}
-        ${isSelected ? "ring-2 ring-accent-2/30 bg-accent-2/5" : ""}
+        ${isSelected ? "ring-1 ring-[hsl(var(--accent))]/30 bg-[hsl(var(--accent))]/5" : ""}
         ${issue.status === "resolved" ? "opacity-50" : ""}
-        ${isNew ? "animate-slide-in-new" : ""}
+        ${isNew ? "animate-slide-in-new new-issue-glow" : ""}
       `}
       onMouseEnter={() => onHover(issue.id)}
       onMouseLeave={() => onHover(null)}
-      onClick={() => onFocus(index)}
     >
       <div className="pl-3">
         <button
+          role="checkbox"
+          aria-checked={isSelected}
+          aria-label={`Select issue: ${issue.title}`}
           onClick={(e) => {
             e.stopPropagation();
             onToggleSelect(issue.id);
@@ -165,7 +143,7 @@ const IssueRow = memo(function IssueRow({
 
       <Link
         href={`/dashboard/issues/${issue.id}?project=${projectId}`}
-        className={`flex-1 flex items-center gap-4 pr-4 ${density === "compact" ? "py-2" : "py-3.5"}`}
+        className={`flex-1 flex items-center gap-4 pr-4 ${density === "compact" ? "py-3" : "py-4"}`}
       >
         <div className={`shrink-0 p-2 rounded-lg ${config.bg} transition-transform group-hover:scale-110`}>
           <Icon className={`h-4 w-4 ${config.color}`} aria-hidden="true" />
@@ -185,20 +163,25 @@ const IssueRow = memo(function IssueRow({
               </span>
             )}
             {isRecent && (
-              <span className="shrink-0 flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-bug/10 text-bug text-[10px] font-medium">
-                <span className="w-1.5 h-1.5 rounded-full bg-bug animate-pulse" />
-                NEW
-              </span>
+              <>
+                <span
+                  aria-hidden="true"
+                  className="shrink-0 h-1.5 w-1.5 rounded-full bg-[hsl(var(--accent))] animate-pulse"
+                />
+                <span className="sr-only">Recently active</span>
+              </>
             )}
           </div>
-          <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground">
-            <span className="font-mono">{issue.fingerprint.slice(0, 8)}</span>
-            <span className="flex items-center gap-1">
-              <Activity className="h-3 w-3" />
+          <div className="flex items-center gap-3 mt-1 text-xs text-[hsl(var(--muted-foreground))]">
+            <span className="font-mono text-[11px]">{issue.fingerprint.slice(0, 8)}</span>
+            <span className="flex items-center gap-1 font-mono">
+              <Activity className="h-3 w-3" aria-hidden="true" />
+              <span className="sr-only">Events: </span>
               {issue.count.toLocaleString()}
             </span>
-            <span className="flex items-center gap-1">
-              <Users className="h-3 w-3" />
+            <span className="flex items-center gap-1 font-mono">
+              <Users className="h-3 w-3" aria-hidden="true" />
+              <span className="sr-only">Users affected: </span>
               {issue.user_count}
             </span>
           </div>
@@ -211,7 +194,7 @@ const IssueRow = memo(function IssueRow({
             <Sparkline data={sparkData} width={56} height={16} showTrend={true} />
           </div>
           <span
-            className={`text-xs text-muted-foreground text-right transition-opacity ${isHovered && issue.status !== "resolved" ? "opacity-0 w-0 overflow-hidden" : "opacity-100 w-16"}`}
+            className={`text-xs text-[hsl(var(--muted-foreground))] font-mono text-right transition-opacity ${isHovered && issue.status !== "resolved" ? "opacity-0 w-0 overflow-hidden" : "opacity-100 w-16"}`}
           >
             {formatRelativeTime(issue.last_seen)}
           </span>
@@ -227,11 +210,12 @@ const IssueRow = memo(function IssueRow({
           )}
           {issue.status !== "resolved" && issue.status !== "ignored" && (
             <div
-              className={`flex items-center gap-1 transition-all ${isHovered ? "opacity-100 w-auto" : "opacity-0 w-0 overflow-hidden"}`}
+              className={`flex items-center gap-1 transition-all ${isHovered ? "opacity-100" : "opacity-0 focus-within:opacity-100"}`}
             >
               <Button
                 size="sm"
                 variant="ghost"
+                aria-label={`Resolve: ${issue.title}`}
                 className="h-7 px-2 text-xs"
                 onClick={(e) => {
                   e.preventDefault();
@@ -239,13 +223,13 @@ const IssueRow = memo(function IssueRow({
                   onResolve(issue.id);
                 }}
               >
-                <Check className="h-3 w-3 mr-1" />
+                <Check className="h-3 w-3 mr-1" aria-hidden="true" />
                 Resolve
               </Button>
             </div>
           )}
           {issue.status === "unresolved" && !isHovered && (
-            <ChevronRight className="h-4 w-4 text-muted-foreground" />
+            <ChevronRight className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
           )}
         </div>
       </Link>
@@ -266,9 +250,11 @@ export default function DashboardPage() {
   const [sortBy, setSortBy] = useState<SortOption>("recent");
   const [issues, setIssues] = useState<Issue[]>([]);
   const [searchResults, setSearchResults] = useState<Issue[] | null>(null);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [_facets, setFacets] = useState<Facets | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [_isSearching, setIsSearching] = useState(false);
   const [hoveredIssue, setHoveredIssue] = useState<string | null>(null);
   const [selectedIssues, setSelectedIssues] = useState<Set<string>>(new Set());
@@ -276,6 +262,13 @@ export default function DashboardPage() {
   const [activeFilter, setActiveFilter] = useState<string | null>(null);
   const [newIssueIds, setNewIssueIds] = useState<Set<string>>(new Set());
   const previousIssueIdsRef = useRef<Set<string>>(new Set());
+  // Stable ref so handleStatusChange doesn't need `issues` in its dep array,
+  // preventing IssueRow remounts on every 30s poll.
+  const issuesRef = useRef(issues);
+  issuesRef.current = issues;
+
+  // First-error celebration
+  const { firstIssue, shouldCelebrate, dismiss } = useFirstError();
 
   // Saved searches
   const { savedSearches, saveSearch, deleteSearch } = useSavedSearches(selectedProject?.id);
@@ -284,10 +277,11 @@ export default function DashboardPage() {
   const [currentSearchQuery, setCurrentSearchQuery] = useState("");
   const [showShortcutsHelp, setShowShortcutsHelp] = useState(false);
   const [renderCap, setRenderCap] = useState(100);
-  const [density, setDensity] = useState<"compact" | "comfortable">(() => {
-    if (typeof window === "undefined") return "comfortable";
-    return (localStorage.getItem("bugwatch:issues-density") as "compact" | "comfortable") || "comfortable";
-  });
+  const [density, setDensity] = useState<"compact" | "comfortable">("comfortable");
+  useEffect(() => {
+    const stored = localStorage.getItem("bugwatch:issues-density");
+    if (stored === "compact" || stored === "comfortable") setDensity(stored);
+  }, []);
 
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -303,10 +297,13 @@ export default function DashboardPage() {
       const stored = sessionStorage.getItem(key);
       if (stored) {
         const parsed = JSON.parse(stored);
-        if (parsed.activeFilter) setActiveFilter(parsed.activeFilter);
-        if (parsed.sortBy) setSortBy(parsed.sortBy);
+        if (parsed.activeFilter && typeof parsed.activeFilter === "string") setActiveFilter(parsed.activeFilter);
+        const VALID_SORT = new Set(["recent", "frequent", "users", "trending"]);
+        if (parsed.sortBy && VALID_SORT.has(parsed.sortBy)) setSortBy(parsed.sortBy as SortOption);
       }
-    } catch { /* ignore parse errors */ }
+    } catch {
+      /* ignore parse errors */
+    }
   }, [selectedProject]);
 
   // Save filters to sessionStorage when they change
@@ -316,59 +313,95 @@ export default function DashboardPage() {
     sessionStorage.setItem(key, JSON.stringify({ activeFilter, sortBy }));
   }, [selectedProject, activeFilter, sortBy]);
 
-  // Use search results if available, otherwise use all issues
+  // Pre-compute timestamps once, then sort with numeric comparison only.
+  // Avoids O(n log n × Date) — drops to O(n) precompute + O(n log n) numeric.
   const displayIssues = useMemo(() => {
     const baseIssues = searchResults !== null ? searchResults : issues;
-    const sorted = [...baseIssues].sort((a, b) => {
+    const now = Date.now();
+    const withTs = baseIssues.map((i) => ({
+      ...i,
+      _lastMs: new Date(i.last_seen).getTime(),
+      _firstMs: new Date(i.first_seen).getTime(),
+    }));
+    withTs.sort((a, b) => {
       switch (sortBy) {
         case "recent":
-          return new Date(b.last_seen).getTime() - new Date(a.last_seen).getTime();
+          return b._lastMs - a._lastMs;
         case "frequent":
           return b.count - a.count;
         case "users":
           return b.user_count - a.user_count;
         case "trending": {
-          const aHours = (Date.now() - new Date(a.first_seen).getTime()) / (1000 * 60 * 60);
-          const bHours = (Date.now() - new Date(b.first_seen).getTime()) / (1000 * 60 * 60);
-          return (b.count / Math.max(bHours, 1)) - (a.count / Math.max(aHours, 1));
+          const aH = (now - a._firstMs) / 3600000;
+          const bH = (now - b._firstMs) / 3600000;
+          return b.count / Math.max(bH, 1) - a.count / Math.max(aH, 1);
         }
         default:
           return 0;
       }
     });
-    return sorted;
+    return withTs;
   }, [issues, searchResults, sortBy]);
 
-  // Stats
+  // Stats — single pass, memoized on `issues` (not displayIssues — sort order doesn't affect counts)
   const stats = useMemo(() => {
-    const unresolved = displayIssues.filter(i => i.status === "unresolved");
-    const recentIssues = displayIssues.filter(i => {
-      const hoursSince = (Date.now() - new Date(i.last_seen).getTime()) / (1000 * 60 * 60);
-      return hoursSince < 24;
-    });
+    let unresolved = 0,
+      events = 0,
+      users = 0,
+      recent = 0,
+      critical = 0,
+      fatal = 0,
+      error = 0;
+    const now = Date.now();
+    for (const i of issues) {
+      if (i.status === "unresolved") unresolved++;
+      events += i.count;
+      users += i.user_count;
+      if (now - new Date(i.last_seen).getTime() < 86400000) recent++;
+      if (i.level === "fatal") {
+        fatal++;
+        critical++;
+      } else if (i.level === "error") {
+        error++;
+        critical++;
+      }
+    }
     return {
-      total: displayIssues.length,
-      unresolved: unresolved.length,
-      events: displayIssues.reduce((sum, i) => sum + i.count, 0),
-      users: displayIssues.reduce((sum, i) => sum + i.user_count, 0),
-      recentCount: recentIssues.length,
-      criticalCount: displayIssues.filter(i => i.level === "fatal" || i.level === "error").length,
+      total: issues.length,
+      unresolved,
+      events,
+      users,
+      recentCount: recent,
+      criticalCount: critical,
+      fatalCount: fatal,
+      errorCount: error,
     };
-  }, [displayIssues]);
+  }, [issues]);
 
-  // Memoize sparkline data to avoid regeneration on every render (Math.random inside)
+  // Sparkline cache — keyed by id:count so re-sorts don't regenerate
+  const sparklineCacheRef = useRef(new Map<string, number[]>());
   const sparklineCache = useMemo(() => {
-    const cache = new Map<string, number[]>();
-    for (const issue of displayIssues) {
-      cache.set(issue.id, generateSparklineData(issue.count, issue.first_seen));
+    const cache = sparklineCacheRef.current;
+    // Build set of current keys for cleanup
+    const currentKeys = new Set<string>();
+    for (const issue of issues) {
+      const key = `${issue.id}:${issue.count}`;
+      currentKeys.add(key);
+      if (!cache.has(key)) {
+        cache.set(key, generateSparklineData(issue.count, issue.first_seen));
+      }
+    }
+    // Evict stale entries to prevent unbounded growth
+    for (const k of cache.keys()) {
+      if (!currentKeys.has(k)) cache.delete(k);
     }
     return cache;
-  }, [displayIssues]);
+  }, [issues]);
 
   // Store issue order in sessionStorage for prev/next navigation
   useEffect(() => {
     if (displayIssues.length > 0 && selectedProject) {
-      const issueOrder = displayIssues.map(i => i.id);
+      const issueOrder = displayIssues.map((i) => i.id);
       sessionStorage.setItem(`bugwatch:issue-order:${selectedProject.id}`, JSON.stringify(issueOrder));
     }
   }, [displayIssues, selectedProject]);
@@ -387,7 +420,7 @@ export default function DashboardPage() {
       if (issue) toggleIssueSelection(issue.id);
     },
     onFocusSearch: () => {
-      const searchInput = document.querySelector<HTMLInputElement>('[data-search-input]');
+      const searchInput = document.querySelector<HTMLInputElement>("[data-search-input]");
       searchInput?.focus();
     },
     onResolve: (index) => {
@@ -416,8 +449,10 @@ export default function DashboardPage() {
     setCurrentSearchQuery(query);
   }, []);
 
-  // Fetch issues
+  // Fetch issues — abort controller cancels any in-flight request on project switch
   useEffect(() => {
+    const controller = new AbortController();
+
     async function fetchIssues() {
       if (!selectedProject) {
         setIssues([]);
@@ -428,30 +463,43 @@ export default function DashboardPage() {
       setError(null);
       try {
         const issuesResponse = await issuesApi.list(selectedProject.id);
+        if (controller.signal.aborted) return;
         setIssues(issuesResponse.data);
-        previousIssueIdsRef.current = new Set(issuesResponse.data.map(i => i.id));
+        previousIssueIdsRef.current = new Set(issuesResponse.data.map((i) => i.id));
       } catch (err) {
+        if (controller.signal.aborted) return;
+        if (err instanceof ApiError && err.status === 401) return;
         setError("Failed to load issues");
         toast.error("Failed to load issues", {
-          description: err instanceof Error ? err.message : "Please try again",
+          description: "Please try again",
         });
       } finally {
-        setIsLoading(false);
+        if (!controller.signal.aborted) setIsLoading(false);
       }
     }
     fetchIssues();
+    return () => controller.abort();
   }, [selectedProject]);
 
-  // Live polling (10s interval)
+  // Live polling (30s interval)
   useEffect(() => {
     if (!isLive || !selectedProject) return;
 
+    let cancelled = false;
+    let polling = false; // prevent overlapping concurrent polls
+    let consecutiveFailures = 0;
     let interval: ReturnType<typeof setInterval> | null = null;
+    let titleFocusHandler: (() => void) | null = null;
+    let clearNewIdsTimer: ReturnType<typeof setTimeout> | null = null;
 
     async function pollIssues() {
+      if (polling || cancelled) return;
+      polling = true;
       try {
         const response = await issuesApi.list(selectedProject!.id);
-        const newIds = new Set(response.data.map(i => i.id));
+        if (cancelled) return;
+
+        const newIds = new Set(response.data.map((i) => i.id));
         const addedIds = new Set<string>();
 
         for (const id of newIds) {
@@ -462,36 +510,53 @@ export default function DashboardPage() {
 
         if (addedIds.size > 0) {
           setNewIssueIds(addedIds);
-          // Clear animation class after animation completes
-          setTimeout(() => setNewIssueIds(new Set()), 600);
+          if (clearNewIdsTimer) clearTimeout(clearNewIdsTimer);
+          clearNewIdsTimer = setTimeout(() => setNewIssueIds(new Set()), 600);
 
-          // Toast notification for new issues
-          const newIssues = response.data.filter(i => addedIds.has(i.id));
-          const hasCritical = newIssues.some(i => i.level === "fatal" || i.level === "error");
+          const newIssues = response.data.filter((i) => addedIds.has(i.id));
+          const hasCritical = newIssues.some((i) => i.level === "fatal" || i.level === "error");
           if (hasCritical) {
-            const critical = newIssues.find(i => i.level === "fatal" || i.level === "error");
+            const critical = newIssues.find((i) => i.level === "fatal" || i.level === "error");
             toast.error("New critical error", {
               description: critical?.title,
-              action: critical ? {
-                label: "View",
-                onClick: () => router.push(`/dashboard/issues/${critical.id}?project=${selectedProject?.id}`),
-              } : undefined,
+              action: critical
+                ? {
+                    label: "View",
+                    onClick: () => router.push(`/dashboard/issues/${critical.id}?project=${selectedProject?.id}`),
+                  }
+                : undefined,
             });
           } else {
-            toast(`${addedIds.size} new issue${addedIds.size > 1 ? "s" : ""}` );
+            toast(`${addedIds.size} new issue${addedIds.size > 1 ? "s" : ""}`);
           }
 
-          // Flash browser tab title
+          // Flash browser tab title — use { once: true } to prevent listener accumulation
           const originalTitle = document.title;
           document.title = `(${addedIds.size}) Bugwatch`;
-          const onFocus = () => { document.title = originalTitle; window.removeEventListener("focus", onFocus); };
-          window.addEventListener("focus", onFocus);
+          if (titleFocusHandler) window.removeEventListener("focus", titleFocusHandler);
+          titleFocusHandler = () => {
+            document.title = originalTitle;
+          };
+          window.addEventListener("focus", titleFocusHandler, { once: true });
         }
 
         previousIssueIdsRef.current = newIds;
         setIssues(response.data);
-      } catch {
-        // Silent fail for polling
+        consecutiveFailures = 0;
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 401) {
+          // Session expired — auth-context will redirect; stop polling
+          cancelled = true;
+          setIsLive(false);
+          return;
+        }
+        consecutiveFailures++;
+        if (consecutiveFailures >= 3) {
+          setIsLive(false);
+          toast.error("Live updates paused", { description: "Could not reach server" });
+        }
+      } finally {
+        polling = false;
       }
     }
 
@@ -499,27 +564,34 @@ export default function DashboardPage() {
 
     function handleVisibility() {
       if (document.hidden) {
-        if (interval) { clearInterval(interval); interval = null; }
+        if (interval) {
+          clearInterval(interval);
+          interval = null;
+        }
       } else {
         pollIssues();
         if (!interval) interval = setInterval(pollIssues, POLL_INTERVAL_MS);
       }
     }
 
-    // Only start polling if the tab is actually visible on mount.
     if (!document.hidden) {
+      // Poll immediately on activation, then on the regular interval
+      pollIssues();
       interval = setInterval(pollIssues, POLL_INTERVAL_MS);
     }
     document.addEventListener("visibilitychange", handleVisibility);
 
     return () => {
+      cancelled = true;
       if (interval) clearInterval(interval);
+      if (clearNewIdsTimer) clearTimeout(clearNewIdsTimer);
+      if (titleFocusHandler) window.removeEventListener("focus", titleFocusHandler);
       document.removeEventListener("visibilitychange", handleVisibility);
     };
   }, [isLive, selectedProject]);
 
   const toggleIssueSelection = useCallback((id: string) => {
-    setSelectedIssues(prev => {
+    setSelectedIssues((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
@@ -535,145 +607,95 @@ export default function DashboardPage() {
     setFocusedIndex(index);
   }, []);
 
-  // Ignore with undo (single)
-  const handleIgnore = useCallback(async (issueId: string) => {
-    if (!selectedProject) return;
-    let previousStatus = "unresolved";
+  // Single issue status change with optimistic update + undo
+  // verb = action verb ("resolve", "ignore"); label = past tense ("resolved", "ignored")
+  const handleStatusChange = useCallback(
+    async (issueId: string, newStatus: string, verb: string, label: string) => {
+      if (!selectedProject) return;
+      // Read from ref so this callback is stable across polls (not recreated when issues changes).
+      const previousStatus = issuesRef.current.find((i) => i.id === issueId)?.status ?? "unresolved";
+      setIssues((prev) => prev.map((i) => (i.id === issueId ? { ...i, status: newStatus } : i)));
 
-    setIssues(prev => {
-      const issue = prev.find(i => i.id === issueId);
-      if (issue) previousStatus = issue.status;
-      return prev.map(i => i.id === issueId ? { ...i, status: "ignored" } : i);
-    });
-
-    toast.success("Issue ignored", {
-      action: {
-        label: "Undo",
-        onClick: async () => {
-          setIssues(prev => prev.map(i => i.id === issueId ? { ...i, status: previousStatus } : i));
-          try {
-            await issuesApi.update(selectedProject.id, issueId, previousStatus);
-          } catch {
-            toast.error("Failed to undo ignore");
-          }
-        },
-      },
-    });
-
-    try {
-      await issuesApi.update(selectedProject.id, issueId, "ignored");
-    } catch {
-      setIssues(prev => prev.map(i => i.id === issueId ? { ...i, status: previousStatus } : i));
-      toast.error("Failed to ignore issue");
-    }
-  }, [selectedProject]);
-
-  // Resolve with undo
-  const handleResolve = useCallback(async (issueId: string) => {
-    if (!selectedProject) return;
-    let previousStatus = "unresolved";
-
-    setIssues(prev => {
-      const issue = prev.find(i => i.id === issueId);
-      if (issue) previousStatus = issue.status;
-      return prev.map(i => i.id === issueId ? { ...i, status: "resolved" } : i);
-    });
-
-    toast.success("Issue resolved", {
-      action: {
-        label: "Undo",
-        onClick: async () => {
-          setIssues(prev => prev.map(i => i.id === issueId ? { ...i, status: previousStatus } : i));
-          try {
-            await issuesApi.update(selectedProject.id, issueId, previousStatus);
-          } catch {
-            toast.error("Failed to undo resolve");
-          }
-        },
-      },
-    });
-
-    try {
-      await issuesApi.update(selectedProject.id, issueId, "resolved");
-    } catch {
-      setIssues(prev => prev.map(i => i.id === issueId ? { ...i, status: previousStatus } : i));
-      toast.error("Failed to resolve issue");
-    }
-  }, [selectedProject]);
-
-  // Bulk resolve with undo
-  const handleBulkResolve = useCallback(async () => {
-    if (!selectedProject || selectedIssues.size === 0) return;
-    const ids = Array.from(selectedIssues);
-    let previousStates = new Map<string, string>();
-
-    setIssues(prev => {
-      previousStates = new Map(
-        prev.filter(i => ids.includes(i.id)).map(i => [i.id, i.status])
-      );
-      return prev.map(i => ids.includes(i.id) ? { ...i, status: "resolved" } : i);
-    });
-    setSelectedIssues(new Set());
-
-    toast.success(`${ids.length} issues resolved`, {
-      action: {
-        label: "Undo",
-        onClick: async () => {
-          setIssues(prev => prev.map(i => {
-            const prev_status = previousStates.get(i.id);
-            return prev_status ? { ...i, status: prev_status } : i;
-          }));
-          for (const id of ids) {
-            const prevStatus = previousStates.get(id);
-            if (prevStatus) {
-              try { await issuesApi.update(selectedProject.id, id, prevStatus); } catch { /* */ }
+      toast.success(`Issue ${label}`, {
+        action: {
+          label: "Undo",
+          onClick: async () => {
+            setIssues((prev) => prev.map((i) => (i.id === issueId ? { ...i, status: previousStatus } : i)));
+            try {
+              await issuesApi.update(selectedProject.id, issueId, previousStatus);
+            } catch {
+              toast.error(`Failed to undo ${label}`);
             }
-          }
+          },
         },
-      },
-    });
+      });
 
-    for (const id of ids) {
-      try { await issuesApi.update(selectedProject.id, id, "resolved"); } catch { /* */ }
-    }
-  }, [selectedProject, selectedIssues]);
+      try {
+        await issuesApi.update(selectedProject.id, issueId, newStatus);
+      } catch {
+        setIssues((prev) => prev.map((i) => (i.id === issueId ? { ...i, status: previousStatus } : i)));
+        toast.error(`Failed to ${verb} issue`);
+      }
+    },
+    [selectedProject]
+  );
 
-  // Bulk ignore
-  const handleBulkIgnore = useCallback(async () => {
-    if (!selectedProject || selectedIssues.size === 0) return;
-    const ids = Array.from(selectedIssues);
-    let previousStates = new Map<string, string>();
+  const handleIgnore = useCallback(
+    (issueId: string) => handleStatusChange(issueId, "ignored", "ignore", "ignored"),
+    [handleStatusChange]
+  );
+  const handleResolve = useCallback(
+    (issueId: string) => handleStatusChange(issueId, "resolved", "resolve", "resolved"),
+    [handleStatusChange]
+  );
 
-    setIssues(prev => {
-      previousStates = new Map(
-        prev.filter(i => ids.includes(i.id)).map(i => [i.id, i.status])
-      );
-      return prev.map(i => ids.includes(i.id) ? { ...i, status: "ignored" } : i);
-    });
-    setSelectedIssues(new Set());
+  // Bulk status change with optimistic update + undo
+  const handleBulkStatusChange = useCallback(
+    async (newStatus: string, label: string) => {
+      if (!selectedProject || selectedIssues.size === 0) return;
+      const ids = Array.from(selectedIssues);
+      const idSet = new Set(ids);
 
-    toast.success(`${ids.length} issues ignored`, {
-      action: {
-        label: "Undo",
-        onClick: async () => {
-          setIssues(prev => prev.map(i => {
-            const prev_status = previousStates.get(i.id);
-            return prev_status ? { ...i, status: prev_status } : i;
-          }));
-          for (const id of ids) {
-            const prevStatus = previousStates.get(id);
-            if (prevStatus) {
-              try { await issuesApi.update(selectedProject.id, id, prevStatus); } catch { /* */ }
+      // Capture previousStates atomically inside the updater to avoid stale closure.
+      let previousStates = new Map<string, string>();
+      setIssues((prev) => {
+        previousStates = new Map(prev.filter((i) => idSet.has(i.id)).map((i) => [i.id, i.status]));
+        return prev.map((i) => (idSet.has(i.id) ? { ...i, status: newStatus } : i));
+      });
+      setSelectedIssues(new Set());
+
+      toast.success(`${ids.length} issues ${label}`, {
+        action: {
+          label: "Undo",
+          onClick: async () => {
+            setIssues((prev) =>
+              prev.map((i) => {
+                const prevStatus = previousStates.get(i.id);
+                return prevStatus ? { ...i, status: prevStatus } : i;
+              })
+            );
+            const results = await Promise.allSettled(
+              ids.map((id) => {
+                const prevStatus = previousStates.get(id);
+                return prevStatus ? issuesApi.update(selectedProject.id, id, prevStatus) : Promise.resolve();
+              })
+            );
+            const failed = results.filter((r) => r.status === "rejected").length;
+            if (failed > 0) {
+              toast.error(`${failed} issue${failed > 1 ? "s" : ""} could not be reverted`);
             }
-          }
+          },
         },
-      },
-    });
+      });
 
-    for (const id of ids) {
-      try { await issuesApi.update(selectedProject.id, id, "ignored"); } catch { /* */ }
-    }
-  }, [selectedProject, selectedIssues]);
+      // Run all status updates in parallel rather than sequentially.
+      await Promise.allSettled(ids.map((id) => issuesApi.update(selectedProject.id, id, newStatus)));
+    },
+    [selectedProject, selectedIssues]
+  );
+
+  const handleBulkResolve = useCallback(() => handleBulkStatusChange("resolved", "resolved"), [handleBulkStatusChange]);
+  const handleBulkIgnore = useCallback(() => handleBulkStatusChange("ignored", "ignored"), [handleBulkStatusChange]);
 
   // Save search
   const handleSaveSearch = () => {
@@ -712,15 +734,14 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-6">
+      {/* First-error celebration overlay */}
+      {shouldCelebrate && firstIssue && <FirstErrorCelebration issue={firstIssue} onDismiss={dismiss} />}
+
       {/* Compact Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-4">
           <h1 className="font-display text-heading-lg">Issues</h1>
-          {selectedProject && (
-            <span className="text-sm text-muted-foreground">
-              {selectedProject.name}
-            </span>
-          )}
+          {selectedProject && <span className="text-sm text-muted-foreground">{selectedProject.name}</span>}
         </div>
         <div className="flex items-center gap-2">
           {/* Density toggle */}
@@ -744,9 +765,7 @@ export default function DashboardPage() {
               aria-label="Compact density"
               aria-pressed={density === "compact"}
               className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors ${
-                density === "compact"
-                  ? "bg-accent-2/12 text-accent-2"
-                  : "text-muted-foreground hover:text-foreground"
+                density === "compact" ? "bg-accent-2/12 text-accent-2" : "text-muted-foreground hover:text-foreground"
               }`}
             >
               Compact
@@ -765,12 +784,18 @@ export default function DashboardPage() {
           <Button
             variant="ghost"
             size="sm"
+            role="switch"
+            aria-checked={isLive}
+            aria-label={isLive ? "Disable live updates" : "Enable live updates"}
             className="text-muted-foreground"
             onClick={() => setIsLive(!isLive)}
           >
-            <Activity className="h-4 w-4 mr-2" />
+            <Activity className="h-4 w-4 mr-2" aria-hidden="true" />
             Live
-            <span className={`ml-2 h-2 w-2 rounded-full transition-colors ${isLive ? "bg-green-500 animate-pulse" : "bg-muted-foreground/30"}`} />
+            <span
+              aria-hidden="true"
+              className={`ml-2 h-2 w-2 rounded-full transition-colors ${isLive ? "bg-green-500 animate-pulse" : "bg-muted-foreground/30"}`}
+            />
           </Button>
         </div>
       </div>
@@ -780,9 +805,7 @@ export default function DashboardPage() {
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle>Keyboard shortcuts</DialogTitle>
-            <DialogDescription>
-              Navigate and triage issues without the mouse.
-            </DialogDescription>
+            <DialogDescription>Navigate and triage issues without the mouse.</DialogDescription>
           </DialogHeader>
           <div className="space-y-2 text-body-sm">
             {[
@@ -813,70 +836,109 @@ export default function DashboardPage() {
         </DialogContent>
       </Dialog>
 
-      {/* Stats Row */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <div className="group relative overflow-hidden rounded-xl border bg-card p-4 transition-all hover:shadow-lg hover:shadow-accent-2/5 hover:border-accent-2/20 card-hover">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Unresolved</p>
-              <p className="font-display text-3xl font-semibold mt-1 tabular-nums tracking-tight">{stats.unresolved}</p>
-            </div>
-            <div className={`p-2 rounded-lg ${stats.unresolved > 0 ? 'bg-orange-500/10' : 'bg-bug/10'}`}>
-              <AlertCircle className={`h-5 w-5 ${stats.unresolved > 0 ? 'text-orange-500' : 'text-bug'}`} />
-            </div>
+      {/* Triage Bar */}
+      <div className="flex items-center gap-3 h-10 px-4 rounded-lg surface-card border-[hsl(var(--border-subtle))]">
+        <button
+          type="button"
+          aria-pressed={activeFilter === "fatal-triage"}
+          aria-label={`Filter by fatal issues (${stats.fatalCount})`}
+          onClick={() => {
+            setActiveFilter(activeFilter === "fatal-triage" ? null : "fatal-triage");
+            setSearchResults(activeFilter === "fatal-triage" ? null : issues.filter((i) => i.level === "fatal"));
+          }}
+          className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-mono font-bold transition-all ${
+            stats.criticalCount > 0 ? "text-red-400 hover:bg-red-500/10" : "text-[hsl(var(--muted-foreground))]"
+          } ${activeFilter === "fatal-triage" ? "bg-red-500/10" : ""}`}
+        >
+          <span
+            aria-hidden="true"
+            className={`h-1.5 w-1.5 rounded-full ${stats.criticalCount > 0 ? "bg-red-500 animate-pulse" : "bg-[hsl(var(--muted-foreground))]"}`}
+          />
+          {stats.fatalCount} FATAL
+        </button>
+        <div className="h-4 w-px bg-[hsl(var(--border-subtle))]" />
+        <button
+          type="button"
+          aria-pressed={activeFilter === "error-triage"}
+          aria-label={`Filter by error issues (${stats.errorCount})`}
+          onClick={() => {
+            setActiveFilter(activeFilter === "error-triage" ? null : "error-triage");
+            setSearchResults(activeFilter === "error-triage" ? null : issues.filter((i) => i.level === "error"));
+          }}
+          className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-mono font-bold transition-all ${
+            stats.errorCount > 0 ? "text-orange-400 hover:bg-orange-500/10" : "text-[hsl(var(--muted-foreground))]"
+          } ${activeFilter === "error-triage" ? "bg-orange-500/10" : ""}`}
+        >
+          <span
+            aria-hidden="true"
+            className={`h-1.5 w-1.5 rounded-full ${stats.errorCount > 0 ? "bg-orange-500" : "bg-[hsl(var(--muted-foreground))]"}`}
+          />
+          {stats.errorCount} ERROR
+        </button>
+        <div className="h-4 w-px bg-[hsl(var(--border-subtle))]" />
+        <span className="text-xs text-[hsl(var(--muted-foreground))] font-mono">{stats.unresolved} unresolved</span>
+        <div className="flex-1" />
+        {selectedIssues.size > 0 && (
+          <div role="region" aria-live="polite" aria-label="Bulk actions" className="flex items-center gap-2">
+            <span className="text-xs text-[hsl(var(--muted-foreground))] font-mono">
+              {selectedIssues.size} selected
+            </span>
+            <button
+              type="button"
+              onClick={handleBulkResolve}
+              className="flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-medium bg-[hsl(var(--accent))]/10 text-[hsl(var(--accent))] hover:bg-[hsl(var(--accent))]/20 transition-colors"
+            >
+              <Check className="h-3 w-3" />
+              Resolve all
+            </button>
           </div>
+        )}
+      </div>
+
+      {/* Stats Row */}
+      <dl className="grid grid-cols-2 md:grid-cols-4 gap-3" aria-label="Issue statistics">
+        <div className="surface-card p-4 card-hover">
+          <dt className="text-[11px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider">
+            Unresolved
+          </dt>
+          <dd className="font-mono text-3xl font-bold mt-1 tabular-nums tracking-tight">{stats.unresolved}</dd>
           {stats.criticalCount > 0 && (
-            <p className="text-xs text-red-500 mt-2 flex items-center gap-1">
-              <Flame className="h-3 w-3" />
+            <p className="text-xs text-red-400 mt-2 flex items-center gap-1 font-mono">
+              <Flame className="h-3 w-3" aria-hidden="true" />
               {stats.criticalCount} critical
             </p>
           )}
         </div>
 
-        <div className="group relative overflow-hidden rounded-xl border bg-card p-4 transition-all hover:shadow-lg hover:shadow-accent-2/5 hover:border-accent-2/20 card-hover">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Events (24h)</p>
-              <p className="font-display text-3xl font-semibold mt-1 tabular-nums tracking-tight">{stats.events.toLocaleString()}</p>
-            </div>
-            <div className="p-2 rounded-lg bg-blue-500/10">
-              <TrendingUp className="h-5 w-5 text-blue-500" />
-            </div>
-          </div>
-          <div className="mt-2 flex items-center gap-1">
-            <div className="flex-1 h-1 rounded-full bg-muted overflow-hidden">
-              <div className="h-full w-3/4 bg-gradient-to-r from-blue-500 to-primary rounded-full" />
-            </div>
+        <div className="surface-card p-4 card-hover">
+          <dt className="text-[11px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider">
+            Events
+          </dt>
+          <dd className="font-mono text-3xl font-bold mt-1 tabular-nums tracking-tight">
+            {stats.events.toLocaleString()}
+          </dd>
+          <div className="mt-2 h-0.5 rounded-full bg-[hsl(var(--surface-3))] overflow-hidden">
+            <div className="h-full w-3/4 bg-[hsl(var(--accent))]/40 rounded-full" />
           </div>
         </div>
 
-        <div className="group relative overflow-hidden rounded-xl border bg-card p-4 transition-all hover:shadow-lg hover:shadow-accent-2/5 hover:border-accent-2/20 card-hover">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Users Affected</p>
-              <p className="font-display text-3xl font-semibold mt-1 tabular-nums tracking-tight">{stats.users.toLocaleString()}</p>
-            </div>
-            <div className="p-2 rounded-lg bg-purple-500/10">
-              <Users className="h-5 w-5 text-purple-500" />
-            </div>
-          </div>
+        <div className="surface-card p-4 card-hover">
+          <dt className="text-[11px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider">
+            Users Affected
+          </dt>
+          <dd className="font-mono text-3xl font-bold mt-1 tabular-nums tracking-tight">
+            {stats.users.toLocaleString()}
+          </dd>
         </div>
 
-        <div className="group relative overflow-hidden rounded-xl border bg-card p-4 transition-all hover:shadow-lg hover:shadow-accent-2/5 hover:border-accent-2/20 card-hover">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Last 24h</p>
-              <p className="font-display text-3xl font-semibold mt-1 tabular-nums tracking-tight">{stats.recentCount}</p>
-            </div>
-            <div className="p-2 rounded-lg bg-emerald-500/10">
-              <Clock className="h-5 w-5 text-emerald-500" />
-            </div>
-          </div>
-          {stats.recentCount > 0 && (
-            <p className="text-xs text-emerald-500 mt-2">Active issues</p>
-          )}
+        <div className="surface-card p-4 card-hover">
+          <dt className="text-[11px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider">
+            Last 24h
+          </dt>
+          <dd className="font-mono text-3xl font-bold mt-1 tabular-nums tracking-tight">{stats.recentCount}</dd>
+          {stats.recentCount > 0 && <p className="text-xs text-emerald-400 mt-2 font-mono">Active</p>}
         </div>
-      </div>
+      </dl>
 
       {/* Advanced Search Bar */}
       <IssueSearchBar
@@ -896,6 +958,8 @@ export default function DashboardPage() {
           return (
             <button
               key={filter.id}
+              type="button"
+              aria-pressed={activeFilter === filter.id}
               onClick={() => {
                 if (activeFilter === filter.id) {
                   setActiveFilter(null);
@@ -907,19 +971,19 @@ export default function DashboardPage() {
                     setSortBy("trending");
                   } else if (filter.id === "critical") {
                     // Filter to fatal + error level issues
-                    setSearchResults(issues.filter(i => i.level === "fatal" || i.level === "error"));
+                    setSearchResults(issues.filter((i) => i.level === "fatal" || i.level === "error"));
                   } else if (filter.id === "new-today") {
                     // Filter to issues first seen today
                     const today = new Date();
                     today.setHours(0, 0, 0, 0);
-                    setSearchResults(issues.filter(i => new Date(i.first_seen) >= today));
+                    setSearchResults(issues.filter((i) => new Date(i.first_seen) >= today));
                   }
                 }
               }}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap border transition-all ${
                 activeFilter === filter.id
-                  ? "bg-accent-2 text-accent-2-foreground border-accent-2"
-                  : "bg-card text-muted-foreground border-border hover:border-accent-2/30 hover:text-foreground"
+                  ? "bg-[hsl(var(--accent))] text-[hsl(var(--accent-foreground))] border-[hsl(var(--accent))]"
+                  : "bg-[hsl(var(--surface-1))] text-muted-foreground border-border hover:border-[hsl(var(--accent))]/30 hover:text-foreground"
               }`}
             >
               <FilterIcon className="h-3 w-3" />
@@ -928,57 +992,68 @@ export default function DashboardPage() {
           );
         })}
 
-        {savedSearches.length > 0 && (
-          <div className="h-4 w-px bg-border mx-1 shrink-0" />
-        )}
+        {savedSearches.length > 0 && <div className="h-4 w-px bg-border mx-1 shrink-0" />}
 
         {savedSearches.map((search) => (
-          <button
+          <div
             key={search.id}
-            onClick={() => {
-              if (activeFilter === search.id) {
-                setActiveFilter(null);
-                setSearchResults(null);
-              } else {
-                setActiveFilter(search.id);
-                // Apply saved search query as a text filter
-                if (search.query) {
-                  const q = search.query.toLowerCase();
-                  setSearchResults(issues.filter(i =>
-                    i.title.toLowerCase().includes(q) ||
-                    i.fingerprint.toLowerCase().includes(q) ||
-                    (i.level && i.level.toLowerCase().includes(q))
-                  ));
-                }
-              }
-            }}
-            className={`group flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap border transition-all ${
+            className={`group inline-flex items-center rounded-full text-xs font-medium whitespace-nowrap border transition-all ${
               activeFilter === search.id
-                ? "bg-accent-2 text-accent-2-foreground border-accent-2"
-                : "bg-card text-muted-foreground border-border hover:border-accent-2/30 hover:text-foreground"
+                ? "bg-[hsl(var(--accent))] text-[hsl(var(--accent-foreground))] border-[hsl(var(--accent))]"
+                : "bg-[hsl(var(--surface-1))] text-muted-foreground border-border hover:border-[hsl(var(--accent))]/30 hover:text-foreground"
             }`}
           >
-            <Bookmark className="h-3 w-3" />
-            {search.name}
             <button
+              type="button"
+              aria-pressed={activeFilter === search.id}
+              aria-label={`Filter by saved search: ${search.name}`}
+              onClick={() => {
+                if (activeFilter === search.id) {
+                  setActiveFilter(null);
+                  setSearchResults(null);
+                } else {
+                  setActiveFilter(search.id);
+                  if (search.query) {
+                    const q = search.query.toLowerCase();
+                    setSearchResults(
+                      issues.filter(
+                        (i) =>
+                          i.title.toLowerCase().includes(q) ||
+                          i.fingerprint.toLowerCase().includes(q) ||
+                          (i.level && i.level.toLowerCase().includes(q))
+                      )
+                    );
+                  }
+                }
+              }}
+              className="flex items-center gap-1.5 pl-3 pr-2 py-1.5"
+            >
+              <Bookmark className="h-3 w-3" aria-hidden="true" />
+              {search.name}
+            </button>
+            <button
+              type="button"
+              aria-label={`Remove saved search: ${search.name}`}
               onClick={(e) => {
                 e.stopPropagation();
                 deleteSearch(search.id);
                 toast.success("Search removed");
               }}
-              className="ml-1 opacity-0 group-hover:opacity-100 transition-opacity"
+              className="pr-2 py-1.5 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus:opacity-100 transition-opacity"
             >
-              <X className="h-3 w-3" />
+              <X className="h-3 w-3" aria-hidden="true" />
             </button>
-          </button>
+          </div>
         ))}
 
         {currentSearchQuery && (
           <button
+            type="button"
+            aria-label={`Save current search: ${currentSearchQuery}`}
             onClick={() => setShowSaveSearch(true)}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap border border-dashed border-accent-2/30 text-accent-2 hover:bg-accent-2/5 transition-all"
           >
-            <Bookmark className="h-3 w-3" />
+            <Bookmark className="h-3 w-3" aria-hidden="true" />
             Save Search
           </button>
         )}
@@ -986,19 +1061,27 @@ export default function DashboardPage() {
 
       {/* Save Search Mini Dialog */}
       {showSaveSearch && (
-        <div className="flex items-center gap-2 px-3 py-2 rounded-lg border bg-card animate-fade-in-up">
+        <div className="flex items-center gap-2 px-3 py-2 surface-card animate-fade-in-up">
           <Bookmark className="h-4 w-4 text-accent-2 shrink-0" />
           <input
             autoFocus
             type="text"
+            aria-label="Search name"
             value={saveSearchName}
             onChange={(e) => setSaveSearchName(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") handleSaveSearch(); if (e.key === "Escape") setShowSaveSearch(false); }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") handleSaveSearch();
+              if (e.key === "Escape") setShowSaveSearch(false);
+            }}
             placeholder="Search name..."
             className="flex-1 h-7 bg-transparent text-sm outline-none"
           />
-          <Button size="sm" className="h-7 text-xs" onClick={handleSaveSearch}>Save</Button>
-          <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setShowSaveSearch(false)}>Cancel</Button>
+          <Button size="sm" className="h-7 text-xs" onClick={handleSaveSearch}>
+            Save
+          </Button>
+          <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setShowSaveSearch(false)}>
+            Cancel
+          </Button>
         </div>
       )}
 
@@ -1023,9 +1106,9 @@ export default function DashboardPage() {
 
       {/* Error State */}
       {error && !isLoading && (
-        <div className="flex flex-col items-center justify-center py-16 animate-fade-in-up">
+        <div role="alert" className="flex flex-col items-center justify-center py-16 animate-fade-in-up">
           <div className="w-14 h-14 rounded-2xl bg-destructive/10 flex items-center justify-center mb-4">
-            <AlertCircle className="h-7 w-7 text-destructive" />
+            <AlertCircle className="h-7 w-7 text-destructive" aria-hidden="true" />
           </div>
           <h3 className="text-lg font-medium mb-1">Something went wrong</h3>
           <p className="text-sm text-muted-foreground mb-4">{error}</p>
@@ -1047,39 +1130,41 @@ export default function DashboardPage() {
                 </div>
                 <h3 className="text-lg font-medium mb-1">No matching issues</h3>
                 <p className="text-sm text-muted-foreground mb-4">Try adjusting your search or filters</p>
-                <Button variant="outline" onClick={() => { setSearchResults(null); setActiveFilter(null); }}>
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setSearchResults(null);
+                    setActiveFilter(null);
+                  }}
+                >
                   Clear filters
                 </Button>
               </div>
             ) : (
-              // Zero issues celebration
-              <div className="flex flex-col items-center justify-center py-20 animate-fade-in-up">
-                <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-green-500/20 to-emerald-500/10 flex items-center justify-center mb-4">
-                  <Check className="h-8 w-8 text-green-500" />
-                </div>
-                <h3 className="text-lg font-medium mb-1">Zero issues!</h3>
-                <p className="text-sm text-muted-foreground">Your application is running clean</p>
-              </div>
+              // Zero issues — onboarding empty state
+              <OnboardingEmptyState project={selectedProject} />
             )
           ) : (
-            displayIssues.slice(0, renderCap).map((issue, index) => (
-              <IssueRow
-                key={issue.id}
-                issue={issue}
-                index={index}
-                isHovered={hoveredIssue === issue.id}
-                isFocused={focusedIndex === index}
-                isSelected={selectedIssues.has(issue.id)}
-                isNew={newIssueIds.has(issue.id)}
-                sparkData={sparklineCache.get(issue.id) || []}
-                density={density}
-                projectId={selectedProject?.id}
-                onHover={handleHover}
-                onFocus={handleFocus}
-                onToggleSelect={toggleIssueSelection}
-                onResolve={handleResolve}
-              />
-            ))
+            displayIssues
+              .slice(0, renderCap)
+              .map((issue, index) => (
+                <IssueRow
+                  key={issue.id}
+                  issue={issue}
+                  index={index}
+                  isHovered={hoveredIssue === issue.id}
+                  isFocused={focusedIndex === index}
+                  isSelected={selectedIssues.has(issue.id)}
+                  isNew={newIssueIds.has(issue.id)}
+                  sparkData={sparklineCache.get(`${issue.id}:${issue.count}`) || []}
+                  density={density}
+                  projectId={selectedProject?.id}
+                  onHover={handleHover}
+                  onFocus={handleFocus}
+                  onToggleSelect={toggleIssueSelection}
+                  onResolve={handleResolve}
+                />
+              ))
           )}
         </div>
       )}
@@ -1091,11 +1176,7 @@ export default function DashboardPage() {
             Showing {Math.min(renderCap, displayIssues.length)} of {displayIssues.length} issues
           </p>
           {displayIssues.length > renderCap && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setRenderCap((n) => n + 100)}
-            >
+            <Button variant="outline" size="sm" onClick={() => setRenderCap((n) => n + 100)}>
               Load 100 more
             </Button>
           )}

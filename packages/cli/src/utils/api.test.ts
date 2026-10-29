@@ -65,7 +65,7 @@ describe("loadConfig / saveConfig", () => {
     expect(fsPromises.writeFile).toHaveBeenCalledWith(
       expect.stringContaining("config.json"),
       expect.stringContaining('"apiKey": "bw_test_key"'),
-      "utf-8"
+      { encoding: "utf-8", mode: 0o600 }
     );
   });
 
@@ -110,7 +110,7 @@ describe("API method URL construction", () => {
     await listProjects();
 
     expect(fetchSpy).toHaveBeenCalledOnce();
-    const [url, opts] = fetchSpy.mock.calls[0];
+    const [url, opts] = fetchSpy.mock.calls[0]!;
     expect(url).toContain("/api/v1/projects");
     expect(opts.method).toBe("GET");
   });
@@ -118,7 +118,7 @@ describe("API method URL construction", () => {
   it('listIssues("proj1") calls GET /api/v1/projects/proj1/issues', async () => {
     await listIssues("proj1");
 
-    const [url, opts] = fetchSpy.mock.calls[0];
+    const [url, opts] = fetchSpy.mock.calls[0]!;
     expect(url).toContain("/api/v1/projects/proj1/issues");
     expect(opts.method).toBe("GET");
   });
@@ -126,7 +126,7 @@ describe("API method URL construction", () => {
   it("listIssues(undefined) calls GET /api/v1/issues/across-projects", async () => {
     await listIssues(undefined);
 
-    const [url, opts] = fetchSpy.mock.calls[0];
+    const [url, opts] = fetchSpy.mock.calls[0]!;
     expect(url).toContain("/api/v1/issues/across-projects");
     expect(opts.method).toBe("GET");
   });
@@ -137,7 +137,7 @@ describe("API method URL construction", () => {
 
     await getIssue("issue1", "proj1");
 
-    const [url, opts] = fetchSpy.mock.calls[0];
+    const [url, opts] = fetchSpy.mock.calls[0]!;
     expect(url).toContain("/api/v1/projects/proj1/issues/issue1");
     expect(opts.method).toBe("GET");
   });
@@ -148,7 +148,7 @@ describe("API method URL construction", () => {
 
     await updateIssue("issue1", "proj1", { status: "resolved" });
 
-    const [url, opts] = fetchSpy.mock.calls[0];
+    const [url, opts] = fetchSpy.mock.calls[0]!;
     expect(url).toContain("/api/v1/projects/proj1/issues/issue1");
     expect(opts.method).toBe("PATCH");
     expect(JSON.parse(opts.body)).toEqual({ status: "resolved" });
@@ -157,7 +157,7 @@ describe("API method URL construction", () => {
   it('listMonitors("proj1") calls GET /api/v1/projects/proj1/monitors', async () => {
     await listMonitors("proj1");
 
-    const [url, opts] = fetchSpy.mock.calls[0];
+    const [url, opts] = fetchSpy.mock.calls[0]!;
     expect(url).toContain("/api/v1/projects/proj1/monitors");
     expect(opts.method).toBe("GET");
   });
@@ -168,7 +168,7 @@ describe("API method URL construction", () => {
 
     await listMonitors(undefined);
 
-    const [url, opts] = fetchSpy.mock.calls[0];
+    const [url, opts] = fetchSpy.mock.calls[0]!;
     expect(url).toContain("/api/v1/monitors/across-projects");
     expect(opts.method).toBe("GET");
   });
@@ -179,7 +179,7 @@ describe("API method URL construction", () => {
 
     await countIssues("proj1", "unresolved");
 
-    const [url] = fetchSpy.mock.calls[0];
+    const [url] = fetchSpy.mock.calls[0]!;
     expect(url).toContain("/api/v1/projects/proj1/issues");
     expect(url).toContain("status=unresolved");
     expect(url).toContain("per_page=1");
@@ -252,13 +252,13 @@ describe("Error handling", () => {
     const fetchSpy = mockFetchResponse("Unauthorized", 401, "Unauthorized");
     vi.stubGlobal("fetch", fetchSpy);
 
-    await expect(listProjects()).rejects.toThrow(/API request failed: 401/);
+    await expect(listProjects()).rejects.toThrow(/Request failed \(401\)/);
   });
 
   it("throws an error when the API returns 500", async () => {
     const fetchSpy = mockFetchResponse("Internal Server Error", 500, "Internal Server Error");
     vi.stubGlobal("fetch", fetchSpy);
 
-    await expect(listIssues("proj1")).rejects.toThrow(/API request failed: 500/);
+    await expect(listIssues("proj1")).rejects.toThrow(/Request failed \(500\)/);
   });
 });

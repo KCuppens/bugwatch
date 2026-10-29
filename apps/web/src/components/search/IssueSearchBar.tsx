@@ -1,13 +1,27 @@
 "use client";
 
 import { useRef, useEffect, useCallback } from "react";
-import { Search, X, Loader2, Filter } from "lucide-react";
+import { Search, X, Loader2, Clock, Zap, Users, TrendingUp, ChevronDown, Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useSearch } from "@/hooks/useSearch";
 import { useKeyboardNavigation } from "@/hooks/useKeyboardNavigation";
 import { SearchAutocomplete } from "./SearchAutocomplete";
 import { LEVEL_COLORS, STATUS_COLORS } from "@/lib/search";
 import type { Issue, Facets } from "@/lib/api";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import type { SearchToken } from "@/lib/search/types";
+
+interface FieldToken extends SearchToken {
+  type: "field";
+  field: string;
+}
 
 interface IssueSearchBarProps {
   projectId: string | undefined;
@@ -31,6 +45,14 @@ export function IssueSearchBar({
   onSortChange,
 }: IssueSearchBarProps) {
   const inputRef = useRef<HTMLInputElement>(null);
+  const blurTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(
+    () => () => {
+      if (blurTimerRef.current) clearTimeout(blurTimerRef.current);
+    },
+    []
+  );
 
   const {
     query,
@@ -111,7 +133,7 @@ export function IssueSearchBar({
 
   const handleInputBlur = useCallback(() => {
     // Delay closing to allow click on suggestions
-    setTimeout(() => {
+    blurTimerRef.current = setTimeout(() => {
       setAutocompleteOpen(false);
     }, 200);
   }, [setAutocompleteOpen]);
@@ -126,9 +148,9 @@ export function IssueSearchBar({
   );
 
   // Extract active filters from parsed query for display
-  const activeFilters = parsedQuery?.tokens.filter(
-    (t) => t.type === "field" && t.field && t.value
-  ) || [];
+  const activeFilters = (parsedQuery?.tokens.filter(
+    (t): t is FieldToken => t.type === "field" && !!t.field && !!t.value
+  ) ?? []);
 
   return (
     <div className={cn("relative", className)}>
@@ -143,7 +165,7 @@ export function IssueSearchBar({
         {activeFilters.length > 0 && (
           <div className="flex items-center gap-1.5">
             {activeFilters.map((token, index) => {
-              const colorClass = getFilterColorClass(token.field!, token.value);
+              const colorClass = getFilterColorClass(token.field, token.value);
               return (
                 <span
                   key={index}
@@ -159,12 +181,12 @@ export function IssueSearchBar({
                     onClick={(e) => {
                       e.stopPropagation();
                       // Remove this filter from query
-                      const newQuery = query.replace(token.raw, "").trim();
+                      const newQuery = query.split(token.raw).join("").trim();
                       setQuery(newQuery);
                     }}
                     className="hover:text-foreground"
                   >
-                    <X className="h-3 w-3" />
+                    <X className="h-3 w-3" aria-hidden="true" />
                   </button>
                 </span>
               );
@@ -175,6 +197,12 @@ export function IssueSearchBar({
         <input
           ref={inputRef}
           type="text"
+          role="combobox"
+          aria-label="Search issues"
+          aria-expanded={isAutocompleteOpen && suggestions.length > 0}
+          aria-haspopup="listbox"
+          aria-autocomplete="list"
+          aria-controls="search-autocomplete-listbox"
           placeholder="Search issues... (/)"
           value={query}
           onChange={handleInputChange}
@@ -189,9 +217,10 @@ export function IssueSearchBar({
           <button
             type="button"
             onClick={clearSearch}
+            aria-label="Clear search"
             className="p-1 hover:bg-muted rounded transition-colors"
           >
-            <X className="h-4 w-4 text-muted-foreground" />
+            <X className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
           </button>
         )}
 
@@ -199,6 +228,7 @@ export function IssueSearchBar({
         <div className="flex items-center gap-1 border-l pl-3">
           <button
             type="button"
+            aria-pressed={query.includes("level:error")}
             onClick={() => {
               const newQuery = query + (query ? " " : "") + "level:error";
               triggerSearch(newQuery);
@@ -209,6 +239,7 @@ export function IssueSearchBar({
           </button>
           <button
             type="button"
+            aria-pressed={query.includes("is:unresolved")}
             onClick={() => {
               const newQuery = query + (query ? " " : "") + "is:unresolved";
               triggerSearch(newQuery);
@@ -220,22 +251,12 @@ export function IssueSearchBar({
         </div>
 
         {/* Sort dropdown */}
-        <div className="flex items-center gap-2 border-l pl-3">
-          <Filter className="h-3 w-3 text-muted-foreground" />
-          <select
-            value={sortBy}
-            onChange={(e) => onSortChange?.(e.target.value)}
-            className="bg-transparent text-xs outline-none cursor-pointer"
-          >
-            <option value="recent">Recent</option>
-            <option value="frequent">Frequent</option>
-            <option value="users">Users</option>
-            <option value="trending">Trending</option>
-          </select>
+        <div className="border-l pl-3">
+          <SortDropdown sortBy={sortBy ?? "recent"} onSortChange={onSortChange} />
         </div>
 
-        {/* Keyboard shortcut hint */}
-        <kbd className="hidden sm:inline-flex h-5 items-center gap-1 rounded border bg-muted px-1.5 text-[10px] font-medium text-muted-foreground">
+        {/* Keyboard shortcut hint — decorative, screen readers get hint from placeholder */}
+        <kbd aria-hidden="true" className="hidden sm:inline-flex h-5 items-center gap-1 rounded border bg-muted px-1.5 text-[10px] font-medium text-muted-foreground">
           /
         </kbd>
       </div>
@@ -251,6 +272,84 @@ export function IssueSearchBar({
         />
       )}
     </div>
+  );
+}
+
+const SORT_OPTIONS = [
+  {
+    value: "recent",
+    label: "Recent",
+    description: "Most recently seen",
+    icon: Clock,
+  },
+  {
+    value: "frequent",
+    label: "Frequent",
+    description: "Most event occurrences",
+    icon: Zap,
+  },
+  {
+    value: "users",
+    label: "Users",
+    description: "Most users affected",
+    icon: Users,
+  },
+  {
+    value: "trending",
+    label: "Trending",
+    description: "Fastest growing rate",
+    icon: TrendingUp,
+  },
+] as const;
+
+function SortDropdown({
+  sortBy,
+  onSortChange,
+}: {
+  sortBy: string;
+  onSortChange?: (sort: string) => void;
+}) {
+  const active = SORT_OPTIONS.find((o) => o.value === sortBy) ?? SORT_OPTIONS[0];
+  const ActiveIcon = active.icon;
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          aria-label={`Sort by: ${active.label}`}
+          className="flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-2/40"
+        >
+          <ActiveIcon className="h-3 w-3" aria-hidden="true" />
+          <span>{active.label}</span>
+          <ChevronDown className="h-3 w-3 opacity-60" aria-hidden="true" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-52">
+        <DropdownMenuLabel className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider px-2 py-1.5">
+          Sort issues by
+        </DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        {SORT_OPTIONS.map((option) => {
+          const Icon = option.icon;
+          const isActive = sortBy === option.value;
+          return (
+            <DropdownMenuItem
+              key={option.value}
+              onSelect={() => onSortChange?.(option.value)}
+              className={cn("gap-3 pr-2", isActive && "text-accent-2 bg-accent-2/8 hover:bg-accent-2/12 focus:bg-accent-2/12 hover:text-accent-2 focus:text-accent-2")}
+            >
+              <Icon className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+              <div className="flex-1 min-w-0">
+                <div className="font-medium">{option.label}</div>
+                <div className="text-[11px] text-muted-foreground">{option.description}</div>
+              </div>
+              {isActive && <Check className="h-3.5 w-3.5 shrink-0 text-accent-2" aria-hidden="true" />}
+            </DropdownMenuItem>
+          );
+        })}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -278,8 +377,5 @@ function getFilterColorClass(field: string, value: string): string {
  */
 function isInputFocused(): boolean {
   const activeElement = document.activeElement;
-  return (
-    activeElement instanceof HTMLInputElement ||
-    activeElement instanceof HTMLTextAreaElement
-  );
+  return activeElement instanceof HTMLInputElement || activeElement instanceof HTMLTextAreaElement;
 }

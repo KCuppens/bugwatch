@@ -35,12 +35,9 @@ export function FaqSection() {
       <FadeUp>
         <div className="text-center max-w-2xl mx-auto mb-16">
           <h2 className="font-display text-display-md md:text-display-lg mb-4">
-            Frequently asked{" "}
-            <span className="text-accent">questions</span>
+            Frequently asked <span className="text-accent">questions</span>
           </h2>
-          <p className="text-body-lg text-muted-foreground">
-            Everything you need to know about BugWatch.
-          </p>
+          <p className="text-body-lg text-muted-foreground">Everything you need to know about BugWatch.</p>
         </div>
       </FadeUp>
 
@@ -56,7 +53,7 @@ export function FaqSection() {
                 aria-expanded={isOpen}
                 aria-controls={panelId}
                 onClick={() => setOpenIndex(isOpen ? null : index)}
-                className={`w-full p-5 rounded-xl glass-card text-left transition-colors ${
+                className={`w-full p-5 rounded-xl surface-card text-left transition-colors ${
                   isOpen ? "border-accent/30" : ""
                 }`}
               >
@@ -79,9 +76,7 @@ export function FaqSection() {
                 }}
               >
                 <div className="overflow-hidden">
-                  <p className="px-5 pb-5 text-muted-foreground text-sm leading-relaxed">
-                    {faq.answer}
-                  </p>
+                  <p className="px-5 pb-5 text-muted-foreground text-sm leading-relaxed">{faq.answer}</p>
                 </div>
               </div>
             </StaggerItem>

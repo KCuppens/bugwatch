@@ -9,7 +9,7 @@ use axum::{
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tower_http::{
-    cors::{Any, CorsLayer},
+    cors::CorsLayer,
     trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer},
 };
 use tracing::info;
@@ -31,13 +31,23 @@ pub mod utils;
 
 pub use error::{AppError, AppResult};
 pub use rate_limit::RateLimiter;
-pub use services::{AlertingService, HealthCheckWorker, RetentionService};
+pub use services::{
+    AlertingService, HealthCheckWorker, LogAlertEvaluator, LogIssueLinker, NotificationService,
+    RetentionService,
+};
 
 // BugWatch self-monitoring
 use bugwatch::{init as bugwatch_init, install_panic_hook, BugwatchClient, BugwatchOptions};
 
 /// Maximum concurrent alert evaluation tasks
 const MAX_CONCURRENT_ALERTS: usize = 100;
+
+/// Records the instant the server process started, for uptime reporting.
+static SERVER_START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+
+fn init_server_start() {
+    SERVER_START.get_or_init(std::time::Instant::now);
+}
 
 /// Application state shared across handlers
 #[derive(Clone)]
@@ -48,6 +58,7 @@ pub struct AppState {
     #[cfg(feature = "saas")]
     pub stripe: Option<billing::StripeClient>,
     pub alerting_service: Arc<AlertingService>,
+    pub notification_service: Arc<NotificationService>,
     pub bugwatch: Option<Arc<BugwatchClient>>,
     pub alert_semaphore: Arc<tokio::sync::Semaphore>,
     pub payment_store: Arc<crate::payments::store::PaymentStore>,
@@ -56,18 +67,27 @@ pub struct AppState {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Record server start time as early as possible for uptime reporting.
+    init_server_start();
+
     // Load environment variables first (needed for tracing config)
     dotenvy::dotenv().ok();
 
     // Initialize tracing - JSON format in production, pretty format in dev
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| "bugwatch_server=debug,tower_http=debug".into());
+        .unwrap_or_else(|_| "bugwatch_server=info,tower_http=info,sqlx=warn".into());
 
-    let is_production = std::env::var("ENVIRONMENT")
-        .map(|e| e == "production")
-        .unwrap_or(false);
+    let environment = std::env::var("ENVIRONMENT").unwrap_or_default();
+    let use_json_logs = matches!(environment.as_str(), "production" | "staging");
 
-    if is_production {
+    if !use_json_logs && !environment.is_empty() {
+        eprintln!(
+            "[WARN] ENVIRONMENT='{}' is not 'production' or 'staging' — using human-readable logs",
+            environment
+        );
+    }
+
+    if use_json_logs {
         tracing_subscriber::registry()
             .with(env_filter)
             .with(tracing_subscriber::fmt::layer().json())
@@ -91,6 +111,27 @@ async fn main() -> Result<()> {
     // Initialize database
     let db = db::init_with_pool_size(&config.database_url, config.database_max_connections).await?;
 
+    // Warn if the DB still has legacy 16-char (64-bit) fingerprints from before the 128-bit upgrade.
+    // Those issues will not deduplicate with new events until the fingerprints are backfilled.
+    // To resolve: DELETE FROM issues WHERE char_length(fingerprint) = 16; (lets them re-create fresh)
+    match sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM issues WHERE char_length(fingerprint) = 16)",
+    )
+    .fetch_one(&db)
+    .await
+    {
+        Ok(true) => {
+            tracing::warn!(
+                "Legacy 16-char fingerprints detected — these issues will not deduplicate with new events. \
+                 Run: DELETE FROM issues WHERE char_length(fingerprint) = 16"
+            );
+        }
+        Ok(false) => {}
+        Err(e) => {
+            tracing::warn!("Could not check for legacy fingerprints at startup: {}", e);
+        }
+    }
+
     // Initialize Stripe client (SaaS mode only)
     #[cfg(feature = "saas")]
     let stripe = {
@@ -104,6 +145,10 @@ async fn main() -> Result<()> {
     // Initialize alerting service (shared between AppState and workers)
     let alerting_service = Arc::new(AlertingService::new(db.clone(), config.app_url.clone()).await);
     info!("Alerting service initialized");
+
+    // Initialize notification service (shared to avoid per-request SMTP/SES reconnection)
+    let notification_service = Arc::new(NotificationService::new().await);
+    info!("Notification service initialized");
 
     // Initialize BugWatch self-monitoring (dogfooding)
     // Uses bugwatch::init to set the global client for capture_message in error.rs
@@ -143,23 +188,55 @@ async fn main() -> Result<()> {
         #[cfg(feature = "saas")]
         stripe,
         alerting_service: alerting_service.clone(),
+        notification_service: notification_service.clone(),
         bugwatch,
         alert_semaphore: Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_ALERTS)),
         payment_store: Arc::new(crate::payments::store::PaymentStore::new(db.clone())),
-        onchain_verifier: Arc::new(crate::payments::verify::OnChainVerifier::new(
-            config.x402_rpc_url.clone(),
-        )),
+        onchain_verifier: Arc::new(
+            crate::payments::verify::OnChainVerifier::new(config.x402_rpc_url.clone())
+                .map_err(|e| anyhow::anyhow!("Failed to initialise on-chain verifier: {e}"))?,
+        ),
     };
 
     // Build application
     let app = create_app(state.clone());
 
-    // Start health check worker in background
+    // Start health check worker in background — the outer loop supervises an inner
+    // `tokio::spawn` so that a panic in `worker.run()` is surfaced as a JoinError
+    // rather than silently killing the task. Restart with exponential backoff (1s → 60s cap).
     let worker_db = state.db.clone();
     let worker_alerting = alerting_service.clone();
     tokio::spawn(async move {
-        let worker = HealthCheckWorker::with_alerting(worker_db, worker_alerting);
-        worker.run().await;
+        let mut backoff_secs: u64 = 1;
+        loop {
+            let inner_db = worker_db.clone();
+            let inner_alerting = worker_alerting.clone();
+            let task = tokio::spawn(async move {
+                let worker = HealthCheckWorker::with_alerting(inner_db, inner_alerting);
+                worker.run().await;
+            });
+            match task.await {
+                Ok(()) => {
+                    tracing::warn!(backoff_secs, "Health check worker exited — restarting");
+                }
+                Err(e) if e.is_panic() => {
+                    tracing::error!(
+                        error = %e,
+                        backoff_secs,
+                        "Health check worker panicked — restarting"
+                    );
+                }
+                Err(e) => {
+                    tracing::error!(
+                        error = %e,
+                        backoff_secs,
+                        "Health check worker task error — restarting"
+                    );
+                }
+            }
+            tokio::time::sleep(tokio::time::Duration::from_secs(backoff_secs)).await;
+            backoff_secs = (backoff_secs * 2).min(60);
+        }
     });
     info!("Health check worker started");
 
@@ -171,8 +248,26 @@ async fn main() -> Result<()> {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(24 * 60 * 60)); // 24 hours
         loop {
             interval.tick().await;
-            if let Err(e) = retention.run_cleanup().await {
-                tracing::error!("Data retention cleanup failed: {}", e);
+            // Retry up to 3× on failure with a 5-minute back-off between attempts.
+            let mut succeeded = false;
+            for attempt in 1..=3u32 {
+                match retention.run_cleanup().await {
+                    Ok(()) => {
+                        succeeded = true;
+                        break;
+                    }
+                    Err(e) => {
+                        tracing::warn!(attempt, "Data retention cleanup attempt failed: {}", e);
+                        if attempt < 3 {
+                            tokio::time::sleep(std::time::Duration::from_secs(5 * 60)).await;
+                        }
+                    }
+                }
+            }
+            if !succeeded {
+                tracing::error!(
+                    "Data retention cleanup failed after 3 attempts — will retry in 24 hours"
+                );
             }
         }
     });
@@ -193,8 +288,35 @@ async fn main() -> Result<()> {
                 Ok(newly_offline) => {
                     for server in &newly_offline {
                         tracing::info!("Server {} ({}) marked offline", server.hostname, server.id);
-                        if let Err(e) = offline_alerting.on_server_offline(server).await {
-                            tracing::error!("Failed to send server offline alert: {}", e);
+                        // Retry up to 3× with 5s back-off so a transient network
+                        // error doesn't silently drop the offline alert.
+                        let mut last_err: Option<anyhow::Error> = None;
+                        for attempt in 1u32..=3 {
+                            match offline_alerting.on_server_offline(server).await {
+                                Ok(()) => {
+                                    last_err = None;
+                                    break;
+                                }
+                                Err(e) => {
+                                    tracing::warn!(
+                                        attempt,
+                                        server_id = %server.id,
+                                        "Server offline alert attempt {}/3 failed: {}",
+                                        attempt, e
+                                    );
+                                    last_err = Some(e);
+                                    if attempt < 3 {
+                                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                                    }
+                                }
+                            }
+                        }
+                        if let Some(e) = last_err {
+                            tracing::error!(
+                                server_id = %server.id,
+                                "Failed to send server offline alert after 3 attempts: {}",
+                                e
+                            );
                         }
                     }
                 }
@@ -212,13 +334,63 @@ async fn main() -> Result<()> {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(60 * 60)); // 1 hour
         loop {
             interval.tick().await;
-            let removed = rate_limiter.cleanup_inactive(3600); // Remove buckets inactive for > 1 hour
-            if removed > 0 {
-                tracing::info!("Rate limiter cleanup: removed {} inactive buckets", removed);
+            // Per-minute buckets: evict after 1 hour of inactivity
+            let removed = rate_limiter.cleanup_inactive(3600);
+            // Per-hour buckets: evict after 4 hours so the counter is never reset within the
+            // 1-hour window (prevents rate-limit bypass via bucket eviction)
+            let hourly_removed = rate_limiter.cleanup_hourly_inactive(4 * 3600);
+            if removed + hourly_removed > 0 {
+                tracing::info!(
+                    "Rate limiter cleanup: removed {} per-minute + {} per-hour inactive buckets",
+                    removed,
+                    hourly_removed
+                );
             }
         }
     });
     info!("Rate limiter cleanup task started (runs hourly)");
+
+    // Start expired session cleanup task (runs daily)
+    // Removes sessions that have passed their expires_at, including any orphaned sessions
+    // left by soft-delete failures during token rotation.
+    let session_cleanup_db = state.db.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(24 * 60 * 60)); // 24 hours
+        loop {
+            interval.tick().await;
+            // Loop until delete_expired drains the full backlog (batches of 1000).
+            let mut total = 0u64;
+            'batch: loop {
+                for attempt in 1..=3u32 {
+                    match crate::db::repositories::SessionRepository::delete_expired(
+                        &session_cleanup_db,
+                    )
+                    .await
+                    {
+                        Ok(0) => break 'batch, // backlog drained
+                        Ok(n) => {
+                            total += n;
+                            break; // batch succeeded, fetch next batch
+                        }
+                        Err(e) => {
+                            tracing::warn!("Session cleanup attempt {}/3 failed: {}", attempt, e);
+                            if attempt == 3 {
+                                tracing::error!(
+                                    "Session cleanup failed after 3 attempts — will retry next cycle"
+                                );
+                                break 'batch;
+                            }
+                            tokio::time::sleep(std::time::Duration::from_secs(5 * 60)).await;
+                        }
+                    }
+                }
+            }
+            if total > 0 {
+                tracing::info!("Session cleanup: deleted {} expired sessions", total);
+            }
+        }
+    });
+    info!("Session cleanup task started (runs daily)");
 
     // Start x402 payment challenge expiry task (runs hourly)
     let payment_store_clone = state.payment_store.clone();
@@ -226,40 +398,142 @@ async fn main() -> Result<()> {
         let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(3600)); // every hour
         loop {
             interval.tick().await;
-            match payment_store_clone.expire_old().await {
-                Ok(n) if n > 0 => tracing::info!("Expired {} stale x402 payment challenges", n),
-                Err(e) => tracing::warn!("Failed to expire old x402 challenges: {}", e),
-                _ => {}
+            let mut succeeded = false;
+            for attempt in 1..=3u32 {
+                match payment_store_clone.expire_old().await {
+                    Ok(n) => {
+                        if n > 0 {
+                            tracing::info!("Expired {} stale x402 payment challenges", n);
+                        }
+                        succeeded = true;
+                        break;
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "Failed to expire x402 challenges (attempt {}/3): {}",
+                            attempt,
+                            e
+                        );
+                        if attempt < 3 {
+                            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                        }
+                    }
+                }
+            }
+            if !succeeded {
+                tracing::error!(
+                    "x402 challenge expiry failed after 3 attempts — stale challenges may accumulate"
+                );
             }
         }
     });
     info!("x402 payment challenge expiry task started (runs hourly)");
 
+    // Ensure next month's log partition exists (idempotent; PG-only, no-op on error)
+    {
+        let partition_db = db.clone();
+        tokio::spawn(async move {
+            if let Err(e) =
+                crate::db::repositories::LogRepository::ensure_next_partition(&partition_db).await
+            {
+                tracing::warn!("ensure_next_partition (log monitoring): {}", e);
+            }
+        });
+    }
+
+    // Start log alert evaluator (runs every 30s)
+    let log_alert_db = db.clone();
+    let log_alert_notif = notification_service.clone();
+    tokio::spawn(async move {
+        let evaluator = LogAlertEvaluator::new(log_alert_db, log_alert_notif);
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+        loop {
+            interval.tick().await;
+            if let Err(e) = evaluator.run_once().await {
+                tracing::error!("Log alert evaluator failed: {}", e);
+            }
+        }
+    });
+    info!("Log alert evaluator started (runs every 30s)");
+
+    // Start log issue linker (runs every 60s)
+    let log_linker_db = db.clone();
+    tokio::spawn(async move {
+        let linker = LogIssueLinker::new(log_linker_db);
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+        loop {
+            interval.tick().await;
+            if let Err(e) = linker.run_once().await {
+                tracing::error!("Log issue linker failed: {}", e);
+            }
+        }
+    });
+    info!("Log issue linker started (runs every 60s)");
+
     // Start server
     let listener = TcpListener::bind(&config.server_addr).await?;
     info!("Listening on {}", config.server_addr);
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    let grace_secs = config.shutdown_grace_secs;
+
+    // TODO(r41-a33): the background workers spawned above (health check, retention,
+    // server-offline detection, rate-limiter cleanup, session cleanup, x402 expiry —
+    // see the six `tokio::spawn` sites earlier in this function) are not drained on
+    // shutdown. Axum's `with_graceful_shutdown` only awaits in-flight HTTP requests.
+    //
+    // A correct fix requires collecting every spawn's `JoinHandle` into a `Vec` and
+    // broadcasting a shutdown signal (e.g. `tokio::sync::broadcast` or an
+    // `AtomicBool`) that each worker's inner loop polls via `tokio::select!` against
+    // its `interval.tick()`. On shutdown, notify then `tokio::time::timeout(grace,
+    // futures::future::join_all(handles))`. That wiring is ~60 LOC across six
+    // workers and was deferred past the round-41 worker-7 budget (see task A33).
+    // The workers are idempotent and safe to terminate mid-cycle (all use retry
+    // loops for DB operations), so the immediate risk is only partially completed
+    // cleanup work; full graceful drain is still tracked as a follow-up.
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(async move {
+        shutdown_signal().await;
+        // Allow in-flight requests (e.g. payment verifications with RPC retries) to
+        // finish before the process exits. Configurable via SHUTDOWN_GRACE_SECS.
+        info!(
+            "Graceful shutdown: waiting up to {}s for in-flight requests",
+            grace_secs
+        );
+        tokio::time::sleep(std::time::Duration::from_secs(grace_secs)).await;
+    })
+    .await?;
 
     Ok(())
 }
 
 fn create_app(state: AppState) -> Router {
+    let allowed_headers = [
+        header::CONTENT_TYPE,
+        header::AUTHORIZATION,
+        header::ACCEPT,
+        header::ORIGIN,
+        HeaderName::from_static("x-api-key"),
+        HeaderName::from_static("x-bugwatch-sdk"),
+        HeaderName::from_static("x-bugwatch-sdk-version"),
+        HeaderName::from_static("x-bugwatch-agent"),
+        HeaderName::from_static("x-payment"),
+    ];
+
     // CORS configuration
     let cors = if state.config.allowed_origins.is_empty()
         && state.config.environment == "development"
     {
         // Development: allow the frontend origin with credentials (for httpOnly cookies).
         // Can't use Any with allow_credentials(true), so derive from app_url or default.
-        let dev_origin = state
-            .config
-            .app_url
-            .replace("/api", "")
-            .trim_end_matches('/')
-            .parse::<HeaderValue>()
-            .unwrap_or_else(|_| "http://localhost:3001".parse().unwrap());
+        let dev_origin = {
+            let url = state.config.app_url.trim_end_matches('/');
+            let url = url.strip_suffix("/api").unwrap_or(url);
+            url.parse::<HeaderValue>()
+                .unwrap_or_else(|_| "http://localhost:3001".parse().unwrap())
+        };
         CorsLayer::new()
             .allow_origin(dev_origin)
             .allow_methods([
@@ -270,20 +544,11 @@ fn create_app(state: AppState) -> Router {
                 Method::DELETE,
                 Method::OPTIONS,
             ])
-            .allow_headers([
-                header::CONTENT_TYPE,
-                header::AUTHORIZATION,
-                header::ACCEPT,
-                header::ORIGIN,
-                HeaderName::from_static("x-api-key"),
-                HeaderName::from_static("x-bugwatch-sdk"),
-                HeaderName::from_static("x-bugwatch-sdk-version"),
-                HeaderName::from_static("x-bugwatch-agent"),
-                HeaderName::from_static("x-payment"),
-            ])
+            .allow_headers(allowed_headers)
             .allow_credentials(true)
     } else if state.config.allowed_origins.is_empty() {
-        // Non-development with no origins configured: restrictive default
+        // Non-development with no origins configured: restrictive default — no credentials
+        // because no origin is permitted, so credential sharing would be meaningless and misleading.
         tracing::warn!("No ALLOWED_ORIGINS configured in non-development mode. CORS will reject cross-origin requests.");
         CorsLayer::new()
             .allow_origin(tower_http::cors::AllowOrigin::list(
@@ -297,18 +562,8 @@ fn create_app(state: AppState) -> Router {
                 Method::DELETE,
                 Method::OPTIONS,
             ])
-            .allow_headers([
-                header::CONTENT_TYPE,
-                header::AUTHORIZATION,
-                header::ACCEPT,
-                header::ORIGIN,
-                HeaderName::from_static("x-api-key"),
-                HeaderName::from_static("x-bugwatch-sdk"),
-                HeaderName::from_static("x-bugwatch-sdk-version"),
-                HeaderName::from_static("x-bugwatch-agent"),
-                HeaderName::from_static("x-payment"),
-            ])
-            .allow_credentials(true)
+            .allow_headers(allowed_headers)
+            .allow_credentials(false)
     } else {
         // Production: restrict to configured origins
         let origins: Vec<HeaderValue> = state
@@ -327,17 +582,7 @@ fn create_app(state: AppState) -> Router {
                 Method::DELETE,
                 Method::OPTIONS,
             ])
-            .allow_headers([
-                header::CONTENT_TYPE,
-                header::AUTHORIZATION,
-                header::ACCEPT,
-                header::ORIGIN,
-                HeaderName::from_static("x-api-key"),
-                HeaderName::from_static("x-bugwatch-sdk"),
-                HeaderName::from_static("x-bugwatch-sdk-version"),
-                HeaderName::from_static("x-bugwatch-agent"),
-                HeaderName::from_static("x-payment"),
-            ])
+            .allow_headers(allowed_headers)
             .allow_credentials(true)
     };
 
@@ -353,22 +598,41 @@ fn create_app(state: AppState) -> Router {
     // builds omit it entirely (it would be a runtime no-op anyway because
     // x402_enabled is false and deployment_mode is self-hosted).
     #[cfg(feature = "saas")]
-    let router = router.layer(axum::middleware::from_fn_with_state(
-        state.clone(),
-        crate::payments::x402_payment_middleware,
-    ));
+    let router = {
+        router.layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            |axum::extract::State(s): axum::extract::State<AppState>,
+             req: axum::extract::Request,
+             next: axum::middleware::Next| async move {
+                crate::payments::x402_payment_middleware(s, req, next).await
+            },
+        ))
+    };
 
     router
         .with_state(state)
         .layer(
             TraceLayer::new_for_http()
                 .make_span_with(DefaultMakeSpan::new().level(Level::INFO))
-                .on_response(DefaultOnResponse::new().level(Level::INFO)),
+                .on_response(
+                    DefaultOnResponse::new()
+                        .level(Level::INFO)
+                        .latency_unit(tower_http::LatencyUnit::Micros),
+                ),
         )
         .layer(cors)
         .layer(DefaultBodyLimit::max(2 * 1024 * 1024)) // 2MB max body size
+        // Request-wide timeout — prevents slow/hung upstreams from pinning a
+        // worker indefinitely. 60s is generous relative to normal p99 latency
+        // and still short enough that orphaned requests are recycled.
+        .layer(tower_http::timeout::TimeoutLayer::with_status_code(
+            StatusCode::REQUEST_TIMEOUT,
+            std::time::Duration::from_secs(60),
+        ))
         // Security headers — prevent clickjacking, MIME sniffing, and control referrer
         .layer(axum::middleware::from_fn(security_headers))
+        // Request correlation IDs — propagate or generate x-request-id for tracing
+        .layer(axum::middleware::from_fn(request_id_middleware))
 }
 
 /// Security headers middleware — sets X-Frame-Options, X-Content-Type-Options,
@@ -379,10 +643,7 @@ async fn security_headers(
 ) -> axum::response::Response {
     let mut response = next.run(req).await;
     let headers = response.headers_mut();
-    headers.insert(
-        header::X_FRAME_OPTIONS,
-        HeaderValue::from_static("DENY"),
-    );
+    headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
     headers.insert(
         header::X_CONTENT_TYPE_OPTIONS,
         HeaderValue::from_static("nosniff"),
@@ -399,30 +660,95 @@ async fn security_headers(
         HeaderName::from_static("permissions-policy"),
         HeaderValue::from_static("camera=(), microphone=(), geolocation=()"),
     );
+    headers.insert(
+        HeaderName::from_static("content-security-policy"),
+        HeaderValue::from_static("default-src 'none'; frame-ancestors 'none'"),
+    );
+    headers.insert(
+        HeaderName::from_static("strict-transport-security"),
+        HeaderValue::from_static("max-age=63072000; includeSubDomains"),
+    );
     response
 }
 
-async fn health_check(State(state): State<AppState>) -> axum::response::Response {
-    use axum::response::IntoResponse;
+/// Propagates an incoming `x-request-id` header or generates a new UUID,
+/// then echoes it back in the response for end-to-end request tracing.
+async fn request_id_middleware(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let request_id = req
+        .headers()
+        .get("x-request-id")
+        .and_then(|v| v.to_str().ok())
+        .map(String::from)
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
-    match sqlx::query("SELECT 1").execute(&state.db).await {
-        Ok(_) => (
-            StatusCode::OK,
-            axum::Json(serde_json::json!({
-                "status": "healthy",
-                "database": "connected"
-            })),
-        )
-            .into_response(),
-        Err(_) => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            axum::Json(serde_json::json!({
-                "status": "unhealthy",
-                "database": "disconnected"
-            })),
-        )
-            .into_response(),
+    tracing::Span::current().record("request_id", request_id.as_str());
+
+    let mut response = next.run(req).await;
+    if let Ok(val) = HeaderValue::from_str(&request_id) {
+        response
+            .headers_mut()
+            .insert(HeaderName::from_static("x-request-id"), val);
     }
+    response
+}
+
+async fn health_check(
+    State(state): State<AppState>,
+    axum::extract::ConnectInfo(peer_addr): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    axum::extract::RawQuery(query): axum::extract::RawQuery,
+    headers: axum::http::HeaderMap,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let _ = query; // unused — needed to keep the extractor list uniform
+
+    // Rate limit /health to prevent it from being used as a free DB-query DoS vector.
+    let ip =
+        crate::api::auth::extract_client_ip(&headers, state.config.trust_proxy, Some(peer_addr));
+    let check = state.rate_limiter.check(&format!("health:{}", ip), 60);
+    if !check.allowed {
+        return (StatusCode::TOO_MANY_REQUESTS, "Rate limit exceeded").into_response();
+    }
+
+    let db_ok = sqlx::query("SELECT 1").execute(&state.db).await.is_ok();
+    let status = if db_ok { "healthy" } else { "unhealthy" };
+    let code = if db_ok {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
+    let timestamp = chrono::Utc::now().to_rfc3339();
+
+    // In production, return only the fields a load-balancer needs: status,
+    // timestamp, and whether the database is reachable.  Version strings and
+    // pool internals are stripped to reduce information leakage.
+    let body = if state.config.is_production() {
+        serde_json::json!({
+            "status": status,
+            "timestamp": timestamp,
+            "database": if db_ok { "connected" } else { "disconnected" },
+        })
+    } else {
+        let uptime_secs = SERVER_START
+            .get()
+            .map(|s| s.elapsed().as_secs())
+            .unwrap_or(0);
+        serde_json::json!({
+            "status": status,
+            "version": env!("CARGO_PKG_VERSION"),
+            "timestamp": timestamp,
+            "uptime_secs": uptime_secs,
+            "database": if db_ok { "connected" } else { "disconnected" },
+            "db_pool": {
+                "size": state.db.size(),
+                "idle": state.db.num_idle()
+            }
+        })
+    };
+
+    (code, axum::Json(body)).into_response()
 }
 
 async fn serve_install_script() -> Response {
@@ -444,8 +770,27 @@ async fn serve_agent_script() -> Response {
 }
 
 async fn shutdown_signal() {
-    tokio::signal::ctrl_c()
-        .await
-        .expect("Failed to install CTRL+C signal handler");
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("Failed to install CTRL+C signal handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("Failed to install SIGTERM handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+    }
+
     info!("Shutdown signal received, starting graceful shutdown");
 }

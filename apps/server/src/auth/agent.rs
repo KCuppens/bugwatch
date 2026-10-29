@@ -3,10 +3,14 @@ use axum::{
     extract::FromRequestParts,
     http::{header::AUTHORIZATION, request::Parts, HeaderName},
 };
-use sha2::{Digest, Sha256};
+use hmac::{Hmac, Mac};
+use sha2::Sha256;
 
 use crate::{
-    db::{models::AgentKey, repositories::AgentKeyRepository},
+    db::{
+        models::AgentKey,
+        repositories::{AgentKeyRepository, OrganizationRepository},
+    },
     AppError, AppState,
 };
 
@@ -28,20 +32,22 @@ impl AgentAuth {
     }
 }
 
-/// Hash an agent key using SHA-256
-pub fn hash_agent_key(key: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(key.as_bytes());
-    hex::encode(hasher.finalize())
+/// Hash an agent key using HMAC-SHA256 keyed on the application secret.
+/// Using HMAC instead of plain SHA-256 means a leaked key_hash column cannot
+/// be brute-forced without also knowing the JWT secret.
+pub fn hash_agent_key(key: &str, secret: &[u8]) -> String {
+    type HmacSha256 = Hmac<Sha256>;
+    let mut mac = HmacSha256::new_from_slice(secret).expect("HMAC accepts any key length");
+    mac.update(key.as_bytes());
+    hex::encode(mac.finalize().into_bytes())
 }
 
 /// Generate a new agent API key
 pub fn generate_agent_key() -> String {
-    use uuid::Uuid;
-    let random =
-        Uuid::new_v4().to_string().replace('-', "") + &Uuid::new_v4().to_string().replace('-', "");
-    // Take first 40 chars of the random string
-    format!("bw_agent_{}", &random[..40])
+    use rand::RngCore;
+    let mut bytes = [0u8; 32];
+    rand::rngs::OsRng.fill_bytes(&mut bytes);
+    format!("bw_agent_{}", hex::encode(bytes))
 }
 
 /// Extract the key prefix for display (first 12 chars)
@@ -86,8 +92,15 @@ impl FromRequestParts<AppState> for AgentAuth {
             ));
         }
 
+        // Validate exact key length: "bw_agent_" (9) + 64 hex chars = 73
+        if api_key.len() != 73 {
+            return Err(AppError::Unauthorized(
+                "Invalid agent API key format".to_string(),
+            ));
+        }
+
         // Hash and look up
-        let key_hash = hash_agent_key(&api_key);
+        let key_hash = hash_agent_key(&api_key, state.config.jwt_secret.as_bytes());
         let agent_key = AgentKeyRepository::find_by_hash(&state.db, &key_hash)
             .await
             .map_err(|_| AppError::Internal("Failed to validate agent key".to_string()))?
@@ -95,9 +108,36 @@ impl FromRequestParts<AppState> for AgentAuth {
                 AppError::Unauthorized("Invalid or revoked agent API key".to_string())
             })?;
 
-        // Parse permissions
+        // Tenant post-check: reject if the key's organization was deleted or
+        // is otherwise missing. The auth path cannot know the target org up
+        // front (the key defines it), so this catches orphaned-key edge cases
+        // rather than defending against a cross-tenant request.
+        if OrganizationRepository::find_by_id(&state.db, &agent_key.organization_id)
+            .await
+            .map_err(|_| AppError::Internal("Failed to validate tenant".to_string()))?
+            .is_none()
+        {
+            tracing::warn!(
+                agent_key_id = %agent_key.id,
+                organization_id = %agent_key.organization_id,
+                "agent key references missing organization, rejecting"
+            );
+            return Err(AppError::Unauthorized(
+                "Invalid or revoked agent API key".to_string(),
+            ));
+        }
+
+        // Parse permissions. Malformed JSON is treated as no permissions, but
+        // logged so operators can spot corruption.
         let permissions: Vec<String> =
-            serde_json::from_str(&agent_key.permissions).unwrap_or_default();
+            serde_json::from_str(&agent_key.permissions).unwrap_or_else(|e| {
+                tracing::warn!(
+                    agent_key_id = %agent_key.id,
+                    error = %e,
+                    "malformed permissions JSON on agent key, treating as empty"
+                );
+                Vec::new()
+            });
 
         let organization_id = agent_key.organization_id.clone();
 
@@ -134,8 +174,8 @@ mod tests {
         let key = generate_agent_key();
         assert_eq!(
             key.len(),
-            49,
-            "Key should be 49 chars (9 prefix + 40 random), got: {}",
+            73,
+            "Key should be 73 chars (9 prefix + 64 hex-encoded random bytes), got: {}",
             key.len()
         );
     }
@@ -150,15 +190,17 @@ mod tests {
     #[test]
     fn hash_agent_key_deterministic() {
         let key = "bw_agent_abc123";
-        let hash1 = hash_agent_key(key);
-        let hash2 = hash_agent_key(key);
+        let secret = b"test-secret";
+        let hash1 = hash_agent_key(key, secret);
+        let hash2 = hash_agent_key(key, secret);
         assert_eq!(hash1, hash2, "Same input should produce same hash");
     }
 
     #[test]
     fn hash_agent_key_different_inputs_different_hashes() {
-        let hash1 = hash_agent_key("bw_agent_key1");
-        let hash2 = hash_agent_key("bw_agent_key2");
+        let secret = b"test-secret";
+        let hash1 = hash_agent_key("bw_agent_key1", secret);
+        let hash2 = hash_agent_key("bw_agent_key2", secret);
         assert_ne!(
             hash1, hash2,
             "Different inputs should produce different hashes"
@@ -167,11 +209,11 @@ mod tests {
 
     #[test]
     fn hash_agent_key_is_64_hex_chars() {
-        let hash = hash_agent_key("bw_agent_test");
+        let hash = hash_agent_key("bw_agent_test", b"test-secret");
         assert_eq!(
             hash.len(),
             64,
-            "SHA-256 hex digest should be 64 chars, got: {}",
+            "HMAC-SHA256 hex digest should be 64 chars, got: {}",
             hash.len()
         );
         assert!(

@@ -1,5 +1,9 @@
 # Stage 1: Build the Rust binary (self-hosted, no --features saas)
-FROM rust:1.82-bookworm AS builder
+# rust 1.99: Cargo.lock is not committed, so every build resolves the newest
+# compatible deps, and those raise their MSRV over time (uuid 1.28 needs 1.89).
+# Stays on bookworm so the produced binary matches the debian:bookworm-slim
+# runtime's GLIBC.
+FROM rust:1.99-bookworm AS builder
 
 WORKDIR /usr/src/bugwatch/apps/server
 
@@ -13,6 +17,8 @@ RUN cargo build --release 2>/dev/null || true
 # Copy actual source code, migrations (embedded via include_str!), and agent scripts
 COPY apps/server/src ./src/
 COPY apps/server/migrations ./migrations/
+# api/mod.rs embeds this via include_str!("../../openapi.yaml")
+COPY apps/server/openapi.yaml ./openapi.yaml
 COPY apps/agent/ ../../apps/agent/
 
 # Build the real binary

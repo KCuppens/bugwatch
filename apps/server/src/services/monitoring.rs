@@ -13,8 +13,12 @@ use crate::db::{
     DbPool,
 };
 
-/// Maximum concurrent health checks to prevent OOM from accumulated timeouts
-const MAX_CONCURRENT_CHECKS: usize = 10;
+/// Maximum concurrent health checks — bounds in-flight requests (OOM guard for
+/// accumulated timeouts) and sizes the per-cycle claim batch. Must cover the fleet:
+/// at a 10s cycle, capacity is 6×this per minute vs one check per monitor per
+/// interval_seconds (60s default) — 10 capped us at 60 checks/min against 500+
+/// active monitors, stretching every "60s" monitor to ~9 minutes.
+const MAX_CONCURRENT_CHECKS: usize = 100;
 
 /// Health check worker that monitors endpoints
 pub struct HealthCheckWorker {
@@ -69,52 +73,41 @@ impl HealthCheckWorker {
         }
     }
 
-    /// Process all monitors that need checking
+    /// Process all monitors that need checking.
+    /// Uses SELECT FOR UPDATE SKIP LOCKED to claim a batch atomically, preventing
+    /// duplicate checks when multiple worker instances run concurrently.
     async fn process_monitors(&self) -> Result<()> {
-        let monitors = MonitorRepository::list_active(&self.pool).await?;
+        let monitors =
+            MonitorRepository::claim_due_monitors(&self.pool, MAX_CONCURRENT_CHECKS as i32).await?;
+
+        tracing::debug!(claimed = monitors.len(), "Claimed monitors for this cycle");
 
         for monitor in monitors {
-            if self.should_check(&monitor) {
-                // Acquire semaphore permit to limit concurrent checks
-                let permit = self.semaphore.clone().acquire_owned().await;
-                if permit.is_err() {
-                    warn!(
-                        "Failed to acquire semaphore permit for monitor {}",
-                        monitor.id
-                    );
-                    continue;
+            // Acquire semaphore permit to limit concurrent checks
+            let Ok(permit) = self.semaphore.clone().acquire_owned().await else {
+                warn!(
+                    "Failed to acquire semaphore permit for monitor {}",
+                    monitor.id
+                );
+                continue;
+            };
+
+            // Spawn check in background to not block other checks
+            let pool = self.pool.clone();
+            let client = self.client.clone();
+            let monitor = monitor.clone();
+            let alerting = self.alerting.clone();
+
+            tokio::spawn(async move {
+                // Hold permit until check completes
+                let _permit = permit;
+                if let Err(e) = check_monitor(&pool, &client, &monitor, &alerting).await {
+                    error!("Error checking monitor {}: {}", monitor.id, e);
                 }
-                let permit = permit.unwrap();
-
-                // Spawn check in background to not block other checks
-                let pool = self.pool.clone();
-                let client = self.client.clone();
-                let monitor = monitor.clone();
-                let alerting = self.alerting.clone();
-
-                tokio::spawn(async move {
-                    // Hold permit until check completes
-                    let _permit = permit;
-                    if let Err(e) = check_monitor(&pool, &client, &monitor, &alerting).await {
-                        error!("Error checking monitor {}: {}", monitor.id, e);
-                    }
-                });
-            }
+            });
         }
 
         Ok(())
-    }
-
-    /// Check if a monitor needs to be checked
-    fn should_check(&self, monitor: &Monitor) -> bool {
-        match &monitor.last_checked_at {
-            None => true, // Never checked
-            Some(last_time) => {
-                let now = chrono::Utc::now();
-                let elapsed = now.signed_duration_since(*last_time);
-                elapsed.num_seconds() >= monitor.interval_seconds as i64
-            }
-        }
     }
 }
 
@@ -149,8 +142,11 @@ async fn check_monitor(
     let start = Instant::now();
 
     // Parse headers
-    let headers: std::collections::HashMap<String, String> =
-        serde_json::from_str(&monitor.headers).unwrap_or_default();
+    let headers: std::collections::HashMap<String, String> = serde_json::from_str(&monitor.headers)
+        .unwrap_or_else(|e| {
+            warn!(monitor_id = %monitor.id, "Failed to parse monitor headers: {}", e);
+            Default::default()
+        });
 
     // Build request
     let mut request = match monitor.method.to_uppercase().as_str() {
@@ -163,8 +159,12 @@ async fn check_monitor(
         _ => client.get(&monitor.url),
     };
 
-    // Add headers
-    for (key, value) in headers {
+    // Add headers (cap at 20, limit key/value to 1 KB each to prevent memory amplification)
+    for (key, value) in headers.into_iter().take(20) {
+        if key.len() > 1024 || value.len() > 1024 {
+            warn!(monitor_id = %monitor.id, "Skipping oversized header '{}'", key);
+            continue;
+        }
         request = request.header(&key, &value);
     }
 
@@ -270,7 +270,7 @@ async fn check_monitor(
     Ok(())
 }
 
-/// Cleanup old monitor checks to prevent database bloat
+#[allow(dead_code)]
 pub async fn cleanup_old_checks(pool: &DbPool, retention_days: i32) -> Result<u64> {
     let deleted = MonitorCheckRepository::cleanup_old_checks(pool, retention_days).await?;
     if deleted > 0 {

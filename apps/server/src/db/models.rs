@@ -1,6 +1,7 @@
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
+
+use super::types::{Bool, Timestamp};
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct User {
@@ -9,10 +10,10 @@ pub struct User {
     #[serde(skip_serializing)]
     pub password_hash: String,
     pub name: Option<String>,
-    pub created_at: DateTime<Utc>,
-    pub email_verified: bool,
+    pub created_at: Timestamp,
+    pub email_verified: Bool,
     pub failed_login_attempts: i32,
-    pub locked_until: Option<DateTime<Utc>>,
+    pub locked_until: Option<Timestamp>,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize)]
@@ -20,8 +21,8 @@ pub struct Session {
     pub id: String,
     pub user_id: String,
     pub token_hash: String,
-    pub expires_at: DateTime<Utc>,
-    pub created_at: DateTime<Utc>,
+    pub expires_at: Timestamp,
+    pub created_at: Timestamp,
     pub ip_address: Option<String>,
     pub user_agent: Option<String>,
 }
@@ -34,13 +35,14 @@ pub struct Project {
     pub api_key: String,
     pub owner_id: String,
     pub tier: String,
-    pub created_at: DateTime<Utc>,
+    pub created_at: Timestamp,
     pub settings: String,
     pub platform: Option<String>,
     pub framework: Option<String>,
-    pub onboarding_completed_at: Option<DateTime<Utc>>,
+    pub onboarding_completed_at: Option<Timestamp>,
     pub organization_id: Option<String>,
     pub api_key_hash: String,
+    pub logo_url: Option<String>,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
@@ -51,8 +53,8 @@ pub struct Issue {
     pub title: String,
     pub status: String,
     pub level: String,
-    pub first_seen: DateTime<Utc>,
-    pub last_seen: DateTime<Utc>,
+    pub first_seen: Timestamp,
+    pub last_seen: Timestamp,
     pub count: i64,
     pub user_count: i64,
     pub environment: String,
@@ -63,9 +65,9 @@ pub struct Event {
     pub id: String,
     pub issue_id: String,
     pub event_id: String,
-    pub timestamp: DateTime<Utc>,
+    pub timestamp: Timestamp,
     pub payload: String,
-    pub processed_at: DateTime<Utc>,
+    pub processed_at: Timestamp,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
@@ -80,9 +82,9 @@ pub struct Monitor {
     pub expected_status: Option<i32>,
     pub headers: String,
     pub body: Option<String>,
-    pub is_active: bool,
-    pub created_at: DateTime<Utc>,
-    pub last_checked_at: Option<DateTime<Utc>>,
+    pub is_active: Bool,
+    pub created_at: Timestamp,
+    pub last_checked_at: Option<Timestamp>,
     pub current_status: String,
 }
 
@@ -94,17 +96,17 @@ pub struct MonitorCheck {
     pub response_time_ms: Option<i32>,
     pub status_code: Option<i32>,
     pub error_message: Option<String>,
-    pub checked_at: DateTime<Utc>,
+    pub checked_at: Timestamp,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize)]
 pub struct MonitorIncident {
     pub id: String,
     pub monitor_id: String,
-    pub started_at: DateTime<Utc>,
-    pub resolved_at: Option<DateTime<Utc>>,
+    pub started_at: Timestamp,
+    pub resolved_at: Option<Timestamp>,
     pub cause: Option<String>,
-    pub created_at: DateTime<Utc>,
+    pub created_at: Timestamp,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
@@ -114,9 +116,9 @@ pub struct AlertRule {
     pub name: String,
     pub condition: String, // JSON: { "type": "new_issue" | "issue_frequency" | "monitor_down", ... }
     pub actions: String,   // JSON: array of channel IDs
-    pub is_active: bool,
-    pub created_at: DateTime<Utc>,
-    pub muted_until: Option<DateTime<Utc>>,
+    pub is_active: Bool,
+    pub created_at: Timestamp,
+    pub muted_until: Option<Timestamp>,
     pub snooze_duration_minutes: Option<i32>,
 }
 
@@ -127,8 +129,8 @@ pub struct NotificationChannel {
     pub name: String,
     pub channel_type: String, // 'email', 'webhook', 'slack'
     pub config: String,       // JSON config
-    pub is_active: bool,
-    pub created_at: DateTime<Utc>,
+    pub is_active: Bool,
+    pub created_at: Timestamp,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize)]
@@ -141,8 +143,8 @@ pub struct AlertLog {
     pub status: String,
     pub message: String,
     pub error_message: Option<String>,
-    pub created_at: DateTime<Utc>,
-    pub sent_at: Option<DateTime<Utc>>,
+    pub created_at: Timestamp,
+    pub sent_at: Option<Timestamp>,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
@@ -151,8 +153,63 @@ pub struct IssueComment {
     pub issue_id: String,
     pub user_id: String,
     pub content: String,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
+    pub created_at: Timestamp,
+    pub updated_at: Timestamp,
+}
+
+/// Alert condition variants stored as JSON in `alert_rules.condition`.
+/// Single canonical definition shared by the API layer and alerting service.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum AlertCondition {
+    #[serde(rename = "new_issue")]
+    NewIssue {
+        #[serde(default)]
+        level: Option<String>,
+    },
+    #[serde(rename = "issue_frequency")]
+    IssueFrequency { threshold: u32, window_minutes: u32 },
+    #[serde(rename = "monitor_down")]
+    MonitorDown {
+        #[serde(default)]
+        monitor_id: Option<String>,
+    },
+    #[serde(rename = "monitor_recovery")]
+    MonitorRecovery {
+        #[serde(default)]
+        monitor_id: Option<String>,
+    },
+    #[serde(rename = "server_cpu_high")]
+    ServerCpuHigh {
+        threshold_percent: f64,
+        #[serde(default)]
+        server_id: Option<String>,
+    },
+    #[serde(rename = "server_memory_high")]
+    ServerMemoryHigh {
+        threshold_percent: f64,
+        #[serde(default)]
+        server_id: Option<String>,
+    },
+    #[serde(rename = "server_disk_high")]
+    ServerDiskHigh {
+        threshold_percent: f64,
+        #[serde(default)]
+        mount: Option<String>,
+        #[serde(default)]
+        server_id: Option<String>,
+    },
+    #[serde(rename = "server_offline")]
+    ServerOffline {
+        #[serde(default = "default_missing_minutes")]
+        missing_minutes: u32,
+        #[serde(default)]
+        server_id: Option<String>,
+    },
+}
+
+fn default_missing_minutes() -> u32 {
+    5
 }
 
 // ============================================================================
@@ -166,22 +223,29 @@ pub struct Organization {
     pub slug: String,
     pub owner_id: String,
     pub tier: String,
+    // Stripe identifiers are internal-only and must never be exposed to
+    // clients (they're useful to attackers for phishing / support-desk
+    // social engineering). FromRow still populates them for server-side use.
+    #[allow(dead_code)]
+    #[serde(skip_serializing)]
     pub stripe_customer_id: Option<String>,
+    #[allow(dead_code)]
+    #[serde(skip_serializing)]
     pub stripe_subscription_id: Option<String>,
     pub subscription_status: String,
     pub seats: i32,
     pub billing_interval: Option<String>,
-    pub current_period_start: Option<DateTime<Utc>>,
-    pub current_period_end: Option<DateTime<Utc>>,
-    pub cancel_at_period_end: bool,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
+    pub current_period_start: Option<Timestamp>,
+    pub current_period_end: Option<Timestamp>,
+    pub cancel_at_period_end: Bool,
+    pub created_at: Timestamp,
+    pub updated_at: Timestamp,
     // Payment failure tracking
-    pub payment_failed_at: Option<DateTime<Utc>>,
-    pub grace_period_ends: Option<DateTime<Utc>>,
+    pub payment_failed_at: Option<Timestamp>,
+    pub grace_period_ends: Option<Timestamp>,
     // Tax handling
     pub tax_id: Option<String>,
-    pub tax_exempt: Option<bool>,
+    pub tax_exempt: Option<Bool>,
     pub billing_country: Option<String>,
     pub billing_address: Option<String>,
     // x402 micropayment grant columns
@@ -197,7 +261,7 @@ pub struct OrganizationMember {
     pub organization_id: String,
     pub user_id: String,
     pub role: String,
-    pub created_at: DateTime<Utc>,
+    pub created_at: Timestamp,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
@@ -206,11 +270,12 @@ pub struct UsageRecord {
     pub organization_id: String,
     pub metric: String,
     pub count: i32,
-    pub period_start: DateTime<Utc>,
-    pub period_end: DateTime<Utc>,
-    pub created_at: DateTime<Utc>,
+    pub period_start: Timestamp,
+    pub period_end: Timestamp,
+    pub created_at: Timestamp,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, FromRow, Serialize)]
 pub struct BillingEvent {
     pub id: String,
@@ -220,7 +285,7 @@ pub struct BillingEvent {
     pub amount_cents: Option<i32>,
     pub currency: Option<String>,
     pub metadata: Option<String>,
-    pub created_at: DateTime<Utc>,
+    pub created_at: Timestamp,
 }
 
 // ============================================================================
@@ -235,9 +300,9 @@ pub struct Server {
     pub hostname: String,
     pub os: Option<String>,
     pub kernel: Option<String>,
-    pub first_seen: DateTime<Utc>,
-    pub last_seen: DateTime<Utc>,
-    pub is_active: bool,
+    pub first_seen: Timestamp,
+    pub last_seen: Timestamp,
+    pub is_active: Bool,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
@@ -260,7 +325,7 @@ pub struct ServerMetric {
     pub disks_json: Option<String>,
     pub processes_json: Option<String>,
     pub docker_json: Option<String>,
-    pub recorded_at: DateTime<Utc>,
+    pub recorded_at: Timestamp,
 }
 
 // ============================================================================
@@ -272,14 +337,15 @@ pub struct AgentKey {
     pub id: String,
     pub organization_id: String,
     pub name: String,
+    #[allow(dead_code)]
     #[serde(skip_serializing)]
     pub key_hash: String,
     pub key_prefix: String,
     pub permissions: String, // JSON: ["read", "write", "admin"]
     pub created_by: String,
-    pub last_used_at: Option<DateTime<Utc>>,
-    pub created_at: DateTime<Utc>,
-    pub revoked_at: Option<DateTime<Utc>>,
+    pub last_used_at: Option<Timestamp>,
+    pub created_at: Timestamp,
+    pub revoked_at: Option<Timestamp>,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize)]
@@ -291,7 +357,7 @@ pub struct AgentAuditLog {
     pub resource_id: Option<String>,
     pub metadata: Option<String>,
     pub ip_address: Option<String>,
-    pub created_at: DateTime<Utc>,
+    pub created_at: Timestamp,
 }
 
 // ============================================================================
@@ -310,17 +376,18 @@ pub struct Transaction {
     pub description: Option<String>,
     pub status: String,
     pub duration_ms: f64,
-    pub started_at: DateTime<Utc>,
-    pub finished_at: DateTime<Utc>,
+    pub started_at: Timestamp,
+    pub finished_at: Timestamp,
     pub environment: Option<String>,
     pub release: Option<String>,
     pub tags: Option<String>,
     pub data: Option<String>,
     pub user_id: Option<String>,
-    pub created_at: DateTime<Utc>,
+    pub created_at: Timestamp,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct Span {
     pub id: String,
     pub transaction_id: String,
@@ -330,10 +397,10 @@ pub struct Span {
     pub description: Option<String>,
     pub status: Option<String>,
     pub duration_ms: f64,
-    pub started_at: DateTime<Utc>,
-    pub finished_at: DateTime<Utc>,
+    pub started_at: Timestamp,
+    pub finished_at: Timestamp,
     pub data: Option<String>,
-    pub created_at: DateTime<Utc>,
+    pub created_at: Timestamp,
 }
 
 // ============================================================================
@@ -345,15 +412,17 @@ pub struct Integration {
     pub id: String,
     pub organization_id: String,
     pub provider: String,
+    #[serde(skip_serializing)]
     pub access_token: String,
+    #[serde(skip_serializing)]
     pub refresh_token: Option<String>,
-    pub token_expires_at: Option<DateTime<Utc>>,
+    pub token_expires_at: Option<Timestamp>,
     pub external_user_id: Option<String>,
     pub external_username: Option<String>,
     pub config: String,
     pub created_by: String,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
+    pub created_at: Timestamp,
+    pub updated_at: Timestamp,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
@@ -366,9 +435,9 @@ pub struct IssueLink {
     pub external_issue_key: String,
     pub external_issue_url: String,
     pub external_status: Option<String>,
-    pub sync_enabled: bool,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
+    pub sync_enabled: Bool,
+    pub created_at: Timestamp,
+    pub updated_at: Timestamp,
 }
 
 // ============================================================================
@@ -381,9 +450,9 @@ pub struct SessionRecording {
     pub project_id: String,
     pub session_id: String,
     pub user_id: Option<String>,
-    pub started_at: DateTime<Utc>,
+    pub started_at: Timestamp,
     pub duration_ms: Option<i32>,
-    pub is_complete: bool,
+    pub is_complete: Bool,
     pub segment_count: i32,
     pub total_size_bytes: i64,
     pub environment: Option<String>,
@@ -391,7 +460,7 @@ pub struct SessionRecording {
     pub user_agent: Option<String>,
     pub screen_width: Option<i32>,
     pub screen_height: Option<i32>,
-    pub created_at: DateTime<Utc>,
+    pub created_at: Timestamp,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
@@ -402,7 +471,64 @@ pub struct SessionSegment {
     #[serde(skip)]
     pub data: Vec<u8>,
     pub size_bytes: i32,
-    pub created_at: DateTime<Utc>,
+    pub created_at: Timestamp,
+}
+
+// ============================================================================
+// Log Monitoring
+// ============================================================================
+
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+#[sqlx(rename_all = "snake_case")]
+pub struct LogEntry {
+    pub id: String,
+    pub project_id: String,
+    pub log_id: String,
+    pub timestamp: crate::db::types::Timestamp,
+    pub level: String,
+    pub message: String,
+    pub logger_name: Option<String>,
+    pub service_name: Option<String>,
+    pub environment: Option<String>,
+    pub release: Option<String>,
+    pub tags: Option<serde_json::Value>,
+    pub extra: Option<serde_json::Value>,
+    pub attributes: Option<serde_json::Value>,
+    pub issue_id: Option<String>,
+    pub created_at: crate::db::types::Timestamp,
+}
+
+/// A saved search filter for the log explorer, scoped to a project + user.
+/// `filters` is a JSON string; parse with `serde_json::from_str` as needed.
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+#[sqlx(rename_all = "snake_case")]
+pub struct LogSavedSearch {
+    pub id: String,
+    pub project_id: String,
+    pub user_id: String,
+    pub name: String,
+    /// JSON string — use `serde_json::from_str` to parse.
+    pub filters: String,
+    pub created_at: crate::db::types::Timestamp,
+}
+
+/// An alert rule that fires when log volume matching criteria exceeds a threshold
+/// within a rolling time window.
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+#[sqlx(rename_all = "snake_case")]
+pub struct LogAlertRule {
+    pub id: String,
+    pub project_id: String,
+    pub name: String,
+    pub level_filter: Option<String>,
+    pub search_filter: Option<String>,
+    pub threshold: i32,
+    pub window_seconds: i32,
+    pub notification_type: String,
+    pub notification_target: String,
+    pub last_fired_at: Option<crate::db::types::Timestamp>,
+    pub is_active: crate::db::types::Bool,
+    pub created_at: crate::db::types::Timestamp,
 }
 
 // ============================================================================
@@ -415,6 +541,6 @@ pub struct EmailRateLimit {
     pub project_id: String,
     pub issue_fingerprint: String,
     pub channel_id: String,
-    pub last_sent_at: DateTime<Utc>,
-    pub created_at: DateTime<Utc>,
+    pub last_sent_at: Timestamp,
+    pub created_at: Timestamp,
 }

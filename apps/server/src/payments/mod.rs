@@ -1,8 +1,10 @@
+#![allow(dead_code)]
+
 pub mod challenge;
 pub mod store;
 pub mod verify;
 
-use axum::{body::Body, extract::State, http::Request, middleware::Next, response::Response};
+use axum::{body::Body, http::Request, middleware::Next, response::Response};
 use serde::Deserialize;
 
 use crate::{AppError, AppState};
@@ -23,13 +25,14 @@ pub fn decode_payment_proof(header_value: &str) -> Result<PaymentProof, String> 
 }
 
 /// Verifies an X-Payment proof and, for capacity grants, increments org quota atomically.
-/// Returns the payment_type string ("feature_access" | "capacity_grant") on success.
+/// Returns the payment_type and, for capacity grants, the grant details.
+/// The grant details can be passed through Axum extensions to avoid a stale DB re-read.
 pub async fn verify_and_apply_payment(
     state: &AppState,
     proof: &PaymentProof,
     org_id: &str,
     request_path: &str,
-) -> Result<String, AppError> {
+) -> Result<(String, Option<X402CapacityGrantApplied>), AppError> {
     // 1. Atomically claim the pending nonce (sets status = 'verified', checks expiry in SQL)
     let payment = state
         .payment_store
@@ -41,10 +44,14 @@ pub async fn verify_and_apply_payment(
         })?;
 
     if payment.organization_id != org_id {
-        // Roll back to pending so the agent can retry with the correct org credentials.
-        if let Err(e) = state.payment_store.unclaim(&payment.nonce).await {
-            tracing::error!(nonce = %payment.nonce, error = %e, "Failed to unclaim nonce after org mismatch");
-        }
+        // Do NOT unclaim on org mismatch — restoring the nonce to pending would allow
+        // a different org to claim the same nonce (cross-org replay attack).
+        tracing::warn!(
+            nonce = %payment.nonce,
+            expected_org = %payment.organization_id,
+            actual_org = %org_id,
+            "Payment nonce org mismatch — nonce invalidated"
+        );
         return Err(AppError::Unauthorized(
             "Payment nonce belongs to different organization".to_string(),
         ));
@@ -52,10 +59,13 @@ pub async fn verify_and_apply_payment(
 
     // Check that the payment nonce was issued for this resource
     if !payment.resource.is_empty() && payment.resource != request_path {
-        // Roll back to pending so the agent can retry against the correct endpoint.
-        if let Err(e) = state.payment_store.unclaim(&payment.nonce).await {
-            tracing::error!(nonce = %payment.nonce, error = %e, "Failed to unclaim nonce after resource mismatch");
-        }
+        // Do NOT unclaim on resource mismatch for the same cross-org replay reason.
+        tracing::warn!(
+            nonce = %payment.nonce,
+            expected_resource = %payment.resource,
+            actual_resource = %request_path,
+            "Payment nonce resource mismatch — nonce invalidated"
+        );
         return Err(AppError::Unauthorized(
             "Payment challenge was issued for a different resource".to_string(),
         ));
@@ -74,13 +84,13 @@ pub async fn verify_and_apply_payment(
         .await
     {
         tracing::warn!(
-            "x402 on-chain verification failed for nonce {}: {}",
-            payment.nonce,
-            e
+            nonce = %payment.nonce,
+            tx_hash = %proof.tx_hash,
+            "x402 on-chain verification failed: {}", e
         );
         // Roll back to pending: the tx may not be confirmed yet and the agent can retry.
         if let Err(ue) = state.payment_store.unclaim(&payment.nonce).await {
-            tracing::error!(nonce = %payment.nonce, error = %ue, "Failed to unclaim nonce after on-chain verification failure");
+            tracing::error!(nonce = %payment.nonce, tx_hash = %proof.tx_hash, error = %ue, "Failed to unclaim nonce after on-chain verification failure");
         }
         return Err(AppError::PaymentRequired(
             "Payment verification failed. Ensure the transaction is confirmed on Base mainnet."
@@ -88,7 +98,18 @@ pub async fn verify_and_apply_payment(
         ));
     }
 
-    // 3. Begin DB transaction: capacity grant + mark_consumed are atomic.
+    // 3a. Record tx_hash now (outside the transaction) so a crash between on-chain
+    // verification and the commit below leaves a 'verified' row with a non-null tx_hash —
+    // enough for operators to manually recover the grant. expire_old() will eventually
+    // clean up any stuck 'verified' rows.
+    sqlx::query("UPDATE agent_payments SET tx_hash = $1 WHERE nonce = $2 AND status = 'verified'")
+        .bind(&proof.tx_hash)
+        .bind(&payment.nonce)
+        .execute(&state.db)
+        .await
+        .map_err(|e| AppError::Internal(format!("Failed to record tx_hash: {}", e)))?;
+
+    // 3b. Begin DB transaction: capacity grant + mark_consumed are atomic.
     // If mark_consumed fails (e.g. tx_hash unique constraint), the grant rolls back too.
     let mut db_tx = state
         .db
@@ -144,7 +165,21 @@ pub async fn verify_and_apply_payment(
         ));
     }
 
-    Ok(payment.payment_type)
+    // Build grant info for the extension (lets handlers skip a DB re-read for limit checks).
+    let grant_info = if payment.payment_type == "capacity_grant" {
+        payment
+            .grant_type
+            .as_ref()
+            .zip(payment.grant_quantity)
+            .map(|(grant_type, quantity)| X402CapacityGrantApplied {
+                grant_type: grant_type.clone(),
+                quantity,
+            })
+    } else {
+        None
+    };
+
+    Ok((payment.payment_type, grant_info))
 }
 
 /// Atomically increments org's x402 capacity column inside an existing sqlx transaction.
@@ -183,7 +218,7 @@ pub async fn apply_capacity_grant_in_tx(
         }
         "storage_bytes" => {
             sqlx::query(
-                "UPDATE organizations SET x402_extra_storage_bytes = x402_extra_storage_bytes + $1 WHERE id = $2"
+                "UPDATE organizations SET x402_extra_storage_bytes = LEAST(x402_extra_storage_bytes + $1, 107374182400) WHERE id = $2"
             )
             .bind(quantity)
             .bind(org_id)
@@ -224,11 +259,7 @@ pub async fn apply_capacity_grant_in_tx(
 /// Axum middleware: checks X-Payment header on every request.
 /// - FeatureAccess: verifies, applies, and SHORT-CIRCUITS (skips tier guard)
 /// - CapacityGrant: verifies, applies capacity to org, then FALLS THROUGH to handler
-pub async fn x402_payment_middleware(
-    State(state): State<AppState>,
-    req: Request<Body>,
-    next: Next,
-) -> Response {
+pub async fn x402_payment_middleware(state: AppState, req: Request<Body>, next: Next) -> Response {
     // Only process if x402 is enabled and X-Payment header is present
     if state.config.x402_enabled {
         if let Some(payment_header) = req.headers().get("X-Payment") {
@@ -238,22 +269,38 @@ pub async fn x402_payment_middleware(
                     // We look it up from the DB via the API key
                     // DB lookup only happens after X-Payment header is present AND decoded successfully
                     let request_path = req.uri().path().to_string();
-                    let org_id = get_org_id_from_request(&state, &req).await;
+                    // Extract the API key into an owned value BEFORE the await so the
+                    // middleware future does not hold a `&Request<Body>` across it
+                    // (`&Request<Body>` is not `Send`, which `Router::layer` requires).
+                    let api_key = req
+                        .headers()
+                        .get("X-API-Key")
+                        .or_else(|| req.headers().get("Authorization"))
+                        .and_then(|v| v.to_str().ok())
+                        .map(|s| s.to_string());
+                    let org_id = match api_key.as_deref() {
+                        Some(k) => get_org_id_from_api_key(&state, k).await,
+                        None => None,
+                    };
                     if let Some(org_id) = org_id {
                         match verify_and_apply_payment(&state, &proof, &org_id, &request_path).await
                         {
-                            Ok(payment_type) if payment_type == "feature_access" => {
+                            Ok((ref pt, _)) if pt == "feature_access" => {
                                 // Feature payment verified: bypass tier checks
-                                // Add a flag to request extensions so tier_guard can detect bypass
                                 let mut req = req;
                                 req.extensions_mut().insert(X402PaymentVerified);
                                 return next.run(req).await;
                             }
-                            Ok(ref pt) if pt == "capacity_grant" => {
-                                // Capacity grant applied: fall through to handler normally
-                                // (the limit check will now pass)
+                            Ok((ref pt, grant_info)) if pt == "capacity_grant" => {
+                                // Capacity grant applied: attach grant info so the handler can
+                                // skip a stale DB re-read for limit checks (H29-B).
+                                let mut req = req;
+                                if let Some(info) = grant_info {
+                                    req.extensions_mut().insert(info);
+                                }
+                                return next.run(req).await;
                             }
-                            Ok(ref pt) => {
+                            Ok((ref pt, _)) => {
                                 tracing::warn!(
                                     payment_type = %pt,
                                     "x402 payment verified with unrecognized payment_type; falling through to handler"
@@ -275,6 +322,14 @@ pub async fn x402_payment_middleware(
 /// Marker type inserted into request extensions when a valid feature_access payment was verified
 #[derive(Clone)]
 pub struct X402PaymentVerified;
+
+/// Inserted into request extensions when a capacity_grant payment was verified and applied.
+/// Handlers can read this to avoid a second DB round-trip to check the newly-granted capacity.
+#[derive(Clone)]
+pub struct X402CapacityGrantApplied {
+    pub grant_type: String,
+    pub quantity: i64,
+}
 
 /// Builds a 402 response body enriched with an x402 payment challenge.
 /// Used by API handlers when returning feature-gated 402 errors.
@@ -320,24 +375,54 @@ pub async fn x402_feature_response(
 }
 
 /// Extracts org_id from request using the X-API-Key agent auth header
-async fn get_org_id_from_request(state: &AppState, req: &Request<Body>) -> Option<String> {
+async fn get_org_id_from_api_key(state: &AppState, api_key: &str) -> Option<String> {
     use crate::auth::agent::hash_agent_key;
     use crate::db::repositories::AgentKeyRepository;
-
-    let api_key = req
-        .headers()
-        .get("X-API-Key")
-        .or_else(|| req.headers().get("Authorization"))
-        .and_then(|v| v.to_str().ok())?;
 
     let key = api_key.trim_start_matches("Bearer ").trim();
     if !key.starts_with("bw_agent_") {
         return None;
     }
 
-    let key_hash = hash_agent_key(key);
+    let key_hash = hash_agent_key(key, state.config.jwt_secret.as_bytes());
     let agent_key = AgentKeyRepository::find_by_hash(&state.db, &key_hash)
         .await
         .ok()??;
     Some(agent_key.organization_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use base64::{engine::general_purpose::STANDARD, Engine};
+
+    fn b64(s: &str) -> String {
+        STANDARD.encode(s.as_bytes())
+    }
+
+    #[test]
+    fn valid_proof_decoded() {
+        let encoded = b64(r#"{"nonce":"abc-123","tx_hash":"0xdeadbeef"}"#);
+        let proof = decode_payment_proof(&encoded).unwrap();
+        assert_eq!(proof.nonce, "abc-123");
+        assert_eq!(proof.tx_hash, "0xdeadbeef");
+    }
+
+    #[test]
+    fn invalid_base64_returns_error() {
+        let err = decode_payment_proof("not!valid!base64!!!").unwrap_err();
+        assert!(err.contains("Base64 decode failed"), "got: {}", err);
+    }
+
+    #[test]
+    fn valid_base64_invalid_json_returns_error() {
+        let err = decode_payment_proof(&b64("not json")).unwrap_err();
+        assert!(err.contains("JSON parse failed"), "got: {}", err);
+    }
+
+    #[test]
+    fn missing_tx_hash_field_returns_error() {
+        let err = decode_payment_proof(&b64(r#"{"nonce":"only-nonce"}"#)).unwrap_err();
+        assert!(err.contains("JSON parse failed"), "got: {}", err);
+    }
 }

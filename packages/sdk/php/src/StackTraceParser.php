@@ -28,8 +28,8 @@ final class StackTraceParser
         foreach ($trace as $frame) {
             $file = $frame['file'] ?? null;
             $function = isset($frame['class'])
-                ? $frame['class'] . ($frame['type'] ?? '::') . ($frame['function'] ?? '')
-                : ($frame['function'] ?? null);
+                ? $frame['class'] . ($frame['type'] ?? '::') . $frame['function']
+                : $frame['function'];
 
             $frames[] = new StackFrame(
                 filename: $file !== null ? self::normalizeFilename($file) : null,

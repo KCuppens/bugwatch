@@ -17,7 +17,8 @@ final class RequestContext
         public readonly array $headers = [],
         public readonly array $queryString = [],
         public readonly array $data = [],
-    ) {}
+    ) {
+    }
 
     public static function fromGlobals(): self
     {

@@ -1,15 +1,7 @@
 "use client";
 
-import {
-  createContext,
-  useContext,
-  useState,
-  useEffect,
-  useMemo,
-  useCallback,
-  type ReactNode,
-} from "react";
-import { projectsApi, type Project } from "@/lib/api";
+import { createContext, useContext, useState, useEffect, useMemo, useCallback, type ReactNode } from "react";
+import { projectsApi, ApiError, type Project } from "@/lib/api";
 
 const STORAGE_KEYS = {
   selectedProjectId: "bugwatch:selectedProjectId",
@@ -48,7 +40,12 @@ function getStoredRecentProjectIds(): string[] {
   if (typeof window === "undefined") return [];
   try {
     const stored = localStorage.getItem(STORAGE_KEYS.recentProjects);
-    return stored ? JSON.parse(stored) : [];
+    if (!stored) return [];
+    const parsed: unknown = JSON.parse(stored);
+    if (Array.isArray(parsed) && parsed.every((item) => typeof item === "string")) {
+      return parsed as string[];
+    }
+    return [];
   } catch {
     return [];
   }
@@ -75,13 +72,17 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchProjects = useCallback(async () => {
+  const fetchProjects = useCallback(async (signal?: AbortSignal) => {
     setIsLoading(true);
     setError(null);
 
     try {
       const response = await projectsApi.list(1, 100);
+      if (signal?.aborted) return;
       const fetchedProjects = response.data;
+      if (response.pagination.total > 100) {
+        console.warn(`[project-context] Large project count: ${response.pagination.total}`);
+      }
       setProjects(fetchedProjects);
 
       // Get stored project ID and validate
@@ -112,14 +113,16 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
       }
     } catch (err) {
       console.error("Failed to fetch projects:", err);
-      setError(err instanceof Error ? err.message : "Failed to load projects");
+      setError(err instanceof ApiError ? err.message : "Failed to load projects");
     } finally {
       setIsLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    fetchProjects();
+    const controller = new AbortController();
+    fetchProjects(controller.signal);
+    return () => controller.abort();
   }, [fetchProjects]);
 
   const selectProject = useCallback(
@@ -137,10 +140,7 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
 
   // Map recent IDs to projects
   const recentProjects = useMemo(
-    () =>
-      recentProjectIds
-        .map((id) => projects.find((p) => p.id === id))
-        .filter((p): p is Project => p !== undefined),
+    () => recentProjectIds.map((id) => projects.find((p) => p.id === id)).filter((p): p is Project => p !== undefined),
     [recentProjectIds, projects]
   );
 
@@ -154,20 +154,10 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
       selectProject,
       refreshProjects: fetchProjects,
     }),
-    [
-      projects,
-      selectedProject,
-      recentProjects,
-      isLoading,
-      error,
-      selectProject,
-      fetchProjects,
-    ]
+    [projects, selectedProject, recentProjects, isLoading, error, selectProject, fetchProjects]
   );
 
-  return (
-    <ProjectContext.Provider value={value}>{children}</ProjectContext.Provider>
-  );
+  return <ProjectContext.Provider value={value}>{children}</ProjectContext.Provider>;
 }
 
 export function useProject() {

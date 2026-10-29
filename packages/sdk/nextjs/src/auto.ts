@@ -46,6 +46,7 @@ function autoInit(): void {
  */
 function initServer(envConfig: Partial<BugwatchOptions>): void {
   try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { init } = require("./index");
 
     init({
@@ -68,6 +69,7 @@ function initServer(envConfig: Partial<BugwatchOptions>): void {
  */
 function initClient(envConfig: Partial<BugwatchOptions>): void {
   try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { initClient: initClientSdk } = require("./client");
 
     initClientSdk({

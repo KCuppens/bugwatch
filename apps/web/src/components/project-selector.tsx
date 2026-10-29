@@ -3,15 +3,7 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { Command } from "cmdk";
-import {
-  ChevronDown,
-  Search,
-  Plus,
-  Check,
-  FolderOpen,
-  Clock,
-  AlertTriangle,
-} from "lucide-react";
+import { ChevronDown, Search, Plus, Check, FolderOpen, Clock, AlertTriangle } from "lucide-react";
 import { useProject } from "@/lib/project-context";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -28,14 +20,28 @@ function needsSetup(project: Project): boolean {
 interface ProjectAvatarProps {
   name: string;
   size?: "sm" | "md";
+  logoUrl?: string | null;
 }
 
-function ProjectAvatar({ name, size = "md" }: ProjectAvatarProps) {
+function ProjectAvatar({ name, size = "md", logoUrl }: ProjectAvatarProps) {
+  const [imgError, setImgError] = useState(false);
   const sizeClass = size === "sm" ? "h-7 w-7 text-[11px] rounded-md" : "h-8 w-8 text-[13px] rounded-lg";
+
+  if (logoUrl && !imgError) {
+    return (
+      <img
+        src={logoUrl}
+        alt={name}
+        className={cn("shrink-0 object-cover", sizeClass)}
+        onError={() => setImgError(true)}
+      />
+    );
+  }
+
   return (
     <div
       className={cn(
-        "shrink-0 flex items-center justify-center font-semibold text-white font-display tracking-tight",
+        "shrink-0 flex items-center justify-center font-semibold text-white font-sans tracking-tight",
         sizeClass
       )}
       style={{ backgroundColor: projectAvatarColor(name) }}
@@ -59,9 +65,7 @@ function UnresolvedBadge({ stat, setupIncomplete }: UnresolvedBadgeProps) {
       <span
         className={cn(
           "inline-flex h-5 items-center gap-1 rounded-full px-2 text-caption font-medium tabular-nums",
-          isCritical
-            ? "bg-destructive/10 text-destructive"
-            : "bg-amber-500/10 text-amber-600 dark:text-amber-400"
+          isCritical ? "bg-destructive/10 text-destructive" : "bg-amber-500/10 text-amber-600 dark:text-amber-400"
         )}
       >
         {isCritical && <AlertTriangle className="h-3 w-3" />}
@@ -96,12 +100,12 @@ function ProjectItem({ project, stat, isSelected, onSelect }: ProjectItemProps) 
       onSelect={onSelect}
       className="flex h-12 cursor-pointer items-center gap-3 rounded-lg px-2 aria-selected:bg-accent-2/10 aria-selected:text-accent-2 transition-colors"
     >
-      <ProjectAvatar name={project.name} size="sm" />
+      <ProjectAvatar name={project.name} size="sm" logoUrl={project.logo_url} />
       <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 leading-none">
           <span className="text-body font-medium truncate tracking-tight">{project.name}</span>
         </div>
-        <div className="flex items-center gap-1.5 text-caption text-muted-foreground truncate">
+        <div className="flex items-center gap-1.5 text-caption text-muted-foreground truncate mt-0.5">
           {platform && (
             <>
               <PlatformIcon platform={platform} className="h-3 w-3" />
@@ -110,13 +114,9 @@ function ProjectItem({ project, stat, isSelected, onSelect }: ProjectItemProps) 
           )}
           {platform && stat && stat.unresolved_count > 0 && <span aria-hidden="true">·</span>}
           {stat && stat.unresolved_count > 0 && (
-            <span className="tabular-nums">
-              {stat.unresolved_count} unresolved
-            </span>
+            <span className="tabular-nums">{stat.unresolved_count} unresolved</span>
           )}
-          {!platform && !stat?.unresolved_count && (
-            <span className="text-muted-foreground/60">No activity yet</span>
-          )}
+          {!platform && !stat?.unresolved_count && <span className="text-muted-foreground/60">No activity yet</span>}
         </div>
       </div>
       <UnresolvedBadge stat={stat} setupIncomplete={setupIncomplete} />
@@ -139,13 +139,7 @@ function SkeletonRow() {
 
 export function ProjectSelector() {
   const router = useRouter();
-  const {
-    projects,
-    selectedProject,
-    recentProjects,
-    isLoading,
-    selectProject,
-  } = useProject();
+  const { projects, selectedProject, recentProjects, isLoading, selectProject } = useProject();
   const { stats, isLoading: statsLoading } = useProjectStats();
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -182,17 +176,20 @@ export function ProjectSelector() {
     (prefilledName?: string) => {
       setOpen(false);
       setSearch("");
-      const qs = prefilledName ? `?name=${encodeURIComponent(prefilledName)}` : "";
+      // Validate prefilledName: length <= 100 and only printable chars (no
+      // control chars, no newlines, no tabs). encodeURIComponent handles
+      // escaping but does not block pathological input.
+
+      const isSafeName = (v: string) => v.length > 0 && v.length <= 100 && !/[\x00-\x1f\x7f]/.test(v);
+      const safeName = prefilledName && isSafeName(prefilledName) ? prefilledName : undefined;
+      const qs = safeName ? `?name=${encodeURIComponent(safeName)}` : "";
       router.push(`/dashboard/projects/new${qs}`);
     },
     [router]
   );
 
   const filteredProjects = useMemo(
-    () =>
-      search
-        ? projects.filter((p) => p.name.toLowerCase().includes(search.toLowerCase()))
-        : projects,
+    () => (search ? projects.filter((p) => p.name.toLowerCase().includes(search.toLowerCase())) : projects),
     [projects, search]
   );
 
@@ -203,22 +200,16 @@ export function ProjectSelector() {
   );
 
   const filteredRecentProjects = useMemo(
-    () =>
-      search
-        ? recentProjects.filter((p) => p.name.toLowerCase().includes(search.toLowerCase()))
-        : recentProjects,
+    () => (search ? recentProjects.filter((p) => p.name.toLowerCase().includes(search.toLowerCase())) : recentProjects),
     [recentProjects, search]
   );
 
   const selectedStat = selectedProject ? stats.get(selectedProject.id) : undefined;
-  const selectedPlatform =
-    selectedProject?.platform || selectedStat?.project_platform || null;
+  const selectedPlatform = selectedProject?.platform || selectedStat?.project_platform || null;
   const selectedUnresolved = selectedStat?.unresolved_count ?? 0;
   const selectedCritical = selectedStat?.critical_count ?? 0;
 
-  const hasNoMatches = Boolean(
-    search && filteredProjects.length === 0 && filteredRecentProjects.length === 0
-  );
+  const hasNoMatches = Boolean(search && filteredProjects.length === 0 && filteredRecentProjects.length === 0);
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -226,7 +217,7 @@ export function ProjectSelector() {
         <button
           type="button"
           aria-label="Switch project"
-          className="group flex h-12 w-full items-center gap-3 rounded-lg border border-border-subtle bg-surface-2 px-3 text-left transition-all hover:bg-surface-3 hover:border-border-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-2/60 focus-visible:ring-offset-2 focus-visible:ring-offset-background data-[state=open]:border-accent-2/40"
+          className="group flex h-9 w-full items-center gap-3 rounded-lg border border-border-subtle bg-surface-2 px-3 text-left transition-all hover:bg-surface-3 hover:border-border-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-2/60 focus-visible:ring-offset-2 focus-visible:ring-offset-background data-[state=open]:border-accent-2/40"
         >
           {isLoading ? (
             <>
@@ -237,13 +228,14 @@ export function ProjectSelector() {
               </div>
             </>
           ) : selectedProject ? (
-            <>
-              <ProjectAvatar name={selectedProject.name} />
+            selectedProject.logo_url ? (
+              <ProjectAvatar name={selectedProject.name} logoUrl={selectedProject.logo_url} />
+            ) : (
               <div className="flex-1 min-w-0">
-                <div className="text-body font-medium truncate tracking-tight text-foreground">
+                <div className="text-body font-medium truncate tracking-tight text-foreground leading-none mt-0.5">
                   {selectedProject.name}
                 </div>
-                <div className="flex items-center gap-1.5 text-caption text-muted-foreground truncate">
+                <div className="flex items-center gap-1.5 text-caption text-muted-foreground truncate mt-0.5">
                   {selectedPlatform && (
                     <>
                       <PlatformIcon platform={selectedPlatform} className="h-3 w-3" />
@@ -266,7 +258,7 @@ export function ProjectSelector() {
                   )}
                 </div>
               </div>
-            </>
+            )
           ) : (
             <>
               <div className="h-8 w-8 rounded-lg bg-surface-3 flex items-center justify-center">
@@ -281,17 +273,11 @@ export function ProjectSelector() {
                 {isMac ? "⌘" : "Ctrl"} P
               </kbd>
             </span>
-            <ChevronDown
-              className="h-4 w-4 text-muted-foreground transition-transform duration-200 group-data-[state=open]:rotate-180"
-            />
+            <ChevronDown className="h-4 w-4 text-muted-foreground transition-transform duration-200 group-data-[state=open]:rotate-180" />
           </div>
         </button>
       </PopoverTrigger>
-      <PopoverContent
-        className="w-[320px] p-0 elev-2 border-0 overflow-hidden"
-        align="start"
-        sideOffset={8}
-      >
+      <PopoverContent className="w-[320px] p-0 surface-panel overflow-hidden" align="start" sideOffset={8}>
         <Command className="rounded-2xl" loop shouldFilter={false}>
           {/* Search Input */}
           <div className="flex items-center border-b border-border-subtle px-3 focus-within:border-accent-2/40 transition-colors">
@@ -400,14 +386,20 @@ export function ProjectSelector() {
               <kbd className="inline-flex h-5 items-center rounded border border-border-subtle bg-surface-3 px-1.5 font-mono text-[10px]">
                 {isMac ? "⌘" : "Ctrl"}
               </kbd>
-              <kbd className="inline-flex h-5 items-center rounded border border-border-subtle bg-surface-3 px-1.5 font-mono text-[10px]">P</kbd>
+              <kbd className="inline-flex h-5 items-center rounded border border-border-subtle bg-surface-3 px-1.5 font-mono text-[10px]">
+                P
+              </kbd>
             </div>
             <div className="flex items-center gap-1.5">
-              <kbd className="inline-flex h-5 items-center rounded border border-border-subtle bg-surface-3 px-1.5 font-mono text-[10px]">↑↓</kbd>
+              <kbd className="inline-flex h-5 items-center rounded border border-border-subtle bg-surface-3 px-1.5 font-mono text-[10px]">
+                ↑↓
+              </kbd>
               <span>navigate</span>
             </div>
             <div className="flex items-center gap-1.5">
-              <kbd className="inline-flex h-5 items-center rounded border border-border-subtle bg-surface-3 px-1.5 font-mono text-[10px]">↵</kbd>
+              <kbd className="inline-flex h-5 items-center rounded border border-border-subtle bg-surface-3 px-1.5 font-mono text-[10px]">
+                ↵
+              </kbd>
               <span>select</span>
             </div>
           </div>

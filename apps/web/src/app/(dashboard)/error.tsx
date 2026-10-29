@@ -57,6 +57,7 @@ export default function DashboardError({
             </summary>
             <pre className="mt-2 p-4 bg-muted rounded-md text-xs overflow-auto">
               {error.message}
+              {error.digest && `\n\nDigest: ${error.digest}`}
               {error.stack && `\n\n${error.stack}`}
             </pre>
           </details>

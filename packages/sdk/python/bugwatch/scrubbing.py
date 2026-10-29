@@ -4,21 +4,41 @@ keys or string contents match known sensitive patterns.
 
 Returns a new dict (deep-copied). Original references stay intact.
 """
-import re
+
 import copy
-from typing import Any, Dict, List, Optional, Pattern
+import re
+from re import Pattern
+from typing import Any, Optional
 
 REDACTED = "[Filtered]"
 
 # Default sensitive key substrings (case-insensitive).
-DEFAULT_SENSITIVE_KEYS: List[str] = [
-    "password", "passwd", "pwd",
-    "secret", "token", "api_key", "apikey",
-    "access_token", "refresh_token", "bearer",
-    "authorization", "cookie", "set-cookie", "session",
-    "credit_card", "creditcard", "cc_number", "card_number",
-    "cvv", "cvc", "ssn", "social_security",
-    "private_key", "client_secret", "signature",
+DEFAULT_SENSITIVE_KEYS: list[str] = [
+    "password",
+    "passwd",
+    "pwd",
+    "secret",
+    "token",
+    "api_key",
+    "apikey",
+    "access_token",
+    "refresh_token",
+    "bearer",
+    "authorization",
+    "cookie",
+    "set-cookie",
+    "session",
+    "credit_card",
+    "creditcard",
+    "cc_number",
+    "card_number",
+    "cvv",
+    "cvc",
+    "ssn",
+    "social_security",
+    "private_key",
+    "client_secret",
+    "signature",
 ]
 
 # Default value patterns matched against string values.
@@ -31,8 +51,13 @@ _GITHUB_PAT_RE = re.compile(r"\bghp_[A-Za-z0-9]{36}\b")
 _EMAIL_RE = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
 _CC_RE = re.compile(r"\b(?:\d[ -]*?){13,19}\b")
 
-DEFAULT_VALUE_PATTERNS: List[Pattern[str]] = [
-    _JWT_RE, _AWS_KEY_RE, _SSN_RE, _STRIPE_RE, _SLACK_RE, _GITHUB_PAT_RE,
+DEFAULT_VALUE_PATTERNS: list[Pattern[str]] = [
+    _JWT_RE,
+    _AWS_KEY_RE,
+    _SSN_RE,
+    _STRIPE_RE,
+    _SLACK_RE,
+    _GITHUB_PAT_RE,
 ]
 
 
@@ -54,7 +79,7 @@ def _luhn_check(s: str) -> bool:
     return total % 10 == 0
 
 
-def _key_is_sensitive(key: str, sensitive_keys: List[str]) -> bool:
+def _key_is_sensitive(key: str, sensitive_keys: list[str]) -> bool:
     lower = key.lower()
     for needle in sensitive_keys:
         if needle in lower:
@@ -64,7 +89,7 @@ def _key_is_sensitive(key: str, sensitive_keys: List[str]) -> bool:
 
 def _value_is_sensitive(
     value: str,
-    patterns: List[Pattern[str]],
+    patterns: list[Pattern[str]],
     scrub_emails: bool,
 ) -> bool:
     for pat in patterns:
@@ -79,11 +104,11 @@ def _value_is_sensitive(
 
 def _scrub_value(
     value: Any,
-    sensitive_keys: List[str],
-    patterns: List[Pattern[str]],
+    sensitive_keys: list[str],
+    patterns: list[Pattern[str]],
     scrub_emails: bool,
     depth: int,
-    seen: set,
+    seen: set[int],
 ) -> Any:
     if depth > 8:
         return value
@@ -99,10 +124,12 @@ def _scrub_value(
     seen.add(obj_id)
 
     if isinstance(value, list):
-        return [_scrub_value(v, sensitive_keys, patterns, scrub_emails, depth + 1, seen) for v in value]
+        return [
+            _scrub_value(v, sensitive_keys, patterns, scrub_emails, depth + 1, seen) for v in value
+        ]
 
     if isinstance(value, dict):
-        out: Dict[str, Any] = {}
+        out: dict[str, Any] = {}
         for k, v in value.items():
             if isinstance(k, str) and _key_is_sensitive(k, sensitive_keys):
                 out[k] = REDACTED
@@ -114,9 +141,9 @@ def _scrub_value(
 
 
 def scrub_event(
-    event: Dict[str, Any],
-    options: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
+    event: dict[str, Any],
+    options: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
     """Scrub PII from an event dict. Returns a new dict.
 
     Options:
@@ -133,24 +160,30 @@ def scrub_event(
     sensitive_keys = [k.lower() for k in sensitive_keys]
     patterns = DEFAULT_VALUE_PATTERNS + (opts.get("custom_patterns") or [])
     scrub_emails = opts.get("scrub_emails", False)
-    seen: set = set()
+    seen: set[int] = set()
 
     result = copy.deepcopy(event)
 
     for field in ("extra", "user", "tags"):
         if field in result and result[field]:
-            result[field] = _scrub_value(result[field], sensitive_keys, patterns, scrub_emails, 0, seen)
+            result[field] = _scrub_value(
+                result[field], sensitive_keys, patterns, scrub_emails, 0, seen
+            )
 
     if "request" in result and result["request"]:
         req = result["request"]
         if "headers" in req and req["headers"]:
-            req["headers"] = _scrub_value(req["headers"], sensitive_keys, patterns, scrub_emails, 0, seen)
+            req["headers"] = _scrub_value(
+                req["headers"], sensitive_keys, patterns, scrub_emails, 0, seen
+            )
         if "data" in req and req["data"]:
             req["data"] = _scrub_value(req["data"], sensitive_keys, patterns, scrub_emails, 0, seen)
 
     if "breadcrumbs" in result and result["breadcrumbs"]:
         for crumb in result["breadcrumbs"]:
             if "data" in crumb and crumb["data"]:
-                crumb["data"] = _scrub_value(crumb["data"], sensitive_keys, patterns, scrub_emails, 0, seen)
+                crumb["data"] = _scrub_value(
+                    crumb["data"], sensitive_keys, patterns, scrub_emails, 0, seen
+                )
 
     return result

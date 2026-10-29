@@ -1,14 +1,13 @@
+import { isIP } from "net";
 import type { Request, Response, NextFunction, RequestHandler, ErrorRequestHandler } from "express";
 import {
   getClient,
   captureException,
   addBreadcrumb,
-  setUser,
   flush,
   runWithContext,
   createScopedContext,
   type RequestContext,
-  type ErrorEvent,
   type ScopedContext,
 } from "@bugwatch/core";
 import type { BugwatchExpressOptions, BugwatchRequest, AsyncRequestHandler } from "./types";
@@ -95,8 +94,10 @@ function extractRequestContext(
     }
   }
 
+  // Use req.hostname (respects trust proxy) instead of req.get('host') (user-controlled)
+  // to prevent Host header injection into captured event URLs.
   const context: RequestContext = {
-    url: `${req.protocol}://${req.get("host")}${req.originalUrl}`,
+    url: `${req.protocol}://${req.hostname}${req.originalUrl}`,
     method: req.method,
     headers,
     query_string: req.url.includes("?") ? req.url.split("?")[1] : undefined,
@@ -110,6 +111,11 @@ function extractRequestContext(
   return context;
 }
 
+// Validate IP address format — rejects injected strings from forged headers
+function isValidIp(ip: string): boolean {
+  return isIP(ip) !== 0;
+}
+
 /**
  * Extract client IP from request.
  */
@@ -118,16 +124,16 @@ function extractClientIp(req: Request): string | undefined {
   const forwarded = req.get("x-forwarded-for");
   if (forwarded) {
     const firstIp = forwarded.split(",")[0]?.trim();
-    if (firstIp) return firstIp;
+    if (firstIp && isValidIp(firstIp)) return firstIp;
   }
 
   const realIp = req.get("x-real-ip");
-  if (realIp) return realIp;
+  if (realIp && isValidIp(realIp)) return realIp;
 
   const cfIp = req.get("cf-connecting-ip");
-  if (cfIp) return cfIp;
+  if (cfIp && isValidIp(cfIp)) return cfIp;
 
-  // Fall back to socket address
+  // Fall back to socket address (trusted — not from headers)
   return req.socket.remoteAddress;
 }
 
@@ -159,8 +165,13 @@ export function requestHandler(
     // Create a request-scoped context for isolation
     const scopedContext: ScopedContext = createScopedContext();
 
-    // Store start time for breadcrumb
-    req.bugwatch = { startTime: Date.now() };
+    // Generate a per-request correlation ID for end-to-end tracing
+    const requestId = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+
+    // Store start time and request ID for downstream access
+    req.bugwatch = { startTime: Date.now(), requestId };
 
     // Extract and set user context in the scoped context
     if (options.extractUser) {
@@ -176,7 +187,7 @@ export function requestHandler(
 
     // Run the rest of the request handling within the isolated context
     runWithContext(scopedContext, () => {
-      // Add request start breadcrumb
+      // Add request start breadcrumb with correlation ID
       if (options.addBreadcrumbs !== false) {
         addBreadcrumb({
           category: "http",
@@ -185,6 +196,7 @@ export function requestHandler(
           data: {
             method: req.method,
             url: req.originalUrl,
+            request_id: requestId,
           },
         });
       }
@@ -192,19 +204,28 @@ export function requestHandler(
       // Track response for completion breadcrumb
       const originalEnd = res.end.bind(res);
       res.end = function (...args: Parameters<Response["end"]>) {
-        if (options.addBreadcrumbs !== false) {
-          const duration = Date.now() - (req.bugwatch?.startTime || Date.now());
-          addBreadcrumb({
-            category: "http",
-            message: `${req.method} ${req.path} -> ${res.statusCode}`,
-            level: res.statusCode >= 500 ? "error" : res.statusCode >= 400 ? "warning" : "info",
-            data: {
-              method: req.method,
-              url: req.originalUrl,
-              status_code: res.statusCode,
-              duration_ms: duration,
-            },
-          });
+        // Re-enter the request-scoped context so the breadcrumb attaches to the
+        // correct request, not the global scope (res.end fires after runWithContext exits)
+        try {
+          if (options.addBreadcrumbs !== false) {
+            const duration = Date.now() - (req.bugwatch?.startTime || Date.now());
+            runWithContext(scopedContext, () => {
+              addBreadcrumb({
+                category: "http",
+                message: `${req.method} ${req.path} -> ${res.statusCode}`,
+                level: res.statusCode >= 500 ? "error" : res.statusCode >= 400 ? "warning" : "info",
+                data: {
+                  method: req.method,
+                  url: req.originalUrl,
+                  status_code: res.statusCode,
+                  duration_ms: duration,
+                  request_id: requestId,
+                },
+              });
+            });
+          }
+        } catch {
+          // Never let SDK code break response sending
         }
         return originalEnd(...args);
       } as Response["end"];
@@ -238,7 +259,7 @@ export function errorHandler(
   return async (
     err: unknown,
     req: BugwatchRequest,
-    res: Response,
+    _res: Response,
     next: NextFunction
   ) => {
     const client = getClient();
@@ -256,36 +277,34 @@ export function errorHandler(
       }
 
       // Build request context (wrapped to prevent extraction errors from losing the event)
-      let requestContext;
+      let requestContext: RequestContext;
       try {
         requestContext = extractRequestContext(req, options);
       } catch {
         requestContext = { url: req.originalUrl, method: req.method };
       }
 
-      // Build extra context
-      const extra: Record<string, unknown> = {
-        request: requestContext,
-      };
-
-      try {
-        const clientIp = extractClientIp(req);
-        if (clientIp) {
-          extra.client_ip = clientIp;
-        }
-      } catch {
-        // Ignore IP extraction errors
-      }
+      // Build extra context (request context is already at the top-level, so only include non-error original here)
+      const extra: Record<string, unknown> = {};
 
       // If the original thrown value was not an Error, include it as extra data
       if (!(err instanceof Error)) {
         extra.originalValue = err;
       }
 
+      // Resolve IP into user.ip_address (server field) so it surfaces in the User card
+      let clientIp: string | undefined;
+      try {
+        clientIp = extractClientIp(req);
+      } catch {
+        // Ignore IP extraction errors
+      }
+
       // Capture the error
       const eventId = captureException(error, {
         request: requestContext,
         extra,
+        ...(clientIp && { user: { ip_address: clientIp } }),
         tags: {
           "http.method": req.method,
           "http.url": req.originalUrl,
@@ -362,13 +381,28 @@ export function captureError(
 
   return captureException(error, {
     request: requestContext,
-    extra: {
-      request: requestContext,
-      ...(clientIp && { client_ip: clientIp }),
-    },
+    ...(clientIp && { user: { ip_address: clientIp } }),
     tags: {
       "http.method": req.method,
       "http.url": req.originalUrl,
     },
   });
+}
+
+/**
+ * Get the Bugwatch request ID for the current request.
+ * Include this in response headers (e.g. X-Request-Id) for end-to-end tracing.
+ *
+ * @example
+ * ```typescript
+ * app.use(requestHandler());
+ * app.use((req, res, next) => {
+ *   const id = getRequestId(req);
+ *   if (id) res.setHeader('X-Request-Id', id);
+ *   next();
+ * });
+ * ```
+ */
+export function getRequestId(req: Request): string | undefined {
+  return (req as BugwatchRequest).bugwatch?.requestId;
 }

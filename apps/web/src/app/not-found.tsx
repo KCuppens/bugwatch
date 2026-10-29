@@ -1,6 +1,12 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { ArrowLeft } from "lucide-react";
+
+export const metadata: Metadata = {
+  title: "404 — Page Not Found | BugWatch",
+  robots: { index: false },
+};
 
 export default function NotFound() {
   return (

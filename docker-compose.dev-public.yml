@@ -1,0 +1,41 @@
+# Override that puts the dev stack (docker-compose.dev.yml) behind Caddy on
+# public HTTPS. All certs use DNS-01 via Cloudflare (no port 80 needed).
+# Routes by Host:
+#   https://dev.bugwatch.dev     -> web:3001
+#   https://api-dev.bugwatch.dev -> server:3000
+#
+# Usage:
+#   docker compose -f docker-compose.dev.yml -f docker-compose.dev-public.yml up
+
+services:
+  caddy:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.caddy-dev
+    ports:
+      - "443:443"
+    volumes:
+      - ./Caddyfile.dev:/etc/caddy/Caddyfile:ro
+      - caddy_dev_data:/data
+      - caddy_dev_config:/config
+    environment:
+      - CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN:?CLOUDFLARE_API_TOKEN must be set in .env (Cloudflare token with Zone:DNS:Edit + Zone:Zone:Read on bugwatch.dev)}
+      - CLOUDFLARE_AUTOMOTICS_TOKEN=${CLOUDFLARE_AUTOMOTICS_TOKEN:?CLOUDFLARE_AUTOMOTICS_TOKEN must be set in .env (Cloudflare token scoped to automotics.be — used for *.preview.automotics.be wildcard cert)}
+    depends_on:
+      - web
+      - server
+
+  web:
+    # Same-origin in dev: api.ts uses a relative base in NODE_ENV=development,
+    # and Caddy routes /api/* on dev.bugwatch.dev to the Rust server. Setting
+    # NEXT_PUBLIC_API_URL would override that and break cookie same-origin.
+    environment:
+      - NEXT_PUBLIC_API_URL=
+
+  server:
+    environment:
+      - APP_URL=https://dev.bugwatch.dev
+
+volumes:
+  caddy_dev_data:
+  caddy_dev_config:

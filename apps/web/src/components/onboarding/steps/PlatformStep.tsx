@@ -14,20 +14,12 @@ interface PlatformStepProps {
   isValid: boolean;
 }
 
-export function PlatformStep({
-  value,
-  onChange,
-  onNext,
-  onBack,
-  isValid,
-}: PlatformStepProps) {
+export function PlatformStep({ value, onChange, onNext, onBack, isValid }: PlatformStepProps) {
   return (
     <div className="space-y-8">
       <div className="space-y-2 text-center">
-        <h2 className="font-display text-heading-lg">Select Your Platform</h2>
-        <p className="text-muted-foreground">
-          Choose the language your application is built with
-        </p>
+        <h2 className="font-sans text-2xl font-bold">Select Your Platform</h2>
+        <p className="text-muted-foreground">Choose the language your application is built with</p>
       </div>
 
       <div className="grid gap-4 md:grid-cols-3">

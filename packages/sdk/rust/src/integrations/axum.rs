@@ -215,21 +215,27 @@ where
                 // Add breadcrumb for the request
                 if *this.add_breadcrumbs {
                     let mut data = HashMap::new();
-                    data.insert("status_code".to_string(), serde_json::json!(status.as_u16()));
+                    data.insert(
+                        "status_code".to_string(),
+                        serde_json::json!(status.as_u16()),
+                    );
                     if let Some(ref url) = this.request_context.url {
                         data.insert("url".to_string(), serde_json::json!(url));
                     }
 
                     add_breadcrumb(
-                        Breadcrumb::new("http", format!("{} {} -> {}", this.method, this.path, status.as_u16()))
-                            .with_level(if status.is_server_error() {
-                                Level::Error
-                            } else if status.is_client_error() {
-                                Level::Warning
-                            } else {
-                                Level::Info
-                            })
-                            .with_data(data),
+                        Breadcrumb::new(
+                            "http",
+                            format!("{} {} -> {}", this.method, this.path, status.as_u16()),
+                        )
+                        .with_level(if status.is_server_error() {
+                            Level::Error
+                        } else if status.is_client_error() {
+                            Level::Warning
+                        } else {
+                            Level::Info
+                        })
+                        .with_data(data),
                     );
                 }
 
@@ -279,10 +285,7 @@ fn extract_request_context(req: &Request) -> RequestContext {
     let filtered_headers = filter_headers(&headers);
     let client_ip = extract_client_ip(&headers);
 
-    let scheme = req
-        .uri()
-        .scheme_str()
-        .unwrap_or("http");
+    let scheme = req.uri().scheme_str().unwrap_or("http");
 
     let host = headers
         .get("host")
@@ -292,12 +295,7 @@ fn extract_request_context(req: &Request) -> RequestContext {
         .unwrap_or("unknown");
 
     RequestContext {
-        url: Some(build_url(
-            scheme,
-            host,
-            req.uri().path(),
-            req.uri().query(),
-        )),
+        url: Some(build_url(scheme, host, req.uri().path(), req.uri().query())),
         method: Some(req.method().to_string()),
         headers: Some(filtered_headers),
         query_string: req.uri().query().map(|q| q.to_string()),
@@ -510,7 +508,10 @@ mod tests {
 
         let map = headers_to_map(&headers);
 
-        assert_eq!(map.get("content-type"), Some(&"application/json".to_string()));
+        assert_eq!(
+            map.get("content-type"),
+            Some(&"application/json".to_string())
+        );
         assert_eq!(map.get("x-request-id"), Some(&"abc123".to_string()));
     }
 

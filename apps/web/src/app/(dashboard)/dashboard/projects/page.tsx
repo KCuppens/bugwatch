@@ -1,15 +1,9 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   FolderOpen,
@@ -24,8 +18,19 @@ import {
   Flame,
   Users,
   Activity,
+  Eye,
+  EyeOff,
+  Loader2,
 } from "lucide-react";
-import { projectsApi, overviewApi, type Project, type Platform, type Framework, type ProjectStatsWithInfo } from "@/lib/api";
+import {
+  projectsApi,
+  overviewApi,
+  ApiError,
+  type Project,
+  type Platform,
+  type Framework,
+  type ProjectStatsWithInfo,
+} from "@/lib/api";
 import { getPlatformConfig, getFrameworkConfig } from "@/lib/sdk-config";
 import { toast } from "sonner";
 
@@ -53,47 +58,67 @@ function getHealthColor(stats: ProjectStatsWithInfo | undefined): { dot: string;
 
 export default function ProjectsPage() {
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [revealedId, setRevealedId] = useState<string | null>(null);
+  const [revealedKeys, setRevealedKeys] = useState<Map<string, string>>(new Map());
+  const [revealingId, setRevealingId] = useState<string | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [projectStats, setProjectStats] = useState<Map<string, ProjectStatsWithInfo>>(new Map());
 
-  useEffect(() => {
-    async function fetchProjects() {
-      setIsLoading(true);
-      setError(null);
+  const fetchProjects = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
 
-      try {
-        const [projectsRes, statsRes] = await Promise.all([
-          projectsApi.list(),
-          overviewApi.getStatsByProject().catch(() => null),
-        ]);
-        setProjects(projectsRes.data);
+    try {
+      const [projectsRes, statsRes] = await Promise.all([
+        projectsApi.list(),
+        overviewApi.getStatsByProject().catch(() => null),
+      ]);
+      setProjects(projectsRes.data);
 
-        // Build stats map
-        if (statsRes?.data) {
-          const statsMap = new Map<string, ProjectStatsWithInfo>();
-          for (const stat of statsRes.data) {
-            statsMap.set(stat.project_id, stat);
-          }
-          setProjectStats(statsMap);
+      // Build stats map
+      if (statsRes?.data) {
+        const statsMap = new Map<string, ProjectStatsWithInfo>();
+        for (const stat of statsRes.data) {
+          statsMap.set(stat.project_id, stat);
         }
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed to load projects");
-        toast.error("Failed to load projects", {
-          description: err instanceof Error ? err.message : "Please try again",
-        });
-      } finally {
-        setIsLoading(false);
+        setProjectStats(statsMap);
       }
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) return;
+      setError("Failed to load projects");
+      toast.error("Failed to load projects", {
+        description: "Please try again",
+      });
+    } finally {
+      setIsLoading(false);
     }
-
-    fetchProjects();
   }, []);
 
-  function copyApiKey(id: string, apiKey: string) {
+  useEffect(() => {
+    fetchProjects();
+  }, [fetchProjects]);
+
+  async function getFullApiKey(id: string): Promise<string | null> {
+    const cached = revealedKeys.get(id);
+    if (cached) return cached;
     try {
-      navigator.clipboard.writeText(apiKey);
+      const res = await projectsApi.get(id);
+      const fullKey = res.data.api_key;
+      setRevealedKeys((prev) => new Map(prev).set(id, fullKey));
+      return fullKey;
+    } catch {
+      toast.error("Failed to fetch API key");
+      return null;
+    }
+  }
+
+  async function copyApiKey(id: string) {
+    const fullKey = await getFullApiKey(id);
+    if (!fullKey) return;
+    try {
+      await navigator.clipboard.writeText(fullKey);
       setCopiedId(id);
       toast.success("API key copied");
       setTimeout(() => setCopiedId(null), 2000);
@@ -102,13 +127,32 @@ export default function ProjectsPage() {
     }
   }
 
+  async function toggleRevealApiKey(id: string) {
+    if (revealedId === id) {
+      setRevealedId(null);
+      // Clear the cached key from state so it doesn't persist in memory indefinitely
+      setRevealedKeys((prev) => {
+        const next = new Map(prev);
+        next.delete(id);
+        return next;
+      });
+      return;
+    }
+    // Guard against double-tap before the first reveal renders its disabled state
+    if (revealingId === id) return;
+    setRevealingId(id);
+    try {
+      await getFullApiKey(id);
+      setRevealedId(id);
+    } finally {
+      setRevealingId(null);
+    }
+  }
+
   function getProjectBadge(project: Project) {
     if (!project.platform || !project.framework) return null;
     const platformConfig = getPlatformConfig(project.platform as Platform);
-    const frameworkConfig = getFrameworkConfig(
-      project.platform as Platform,
-      project.framework as Framework
-    );
+    const frameworkConfig = getFrameworkConfig(project.platform as Platform, project.framework as Framework);
     if (!platformConfig || !frameworkConfig) return null;
     return {
       platform: platformConfig.name,
@@ -164,7 +208,7 @@ export default function ProjectsPage() {
         <AlertCircle className="h-12 w-12 text-destructive" />
         <h2 className="text-lg font-medium">Failed to load projects</h2>
         <p className="text-muted-foreground">{error}</p>
-        <Button onClick={() => window.location.reload()}>Try Again</Button>
+        <Button onClick={fetchProjects}>Try Again</Button>
       </div>
     );
   }
@@ -175,9 +219,7 @@ export default function ProjectsPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="font-display text-heading-lg">Projects</h1>
-          <p className="text-body-sm text-muted-foreground mt-1">
-            Manage your projects and API keys
-          </p>
+          <p className="text-body-sm text-muted-foreground mt-1">Manage your projects and API keys</p>
         </div>
         <Link href="/dashboard/projects/new">
           <Button variant="success">
@@ -191,8 +233,7 @@ export default function ProjectsPage() {
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
         {projects.map((project) => {
           const badge = getProjectBadge(project);
-          const needsOnboarding =
-            !project.onboarding_completed_at && project.platform;
+          const needsOnboarding = !project.onboarding_completed_at && project.platform;
           const stats = projectStats.get(project.id);
           const health = getHealthColor(stats);
 
@@ -208,16 +249,14 @@ export default function ProjectsPage() {
                       <div className="flex items-center gap-2">
                         <CardTitle className="text-base">{project.name}</CardTitle>
                         {/* Health indicator dot */}
-                        <span className={`h-2 w-2 rounded-full ${health.dot}`} title={health.label} />
+                        <span role="img" aria-label={health.label} className={`h-2 w-2 rounded-full ${health.dot}`} />
                       </div>
-                      <CardDescription className="text-xs">
-                        {project.slug}
-                      </CardDescription>
+                      <CardDescription className="text-xs">{project.slug}</CardDescription>
                     </div>
                   </div>
-                  <Link href={`/dashboard/projects/${project.id}/settings`}>
+                  <Link href={`/dashboard/projects/${project.id}/settings`} aria-label={`Settings for ${project.name}`}>
                     <Button variant="ghost" size="icon" className="h-8 w-8">
-                      <Settings className="h-4 w-4" />
+                      <Settings className="h-4 w-4" aria-hidden="true" />
                     </Button>
                   </Link>
                 </div>
@@ -241,9 +280,7 @@ export default function ProjectsPage() {
                     href={`/dashboard/projects/${project.id}/settings`}
                     className="flex items-center justify-between rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 dark:border-amber-900 dark:bg-amber-950"
                   >
-                    <span className="text-sm font-medium text-amber-800 dark:text-amber-200">
-                      Complete setup
-                    </span>
+                    <span className="text-sm font-medium text-amber-800 dark:text-amber-200">Complete setup</span>
                     <ArrowRight className="h-4 w-4 text-amber-600 dark:text-amber-400" />
                   </Link>
                 )}
@@ -251,30 +288,30 @@ export default function ProjectsPage() {
                 {/* Real Stats */}
                 <div className="flex items-center gap-4 text-sm">
                   <div className="flex items-center gap-1 text-muted-foreground">
-                    <Bug className="h-3 w-3" />
+                    <Bug className="h-3 w-3" aria-hidden="true" />
                     <span>{stats?.unresolved_count ?? 0} issues</span>
                   </div>
                   {stats && stats.critical_count > 0 && (
                     <div className="flex items-center gap-1 text-red-500">
-                      <Flame className="h-3 w-3" />
+                      <Flame className="h-3 w-3" aria-hidden="true" />
                       <span>{stats.critical_count} critical</span>
                     </div>
                   )}
                   {stats && stats.total_events > 0 && (
                     <div className="flex items-center gap-1 text-muted-foreground">
-                      <Activity className="h-3 w-3" />
+                      <Activity className="h-3 w-3" aria-hidden="true" />
                       <span>{stats.total_events.toLocaleString()}</span>
                     </div>
                   )}
                   {stats && stats.total_users > 0 && (
                     <div className="flex items-center gap-1 text-muted-foreground">
-                      <Users className="h-3 w-3" />
+                      <Users className="h-3 w-3" aria-hidden="true" />
                       <span>{stats.total_users}</span>
                     </div>
                   )}
                   {!stats && (
                     <div className="flex items-center gap-1 text-muted-foreground">
-                      <Clock className="h-3 w-3" />
+                      <Clock className="h-3 w-3" aria-hidden="true" />
                       <span>{formatRelativeTime(project.created_at)}</span>
                     </div>
                   )}
@@ -283,20 +320,47 @@ export default function ProjectsPage() {
                 {/* API Key */}
                 <div className="space-y-1">
                   <span className="text-xs text-muted-foreground">API Key</span>
-                  <div className="flex items-center gap-2">
+                  <div role="group" aria-label={`API key for ${project.name}`} className="flex items-center gap-2">
                     <code className="flex-1 truncate rounded bg-muted px-2 py-1 text-xs font-mono">
-                      {project.api_key}
+                      {revealedId === project.id ? (
+                        (revealedKeys.get(project.id) ?? "(error loading key)")
+                      ) : (
+                        <>
+                          <span aria-hidden="true">{"•".repeat(24)}</span>
+                          <span className="sr-only">API key hidden</span>
+                        </>
+                      )}
                     </code>
+                    <span aria-live="polite" className="sr-only">
+                      {revealedId === project.id ? "API key revealed" : ""}
+                    </span>
                     <Button
                       variant="ghost"
                       size="icon"
                       className="h-7 w-7 shrink-0"
-                      onClick={() => copyApiKey(project.id, project.api_key)}
+                      aria-label={revealedId === project.id ? "Hide API key" : "Reveal API key"}
+                      disabled={revealingId === project.id}
+                      onClick={() => toggleRevealApiKey(project.id)}
+                    >
+                      {revealingId === project.id ? (
+                        <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
+                      ) : revealedId === project.id ? (
+                        <EyeOff className="h-3 w-3" aria-hidden="true" />
+                      ) : (
+                        <Eye className="h-3 w-3" aria-hidden="true" />
+                      )}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7 shrink-0"
+                      aria-label={copiedId === project.id ? "API key copied" : "Copy API key"}
+                      onClick={() => copyApiKey(project.id)}
                     >
                       {copiedId === project.id ? (
-                        <Check className="h-3 w-3 text-bug" />
+                        <Check className="h-3 w-3 text-bug" aria-hidden="true" />
                       ) : (
-                        <Copy className="h-3 w-3" />
+                        <Copy className="h-3 w-3" aria-hidden="true" />
                       )}
                     </Button>
                   </div>
@@ -321,20 +385,20 @@ export default function ProjectsPage() {
         })}
 
         {/* Empty State / Create New */}
-        <Card className="flex flex-col items-center justify-center border-dashed border-bug/50 p-6 hover:border-bug transition-colors">
-          <div className="rounded-full bg-bug/10 p-3">
-            <Plus className="h-6 w-6 text-bug" />
-          </div>
-          <h3 className="mt-4 font-medium">Create a new project</h3>
-          <p className="mt-1 text-center text-sm text-muted-foreground">
-            Get started by creating a project for your application
-          </p>
-          <Link href="/dashboard/projects/new">
-            <Button className="mt-4" variant="outline">
+        <Link href="/dashboard/projects/new" className="block">
+          <Card className="flex flex-col items-center justify-center border-dashed border-bug/50 p-6 hover:border-bug transition-colors cursor-pointer">
+            <div className="rounded-full bg-bug/10 p-3">
+              <Plus className="h-6 w-6 text-bug" aria-hidden="true" />
+            </div>
+            <h3 className="mt-4 font-medium">Create a new project</h3>
+            <p className="mt-1 text-center text-sm text-muted-foreground">
+              Get started by creating a project for your application
+            </p>
+            <Button className="mt-4 pointer-events-none" variant="outline" tabIndex={-1} aria-hidden="true">
               New Project
             </Button>
-          </Link>
-        </Card>
+          </Card>
+        </Link>
       </div>
     </div>
   );

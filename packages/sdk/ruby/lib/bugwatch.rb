@@ -14,8 +14,8 @@ require_relative "bugwatch/client"
 require_relative "bugwatch/integrations/rack"
 
 # Auto-load framework integrations if present
-require_relative "bugwatch/integrations/rails" if defined?(::Rails::Railtie)
-require_relative "bugwatch/integrations/sidekiq" if defined?(::Sidekiq)
+require_relative "bugwatch/integrations/rails" if defined?(Rails::Railtie)
+require_relative "bugwatch/integrations/sidekiq" if defined?(Sidekiq)
 
 module Bugwatch
   class << self
@@ -65,10 +65,13 @@ module Bugwatch
       init
     end
 
-    # For testing: reset all state
+    # For testing: discard all state without closing the transport.
+    # Callers that need a graceful shutdown should call Bugwatch.close first.
+    # Calling close here leaks mock doubles across RSpec examples because the
+    # previous example's InstanceDouble is already expired by the time the next
+    # example's before hook runs.
     def reset!
       @mutex&.synchronize do
-        @client&.close
         @client = nil
         @configuration = nil
       end
@@ -76,8 +79,6 @@ module Bugwatch
 
     private
 
-    def client
-      @client
-    end
+    attr_reader :client
   end
 end

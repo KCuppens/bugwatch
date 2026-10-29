@@ -22,12 +22,14 @@ Manual capture (optional)::
     except Exception:
         bugwatch.capture_exception()
 """
-import atexit
+
 import asyncio
+import atexit
 import os
 import sys
 import threading
-from typing import Any, Callable, Dict, Optional
+from types import TracebackType
+from typing import Any, Callable, Optional
 
 from .client import BugwatchClient, request_scope
 from .fingerprint import fingerprint_from_exception, generate_fingerprint
@@ -98,9 +100,9 @@ _lock = threading.Lock()
 _client: Optional[BugwatchClient] = None
 
 # Original hooks (saved to restore and chain)
-_original_excepthook: Optional[Callable] = None
-_original_threading_excepthook: Optional[Callable] = None
-_original_asyncio_handler: Optional[Callable] = None
+_original_excepthook: Optional[Callable[..., Any]] = None
+_original_threading_excepthook: Optional[Callable[..., Any]] = None
+_original_asyncio_handler: Optional[Callable[..., Any]] = None
 
 # Track if hooks are installed
 _hooks_installed: bool = False
@@ -110,7 +112,12 @@ _hooks_installed: bool = False
 # Global Exception Hooks
 # =============================================================================
 
-def _bugwatch_excepthook(exc_type, exc_value, exc_tb):
+
+def _bugwatch_excepthook(
+    exc_type: type[BaseException],
+    exc_value: BaseException,
+    exc_tb: Optional[TracebackType],
+) -> None:
     """Global exception hook to capture uncaught exceptions."""
     if _client is not None:
         try:
@@ -126,7 +133,7 @@ def _bugwatch_excepthook(exc_type, exc_value, exc_tb):
         _original_excepthook(exc_type, exc_value, exc_tb)
 
 
-def _bugwatch_threading_excepthook(args):
+def _bugwatch_threading_excepthook(args: Any) -> None:
     """Thread exception hook (Python 3.8+)."""
     if _client is not None:
         try:
@@ -148,7 +155,7 @@ def _bugwatch_threading_excepthook(args):
         _original_threading_excepthook(args)
 
 
-def _bugwatch_task_done_callback(task):
+def _bugwatch_task_done_callback(task: "asyncio.Task[Any]") -> None:
     """Callback on every asyncio.Task — captures unhandled exceptions immediately."""
     if task.cancelled():
         return
@@ -160,7 +167,7 @@ def _bugwatch_task_done_callback(task):
         return
     if getattr(task, "_bugwatch_captured", False):
         return
-    task._bugwatch_captured = True
+    task._bugwatch_captured = True  # type: ignore[attr-defined]
     try:
         _client.capture_exception(
             exc,
@@ -174,11 +181,14 @@ def _bugwatch_task_done_callback(task):
         pass
 
 
-_original_task_factory = None
+_original_task_factory: Optional[Callable[..., Any]] = None
 
 
-def _bugwatch_task_factory(loop, coro, **kwargs):
+def _bugwatch_task_factory(
+    loop: asyncio.AbstractEventLoop, coro: Any, **kwargs: Any
+) -> "asyncio.Task[Any]":
     """Custom task factory that adds done callback to every task."""
+    task: asyncio.Task[Any]
     if _original_task_factory is not None:
         task = _original_task_factory(loop, coro, **kwargs)
     else:
@@ -187,7 +197,7 @@ def _bugwatch_task_factory(loop, coro, **kwargs):
     return task
 
 
-def _bugwatch_asyncio_handler(loop, context):
+def _bugwatch_asyncio_handler(loop: asyncio.AbstractEventLoop, context: dict[str, Any]) -> None:
     """Asyncio exception handler for task exceptions."""
     exception = context.get("exception")
 
@@ -212,7 +222,7 @@ def _bugwatch_asyncio_handler(loop, context):
         loop.default_exception_handler(context)
 
 
-def _install_excepthook():
+def _install_excepthook() -> None:
     """Install sys.excepthook."""
     global _original_excepthook
     if sys.excepthook is not _bugwatch_excepthook:
@@ -220,16 +230,15 @@ def _install_excepthook():
         sys.excepthook = _bugwatch_excepthook
 
 
-def _install_threading_hook():
+def _install_threading_hook() -> None:
     """Install threading.excepthook (Python 3.8+)."""
     global _original_threading_excepthook
-    if sys.version_info >= (3, 8):
-        if threading.excepthook is not _bugwatch_threading_excepthook:
-            _original_threading_excepthook = threading.excepthook
-            threading.excepthook = _bugwatch_threading_excepthook
+    if threading.excepthook is not _bugwatch_threading_excepthook:
+        _original_threading_excepthook = threading.excepthook
+        threading.excepthook = _bugwatch_threading_excepthook
 
 
-def _install_asyncio_hook():
+def _install_asyncio_hook() -> None:
     """Install asyncio exception handler AND task factory.
 
     The exception handler catches exceptions from tasks whose result is never
@@ -242,7 +251,7 @@ def _install_asyncio_hook():
     """
     global _original_asyncio_handler, _original_task_factory
 
-    def _do_install(loop):
+    def _do_install(loop: asyncio.AbstractEventLoop) -> None:
         global _original_asyncio_handler, _original_task_factory
         # Exception handler
         handler = loop.get_exception_handler()
@@ -263,7 +272,7 @@ def _install_asyncio_hook():
         # when a loop is created and run.
         _original_run = asyncio.events.BaseDefaultEventLoopPolicy.set_event_loop
 
-        def _patched_set_event_loop(self, loop):
+        def _patched_set_event_loop(self: Any, loop: Optional[asyncio.AbstractEventLoop]) -> None:
             _original_run(self, loop)
             if loop is not None:
                 try:
@@ -271,10 +280,12 @@ def _install_asyncio_hook():
                 except Exception:
                     pass
 
-        asyncio.events.BaseDefaultEventLoopPolicy.set_event_loop = _patched_set_event_loop
+        asyncio.events.BaseDefaultEventLoopPolicy.set_event_loop = (  # type: ignore[method-assign]
+            _patched_set_event_loop
+        )
 
 
-def _uninstall_hooks():
+def _uninstall_hooks() -> None:
     """Restore original exception hooks."""
     global _hooks_installed, _original_task_factory
 
@@ -300,14 +311,15 @@ def _uninstall_hooks():
 # Atexit Handler
 # =============================================================================
 
-def _atexit_handler():
+
+def _atexit_handler() -> None:
     """Flush pending events and cleanup on shutdown with a timeout."""
     if _client is not None:
         try:
             # Use a thread-based timeout that works on all platforms
-            def _flush():
+            def _flush() -> None:
                 try:
-                    if hasattr(_client.transport, 'flush'):
+                    if hasattr(_client.transport, "flush"):
                         _client.transport.flush()
                 except Exception:
                     pass
@@ -322,6 +334,7 @@ def _atexit_handler():
 # =============================================================================
 # Public API
 # =============================================================================
+
 
 def _validate_api_key(key: Optional[str]) -> str:
     """
@@ -345,6 +358,7 @@ def _validate_api_key(key: Optional[str]) -> str:
     # Warn if key doesn't follow expected format
     if not key.startswith("bw_"):
         import warnings
+
         warnings.warn(
             f"Bugwatch: API key should start with 'bw_'. Got key starting with '{key[:3] if len(key) >= 3 else key}'",
             UserWarning,
@@ -510,14 +524,14 @@ def get_client() -> Optional[BugwatchClient]:
     return _client
 
 
-def flush():
+def flush() -> None:
     """Flush any pending events to Bugwatch."""
     if _client is not None:
-        if hasattr(_client.transport, 'flush'):
+        if hasattr(_client.transport, "flush"):
             _client.transport.flush()
 
 
-def close():
+def close() -> None:
     """Close the Bugwatch client and restore original hooks."""
     global _client
 
@@ -530,8 +544,8 @@ def close():
 def capture_exception(
     error: Optional[BaseException] = None,
     level: Level = Level.ERROR,
-    tags: Optional[Dict[str, str]] = None,
-    extra: Optional[Dict[str, Any]] = None,
+    tags: Optional[dict[str, str]] = None,
+    extra: Optional[dict[str, Any]] = None,
 ) -> str:
     """
     Capture an exception and send it to Bugwatch.
@@ -554,8 +568,8 @@ def capture_exception(
 def capture_message(
     message: str,
     level: Level = Level.INFO,
-    tags: Optional[Dict[str, str]] = None,
-    extra: Optional[Dict[str, Any]] = None,
+    tags: Optional[dict[str, str]] = None,
+    extra: Optional[dict[str, Any]] = None,
 ) -> str:
     """
     Capture a message and send it to Bugwatch.
@@ -579,7 +593,7 @@ def add_breadcrumb(
     category: str,
     message: str,
     level: Level = Level.INFO,
-    data: Optional[Dict[str, Any]] = None,
+    data: Optional[dict[str, Any]] = None,
 ) -> None:
     """
     Add a breadcrumb to the trail.

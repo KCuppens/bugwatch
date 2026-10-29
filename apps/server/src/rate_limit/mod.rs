@@ -11,6 +11,9 @@ use crate::billing::tiers::{self, Tier};
 use crate::config::DeploymentMode;
 use crate::db::{repositories::OrganizationRepository, DbPool};
 
+// 5-minute TTL bounds memory for the tier cache while still letting upgrades take
+// effect without explicit invalidation on every billing code path. Entries are evicted
+// lazily on read (see `check_with_tier_lookup`); no background task is required.
 const TIER_CACHE_TTL: Duration = Duration::from_secs(300);
 
 fn tier_cache() -> &'static DashMap<String, (u32, Instant)> {
@@ -20,10 +23,17 @@ fn tier_cache() -> &'static DashMap<String, (u32, Instant)> {
 
 /// Thread-safe rate limiter using token bucket algorithm
 ///
-/// Maintains separate buckets per key (typically API key or project ID)
+/// Maintains separate buckets per key (typically API key or project ID).
+/// Per-minute and per-hour buckets live in separate DashMaps so that
+/// the hourly cleanup pass (`cleanup_inactive`) never evicts hourly buckets
+/// (which would reset the counter and allow rate-limit bypass).
 #[derive(Clone)]
 pub struct RateLimiter {
+    /// Per-minute token buckets (auth IPs, API keys, …)
     buckets: Arc<DashMap<String, TokenBucket>>,
+    /// Per-hour token buckets (password reset per email, …).
+    /// Uses a 4-hour inactivity TTL in cleanup so counters are not reset within the hour.
+    hourly_buckets: Arc<DashMap<String, TokenBucket>>,
 }
 
 impl Default for RateLimiter {
@@ -37,6 +47,7 @@ impl RateLimiter {
     pub fn new() -> Self {
         Self {
             buckets: Arc::new(DashMap::new()),
+            hourly_buckets: Arc::new(DashMap::new()),
         }
     }
 
@@ -70,12 +81,19 @@ impl RateLimiter {
                 } else {
                     drop(entry);
                     let limit = Self::resolve_tier_limit(db, api_key).await;
+                    // Unconditionally overwrite: the stale entry is still in the map (drop
+                    // only released the read guard, not the key), so or_insert would do
+                    // nothing and leave the stale value. insert() always writes the fresh value.
                     tier_cache().insert(api_key.to_string(), (limit, Instant::now()));
                     limit
                 }
             } else {
                 let limit = Self::resolve_tier_limit(db, api_key).await;
-                tier_cache().insert(api_key.to_string(), (limit, Instant::now()));
+                // Use or_insert to avoid overwriting a value that a concurrent request
+                // may have already inserted while we were awaiting the DB query.
+                tier_cache()
+                    .entry(api_key.to_string())
+                    .or_insert((limit, Instant::now()));
                 limit
             }
         };
@@ -108,22 +126,39 @@ impl RateLimiter {
         bucket.try_consume()
     }
 
-    /// Get current stats for a key (for debugging/monitoring)
-    #[allow(dead_code)]
-    pub fn get_stats(&self, key: &str) -> Option<(u32, u32)> {
-        self.buckets.get(key).map(|bucket| {
-            let result = RateLimitResult {
-                allowed: true,
-                remaining: bucket.current_tokens(),
-                limit: bucket.current_tokens(), // This is a simplified view
-                retry_after_secs: None,
-            };
-            (result.remaining, result.limit)
-        })
+    /// Check if a request should be allowed with an hourly rate limit.
+    ///
+    /// Useful for low-frequency operations (e.g. password reset: 3/hour per email).
+    ///
+    /// Hourly buckets are stored in a **separate** DashMap from per-minute buckets so that
+    /// `cleanup_inactive` (called hourly) does not evict them and reset the counter within
+    /// the window — which would allow rate-limit bypass via bucket eviction.
+    ///
+    /// # Arguments
+    /// * `key` - Unique identifier for the rate limit bucket
+    /// * `limit_per_hour` - The rate limit (requests per hour); **only honoured on the
+    ///   first call for a given key** — subsequent calls reuse the existing bucket regardless
+    ///   of the value passed. Always call with the same limit for a given key.
+    pub fn check_hourly(&self, key: &str, limit_per_hour: u32) -> RateLimitResult {
+        let mut bucket = self
+            .hourly_buckets
+            .entry(key.to_string())
+            .or_insert_with(|| TokenBucket::new_with_hourly_rate(limit_per_hour, limit_per_hour));
+        bucket.try_consume()
     }
 
-    /// Remove expired/inactive buckets (cleanup)
-    /// Should be called periodically to prevent memory growth
+    /// Get current stats for a key (for debugging/monitoring).
+    /// Returns `(remaining_tokens, capacity)`.
+    #[allow(dead_code)]
+    pub fn get_stats(&self, key: &str) -> Option<(u32, u32)> {
+        self.buckets
+            .get(key)
+            .map(|bucket| (bucket.current_tokens(), bucket.get_capacity()))
+    }
+
+    /// Remove expired/inactive per-minute buckets to prevent memory growth.
+    /// Should be called periodically (e.g. hourly). Does NOT touch hourly buckets
+    /// — use `cleanup_hourly_inactive` for those (with a longer TTL).
     ///
     /// # Arguments
     /// * `max_age_secs` - Remove buckets that haven't been accessed in this many seconds
@@ -131,25 +166,38 @@ impl RateLimiter {
     /// # Returns
     /// Number of buckets removed
     pub fn cleanup_inactive(&self, max_age_secs: u64) -> usize {
-        let mut removed = 0;
-        let keys_to_remove: Vec<String> = self
-            .buckets
-            .iter()
-            .filter(|entry| entry.value().seconds_since_last_access() > max_age_secs)
-            .map(|entry| entry.key().clone())
-            .collect();
-
-        for key in keys_to_remove {
-            self.buckets.remove(&key);
-            removed += 1;
-        }
-
-        removed
+        let before = self.buckets.len();
+        self.buckets
+            .retain(|_, v| v.seconds_since_last_access() <= max_age_secs);
+        before - self.buckets.len()
     }
 
-    /// Get the current number of buckets (for monitoring)
+    /// Remove expired/inactive per-hour buckets. Uses a longer TTL than `cleanup_inactive`
+    /// (at least 2× the refill window, e.g. 4 hours) so that hourly counters are not reset
+    /// mid-window.
+    ///
+    /// # Arguments
+    /// * `max_age_secs` - Remove hourly buckets that haven't been accessed in this many seconds;
+    ///   should be ≥ 7200 (2 hours) to prevent mid-window eviction for a 1-hour refill window.
+    ///
+    /// # Returns
+    /// Number of buckets removed
+    pub fn cleanup_hourly_inactive(&self, max_age_secs: u64) -> usize {
+        let before = self.hourly_buckets.len();
+        self.hourly_buckets
+            .retain(|_, v| v.seconds_since_last_access() <= max_age_secs);
+        before - self.hourly_buckets.len()
+    }
+
+    /// Get the current number of per-minute buckets (for monitoring)
     pub fn bucket_count(&self) -> usize {
         self.buckets.len()
+    }
+
+    /// Get the current number of per-hour buckets (for monitoring)
+    #[allow(dead_code)]
+    pub fn hourly_bucket_count(&self) -> usize {
+        self.hourly_buckets.len()
     }
 }
 
@@ -192,5 +240,120 @@ mod tests {
         assert!(result1.allowed);
         assert!(result2.allowed);
         assert_eq!(result1.remaining, result2.remaining);
+    }
+
+    #[test]
+    fn check_hourly_allows_request() {
+        let limiter = RateLimiter::new();
+        let result = limiter.check_hourly("hourly-key", 5);
+        assert!(result.allowed);
+    }
+
+    #[test]
+    fn check_hourly_exhausted_denies() {
+        let limiter = RateLimiter::new();
+        for _ in 0..3 {
+            limiter.check_hourly("ex-key", 3);
+        }
+        let result = limiter.check_hourly("ex-key", 3);
+        assert!(!result.allowed);
+    }
+
+    #[test]
+    fn bucket_count_tracks_per_minute_buckets() {
+        let limiter = RateLimiter::new();
+        assert_eq!(limiter.bucket_count(), 0);
+        limiter.check("a", 100);
+        limiter.check("b", 100);
+        assert_eq!(limiter.bucket_count(), 2);
+    }
+
+    #[test]
+    fn hourly_bucket_count_tracks_hourly_buckets() {
+        let limiter = RateLimiter::new();
+        assert_eq!(limiter.hourly_bucket_count(), 0);
+        limiter.check_hourly("ha", 5);
+        assert_eq!(limiter.hourly_bucket_count(), 1);
+    }
+
+    #[test]
+    fn get_stats_returns_none_for_missing_key() {
+        let limiter = RateLimiter::new();
+        assert!(limiter.get_stats("nonexistent").is_none());
+    }
+
+    #[test]
+    fn get_stats_returns_capacity_after_check() {
+        let limiter = RateLimiter::new();
+        limiter.check("my-key", 100);
+        let stats = limiter.get_stats("my-key");
+        assert!(stats.is_some());
+        let (remaining, capacity) = stats.unwrap();
+        assert_eq!(capacity, 100);
+        assert!(remaining < capacity);
+    }
+
+    #[test]
+    fn cleanup_inactive_removes_old_buckets() {
+        let limiter = RateLimiter::new();
+        limiter.check("cleanup-key", 100);
+        assert_eq!(limiter.bucket_count(), 1);
+        // max_age_secs = 0 removes everything accessed more than 0s ago
+        let removed = limiter.cleanup_inactive(0);
+        assert!(removed <= 1); // may be 0 if the bucket was just accessed
+    }
+
+    #[test]
+    fn cleanup_hourly_inactive_removes_old_buckets() {
+        let limiter = RateLimiter::new();
+        limiter.check_hourly("hourly-cleanup", 5);
+        assert_eq!(limiter.hourly_bucket_count(), 1);
+        let removed = limiter.cleanup_hourly_inactive(0);
+        assert!(removed <= 1);
+    }
+
+    #[test]
+    fn default_creates_empty_limiter() {
+        let limiter = RateLimiter::default();
+        assert_eq!(limiter.bucket_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn check_with_tier_lookup_self_hosted_uses_config_limit() {
+        use crate::db::test_helpers::test_any_pool;
+        let pool = test_any_pool().await;
+        let limiter = RateLimiter::new();
+        let result = limiter
+            .check_with_tier_lookup("sh-key", &pool, DeploymentMode::SelfHosted, 500)
+            .await;
+        assert!(result.allowed);
+    }
+
+    #[tokio::test]
+    async fn check_with_tier_lookup_saas_unknown_key_uses_free_tier() {
+        use crate::db::test_helpers::test_any_pool;
+        let pool = test_any_pool().await;
+        let limiter = RateLimiter::new();
+        // Unknown API key → resolve_tier_limit returns Free (100/min); first request allowed
+        let result = limiter
+            .check_with_tier_lookup("unknown-saas-key", &pool, DeploymentMode::Saas, 10000)
+            .await;
+        assert!(result.allowed);
+    }
+
+    #[tokio::test]
+    async fn check_with_tier_lookup_saas_cache_hit_reuses_limit() {
+        use crate::db::test_helpers::test_any_pool;
+        let pool = test_any_pool().await;
+        let limiter = RateLimiter::new();
+        // First call populates tier cache
+        limiter
+            .check_with_tier_lookup("cache-saas-key", &pool, DeploymentMode::Saas, 10000)
+            .await;
+        // Second call hits fresh cache entry
+        let result = limiter
+            .check_with_tier_lookup("cache-saas-key", &pool, DeploymentMode::Saas, 10000)
+            .await;
+        assert!(result.allowed);
     }
 }

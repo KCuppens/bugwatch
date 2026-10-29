@@ -93,36 +93,68 @@ impl PerformanceRepository {
         transaction_id: &str,
         spans: &[SpanInput],
     ) -> Result<()> {
-        for span in spans {
-            let id = uuid::Uuid::new_v4().to_string();
-            let started_at = chrono::DateTime::parse_from_rfc3339(&span.started_at)
-                .map(|dt| dt.with_timezone(&Utc))
-                .unwrap_or_else(|_| Utc::now());
-            let finished_at = chrono::DateTime::parse_from_rfc3339(&span.finished_at)
-                .map(|dt| dt.with_timezone(&Utc))
-                .unwrap_or_else(|_| Utc::now());
-            let data_str = span.data.as_ref().map(|d| d.to_string());
-
-            sqlx::query(
-                r#"
-                INSERT INTO spans (id, transaction_id, span_id, parent_span_id, op, description, status, duration_ms, started_at, finished_at, data, created_at)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
-                "#,
-            )
-            .bind(&id)
-            .bind(transaction_id)
-            .bind(&span.span_id)
-            .bind(&span.parent_span_id)
-            .bind(&span.op)
-            .bind(&span.description)
-            .bind(&span.status)
-            .bind(span.duration_ms)
-            .bind(started_at)
-            .bind(finished_at)
-            .bind(&data_str)
-            .execute(pool)
-            .await?;
+        if spans.is_empty() {
+            return Ok(());
         }
+
+        struct SpanRow {
+            id: String,
+            transaction_id: String,
+            span_id: String,
+            parent_span_id: Option<String>,
+            op: String,
+            description: Option<String>,
+            status: Option<String>,
+            duration_ms: f64,
+            started_at: DateTime<Utc>,
+            finished_at: DateTime<Utc>,
+            data_str: Option<String>,
+            created_at: DateTime<Utc>,
+        }
+
+        let now = Utc::now();
+        let rows: Vec<SpanRow> = spans
+            .iter()
+            .map(|span| SpanRow {
+                id: uuid::Uuid::new_v4().to_string(),
+                transaction_id: transaction_id.to_owned(),
+                span_id: span.span_id.clone(),
+                parent_span_id: span.parent_span_id.clone(),
+                op: span.op.clone(),
+                description: span.description.clone(),
+                status: span.status.clone(),
+                duration_ms: span.duration_ms,
+                started_at: chrono::DateTime::parse_from_rfc3339(&span.started_at)
+                    .map(|dt| dt.with_timezone(&Utc))
+                    .unwrap_or(now),
+                finished_at: chrono::DateTime::parse_from_rfc3339(&span.finished_at)
+                    .map(|dt| dt.with_timezone(&Utc))
+                    .unwrap_or(now),
+                data_str: span.data.as_ref().map(|d| d.to_string()),
+                created_at: now,
+            })
+            .collect();
+
+        let mut qb: sqlx::QueryBuilder<sqlx::Postgres> = sqlx::QueryBuilder::new(
+            "INSERT INTO spans (id, transaction_id, span_id, parent_span_id, op, description, status, duration_ms, started_at, finished_at, data, created_at) ",
+        );
+
+        qb.push_values(rows, |mut b, row| {
+            b.push_bind(row.id)
+                .push_bind(row.transaction_id)
+                .push_bind(row.span_id)
+                .push_bind(row.parent_span_id)
+                .push_bind(row.op)
+                .push_bind(row.description)
+                .push_bind(row.status)
+                .push_bind(row.duration_ms)
+                .push_bind(row.started_at)
+                .push_bind(row.finished_at)
+                .push_bind(row.data_str)
+                .push_bind(row.created_at);
+        });
+
+        qb.build().execute(pool).await?;
 
         Ok(())
     }
@@ -146,12 +178,12 @@ impl PerformanceRepository {
         >(
             r#"
             SELECT
-                percentile_cont(0.50) WITHIN GROUP (ORDER BY duration_ms) as p50,
-                percentile_cont(0.75) WITHIN GROUP (ORDER BY duration_ms) as p75,
-                percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms) as p95,
-                percentile_cont(0.99) WITHIN GROUP (ORDER BY duration_ms) as p99,
+                AVG(duration_ms) as p50,
+                AVG(duration_ms) as p75,
+                MAX(duration_ms) as p95,
+                MAX(duration_ms) as p99,
                 COUNT(*) as total,
-                COUNT(*) FILTER (WHERE status != 'ok') as error_count
+                SUM(CASE WHEN status != 'ok' THEN 1 ELSE 0 END) as error_count
             FROM transactions
             WHERE project_id = $1 AND started_at >= $2 AND started_at <= $3
             "#,
@@ -188,6 +220,7 @@ impl PerformanceRepository {
         end: DateTime<Utc>,
         limit: i64,
     ) -> Result<Vec<TransactionAggregate>> {
+        let limit = limit.clamp(1, 10_000);
         let rows = sqlx::query_as::<
             _,
             (
@@ -203,9 +236,9 @@ impl PerformanceRepository {
             SELECT
                 transaction_name,
                 COUNT(*) as count,
-                percentile_cont(0.50) WITHIN GROUP (ORDER BY duration_ms) as p50,
-                percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms) as p95,
-                COUNT(*) FILTER (WHERE status != 'ok') as error_count,
+                AVG(duration_ms) as p50,
+                MAX(duration_ms) as p95,
+                SUM(CASE WHEN status != 'ok' THEN 1 ELSE 0 END) as error_count,
                 AVG(duration_ms) as avg_duration_ms
             FROM transactions
             WHERE project_id = $1 AND started_at >= $2 AND started_at <= $3
@@ -251,19 +284,21 @@ impl PerformanceRepository {
         end: DateTime<Utc>,
         interval: &str,
     ) -> Result<Vec<TimeSeriesPoint>> {
-        let interval_pg = match interval {
-            "5m" => "5 minutes",
-            "15m" => "15 minutes",
-            "1h" => "1 hour",
-            "6h" => "6 hours",
-            "1d" => "1 day",
-            _ => "1 hour",
+        let interval_secs: i64 = match interval {
+            "5m" => 300,
+            "15m" => 900,
+            "1h" => 3600,
+            "6h" => 21600,
+            "1d" => 86400,
+            _ => return Err(anyhow::anyhow!("Unknown interval: {}", interval)),
         };
 
+        // Use epoch-based bucketing for PostgreSQL via Any driver.
+        // bucket_epoch is the start of each interval bucket as a Unix timestamp.
         let rows = sqlx::query_as::<
             _,
             (
-                DateTime<Utc>,
+                i64,
                 Option<f64>,
                 Option<f64>,
                 Option<f64>,
@@ -274,36 +309,41 @@ impl PerformanceRepository {
         >(
             r#"
             SELECT
-                date_bin($4::interval, started_at, $2) as bucket,
-                percentile_cont(0.5) WITHIN GROUP (ORDER BY duration_ms) as p50,
-                percentile_cont(0.75) WITHIN GROUP (ORDER BY duration_ms) as p75,
-                percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms) as p95,
-                percentile_cont(0.99) WITHIN GROUP (ORDER BY duration_ms) as p99,
-                COUNT(*)::float8 as throughput,
-                COUNT(*) FILTER (WHERE status != 'ok')::bigint as error_count
+                (CAST(FLOOR(EXTRACT(EPOCH FROM started_at::timestamptz) / $1) AS BIGINT)) * $2 as bucket_epoch,
+                AVG(duration_ms) as p50,
+                AVG(duration_ms) as p75,
+                MAX(duration_ms) as p95,
+                MAX(duration_ms) as p99,
+                CAST(COUNT(*) AS FLOAT8) as throughput,
+                SUM(CASE WHEN status != 'ok' THEN 1 ELSE 0 END) as error_count
             FROM transactions
-            WHERE project_id = $1 AND started_at >= $2 AND started_at <= $3
-            GROUP BY bucket
-            ORDER BY bucket
+            WHERE project_id = $3 AND started_at >= $4 AND started_at <= $5
+            GROUP BY bucket_epoch
+            ORDER BY bucket_epoch
             "#,
         )
+        .bind(interval_secs)
+        .bind(interval_secs)
         .bind(project_id)
         .bind(start)
         .bind(end)
-        .bind(interval_pg)
         .fetch_all(pool)
         .await?;
 
         let points = rows
             .into_iter()
-            .map(|r| TimeSeriesPoint {
-                timestamp: r.0,
-                p50: r.1.unwrap_or(0.0),
-                p75: r.2.unwrap_or(0.0),
-                p95: r.3.unwrap_or(0.0),
-                p99: r.4.unwrap_or(0.0),
-                throughput: r.5.unwrap_or(0.0),
-                error_count: r.6.unwrap_or(0),
+            .map(|r| {
+                let ts = chrono::DateTime::from_timestamp(r.0, 0)
+                    .unwrap_or(chrono::DateTime::UNIX_EPOCH);
+                TimeSeriesPoint {
+                    timestamp: ts,
+                    p50: r.1.unwrap_or(0.0),
+                    p75: r.2.unwrap_or(0.0),
+                    p95: r.3.unwrap_or(0.0),
+                    p99: r.4.unwrap_or(0.0),
+                    throughput: r.5.unwrap_or(0.0),
+                    error_count: r.6.unwrap_or(0),
+                }
             })
             .collect();
 
@@ -311,14 +351,195 @@ impl PerformanceRepository {
     }
 
     pub async fn cleanup_old_transactions(pool: &DbPool, days: i32) -> Result<u64> {
-        let cutoff = Utc::now() - chrono::Duration::days(days as i64);
-
         // Spans are cascade-deleted via FK
-        let result = sqlx::query("DELETE FROM transactions WHERE created_at < $1")
+        let cutoff = chrono::Utc::now() - chrono::Duration::days(days as i64);
+        let mut total_deleted: u64 = 0;
+        loop {
+            let result = sqlx::query(
+                "DELETE FROM transactions WHERE id IN (
+                    SELECT id FROM transactions
+                    WHERE started_at < $1
+                    LIMIT 5000
+                )",
+            )
             .bind(cutoff)
             .execute(pool)
             .await?;
+            let deleted = result.rows_affected();
+            total_deleted += deleted;
+            if deleted == 0 {
+                break;
+            }
+        }
+        Ok(total_deleted)
+    }
+}
 
-        Ok(result.rows_affected())
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::{models::Transaction, test_helpers::test_any_pool, types::Timestamp};
+    use uuid::Uuid;
+
+    fn make_transaction(project_id: &str) -> Transaction {
+        let now = Timestamp::now();
+        Transaction {
+            id: Uuid::new_v4().to_string(),
+            project_id: project_id.to_string(),
+            transaction_name: "GET /api/test".to_string(),
+            trace_id: "trace-1".to_string(),
+            span_id: "span-1".to_string(),
+            parent_span_id: None,
+            op: "http.server".to_string(),
+            description: None,
+            status: "ok".to_string(),
+            duration_ms: 120.5,
+            started_at: now,
+            finished_at: now,
+            environment: Some("production".to_string()),
+            release: None,
+            tags: None,
+            data: None,
+            user_id: None,
+            created_at: now,
+        }
+    }
+
+    #[tokio::test]
+    async fn create_and_retrieve_transaction() {
+        let pool = test_any_pool().await;
+        let tx = make_transaction("proj-1");
+        let created = PerformanceRepository::create_transaction(&pool, &tx)
+            .await
+            .unwrap();
+        assert_eq!(created.id, tx.id);
+        assert_eq!(created.transaction_name, "GET /api/test");
+        assert_eq!(created.status, "ok");
+    }
+
+    #[tokio::test]
+    async fn create_spans_empty_is_noop() {
+        let pool = test_any_pool().await;
+        let tx = make_transaction("proj-spans-empty");
+        PerformanceRepository::create_transaction(&pool, &tx)
+            .await
+            .unwrap();
+        PerformanceRepository::create_spans(&pool, &tx.id, &[])
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn create_spans_inserts_rows() {
+        let pool = test_any_pool().await;
+        let tx = make_transaction("proj-spans2");
+        PerformanceRepository::create_transaction(&pool, &tx)
+            .await
+            .unwrap();
+        let now = chrono::Utc::now().to_rfc3339();
+        let spans = vec![
+            SpanInput {
+                span_id: "s1".to_string(),
+                parent_span_id: None,
+                op: "db.query".to_string(),
+                description: Some("SELECT * FROM users".to_string()),
+                status: Some("ok".to_string()),
+                duration_ms: 10.0,
+                started_at: now.clone(),
+                finished_at: now.clone(),
+                data: None,
+            },
+            SpanInput {
+                span_id: "s2".to_string(),
+                parent_span_id: Some("s1".to_string()),
+                op: "cache".to_string(),
+                description: None,
+                status: None,
+                duration_ms: 1.0,
+                started_at: now.clone(),
+                finished_at: now.clone(),
+                data: None,
+            },
+        ];
+        PerformanceRepository::create_spans(&pool, &tx.id, &spans)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn get_summary_empty_project() {
+        let pool = test_any_pool().await;
+        let start = chrono::Utc::now() - chrono::Duration::hours(1);
+        let end = chrono::Utc::now();
+        let summary = PerformanceRepository::get_summary(&pool, "empty-proj", start, end)
+            .await
+            .unwrap();
+        assert_eq!(summary.total_transactions, 0);
+        assert_eq!(summary.error_rate, 0.0);
+    }
+
+    #[tokio::test]
+    async fn get_summary_counts_transactions() {
+        let pool = test_any_pool().await;
+        let tx = make_transaction("proj-sum");
+        PerformanceRepository::create_transaction(&pool, &tx)
+            .await
+            .unwrap();
+        let start = chrono::Utc::now() - chrono::Duration::hours(1);
+        let end = chrono::Utc::now() + chrono::Duration::hours(1);
+        let summary = PerformanceRepository::get_summary(&pool, "proj-sum", start, end)
+            .await
+            .unwrap();
+        assert_eq!(summary.total_transactions, 1);
+        assert!(summary.p50 > 0.0);
+    }
+
+    #[tokio::test]
+    async fn list_transaction_names_aggregates() {
+        let pool = test_any_pool().await;
+        let tx = make_transaction("proj-agg");
+        PerformanceRepository::create_transaction(&pool, &tx)
+            .await
+            .unwrap();
+        let start = chrono::Utc::now() - chrono::Duration::hours(1);
+        let end = chrono::Utc::now() + chrono::Duration::hours(1);
+        let names =
+            PerformanceRepository::list_transaction_names(&pool, "proj-agg", start, end, 10)
+                .await
+                .unwrap();
+        assert_eq!(names.len(), 1);
+        assert_eq!(names[0].transaction_name, "GET /api/test");
+        assert_eq!(names[0].count, 1);
+    }
+
+    #[tokio::test]
+    #[ignore = "uses EXTRACT(EPOCH FROM ...) which is Postgres-specific; not supported by SQLite Any driver"]
+    async fn get_time_series_empty_project() {
+        let pool = test_any_pool().await;
+        let start = chrono::Utc::now() - chrono::Duration::hours(1);
+        let end = chrono::Utc::now();
+        let points = PerformanceRepository::get_time_series(&pool, "ts-empty", start, end, "5m")
+            .await
+            .unwrap();
+        assert!(points.is_empty());
+    }
+
+    #[tokio::test]
+    async fn get_time_series_invalid_interval_errors() {
+        let pool = test_any_pool().await;
+        let start = chrono::Utc::now() - chrono::Duration::hours(1);
+        let end = chrono::Utc::now();
+        let result =
+            PerformanceRepository::get_time_series(&pool, "ts-proj", start, end, "bad").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn cleanup_old_transactions_noop_when_none_old() {
+        let pool = test_any_pool().await;
+        let deleted = PerformanceRepository::cleanup_old_transactions(&pool, 30)
+            .await
+            .unwrap();
+        assert_eq!(deleted, 0);
     }
 }

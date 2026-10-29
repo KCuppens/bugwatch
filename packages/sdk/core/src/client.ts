@@ -15,6 +15,7 @@ import { fingerprintFromException } from "./fingerprint";
 import { getMergedContext } from "./context";
 import { Transaction } from "./performance";
 import { scrubEvent } from "./scrubbing";
+import { shouldDenyUrl, shouldAllowUrl, shouldDropByLevel, isBrowserNoise, sessionErrorCounter } from "./filters";
 
 /**
  * Ring buffer for efficient breadcrumb storage.
@@ -69,12 +70,22 @@ class RingBuffer<T> {
 }
 
 const SDK_NAME = "@bugwatch/core";
-const SDK_VERSION = "0.1.0";
+const SDK_VERSION = "0.4.1";
 
 /**
  * Generate a unique event ID
  */
 function generateEventId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID().replace(/-/g, "");
+  }
+  // Fallback: use getRandomValues if available (cryptographically secure)
+  if (typeof crypto !== "undefined" && typeof crypto.getRandomValues === "function") {
+    const arr = new Uint8Array(16);
+    crypto.getRandomValues(arr);
+    return Array.from(arr, (b) => b.toString(16).padStart(2, "0")).join("");
+  }
+  // Last resort fallback (not cryptographically secure)
   const timestamp = Date.now().toString(36);
   const random = Math.random().toString(36).substring(2, 10);
   return `${timestamp}${random}`;
@@ -107,6 +118,30 @@ export class Bugwatch implements BugwatchClient {
 
   constructor(options: BugwatchOptions) {
     this.options = { ...DEFAULT_OPTIONS, ...options };
+
+    const sr = this.options.sampleRate;
+    if (sr !== undefined && (sr < 0 || sr > 1)) {
+      throw new Error(`[Bugwatch] Invalid sampleRate: ${sr}. Must be between 0 and 1.`);
+    }
+    const mes = this.options.maxErrorsPerSession;
+    if (mes !== undefined && (!Number.isInteger(mes) || mes < 0)) {
+      throw new Error(
+        `[Bugwatch] Invalid maxErrorsPerSession: ${mes}. Must be a non-negative integer (use 0 to disable).`
+      );
+    }
+
+    const key = this.options.apiKey?.trim();
+    if (key && !key.startsWith("bw_")) {
+      console.warn('[Bugwatch] apiKey does not start with "bw_" — verify the correct project key is being used.');
+    }
+
+    const ep = this.options.endpoint ?? "";
+    if (ep && !ep.startsWith("https://") && !ep.includes("localhost") && !ep.includes("127.0.0.1")) {
+      console.warn(
+        `[Bugwatch] Endpoint "${ep}" does not use HTTPS. All error events (including stack traces and user context) will be transmitted insecurely.`
+      );
+    }
+
     this.transport = this.createTransport();
     this.breadcrumbs = new RingBuffer<Breadcrumb>(this.options.maxBreadcrumbs || 100);
 
@@ -144,10 +179,55 @@ export class Bugwatch implements BugwatchClient {
   }
 
   /**
-   * Get SDK options
+   * Get SDK options (apiKey is masked — use only for non-secret config)
    */
   getOptions(): BugwatchOptions {
-    return this.options;
+    const { apiKey, ...rest } = this.options;
+    return { ...rest, apiKey: apiKey ? "[Filtered]" : "" };
+  }
+
+  /**
+   * Scrub, run beforeSend, and dispatch an event. Returns event_id or "" if dropped.
+   */
+  private processAndSend(raw: import("./types").ErrorEvent): string {
+    const event = scrubEvent(raw, this.options.sanitize);
+
+    let processedEvent: import("./types").ErrorEvent | null = event;
+    if (this.options.beforeSend) {
+      try {
+        processedEvent = this.options.beforeSend(event);
+      } catch (err) {
+        if (this.options.debug) {
+          console.error("[Bugwatch] beforeSend threw an error:", err);
+        }
+        processedEvent = event;
+      }
+    }
+
+    if (!processedEvent) {
+      if (this.options.debug) {
+        console.log("[Bugwatch] Event dropped by beforeSend");
+      }
+      try {
+        this.options.onDropped?.(event.event_id, "before_send");
+      } catch (err) {
+        if (this.options.debug) console.error("[Bugwatch] onDropped callback threw:", err);
+      }
+      return "";
+    }
+
+    // Narrow to const so the closure captures the non-null type
+    const sentEvent: ErrorEvent = processedEvent;
+    this.transport.send(sentEvent).catch((err) => {
+      if (this.options.debug) console.error("[Bugwatch] transport.send failed:", err);
+      try {
+        this.options.onDropped?.(sentEvent.event_id, "network_error");
+      } catch (e) {
+        if (this.options.debug) console.error("[Bugwatch] onDropped callback threw:", e);
+      }
+    });
+
+    return sentEvent.event_id;
   }
 
   /**
@@ -158,92 +238,158 @@ export class Bugwatch implements BugwatchClient {
       return "";
     }
 
+    // Generate event ID upfront so all drop reasons (including pre-creation) report a real ID
+    const earlyEventId = generateEventId();
+
     // Sample rate check
     if (Math.random() > (this.options.sampleRate || 1.0)) {
-      try { this.options.onDropped?.("", "sample_rate"); } catch { /* */ }
+      if (this.options.debug) console.log("[Bugwatch] Error dropped: sample_rate");
+      try {
+        this.options.onDropped?.(earlyEventId, "sample_rate");
+      } catch (err) {
+        if (this.options.debug) console.error("[Bugwatch] onDropped callback threw:", err);
+      }
       return "";
     }
 
     // Check ignore patterns
     if (this.shouldIgnoreError(error)) {
-      return "";
-    }
-
-    const rawEvent = this.createEventFromError(error, context);
-
-    // Apply PII scrubbing before beforeSend so users can override
-    const event = scrubEvent(rawEvent, this.options.sanitize);
-
-    // Run beforeSend hook with error handling
-    let processedEvent: import("./types").ErrorEvent | null = event;
-    if (this.options.beforeSend) {
+      if (this.options.debug) console.log(`[Bugwatch] Error dropped: ignored (message: "${error.message}")`);
       try {
-        processedEvent = this.options.beforeSend(event);
+        this.options.onDropped?.(earlyEventId, "ignored");
       } catch (err) {
-        if (this.options.debug) {
-          console.error("[Bugwatch] beforeSend threw an error:", err);
-        }
-        // Continue with original event if beforeSend throws
-        processedEvent = event;
+        if (this.options.debug) console.error("[Bugwatch] onDropped callback threw:", err);
       }
-    }
-
-    if (!processedEvent) {
-      if (this.options.debug) {
-        console.log("[Bugwatch] Event dropped by beforeSend");
-      }
-      try { this.options.onDropped?.(event.event_id, "before_send"); } catch { /* */ }
       return "";
     }
 
-    // Send event asynchronously
-    this.transport.send(processedEvent).catch(() => {
-      // Errors are logged by transport
-    });
+    // Auto-filter known browser noise (pre-creation, cheap path)
+    if (this.options.filterBrowserNoise && isBrowserNoise(error)) {
+      if (this.options.debug) console.log(`[Bugwatch] Error dropped: browser_noise (message: "${error.message}")`);
+      try {
+        this.options.onDropped?.(earlyEventId, "browser_noise");
+      } catch (err) {
+        if (this.options.debug) console.error("[Bugwatch] onDropped callback threw:", err);
+      }
+      return "";
+    }
 
-    return processedEvent.event_id;
+    const event = this.createEventFromError(error, context);
+    const filenames = event.exception?.stacktrace.map((f) => f.filename) ?? [];
+    // Extract source URL for URL-based filtering. Strip from event.extra so it
+    // is never sent to the server (internal SDK field, not user data).
+    const rawSourceUrl = context?.extra?.__sourceUrl;
+    const sourceUrl = typeof rawSourceUrl === "string" && rawSourceUrl.length > 0 ? rawSourceUrl : undefined;
+    if (event.extra && "__sourceUrl" in event.extra) {
+      delete event.extra.__sourceUrl;
+    }
+
+    // Drop errors from denied script URLs
+    if (this.options.denyUrls && shouldDenyUrl(filenames, sourceUrl, this.options.denyUrls)) {
+      if (this.options.debug)
+        console.log(`[Bugwatch] Error dropped: deny_url (source: "${sourceUrl ?? filenames[0] ?? "(unknown)"}")`);
+      try {
+        this.options.onDropped?.(event.event_id, "deny_url");
+      } catch (err) {
+        if (this.options.debug) console.error("[Bugwatch] onDropped callback threw:", err);
+      }
+      return "";
+    }
+
+    // Drop errors not matching the allowed URL whitelist
+    if (this.options.allowUrls && !shouldAllowUrl(filenames, sourceUrl, this.options.allowUrls)) {
+      if (this.options.debug)
+        console.log(
+          `[Bugwatch] Error dropped: allow_url (no frame matched allowUrls; stackless errors always pass through)`
+        );
+      try {
+        this.options.onDropped?.(event.event_id, "allow_url");
+      } catch (err) {
+        if (this.options.debug) console.error("[Bugwatch] onDropped callback threw:", err);
+      }
+      return "";
+    }
+
+    // Drop events below minimum level
+    if (this.options.minLevel && shouldDropByLevel(event.level, this.options.minLevel)) {
+      if (this.options.debug)
+        console.log(`[Bugwatch] Error dropped: min_level (level "${event.level}" below "${this.options.minLevel}")`);
+      try {
+        this.options.onDropped?.(event.event_id, "min_level");
+      } catch (err) {
+        if (this.options.debug) console.error("[Bugwatch] onDropped callback threw:", err);
+      }
+      return "";
+    }
+
+    // Client-side session rate limit (checked last so counter only ticks for real sends)
+    if (this.options.maxErrorsPerSession) {
+      if (sessionErrorCounter.isLimitReached(this.options.maxErrorsPerSession)) {
+        if (this.options.debug)
+          console.log(`[Bugwatch] Error dropped: session_rate_limit (limit: ${this.options.maxErrorsPerSession})`);
+        try {
+          this.options.onDropped?.(event.event_id, "session_rate_limit");
+        } catch (err) {
+          if (this.options.debug) console.error("[Bugwatch] onDropped callback threw:", err);
+        }
+        return "";
+      }
+      sessionErrorCounter.increment();
+    }
+
+    return this.processAndSend(event);
   }
 
   /**
    * Capture a message
    */
-  captureMessage(
-    message: string,
-    level: ErrorEvent["level"] = "info"
-  ): string {
+  captureMessage(message: string, level: ErrorEvent["level"] = "info"): string {
     if (!this.initialized) {
       return "";
     }
 
-    const rawEvent = this.createEvent({
-      message,
-      level,
-    });
-    const event = scrubEvent(rawEvent, this.options.sanitize);
-
-    // Run beforeSend hook with error handling
-    let processedEvent: import("./types").ErrorEvent | null = event;
-    if (this.options.beforeSend) {
+    // Sample rate check (consistent with captureException)
+    if (Math.random() > (this.options.sampleRate || 1.0)) {
+      if (this.options.debug) console.log("[Bugwatch] Message dropped: sample_rate");
       try {
-        processedEvent = this.options.beforeSend(event);
+        this.options.onDropped?.(generateEventId(), "sample_rate");
       } catch (err) {
-        if (this.options.debug) {
-          console.error("[Bugwatch] beforeSend threw an error:", err);
-        }
-        // Continue with original event if beforeSend throws
-        processedEvent = event;
+        if (this.options.debug) console.error("[Bugwatch] onDropped callback threw:", err);
       }
-    }
-
-    if (!processedEvent) {
       return "";
     }
 
-    this.transport.send(processedEvent).catch(() => {
-      // Errors are logged by transport
-    });
+    // Drop messages below minimum level (pre-creation — level is known from arg,
+    // so we can check before event creation unlike captureException)
+    if (this.options.minLevel && shouldDropByLevel(level, this.options.minLevel)) {
+      if (this.options.debug)
+        console.log(`[Bugwatch] Message dropped: min_level (level "${level}" below "${this.options.minLevel}")`);
+      try {
+        this.options.onDropped?.("", "min_level");
+      } catch (err) {
+        if (this.options.debug) console.error("[Bugwatch] onDropped callback threw:", err);
+      }
+      return "";
+    }
 
-    return processedEvent.event_id;
+    const event = this.createEvent({ message, level });
+
+    // Client-side session rate limit (shared counter with captureException)
+    if (this.options.maxErrorsPerSession) {
+      if (sessionErrorCounter.isLimitReached(this.options.maxErrorsPerSession)) {
+        if (this.options.debug)
+          console.log(`[Bugwatch] Message dropped: session_rate_limit (limit: ${this.options.maxErrorsPerSession})`);
+        try {
+          this.options.onDropped?.(event.event_id, "session_rate_limit");
+        } catch (err) {
+          if (this.options.debug) console.error("[Bugwatch] onDropped callback threw:", err);
+        }
+        return "";
+      }
+      sessionErrorCounter.increment();
+    }
+
+    return this.processAndSend(event);
   }
 
   /**
@@ -316,10 +462,7 @@ export class Bugwatch implements BugwatchClient {
   /**
    * Create an event from an Error object
    */
-  private createEventFromError(
-    error: Error,
-    context?: Partial<ErrorEvent>
-  ): ErrorEvent {
+  private createEventFromError(error: Error, context?: Partial<ErrorEvent>): ErrorEvent {
     const { type, value } = extractErrorInfo(error);
     const stacktrace = parseStackTrace(error);
 
@@ -343,12 +486,10 @@ export class Bugwatch implements BugwatchClient {
   private createEvent(partial: Partial<ErrorEvent>): ErrorEvent {
     // Get merged context from request scope (if available) and global scope
     // Request context takes precedence over global context
-    const mergedContext = getMergedContext(
-      this.user,
-      this.tags,
-      this.extra,
-      this.breadcrumbs.toArray()
-    );
+    const mergedContext = getMergedContext(this.user, this.tags, this.extra, this.breadcrumbs.toArray());
+
+    // Destructure fields that need merging so ...restPartial doesn't overwrite them
+    const { tags: partialTags, extra: partialExtra, breadcrumbs: partialBreadcrumbs, ...restPartial } = partial;
 
     const event: ErrorEvent = {
       event_id: generateEventId(),
@@ -358,14 +499,16 @@ export class Bugwatch implements BugwatchClient {
       message: partial.message || "",
       environment: this.options.environment,
       release: this.options.release,
-      tags: { ...mergedContext.tags, ...partial.tags },
-      extra: { ...mergedContext.extra, ...partial.extra },
-      breadcrumbs: mergedContext.breadcrumbs,
+      ...(this.options.serverName && { server_name: this.options.serverName }),
+      ...(this.options.runtime && { runtime: this.options.runtime }),
+      tags: { ...mergedContext.tags, ...partialTags },
+      extra: { ...mergedContext.extra, ...partialExtra },
+      breadcrumbs: partialBreadcrumbs ?? mergedContext.breadcrumbs,
       sdk: {
         name: SDK_NAME,
         version: SDK_VERSION,
       },
-      ...partial,
+      ...restPartial,
     };
 
     // Add user context (merged context user + partial user)
@@ -378,10 +521,9 @@ export class Bugwatch implements BugwatchClient {
       event.session_id = this.sessionId;
     }
 
-    // Generate fingerprint if exception exists
+    // Generate fingerprint if exception exists (stored top-level so server uses it for grouping)
     if (event.exception) {
-      const fingerprint = fingerprintFromException(event.exception);
-      event.tags = { ...event.tags, fingerprint };
+      event.fingerprint = fingerprintFromException(event.exception);
     }
 
     return event;
@@ -394,21 +536,20 @@ export class Bugwatch implements BugwatchClient {
     if (!this.options.ignoreErrors || this.options.ignoreErrors.length === 0) {
       return false;
     }
-
     const message = error.message || String(error);
-
     for (const pattern of this.options.ignoreErrors) {
-      if (typeof pattern === "string") {
-        if (message.includes(pattern)) {
+      try {
+        if (typeof pattern === "string") {
+          if (message.includes(pattern)) return true;
+        } else if (pattern.test(message)) {
           return true;
         }
-      } else if (pattern instanceof RegExp) {
-        if (pattern.test(message)) {
-          return true;
+      } catch {
+        if (this.options.debug) {
+          console.warn("[Bugwatch] ignoreErrors pattern threw — skipping:", pattern);
         }
       }
     }
-
     return false;
   }
 
@@ -441,11 +582,10 @@ export class Bugwatch implements BugwatchClient {
       const tracesSampleRate = this.options.tracesSampleRate ?? 1.0;
       if (Math.random() > tracesSampleRate) return;
 
-      // Send via transport
-      const transport = this.transport as HttpTransport;
-      if (transport.sendTransaction) {
-        transport.sendTransaction(event).catch(() => {
-          // Errors are logged by transport
+      // Send via transport (sendTransaction is optional on the Transport interface)
+      if (this.transport.sendTransaction) {
+        this.transport.sendTransaction(event).catch((err) => {
+          if (this.options.debug) console.error("[Bugwatch] sendTransaction failed:", err);
         });
       }
     };
@@ -456,7 +596,7 @@ export class Bugwatch implements BugwatchClient {
       onFinish,
       this.options.environment,
       this.options.release,
-      this.options.experimentalPerformance === true,
+      this.options.experimentalPerformance === true
     );
   }
 

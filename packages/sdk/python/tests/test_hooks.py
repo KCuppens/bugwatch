@@ -1,16 +1,15 @@
 """Tests for exception hooks and plug-and-play features."""
+
 import logging
 import os
 import sys
 import threading
-from unittest.mock import MagicMock, patch
 
 import pytest
 
 import bugwatch
 from bugwatch import Level
 from bugwatch.integrations.logging import BugwatchHandler, setup_logging
-from bugwatch.transport import NoopTransport
 
 
 class TestEnvironmentVariables:
@@ -38,7 +37,7 @@ class TestEnvironmentVariables:
         with pytest.raises(ValueError) as exc_info:
             bugwatch.init()
 
-        assert "api_key is required" in str(exc_info.value)
+        assert "API key required" in str(exc_info.value)
         assert "BUGWATCH_API_KEY" in str(exc_info.value)
 
     def test_explicit_api_key_overrides_env(self) -> None:
@@ -131,10 +130,7 @@ class TestThreadingHook:
         """Store original threading hook if available."""
         # Make sure any previous bugwatch is closed first
         bugwatch.close()
-        if sys.version_info >= (3, 8):
-            self.original_threading_hook = threading.excepthook
-        else:
-            self.original_threading_hook = None
+        self.original_threading_hook = threading.excepthook
 
     def teardown_method(self):
         """Restore original hook and clean up."""

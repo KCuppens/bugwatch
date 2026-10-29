@@ -11,7 +11,8 @@ final class HttpTransport implements TransportInterface
 {
     public function __construct(
         private readonly Options $options,
-    ) {}
+    ) {
+    }
 
     public function send(ErrorEvent $event): bool
     {

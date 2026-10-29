@@ -3,17 +3,20 @@ FROM node:20-alpine AS builder
 
 WORKDIR /app
 
-# Build arguments baked into frontend at build time
+# Build arguments baked into frontend at build time.
+# Kept as ARG (not ENV) so values are not persisted in image layer metadata —
+# they are written to .env.production below for Next.js to inline at build time.
 ARG NEXT_PUBLIC_API_URL=http://localhost:3000
 ARG NEXT_PUBLIC_BUGWATCH_API_KEY
-ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
-ENV NEXT_PUBLIC_BUGWATCH_API_KEY=$NEXT_PUBLIC_BUGWATCH_API_KEY
 
-# Copy web app package.json only (standalone, not as workspace)
-COPY apps/web/package.json ./
+# Copy web app manifests together — both must be in sync for npm ci.
+# Separate COPY instructions preserve layer caching: npm ci only re-runs
+# when package.json or package-lock.json actually changes.
+COPY apps/web/package.json apps/web/package-lock.json ./
 
-# Install dependencies from npm registry (includes @bugwatch/nextjs)
-RUN npm install
+# Install exact versions from the lockfile; fails loudly if package.json
+# and package-lock.json are out of sync, catching version drift early.
+RUN npm ci
 
 # Overlay local SDK builds (includes fixes not yet published to npm)
 COPY packages/sdk/nextjs/dist ./node_modules/@bugwatch/nextjs/dist
@@ -27,6 +30,8 @@ COPY apps/web/tailwind.config.ts ./
 COPY apps/web/postcss.config.mjs ./
 COPY apps/web/next.config.ts ./
 COPY apps/web/next-env.d.ts ./
+COPY apps/web/source.config.ts ./
+COPY apps/web/.source ./.source
 COPY tsconfig.base.json /tsconfig.base.json
 
 # Create .env.production with build args so Next.js picks them up
@@ -60,5 +65,10 @@ EXPOSE 3001
 
 ENV PORT=3001
 ENV HOSTNAME="0.0.0.0"
+
+# Wire /api/health into the container lifecycle so orchestrators (Docker, ECS, k8s)
+# can detect unhealthy containers and restart them automatically.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+    CMD wget -qO- http://localhost:3001/api/health || exit 1
 
 CMD ["node", "server.js"]

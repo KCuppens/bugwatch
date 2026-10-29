@@ -2,7 +2,8 @@
 
 module Bugwatch
   class Client
-    attr_reader :configuration, :transport
+    attr_reader :configuration
+    attr_accessor :transport
 
     def initialize(configuration)
       @configuration = configuration
@@ -37,11 +38,6 @@ module Bugwatch
 
     def close
       @transport.close
-    end
-
-    # Allow replacing transport (useful for testing)
-    def transport=(transport)
-      @transport = transport
     end
 
     private
@@ -92,7 +88,6 @@ module Bugwatch
 
     def normalize_level(level)
       case level.to_s
-      when "error" then Level::ERROR
       when "warning", "warn" then Level::WARNING
       when "info" then Level::INFO
       when "debug" then Level::DEBUG

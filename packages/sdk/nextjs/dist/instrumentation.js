@@ -342,21 +342,17 @@ async function onRequestError(err, request, context) {
     });
   }
 }
+var SENSITIVE_HEADER_KEYS = /* @__PURE__ */ new Set([
+  "authorization",
+  "cookie",
+  "x-api-key",
+  "x-auth-token",
+  "x-csrf-token"
+]);
 function sanitizeHeaders2(headers) {
-  const sensitiveKeys = [
-    "authorization",
-    "cookie",
-    "x-api-key",
-    "x-auth-token",
-    "x-csrf-token"
-  ];
   const sanitized = {};
   for (const [key, value] of Object.entries(headers)) {
-    if (sensitiveKeys.includes(key.toLowerCase())) {
-      sanitized[key] = "[Filtered]";
-    } else {
-      sanitized[key] = value;
-    }
+    sanitized[key] = SENSITIVE_HEADER_KEYS.has(key.toLowerCase()) ? "[Filtered]" : value;
   }
   return sanitized;
 }

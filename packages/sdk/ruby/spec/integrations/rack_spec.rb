@@ -34,7 +34,7 @@ RSpec.describe Bugwatch::Rack::Middleware do
   context "when the app raises an error" do
     let(:app) do
       described_class.new(lambda { |_env|
-        raise RuntimeError, "something broke"
+        raise "something broke"
       })
     end
 

@@ -16,7 +16,8 @@ final class Breadcrumb
         public readonly string $message = '',
         public readonly array $data = [],
         public readonly Level $level = Level::Info,
-    ) {}
+    ) {
+    }
 
     /**
      * @param array<string, mixed> $data

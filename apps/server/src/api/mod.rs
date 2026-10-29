@@ -1,7 +1,31 @@
-use axum::{routing::delete, routing::get, routing::patch, routing::post, Json, Router};
+use axum::{routing::delete, routing::get, routing::patch, routing::post, Router};
 use serde::{Deserialize, Serialize};
 
-use crate::AppState;
+use crate::{auth::AuthIdentity, AppError, AppResult, AppState};
+
+/// Compute a composite rate-limit key for an `AuthIdentity` (user or agent).
+/// Using a composite key ensures user and agent identities never share a bucket.
+pub fn rate_limit_key_for_auth(prefix: &str, auth: &AuthIdentity) -> String {
+    match auth {
+        AuthIdentity::User(u) => format!("{}:user:{}", prefix, u.id),
+        AuthIdentity::Agent(a) => {
+            format!("{}:agent:{}:{}", prefix, a.organization_id, a.agent_key.id)
+        }
+    }
+}
+
+/// Apply a per-minute rate limit and convert a rejection into an `AppError`.
+pub fn enforce_rate_limit(state: &AppState, key: &str, limit: u32) -> AppResult<()> {
+    let result = state.rate_limiter.check(key, limit);
+    if !result.allowed {
+        return Err(AppError::RateLimitExceeded {
+            retry_after_secs: result.retry_after_secs.unwrap_or(60),
+            limit: result.limit,
+            remaining: result.remaining,
+        });
+    }
+    Ok(())
+}
 
 pub mod agent_keys;
 pub mod alerts;
@@ -11,6 +35,9 @@ pub mod comments;
 pub mod events;
 pub mod integrations;
 pub mod issues;
+pub mod log_alert_rules;
+pub mod log_saved_searches;
+pub mod logs;
 pub mod metrics;
 pub mod monitors;
 pub mod performance;
@@ -28,6 +55,8 @@ pub fn router() -> Router<AppState> {
         .route("/auth/refresh", post(auth::refresh))
         .route("/auth/me", get(auth::me).patch(auth::update_profile))
         .route("/auth/change-password", post(auth::change_password))
+        .route("/auth/forgot-password", post(auth::forgot_password))
+        .route("/auth/reset-password", post(auth::reset_password))
         // Agent API Keys (JWT auth required to manage)
         .route(
             "/agent-keys",
@@ -43,6 +72,35 @@ pub fn router() -> Router<AppState> {
         .route("/transactions", post(performance::ingest_transaction))
         // Server metrics ingestion (agent pushes here)
         .route("/metrics", post(metrics::ingest_metrics))
+        // Log ingestion (SDK → server, API key auth)
+        .route("/logs", post(logs::ingest))
+        // Log monitoring (dashboard, JWT auth, tier gated)
+        .route("/projects/:project_id/logs", get(logs::list_logs))
+        .route("/projects/:project_id/logs/stats", get(logs::get_stats))
+        .route("/projects/:project_id/logs/tail", get(logs::tail_logs))
+        .route("/projects/:project_id/logs/facets", get(logs::get_facets))
+        .route(
+            "/projects/:project_id/logs/:log_entry_id/issue",
+            post(logs::link_issue).delete(logs::unlink_issue),
+        )
+        // Log saved searches (Pro+)
+        .route(
+            "/projects/:project_id/log-saved-searches",
+            get(log_saved_searches::list).post(log_saved_searches::create),
+        )
+        .route(
+            "/projects/:project_id/log-saved-searches/:search_id",
+            delete(log_saved_searches::delete),
+        )
+        // Log alert rules (Pro+)
+        .route(
+            "/projects/:project_id/log-alert-rules",
+            get(log_alert_rules::list).post(log_alert_rules::create),
+        )
+        .route(
+            "/projects/:project_id/log-alert-rules/:rule_id",
+            patch(log_alert_rules::update).delete(log_alert_rules::delete),
+        )
         // Projects
         .route("/projects", get(projects::list).post(projects::create))
         .route(
@@ -74,6 +132,10 @@ pub fn router() -> Router<AppState> {
         // Issues - specific routes MUST come before parameterized :issue_id route
         .route("/projects/:project_id/issues", get(issues::list))
         .route("/projects/:project_id/issues/_search", post(issues::search))
+        .route(
+            "/projects/:project_id/issues/facets",
+            get(issues::get_facets),
+        )
         // Nested issue routes with :issue_id
         .route(
             "/projects/:project_id/issues/:issue_id/events/:event_id",
@@ -312,18 +374,13 @@ pub struct ApiResponse<T> {
     pub data: T,
 }
 
-impl<T> ApiResponse<T> {
-    pub fn new(data: T) -> Json<Self> {
-        Json(Self { data })
-    }
-}
-
 /// Pagination parameters
 #[derive(Debug, Deserialize)]
 pub struct PaginationParams {
     #[serde(default = "default_page")]
     pub page: u32,
-    #[serde(default = "default_per_page")]
+    /// Capped at 200 by `cap_per_page` — any larger value is silently clamped.
+    #[serde(default = "default_per_page", deserialize_with = "cap_per_page")]
     pub per_page: u32,
 }
 
@@ -333,6 +390,11 @@ fn default_page() -> u32 {
 
 fn default_per_page() -> u32 {
     20
+}
+
+fn cap_per_page<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
+    let v = u32::deserialize(d)?;
+    Ok(v.clamp(1, 100))
 }
 
 /// Paginated response wrapper
@@ -348,4 +410,99 @@ pub struct PaginationMeta {
     pub per_page: u32,
     pub total: u32,
     pub total_pages: u32,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::types::{Bool, Timestamp};
+    use crate::{
+        auth::{agent::AgentAuth, AuthIdentity},
+        db::models::{AgentKey, User},
+    };
+
+    fn make_user(id: &str) -> User {
+        User {
+            id: id.to_string(),
+            email: "t@example.com".to_string(),
+            password_hash: "h".to_string(),
+            name: None,
+            created_at: Timestamp::now(),
+            email_verified: Bool(true),
+            failed_login_attempts: 0,
+            locked_until: None,
+        }
+    }
+
+    fn make_agent(org_id: &str, key_id: &str) -> AgentAuth {
+        AgentAuth {
+            agent_key: AgentKey {
+                id: key_id.to_string(),
+                organization_id: org_id.to_string(),
+                name: "Agent".to_string(),
+                key_hash: "hash".to_string(),
+                key_prefix: "bw_agent_abc".to_string(),
+                permissions: "[]".to_string(),
+                created_by: "user-1".to_string(),
+                last_used_at: None,
+                created_at: Timestamp::now(),
+                revoked_at: None,
+            },
+            organization_id: org_id.to_string(),
+            permissions: vec![],
+        }
+    }
+
+    #[test]
+    fn rate_limit_key_user_format() {
+        let auth = AuthIdentity::User(make_user("user-42"));
+        assert_eq!(
+            rate_limit_key_for_auth("ingest", &auth),
+            "ingest:user:user-42"
+        );
+    }
+
+    #[test]
+    fn rate_limit_key_agent_format() {
+        let auth = AuthIdentity::Agent(make_agent("org-99", "ak-7"));
+        assert_eq!(
+            rate_limit_key_for_auth("ingest", &auth),
+            "ingest:agent:org-99:ak-7"
+        );
+    }
+
+    #[test]
+    fn rate_limit_user_and_agent_never_collide() {
+        let user = AuthIdentity::User(make_user("id"));
+        let agent = AuthIdentity::Agent(make_agent("id", "id"));
+        assert_ne!(
+            rate_limit_key_for_auth("p", &user),
+            rate_limit_key_for_auth("p", &agent)
+        );
+    }
+
+    #[test]
+    fn pagination_defaults() {
+        let p: PaginationParams = serde_json::from_str("{}").unwrap();
+        assert_eq!(p.page, 1);
+        assert_eq!(p.per_page, 20);
+    }
+
+    #[test]
+    fn per_page_clamped_to_100() {
+        let p: PaginationParams = serde_json::from_str(r#"{"per_page":999}"#).unwrap();
+        assert_eq!(p.per_page, 100);
+    }
+
+    #[test]
+    fn per_page_zero_clamped_to_1() {
+        let p: PaginationParams = serde_json::from_str(r#"{"per_page":0}"#).unwrap();
+        assert_eq!(p.per_page, 1);
+    }
+
+    #[test]
+    fn per_page_in_range_unchanged() {
+        let p: PaginationParams = serde_json::from_str(r#"{"per_page":50}"#).unwrap();
+        assert_eq!(p.per_page, 50);
+    }
 }

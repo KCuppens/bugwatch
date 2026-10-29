@@ -14,7 +14,8 @@ final class StackFrame
         public readonly ?string $absPath = null,
         public readonly bool $inApp = true,
         public readonly ?string $contextLine = null,
-    ) {}
+    ) {
+    }
 
     /**
      * @return array<string, mixed>
