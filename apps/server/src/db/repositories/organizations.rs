@@ -133,6 +133,24 @@ impl OrganizationRepository {
         Ok(result)
     }
 
+    /// The organization a user's new projects belong to: the oldest one they own,
+    /// else the only one they are a member of, else none. Same rule as migration 036.
+    pub async fn find_project_org_id(pool: &DbPool, user_id: &str) -> Result<Option<String>> {
+        sqlx::query_scalar(
+            r#"
+            SELECT COALESCE(
+                (SELECT id FROM organizations WHERE owner_id = $1 ORDER BY created_at, id LIMIT 1),
+                (SELECT MIN(organization_id) FROM organization_members WHERE user_id = $1
+                 HAVING COUNT(DISTINCT organization_id) = 1)
+            )
+            "#,
+        )
+        .bind(user_id)
+        .fetch_one(pool)
+        .await
+        .map_err(Into::into)
+    }
+
     /// Invalidate the org-user cache. Call after any mutation to organizations.
     /// Clears all entries (not per-org) — intentional trade-off: targeted eviction
     /// would require a reverse user→org index. Acceptable for current write volume.
@@ -148,7 +166,7 @@ impl OrganizationRepository {
             "UPDATE organizations SET name = $1, updated_at = $2 WHERE id = $3 RETURNING *",
         )
         .bind(name)
-        .bind(now.to_rfc3339())
+        .bind(now)
         .bind(id)
         .fetch_one(pool)
         .await?;
@@ -157,6 +175,7 @@ impl OrganizationRepository {
     }
 
     /// Update subscription details (called from Stripe webhook)
+    #[allow(clippy::too_many_arguments)]
     pub async fn update_subscription(
         pool: &DbPool,
         id: &str,
@@ -191,10 +210,10 @@ impl OrganizationRepository {
         .bind(stripe_subscription_id)
         .bind(subscription_status)
         .bind(billing_interval)
-        .bind(current_period_start.map(|dt| dt.to_rfc3339()))
-        .bind(current_period_end.map(|dt| dt.to_rfc3339()))
+        .bind(current_period_start)
+        .bind(current_period_end)
         .bind(cancel_at_period_end)
-        .bind(now.to_rfc3339())
+        .bind(now)
         .bind(id)
         .fetch_one(pool)
         .await?;
@@ -205,6 +224,7 @@ impl OrganizationRepository {
     /// Atomically activate a subscription only if it has not already been recorded.
     /// Returns Ok(true) if the row was updated, Ok(false) if already processed.
     /// Prevents concurrent verify_checkout calls from double-processing the same session.
+    #[allow(clippy::too_many_arguments)]
     pub async fn activate_subscription_if_new(
         pool: &DbPool,
         id: &str,
@@ -239,10 +259,10 @@ impl OrganizationRepository {
         .bind(subscription_id)
         .bind(subscription_status)
         .bind(billing_interval)
-        .bind(current_period_start.map(|dt| dt.to_rfc3339()))
-        .bind(current_period_end.map(|dt| dt.to_rfc3339()))
+        .bind(current_period_start)
+        .bind(current_period_end)
         .bind(cancel_at_period_end)
-        .bind(now.to_rfc3339())
+        .bind(now)
         .bind(id)
         .bind(subscription_id)
         .execute(pool)
@@ -263,7 +283,7 @@ impl OrganizationRepository {
             "UPDATE organizations SET stripe_customer_id = $1, updated_at = $2 WHERE id = $3 AND stripe_customer_id IS NULL",
         )
         .bind(stripe_customer_id)
-        .bind(now.to_rfc3339())
+        .bind(now)
         .bind(id)
         .execute(pool)
         .await?;
@@ -352,7 +372,7 @@ impl OrganizationRepository {
             "#,
         )
         .bind(seats)
-        .bind(now.to_rfc3339())
+        .bind(now)
         .bind(id)
         .bind(seats)
         .bind(id)
@@ -388,7 +408,7 @@ impl OrganizationRepository {
         .bind(tax_id)
         .bind(billing_country)
         .bind(billing_address)
-        .bind(now.to_rfc3339())
+        .bind(now)
         .bind(id)
         .fetch_one(pool)
         .await
@@ -413,9 +433,9 @@ impl OrganizationRepository {
             RETURNING *
             "#,
         )
-        .bind(payment_failed_at.map(|dt| dt.to_rfc3339()))
-        .bind(grace_period_ends.map(|dt| dt.to_rfc3339()))
-        .bind(now.to_rfc3339())
+        .bind(payment_failed_at)
+        .bind(grace_period_ends)
+        .bind(now)
         .bind(id)
         .fetch_one(pool)
         .await
@@ -444,7 +464,7 @@ impl OrganizationMemberRepository {
         .bind(organization_id)
         .bind(user_id)
         .bind(role)
-        .bind(now.to_rfc3339())
+        .bind(now)
         .fetch_one(pool)
         .await
         .map_err(Into::into)
@@ -479,7 +499,7 @@ impl OrganizationMemberRepository {
         .bind(organization_id)
         .bind(user_id)
         .bind(role)
-        .bind(now.to_rfc3339())
+        .bind(now)
         .bind(organization_id)
         .bind(seat_limit as i64)
         .fetch_optional(pool)
@@ -601,9 +621,9 @@ impl UsageRepository {
         .bind(organization_id)
         .bind(metric)
         .bind(amount)
-        .bind(period_start.to_rfc3339())
-        .bind(period_end.to_rfc3339())
-        .bind(now.to_rfc3339())
+        .bind(period_start)
+        .bind(period_end)
+        .bind(now)
         .fetch_one(pool)
         .await?;
         Ok(record)
@@ -614,7 +634,7 @@ impl UsageRepository {
         pool: &DbPool,
         organization_id: &str,
         metric: &str,
-        period_start: &str,
+        period_start: chrono::DateTime<chrono::Utc>,
     ) -> Result<i32> {
         let row: Option<(i32,)> = sqlx::query_as(
             "SELECT count FROM usage_records WHERE organization_id = $1 AND metric = $2 AND period_start = $3",
@@ -637,7 +657,7 @@ impl UsageRepository {
             "SELECT * FROM usage_records WHERE organization_id = $1 AND period_start = $2",
         )
         .bind(organization_id)
-        .bind(period_start.to_rfc3339())
+        .bind(period_start)
         .fetch_all(pool)
         .await
         .map_err(Into::into)
@@ -687,7 +707,7 @@ impl BillingEventRepository {
         .bind(amount_cents)
         .bind(currency)
         .bind(metadata)
-        .bind(now.to_rfc3339())
+        .bind(now)
         .fetch_one(pool)
         .await
         .map_err(Into::into)
@@ -716,7 +736,7 @@ impl BillingEventRepository {
         .bind(organization_id)
         .bind(event_type)
         .bind(stripe_event_id)
-        .bind(now.to_rfc3339())
+        .bind(now)
         .execute(pool)
         .await?;
         Ok(result.rows_affected() > 0)
@@ -738,7 +758,7 @@ impl BillingEventRepository {
         organization_id: &str,
         limit: i32,
     ) -> Result<Vec<BillingEvent>> {
-        let limit = limit.max(1).min(1000);
+        let limit = limit.clamp(1, 1000);
         sqlx::query_as::<_, BillingEvent>(
             "SELECT * FROM billing_events WHERE organization_id = $1 ORDER BY created_at DESC LIMIT $2",
         )
@@ -987,10 +1007,9 @@ mod tests {
         UsageRepository::increment(&pool, "org-usage", "events", period_start, period_end, 5)
             .await
             .unwrap();
-        let count =
-            UsageRepository::get_current(&pool, "org-usage", "events", &period_start.to_rfc3339())
-                .await
-                .unwrap();
+        let count = UsageRepository::get_current(&pool, "org-usage", "events", period_start)
+            .await
+            .unwrap();
         assert_eq!(count, 15);
     }
 
@@ -1203,5 +1222,36 @@ mod tests {
         assert_eq!(current.len(), 2);
         let all = UsageRepository::list_all(&pool, "org-ulca").await.unwrap();
         assert_eq!(all.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn find_project_org_id_prefers_owned_then_single_membership() {
+        let pool = test_any_pool().await;
+        sqlx::raw_sql(
+            "INSERT INTO organizations (id, name, slug, owner_id, created_at) VALUES
+                ('org-old', 'Old', 'pfo-old', 'pfo-owner', '2024-01-01T00:00:00Z'),
+                ('org-0-new', 'New', 'pfo-new', 'pfo-owner', '2025-01-01T00:00:00Z'),
+                ('org-x', 'X', 'pfo-x', 'pfo-x-owner', '2024-01-01T00:00:00Z');
+             INSERT INTO organization_members (id, organization_id, user_id, role) VALUES
+                ('pm1', 'org-x', 'pfo-owner', 'member'),
+                ('pm2', 'org-x', 'pfo-member', 'member'),
+                ('pm3', 'org-old', 'pfo-two', 'member'),
+                ('pm4', 'org-x', 'pfo-two', 'member');",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let org_of = |user: &'static str| OrganizationRepository::find_project_org_id(&pool, user);
+        assert_eq!(
+            org_of("pfo-owner").await.unwrap().as_deref(),
+            Some("org-old")
+        );
+        assert_eq!(
+            org_of("pfo-member").await.unwrap().as_deref(),
+            Some("org-x")
+        );
+        assert_eq!(org_of("pfo-two").await.unwrap(), None);
+        assert_eq!(org_of("pfo-nobody").await.unwrap(), None);
     }
 }

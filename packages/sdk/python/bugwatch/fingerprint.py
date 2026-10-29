@@ -1,4 +1,5 @@
 """Error fingerprinting for grouping similar errors."""
+
 import hashlib
 from typing import Optional
 
@@ -67,26 +68,26 @@ def _normalize_message(message: str) -> str:
 
     # Replace UUIDs first (before numbers corrupt them)
     normalized = re.sub(
-        r'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}',
-        '<uuid>',
-        normalized
+        r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
+        "<uuid>",
+        normalized,
     )
 
     # Replace hex values (before numbers corrupt them)
-    normalized = re.sub(r'0x[0-9a-fA-F]+', '<hex>', normalized)
+    normalized = re.sub(r"0x[0-9a-fA-F]+", "<hex>", normalized)
 
     # Replace memory addresses
-    normalized = re.sub(r'at 0x[0-9a-fA-F]+', 'at <address>', normalized)
+    normalized = re.sub(r"at 0x[0-9a-fA-F]+", "at <address>", normalized)
 
     # Replace file paths
-    normalized = re.sub(r'(/[\w\-./]+)+', '<path>', normalized)
-    normalized = re.sub(r'(\\[\w\-.\\ ]+)+', '<path>', normalized)
+    normalized = re.sub(r"(/[\w\-./]+)+", "<path>", normalized)
+    normalized = re.sub(r"(\\[\w\-.\\ ]+)+", "<path>", normalized)
 
     # Replace quoted strings
-    normalized = re.sub(r'"[^"]*"', '<string>', normalized)
-    normalized = re.sub(r"'[^']*'", '<string>', normalized)
+    normalized = re.sub(r'"[^"]*"', "<string>", normalized)
+    normalized = re.sub(r"'[^']*'", "<string>", normalized)
 
     # Replace numbers last (after other patterns that contain numbers)
-    normalized = re.sub(r'\d+', '<number>', normalized)
+    normalized = re.sub(r"\d+", "<number>", normalized)
 
     return normalized

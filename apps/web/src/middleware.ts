@@ -21,22 +21,29 @@ import type { NextRequest } from "next/server";
 const PROTECTED_PREFIXES = ["/welcome", "/dashboard", "/overview"];
 const GUEST_PREFIXES = ["/login", "/signup", "/forgot-password"];
 
-async function hasValidSession(req: NextRequest): Promise<boolean> {
+/**
+ * Returns "verified" when the JWT signature and expiry are confirmed,
+ * "cookie_present" when the cookie exists but can't be verified (JWT_SECRET
+ * absent in Edge Runtime), or "none" when no cookie exists or the token is
+ * cryptographically invalid.
+ */
+async function checkSession(req: NextRequest): Promise<"verified" | "cookie_present" | "none"> {
   const token = req.cookies.get("access_token")?.value;
-  if (!token) return false;
+  if (!token) return "none";
 
   const secret = process.env.JWT_SECRET;
   if (!secret) {
-    // No secret available in Edge Runtime — fall back to presence check.
-    return true;
+    // JWT_SECRET not reachable in this Edge Runtime instance.
+    // Treat as unverified-but-present — the client-side AuthGuard does the real check.
+    return "cookie_present";
   }
 
   try {
     const key = new TextEncoder().encode(secret);
     await jwtVerify(token, key);
-    return true;
+    return "verified";
   } catch {
-    return false;
+    return "none";
   }
 }
 
@@ -44,8 +51,10 @@ export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
   if (PROTECTED_PREFIXES.some((p) => pathname.startsWith(p))) {
-    const valid = await hasValidSession(req);
-    if (!valid) {
+    // Allow if cookie exists (verified OR unverified). The client-side AuthGuard
+    // handles the real auth check and redirects to /login on a 401.
+    const status = await checkSession(req);
+    if (status === "none") {
       const loginUrl = new URL("/login", req.url);
       // Only persist the pathname as `next` if it is a same-origin path with
       // no traversal sequences. Regex char classes that include `.` can let
@@ -59,8 +68,12 @@ export async function middleware(req: NextRequest) {
   }
 
   if (GUEST_PREFIXES.some((p) => pathname.startsWith(p))) {
-    const valid = await hasValidSession(req);
-    if (valid) {
+    // ONLY redirect to /dashboard when the session is cryptographically VERIFIED.
+    // Using cookie-presence here causes an infinite redirect loop: stale httpOnly
+    // cookies (which JS cannot clear) make every /login visit bounce to /dashboard,
+    // which then bounces back to /login because the server rejects the expired token.
+    const status = await checkSession(req);
+    if (status === "verified") {
       const { searchParams } = req.nextUrl;
       const next = searchParams.get("next") ?? "/dashboard";
       const SAFE_PATH_RE = /^\/[a-zA-Z0-9_\-./]*$/;

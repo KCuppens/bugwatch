@@ -1,4 +1,5 @@
 """Tests for exception hooks and plug-and-play features."""
+
 import logging
 import os
 import sys
@@ -36,7 +37,7 @@ class TestEnvironmentVariables:
         with pytest.raises(ValueError) as exc_info:
             bugwatch.init()
 
-        assert "api_key is required" in str(exc_info.value)
+        assert "API key required" in str(exc_info.value)
         assert "BUGWATCH_API_KEY" in str(exc_info.value)
 
     def test_explicit_api_key_overrides_env(self) -> None:

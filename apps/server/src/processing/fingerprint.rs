@@ -110,7 +110,7 @@ pub fn unminify_react_error(message: &str) -> String {
             } else {
                 Some(
                     urlencoding::decode(val)
-                        .unwrap_or_else(|_| std::borrow::Cow::Borrowed(val))
+                        .unwrap_or(std::borrow::Cow::Borrowed(val))
                         .into_owned(),
                 )
             }

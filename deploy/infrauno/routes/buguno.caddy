@@ -1,0 +1,27 @@
+# buguno (formerly bugwatch) — active-color route snippet imported by the shared
+# infrauno Caddy for http://bugwatch.dev and http://buguno.webuno.io.
+# Mirror of /opt/infrauno/shared/routes/buguno.caddy.
+#
+# The active color (blue|green) in the reverse_proxy targets is rewritten in
+# lockstep by /opt/infrauno/scripts/deploy-cell.sh on every swap:
+#   sed -E "s/-(blue|green):/-<next>:/g"
+# so the `-green:`/`-blue:` suffix (incl. buguno-mcp-<color>:3002) flips together.
+handle /api/* {
+	reverse_proxy buguno-server-green:3000
+}
+handle /health {
+	reverse_proxy buguno-server-green:3000
+}
+handle /install.sh {
+	reverse_proxy buguno-server-green:3000
+}
+handle /agent/* {
+	reverse_proxy buguno-server-green:3000
+}
+# Hosted MCP server (Streamable HTTP)
+handle /mcp* {
+	reverse_proxy buguno-mcp-green:3002
+}
+handle {
+	reverse_proxy buguno-web-green:3001
+}

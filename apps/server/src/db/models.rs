@@ -42,6 +42,7 @@ pub struct Project {
     pub onboarding_completed_at: Option<Timestamp>,
     pub organization_id: Option<String>,
     pub api_key_hash: String,
+    pub logo_url: Option<String>,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
@@ -386,6 +387,7 @@ pub struct Transaction {
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct Span {
     pub id: String,
     pub transaction_id: String,
@@ -470,6 +472,63 @@ pub struct SessionSegment {
     pub data: Vec<u8>,
     pub size_bytes: i32,
     pub created_at: Timestamp,
+}
+
+// ============================================================================
+// Log Monitoring
+// ============================================================================
+
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+#[sqlx(rename_all = "snake_case")]
+pub struct LogEntry {
+    pub id: String,
+    pub project_id: String,
+    pub log_id: String,
+    pub timestamp: crate::db::types::Timestamp,
+    pub level: String,
+    pub message: String,
+    pub logger_name: Option<String>,
+    pub service_name: Option<String>,
+    pub environment: Option<String>,
+    pub release: Option<String>,
+    pub tags: Option<serde_json::Value>,
+    pub extra: Option<serde_json::Value>,
+    pub attributes: Option<serde_json::Value>,
+    pub issue_id: Option<String>,
+    pub created_at: crate::db::types::Timestamp,
+}
+
+/// A saved search filter for the log explorer, scoped to a project + user.
+/// `filters` is a JSON string; parse with `serde_json::from_str` as needed.
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+#[sqlx(rename_all = "snake_case")]
+pub struct LogSavedSearch {
+    pub id: String,
+    pub project_id: String,
+    pub user_id: String,
+    pub name: String,
+    /// JSON string — use `serde_json::from_str` to parse.
+    pub filters: String,
+    pub created_at: crate::db::types::Timestamp,
+}
+
+/// An alert rule that fires when log volume matching criteria exceeds a threshold
+/// within a rolling time window.
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+#[sqlx(rename_all = "snake_case")]
+pub struct LogAlertRule {
+    pub id: String,
+    pub project_id: String,
+    pub name: String,
+    pub level_filter: Option<String>,
+    pub search_filter: Option<String>,
+    pub threshold: i32,
+    pub window_seconds: i32,
+    pub notification_type: String,
+    pub notification_target: String,
+    pub last_fired_at: Option<crate::db::types::Timestamp>,
+    pub is_active: crate::db::types::Bool,
+    pub created_at: crate::db::types::Timestamp,
 }
 
 // ============================================================================

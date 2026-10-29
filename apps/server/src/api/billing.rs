@@ -12,12 +12,14 @@ use crate::billing::StripeClient;
 #[cfg(feature = "saas")]
 use crate::db::models::UsageRecord;
 #[cfg(feature = "saas")]
-use crate::db::repositories::UsageRepository;
+use crate::db::repositories::organizations::UsageRepository;
 use crate::{
     auth::AuthUser,
     db::{
         models::{Organization, OrganizationMember},
-        repositories::{OrganizationMemberRepository, OrganizationRepository, UserRepository},
+        repositories::{
+            OrganizationMemberRepository, OrganizationRepository, ProjectRepository, UserRepository,
+        },
     },
     AppState,
 };
@@ -168,6 +170,23 @@ fn generate_org_slug(name: &str) -> String {
     format!("{}-{}", base, &uuid::Uuid::new_v4().to_string()[..8])
 }
 
+/// Steps every newly created organization needs: the owner becomes a member (so
+/// list_members and seat counts are consistent) and the owner's projects that have
+/// no organization yet move into it.
+async fn set_up_new_org(
+    db: &crate::db::DbPool,
+    org_id: &str,
+    owner_id: &str,
+) -> Result<(), (StatusCode, String)> {
+    OrganizationMemberRepository::add(db, org_id, owner_id, "owner")
+        .await
+        .map_err(db_err)?;
+    ProjectRepository::attach_orphans_to_org(db, owner_id, org_id)
+        .await
+        .map_err(db_err)?;
+    Ok(())
+}
+
 /// Create a new organization (only if user doesn't have one)
 pub async fn create_organization(
     user: AuthUser,
@@ -204,10 +223,7 @@ pub async fn create_organization(
             "User already has an organization".to_string(),
         ))?;
 
-    // Add the owner to organization_members so list_members/seat counts are consistent
-    let _ = OrganizationMemberRepository::add(&state.db, &org.id, &user.id, "owner")
-        .await
-        .map_err(db_err)?;
+    set_up_new_org(&state.db, &org.id, &user.id).await?;
 
     tracing::info!(org_id = %org.id, owner_id = %user.id, org_name = %name, "Organization created");
 
@@ -545,9 +561,9 @@ mod saas_billing {
             seats: org.seats,
             subscription_status: org.subscription_status,
             billing_interval: org.billing_interval,
-            current_period_start: org.current_period_start,
-            current_period_end: org.current_period_end,
-            cancel_at_period_end: org.cancel_at_period_end,
+            current_period_start: org.current_period_start.map(|t| t.0),
+            current_period_end: org.current_period_end.map(|t| t.0),
+            cancel_at_period_end: org.cancel_at_period_end.0,
             has_stripe: org.stripe_subscription_id.is_some(),
         }))
     }
@@ -616,9 +632,7 @@ mod saas_billing {
                     )
                 })?;
 
-                OrganizationMemberRepository::add(&state.db, &new_org.id, &user.id, "owner")
-                    .await
-                    .map_err(db_err)?;
+                set_up_new_org(&state.db, &new_org.id, &user.id).await?;
 
                 new_org
             }
@@ -645,7 +659,7 @@ mod saas_billing {
                 OrganizationRepository::set_stripe_customer(
                     &state.db,
                     &org.id,
-                    &customer.id.to_string(),
+                    customer.id.as_ref(),
                 )
                 .await
                 .map_err(|e| {
@@ -801,9 +815,9 @@ mod saas_billing {
                             seats: org.seats,
                             subscription_status: org.subscription_status,
                             billing_interval: org.billing_interval,
-                            current_period_start: org.current_period_start,
-                            current_period_end: org.current_period_end,
-                            cancel_at_period_end: org.cancel_at_period_end,
+                            current_period_start: org.current_period_start.map(|t| t.0),
+                            current_period_end: org.current_period_end.map(|t| t.0),
+                            cancel_at_period_end: org.cancel_at_period_end.0,
                             has_stripe: true,
                         }),
                         message: "Subscription already active".to_string(),
@@ -930,9 +944,9 @@ mod saas_billing {
                         seats: o.seats,
                         subscription_status: o.subscription_status.clone(),
                         billing_interval: o.billing_interval.clone(),
-                        current_period_start: o.current_period_start,
-                        current_period_end: o.current_period_end,
-                        cancel_at_period_end: o.cancel_at_period_end,
+                        current_period_start: o.current_period_start.map(|t| t.0),
+                        current_period_end: o.current_period_end.map(|t| t.0),
+                        cancel_at_period_end: o.cancel_at_period_end.0,
                         has_stripe: o.stripe_subscription_id.is_some(),
                     });
                     return Ok(Json(VerifyCheckoutResponse {
@@ -1139,8 +1153,8 @@ mod saas_billing {
             Some(&subscription_id),
             new_status,
             org.billing_interval.as_deref(),
-            org.current_period_start,
-            org.current_period_end,
+            org.current_period_start.map(|t| t.0),
+            org.current_period_end.map(|t| t.0),
             cancel_flag,
         )
         .await
@@ -1180,7 +1194,7 @@ mod saas_billing {
         let now = chrono::Utc::now();
         let (period_start, period_end) = match (&org.current_period_start, &org.current_period_end)
         {
-            (Some(start), Some(end)) => (*start, *end),
+            (Some(start), Some(end)) => (start.0, end.0),
             _ => {
                 // Default to current calendar month - use beginning of current month
                 use chrono::{Datelike, TimeZone};
@@ -1342,7 +1356,7 @@ mod saas_billing {
             &org.id,
             &req.tier,
             seats as i32,
-            Some(&subscription.id.to_string()),
+            Some(subscription.id.as_ref()),
             "active",
             Some(if annual { "annual" } else { "monthly" }),
             period_start,
@@ -2001,6 +2015,7 @@ mod saas_billing {
     }
 
     #[derive(Deserialize)]
+    #[allow(dead_code)]
     pub struct AddTaxIdRequest {
         #[serde(rename = "type")]
         pub type_: String,
@@ -2148,10 +2163,10 @@ mod saas_billing {
             monthly_cost_cents,
             seats_used: members_count,
             seats_total: org.seats,
-            billing_period_start: org.current_period_start,
-            billing_period_end: org.current_period_end,
+            billing_period_start: org.current_period_start.map(|t| t.0),
+            billing_period_end: org.current_period_end.map(|t| t.0),
             is_past_due: org.subscription_status == "past_due",
-            cancel_at_period_end: org.cancel_at_period_end,
+            cancel_at_period_end: org.cancel_at_period_end.0,
         }))
     }
 
@@ -2226,7 +2241,7 @@ mod tests {
     #[test]
     fn generate_org_slug_suffix_length_is_eight() {
         let slug = generate_org_slug("test");
-        let suffix = slug.split('-').last().unwrap();
+        let suffix = slug.split('-').next_back().unwrap();
         assert_eq!(suffix.len(), 8);
     }
 

@@ -7,7 +7,9 @@ COPY package.json package-lock.json* ./
 COPY apps/web/package.json ./apps/web/
 COPY packages/ ./packages/
 
-RUN npm ci
+# npm creates apps/web/node_modules only when the lockfile nests a package
+# there; the builder stage copies it either way.
+RUN npm ci && mkdir -p apps/web/node_modules
 
 # Stage 2: Build the application
 FROM node:20-alpine AS builder

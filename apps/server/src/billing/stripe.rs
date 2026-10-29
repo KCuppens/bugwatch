@@ -762,6 +762,7 @@ impl StripeClient {
     }
 
     /// Create checkout session with optional coupon
+    #[allow(clippy::too_many_arguments)]
     pub async fn create_checkout_session_with_coupon(
         &self,
         customer_id: &str,

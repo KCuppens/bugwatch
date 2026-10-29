@@ -313,14 +313,14 @@ mod tests {
 
     #[test]
     fn bool_not_owned() {
-        assert_eq!(!Bool(true), false);
-        assert_eq!(!Bool(false), true);
+        assert!(!(!Bool(true)));
+        assert!(!Bool(false));
     }
 
     #[test]
     fn bool_not_ref() {
-        assert_eq!(!&Bool(true), false);
-        assert_eq!(!&Bool(false), true);
+        assert!(!(!&Bool(true)));
+        assert!(!&Bool(false));
     }
 
     #[test]
@@ -342,7 +342,7 @@ mod tests {
     #[tokio::test]
     async fn timestamp_encode_decode_roundtrip() {
         let pool = test_any_pool().await;
-        sqlx::query("CREATE TEMP TABLE ts_rt (ts TIMESTAMPTZ NOT NULL)")
+        sqlx::query("CREATE TABLE ts_rt (ts TIMESTAMPTZ NOT NULL)")
             .execute(&pool)
             .await
             .unwrap();
