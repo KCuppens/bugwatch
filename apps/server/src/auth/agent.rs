@@ -44,9 +44,11 @@ pub fn hash_agent_key(key: &str, secret: &[u8]) -> String {
 
 /// Generate a new agent API key
 pub fn generate_agent_key() -> String {
-    use rand::RngCore;
+    use rand::TryRng;
     let mut bytes = [0u8; 32];
-    rand::rngs::OsRng.fill_bytes(&mut bytes);
+    rand::rngs::SysRng
+        .try_fill_bytes(&mut bytes)
+        .expect("OS CSPRNG unavailable");
     format!("bw_agent_{}", hex::encode(bytes))
 }
 
