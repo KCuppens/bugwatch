@@ -5,7 +5,7 @@ use axum::{
     extract::State,
     http::{HeaderMap, StatusCode},
 };
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
 use subtle::ConstantTimeEq;
 use tokio::sync::Semaphore;
