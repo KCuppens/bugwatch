@@ -61,9 +61,9 @@ export function ThroughputChart({ data }: ThroughputChartProps) {
             borderRadius: "8px",
             fontSize: "12px",
           }}
-          labelFormatter={formatTime}
-          formatter={(value: number, name: string) => [
-            name === "Errors" ? value : value.toFixed(1),
+          labelFormatter={(label) => formatTime(String(label))}
+          formatter={(value, name) => [
+            name === "Errors" ? value : Number(value).toFixed(1),
             name,
           ]}
         />
