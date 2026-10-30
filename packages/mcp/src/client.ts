@@ -11,6 +11,8 @@ import type {
   IssueFrequency,
   IssueFilters,
   CreateMonitorData,
+  CreateProjectData,
+  CreatedProject,
   CreateAlertRuleData,
   PaginatedResponse,
   ApiResponse,
@@ -113,6 +115,13 @@ export class BugwatchClient {
 
   async getProject(id: string): Promise<ApiResponse<Project>> {
     return this.request<ApiResponse<Project>>(`/api/v1/projects/${id}`);
+  }
+
+  async createProject(data: CreateProjectData): Promise<ApiResponse<CreatedProject>> {
+    return this.request<ApiResponse<CreatedProject>>(`/api/v1/projects`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
   }
 
   // Issues

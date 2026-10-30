@@ -164,6 +164,21 @@ export interface IssueFilters {
   per_page?: number;
 }
 
+export interface CreateProjectData {
+  name: string;
+  platform?: string;
+  framework?: string;
+}
+
+export interface CreatedProject {
+  id: string;
+  name: string;
+  slug: string;
+  api_key: string;
+  platform?: string | null;
+  framework?: string | null;
+}
+
 export interface CreateMonitorData {
   name: string;
   url: string;

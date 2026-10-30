@@ -20,6 +20,7 @@ import { buildAlertResourceHandlers } from "./resources/alerts.js";
 // Tools
 import { issueToolDefinitions, handleIssueTool } from "./tools/issues.js";
 import { monitorToolDefinitions, handleMonitorTool } from "./tools/monitors.js";
+import { projectToolDefinitions, handleProjectTool } from "./tools/projects.js";
 import { alertToolDefinitions, handleAlertTool } from "./tools/alerts.js";
 import { commentToolDefinitions, handleCommentTool } from "./tools/comments.js";
 
@@ -193,12 +194,14 @@ export function createBugwatchServer(client: BugwatchClient): Server {
   const allToolDefinitions = [
     ...issueToolDefinitions,
     ...monitorToolDefinitions,
+    ...projectToolDefinitions,
     ...alertToolDefinitions,
     ...commentToolDefinitions,
   ];
 
   const issueToolNames = new Set(issueToolDefinitions.map((t) => t.name));
   const monitorToolNames = new Set(monitorToolDefinitions.map((t) => t.name));
+  const projectToolNames = new Set(projectToolDefinitions.map((t) => t.name));
   const alertToolNames = new Set(alertToolDefinitions.map((t) => t.name));
   const commentToolNames = new Set(commentToolDefinitions.map((t) => t.name));
 
@@ -215,6 +218,9 @@ export function createBugwatchServer(client: BugwatchClient): Server {
     }
     if (monitorToolNames.has(name)) {
       return handleMonitorTool(name, toolArgs, client);
+    }
+    if (projectToolNames.has(name)) {
+      return handleProjectTool(name, toolArgs, client);
     }
     if (alertToolNames.has(name)) {
       return handleAlertTool(name, toolArgs, client);

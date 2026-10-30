@@ -116,6 +116,7 @@ Tools let the AI take actions on your behalf:
 | `ignore_issue` | `issue_id` | Mark an issue as ignored |
 | `get_issue_frequency` | `issue_id`, `period` | Get event counts over time (24h, 7d, 30d) |
 | `add_comment` | `issue_id`, `body` | Add a comment to an issue |
+| `create_project` | `name`, `platform`, `framework` | Create a project and return its ingest key (`bw_live_…`); listings truncate the key |
 | `create_monitor` | `project_id`, `url`, `interval` | Create an uptime monitor |
 | `create_alert_rule` | `project_id`, `condition`, `channel` | Create an alert rule (email, Slack, webhook) |
 | `get_project_health` | `project_id` | Summary of error rates, uptime, and trends |
