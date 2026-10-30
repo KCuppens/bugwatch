@@ -23,6 +23,9 @@
     // undici 7.29.1, pinned exactly by miniflare (wrangler > @opennextjs/cloudflare);
     // no miniflare release ships 7.30.1 yet. miniflare is the local Workers emulator
     // used at build/preview time and only talks to the repo's own dev server.
-    "GHSA-xjj6-f33q-929c"
+    "GHSA-xjj6-f33q-929c",
+    "GHSA-2m5v-pch6-74hx",
+    "GHSA-4w7w-5xrc-9h26",
+    "GHSA-qrxm-fqhp-jwvm"
   ]
 }
