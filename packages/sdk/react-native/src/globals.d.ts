@@ -22,6 +22,8 @@ interface RNExpoGlobal {
   modules?: Record<string, unknown>;
 }
 
+// `var` is required: only var declarations are exposed on `globalThis`.
+/* eslint-disable no-var */
 declare var ErrorUtils: RNErrorUtils | undefined;
 declare var HermesInternal: RNHermesInternal | undefined;
 declare var expo: RNExpoGlobal | undefined;

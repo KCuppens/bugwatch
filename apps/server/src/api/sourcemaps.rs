@@ -506,6 +506,7 @@ mod tests {
         let (_, key) = new_project(&h.app, "sm_invalid@example.com").await;
         let map = sample_map();
 
+        #[allow(clippy::type_complexity)]
         let cases: Vec<(Vec<(&str, &str)>, Option<&[u8]>)> = vec![
             (vec![("bundle", "b.js")], Some(&map)), // no release
             (vec![("release", "1")], Some(&map)),   // no bundle
