@@ -7,6 +7,7 @@
 
 export { init, close, setTags } from "./init";
 export { captureException } from "./errors";
+export { crashedLastRun } from "./native";
 export {
   BugwatchErrorBoundary,
   BugwatchProvider,

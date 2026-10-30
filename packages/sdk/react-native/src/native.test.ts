@@ -1,7 +1,7 @@
 import { reset } from "@bugwatch/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { NativeModules } from "react-native";
-import { captureNativeCrash, getNativeModule, setupNativeCrashReporting } from "./native";
+import { captureNativeCrash, crashedLastRun, getNativeModule, setupNativeCrashReporting } from "./native";
 import { startCapturingClient } from "./test/harness";
 import type { BugwatchNativeModule, NativeCrash } from "./types";
 
@@ -101,4 +101,32 @@ describe("setupNativeCrashReporting", () => {
       expect(mod.clearPendingCrash).toHaveBeenCalledOnce();
     }
   );
+});
+
+describe("crashedLastRun", () => {
+  it("resolves null when the native module is absent", async () => {
+    await setupNativeCrashReporting(null);
+    await expect(crashedLastRun()).resolves.toBeNull();
+  });
+
+  it("resolves true when a crash was pending, including a dropped JS fatal", async () => {
+    startCapturingClient();
+    await setupNativeCrashReporting(fakeModule(crash), 10);
+    await expect(crashedLastRun()).resolves.toBe(true);
+    await setupNativeCrashReporting(fakeModule({ ...crash, type: "RCTFatalException: x" }), 10);
+    await expect(crashedLastRun()).resolves.toBe(true);
+  });
+
+  it("resolves false when the last run ended cleanly", async () => {
+    startCapturingClient();
+    await setupNativeCrashReporting(fakeModule(null), 10);
+    await expect(crashedLastRun()).resolves.toBe(false);
+  });
+
+  it("resolves null when the native check throws", async () => {
+    const mod = fakeModule(null);
+    vi.mocked(mod.getPendingCrash).mockRejectedValueOnce(new Error("boom"));
+    await setupNativeCrashReporting(mod, 10);
+    await expect(crashedLastRun()).resolves.toBeNull();
+  });
 });

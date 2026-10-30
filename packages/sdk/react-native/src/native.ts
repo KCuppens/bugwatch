@@ -130,6 +130,18 @@ export function captureNativeCrash(crash: NativeCrash): string {
   });
 }
 
+let crashedLastRunResult: Promise<boolean | null> = Promise.resolve(null);
+
+/**
+ * Whether the previous launch ended in a crash (native, or a JS fatal that React
+ * Native rethrew natively). Settles once native setup has checked for a pending
+ * crash; resolves `null` when the check cannot be made (native module absent,
+ * `init` not called, `enableNativeCrashes` off, or the check failed).
+ */
+export function crashedLastRun(): Promise<boolean | null> {
+  return crashedLastRunResult;
+}
+
 /**
  * Install the native crash handler and report a crash left over from the
  * previous run, if any. The pending crash is cleared only after the event has
@@ -140,10 +152,18 @@ export async function setupNativeCrashReporting(
   mod: BugwatchNativeModule | null = getNativeModule(),
   flushTimeoutMs = DEFAULT_CRASH_FLUSH_TIMEOUT_MS
 ): Promise<void> {
-  if (!mod) return;
+  if (!mod) {
+    crashedLastRunResult = Promise.resolve(null);
+    return;
+  }
+  let settle: (value: boolean | null) => void = () => {};
+  crashedLastRunResult = new Promise((resolve) => {
+    settle = resolve;
+  });
   try {
     mod.install();
     const crash = await mod.getPendingCrash();
+    settle(crash !== null);
     if (!crash) return;
 
     if (!JS_FATAL_TYPES.some((type) => crash.type.startsWith(type))) {
@@ -155,6 +175,7 @@ export async function setupNativeCrashReporting(
     }
     await mod.clearPendingCrash();
   } catch (err) {
+    settle(null);
     if (getClient()?.getOptions().debug) {
       console.warn("[Bugwatch] Native crash reporting failed:", err);
     }

@@ -114,4 +114,6 @@ For Hermes, upload the **composed** map (the one produced by `hermesc` + `compos
 
 A native crash (signal, uncaught `NSException`, uncaught JVM exception, ANR) is written to disk by the crash handler and sent as a `fatal` event on the next launch, with raw native frames in `extra.native_frames` (no dSYM / ProGuard symbolication). JS fatals are already reported by the JS handler, so the duplicate native record of a rethrown JS error is discarded. See [NATIVE.md](./NATIVE.md) for the native module internals.
 
+`await crashedLastRun()` resolves `true` when the previous launch ended in a crash (including a JS fatal React Native rethrew natively), `false` after a clean exit, and `null` when that cannot be known (native module absent, `init` not called, `enableNativeCrashes: false`, or the check failed). It settles once `init`'s native check has run, so call it after `init`.
+
 > **The native iOS/Android code has not been run on a device or emulator.** It was written and reviewed statically only. Test native crash capture in your own build before relying on it.
