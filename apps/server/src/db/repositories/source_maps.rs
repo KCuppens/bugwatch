@@ -121,7 +121,7 @@ mod tests {
     use crate::db::test_helpers::test_any_pool;
 
     async fn project(pool: &DbPool, slug: &str) -> String {
-        ProjectRepository::create(pool, "App", slug, "owner-sm", None, None)
+        ProjectRepository::create(pool, "App", slug, "owner-sm", None, None, None)
             .await
             .unwrap()
             .id

@@ -105,7 +105,7 @@ export function setupNetworkBreadcrumbs(): () => void {
       fetchDepth++;
       let pending: Promise<Response>;
       try {
-        pending = originalFetch.call(globalThis, input, init);
+        pending = originalFetch.call(globalThis, input as RequestInfo, init);
       } finally {
         fetchDepth--;
       }
