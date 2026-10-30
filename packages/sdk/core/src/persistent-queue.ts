@@ -9,7 +9,7 @@
  * the cap is reached. All operations swallow errors — the queue must NEVER
  * crash the host application.
  */
-import type { ErrorEvent } from "./types";
+import type { ErrorEvent, QueueStorage } from "./types";
 
 const DEFAULT_MAX_EVENTS = 100;
 const DB_NAME = "bugwatch-events";
@@ -182,6 +182,65 @@ class MemoryQueue implements PersistentQueue {
   }
 }
 
+/* -------------------------------------------------------------------------- */
+/* Custom storage adapter (React Native AsyncStorage / MMKV wrappers)           */
+/* -------------------------------------------------------------------------- */
+
+const STORAGE_KEY = "bugwatch:pending-events";
+
+class StorageQueue implements PersistentQueue {
+  // Serialises read-modify-write cycles; AsyncStorage has no transactions.
+  private chain: Promise<unknown> = Promise.resolve();
+
+  constructor(
+    private storage: QueueStorage,
+    private maxEvents: number
+  ) {}
+
+  private run<T>(fn: () => Promise<T>, fallback: T): Promise<T> {
+    const next = this.chain.then(fn, fn).catch(() => fallback);
+    this.chain = next;
+    return next;
+  }
+
+  private async read(): Promise<ErrorEvent[]> {
+    const raw = await this.storage.getItem(STORAGE_KEY);
+    if (!raw) return [];
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      return Array.isArray(parsed) ? (parsed as ErrorEvent[]) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  enqueue(event: ErrorEvent): Promise<boolean> {
+    return this.run(async () => {
+      const events = await this.read();
+      events.push(event);
+      while (events.length > this.maxEvents) events.shift();
+      await this.storage.setItem(STORAGE_KEY, JSON.stringify(events));
+      return true;
+    }, false);
+  }
+
+  drain(): Promise<ErrorEvent[]> {
+    return this.run(async () => {
+      const events = await this.read();
+      if (events.length > 0) await this.storage.removeItem(STORAGE_KEY);
+      return events;
+    }, [] as ErrorEvent[]);
+  }
+
+  clear(): Promise<void> {
+    return this.run(() => this.storage.removeItem(STORAGE_KEY), undefined);
+  }
+
+  size(): Promise<number> {
+    return this.run(async () => (await this.read()).length, 0);
+  }
+}
+
 class NoopQueue implements PersistentQueue {
   async enqueue(): Promise<boolean> {
     return false;
@@ -197,17 +256,22 @@ class NoopQueue implements PersistentQueue {
 
 /**
  * Pick the right queue for the current environment.
- * Browser → IndexedDB. Node → in-memory. Disabled → no-op.
+ * Custom storage → storage-backed. Browser → IndexedDB. Node → in-memory.
+ * Disabled → no-op. React Native has no IndexedDB, so without a storage
+ * adapter it falls through to the in-memory queue.
  */
 export function createPersistentQueue(opts?: {
   enabled?: boolean;
   maxEvents?: number;
+  storage?: QueueStorage;
 }): PersistentQueue {
   const max = opts?.maxEvents ?? DEFAULT_MAX_EVENTS;
+  const storage = opts?.storage;
   const isBrowser = typeof window !== "undefined" && typeof indexedDB !== "undefined";
-  const enabled = opts?.enabled ?? isBrowser; // default on in browser, off in Node
+  const enabled = opts?.enabled ?? (isBrowser || storage !== undefined); // default on in browser / with storage, off in Node
 
   if (!enabled) return new NoopQueue();
+  if (storage) return new StorageQueue(storage, max);
   if (isBrowser) return new IndexedDBQueue(max);
   return new MemoryQueue(max);
 }

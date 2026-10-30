@@ -10,12 +10,32 @@ Official SDKs for [Bugwatch](https://bugwatch.dev) error tracking. Capture, trac
 | JavaScript | `@bugwatch/node` | `npm i @bugwatch/node` | [Docs](https://bugwatch.dev/docs/sdks/javascript/node) |
 | JavaScript | `@bugwatch/nextjs` | `npm i @bugwatch/nextjs` | [Docs](https://bugwatch.dev/docs/sdks/javascript/nextjs) |
 | JavaScript | `@bugwatch/react` | `npm i @bugwatch/react` | [Docs](https://bugwatch.dev/docs/sdks/javascript/react) |
+| React Native | `@bugwatch/react-native` | `npm i @bugwatch/react-native` | [Docs](https://bugwatch.dev/docs/sdks/javascript/react-native) |
 | JavaScript | `@bugwatch/express` | `npm i @bugwatch/express` | [Docs](https://bugwatch.dev/docs/sdks/javascript/express) |
 | JavaScript | `@bugwatch/fastify` | `npm i @bugwatch/fastify` | [Docs](https://bugwatch.dev/docs/sdks/javascript/fastify) |
 | Python | `bugwatch-python` | `pip install bugwatch-python` | [Docs](https://bugwatch.dev/docs/sdks/python) |
 | Rust | `bugwatch` | `cargo add bugwatch` | [Docs](https://bugwatch.dev/docs/sdks/rust) |
 
 ## Quick Start
+
+### React Native / Expo
+
+```bash
+npm install @bugwatch/react-native
+```
+
+```tsx
+// index.js / App entry, before the app renders
+import { init, BugwatchErrorBoundary } from '@bugwatch/react-native';
+
+init({ apiKey: 'YOUR_API_KEY', release: '1.0.0', dist: '1' });
+
+export default function App() {
+  return <BugwatchErrorBoundary><Root /></BugwatchErrorBoundary>;
+}
+```
+
+Works in bare React Native and Expo (dev client / prebuild) with no config plugin. Native crash capture requires the linked native module and is inactive in Expo Go. See [`react-native/README.md`](./react-native/README.md) for source maps, offline storage and navigation breadcrumbs.
 
 ### Next.js
 

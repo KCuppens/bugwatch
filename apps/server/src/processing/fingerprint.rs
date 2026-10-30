@@ -249,6 +249,7 @@ mod tests {
                 pre_context: None,
                 post_context: None,
                 in_app: true,
+                minified: None,
             }],
         };
 
@@ -265,6 +266,7 @@ mod tests {
                 pre_context: None,
                 post_context: None,
                 in_app: true,
+                minified: None,
             }],
         };
 
@@ -285,6 +287,7 @@ mod tests {
                     lineno: 42, colno: 10,
                     abs_path: None, context_line: None, pre_context: None, post_context: None,
                     in_app: true,
+                    minified: None,
                 },
                 StackFrame {
                     filename: "src/lib/alerts-api.ts".to_string(),
@@ -292,6 +295,7 @@ mod tests {
                     lineno: 88, colno: 5,
                     abs_path: None, context_line: None, pre_context: None, post_context: None,
                     in_app: true,
+                    minified: None,
                 },
                 StackFrame {
                     filename: "src/pages/alerts.tsx".to_string(),
@@ -299,6 +303,7 @@ mod tests {
                     lineno: 200, colno: 3,
                     abs_path: None, context_line: None, pre_context: None, post_context: None,
                     in_app: true,
+                    minified: None,
                 },
             ],
         };
@@ -313,6 +318,7 @@ mod tests {
                     lineno: 42, colno: 10,
                     abs_path: None, context_line: None, pre_context: None, post_context: None,
                     in_app: true,
+                    minified: None,
                 },
                 StackFrame {
                     filename: "src/lib/alerts-api.ts".to_string(),
@@ -320,6 +326,7 @@ mod tests {
                     lineno: 88, colno: 5,
                     abs_path: None, context_line: None, pre_context: None, post_context: None,
                     in_app: true,
+                    minified: None,
                 },
                 StackFrame {
                     filename: "src/pages/alerts.tsx".to_string(),
@@ -327,6 +334,7 @@ mod tests {
                     lineno: 250, colno: 3,
                     abs_path: None, context_line: None, pre_context: None, post_context: None,
                     in_app: true,
+                    minified: None,
                 },
             ],
         };
@@ -360,6 +368,7 @@ mod tests {
             pre_context: None,
             post_context: None,
             in_app,
+            minified: None,
         }
     }
 

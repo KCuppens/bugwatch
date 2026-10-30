@@ -631,6 +631,17 @@ describe("Bugwatch client", () => {
       const sent = getSentEvent(fetchMock);
       expect(sent.platform).toBe("javascript");
     });
+
+    it("returns 'react-native' when navigator.product is ReactNative, even with window defined", async () => {
+      const fetchMock = installFetchMock();
+      vi.stubGlobal("window", {});
+      vi.stubGlobal("navigator", { product: "ReactNative" });
+      const client = new Bugwatch({ apiKey: "k" });
+      client.captureMessage("hi");
+      await flushMicrotasks();
+      const sent = getSentEvent(fetchMock);
+      expect(sent.platform).toBe("react-native");
+    });
   });
 
   // -------------------------------------------------------------------

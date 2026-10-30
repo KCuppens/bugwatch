@@ -579,6 +579,18 @@ CREATE TABLE IF NOT EXISTS log_alert_rules (
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+CREATE TABLE IF NOT EXISTS source_maps (
+    id TEXT PRIMARY KEY NOT NULL,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    release TEXT NOT NULL,
+    dist TEXT NOT NULL DEFAULT '',
+    bundle TEXT NOT NULL,
+    data BYTEA NOT NULL,
+    size BIGINT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (project_id, release, dist, bundle)
+);
 "#;
 
 #[allow(dead_code)]

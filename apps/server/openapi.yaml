@@ -52,6 +52,8 @@ tags:
     description: Subscription, invoices, and payment management (SaaS only)
   - name: Organization
     description: Organization and team member management
+  - name: Source Maps
+    description: JavaScript / React Native source map upload for ingest-time symbolication
 
 components:
   securitySchemes:
@@ -527,6 +529,48 @@ components:
           nullable: true
         in_app:
           type: boolean
+        minified:
+          type: object
+          nullable: true
+          description: Original minified frame, kept when the frame was symbolicated from an uploaded source map
+          properties:
+            filename:
+              type: string
+            function:
+              type: string
+            lineno:
+              type: integer
+            colno:
+              type: integer
+
+    SourceMap:
+      type: object
+      description: Metadata of an uploaded source map (the map itself is never returned)
+      required: [id, project_id, release, dist, bundle, size, compressed_size, created_at]
+      properties:
+        id:
+          type: string
+        project_id:
+          type: string
+        release:
+          type: string
+        dist:
+          type: string
+          description: Empty string when no dist was given
+        bundle:
+          type: string
+          description: Bundle basename, e.g. `index.android.bundle`
+        size:
+          type: integer
+          format: int64
+          description: Uncompressed size in bytes
+        compressed_size:
+          type: integer
+          format: int64
+          description: Stored (compressed) size in bytes
+        created_at:
+          type: string
+          format: date-time
 
     RequestContext:
       type: object
@@ -1978,6 +2022,115 @@ paths:
                 $ref: "#/components/schemas/IngestResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  # -------------------------------------------------------------------
+  # Source Maps
+  # -------------------------------------------------------------------
+  /sourcemaps:
+    post:
+      operationId: uploadSourceMap
+      tags: [Source Maps]
+      summary: Upload a source map
+      description: >
+        Uploads (or replaces) the source map for a bundle. Idempotent upsert on
+        (project, release, dist, bundle). Events with platform `react-native` or
+        `javascript` whose release, `tags.dist` and frame bundle basename match are
+        symbolicated at ingest. Authenticates via the project API key.
+      security:
+        - SdkApiKey: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [release, bundle, sourcemap]
+              properties:
+                release:
+                  type: string
+                  maxLength: 200
+                  description: Release identifier; must equal `release` on events
+                dist:
+                  type: string
+                  maxLength: 256
+                  description: Optional build identifier; must equal `tags.dist` on events (defaults to empty)
+                bundle:
+                  type: string
+                  maxLength: 256
+                  description: Bundle basename, e.g. `index.android.bundle` or `main.jsbundle` (an `app:///` prefix or directories are stripped)
+                sourcemap:
+                  type: string
+                  format: binary
+                  description: Source map v3 JSON (max 50 MiB)
+      responses:
+        "200":
+          description: Source map stored
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/SourceMap"
+        "400":
+          description: Malformed multipart body or source map larger than 50 MiB
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          description: Missing/invalid fields or the file is not a valid source map
+        "429":
+          $ref: "#/components/responses/RateLimited"
+    get:
+      operationId: listSourceMaps
+      tags: [Source Maps]
+      summary: List uploaded source maps
+      security:
+        - SdkApiKey: []
+      parameters:
+        - name: release
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Source maps of the authenticated project, newest first
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/SourceMap"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /sourcemaps/{id}:
+    delete:
+      operationId: deleteSourceMap
+      tags: [Source Maps]
+      summary: Delete an uploaded source map
+      security:
+        - SdkApiKey: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Deleted
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
         "429":
           $ref: "#/components/responses/RateLimited"
 

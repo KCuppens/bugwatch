@@ -263,7 +263,7 @@ export function VerificationStep({
             </div>
             <CodeBlock
               code={interpolateApiKey(sdkContent.verificationCode, apiKey)}
-              language={platform === "python" ? "python" : platform === "rust" ? "rust" : "javascript"}
+              language={platform === "python" ? "python" : platform === "rust" ? "rust" : platform === "react-native" ? "typescript" : "javascript"}
             />
           </div>
         )}

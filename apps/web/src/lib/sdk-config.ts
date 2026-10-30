@@ -4,7 +4,7 @@ export interface PlatformConfig {
   id: Platform;
   name: string;
   description: string;
-  icon: "javascript" | "python" | "rust" | "go" | "java" | "ruby" | "php";
+  icon: "javascript" | "python" | "rust" | "go" | "java" | "ruby" | "php" | "react-native";
   frameworks: FrameworkConfig[];
 }
 
@@ -250,6 +250,28 @@ export const PLATFORMS: PlatformConfig[] = [
         description: "PHP framework for web applications",
         package: "bugwatch/sdk",
         docsUrl: "/docs/sdks/php/symfony",
+      },
+    ],
+  },
+  {
+    id: "react-native",
+    name: "React Native",
+    description: "Expo and bare React Native apps",
+    icon: "react-native",
+    frameworks: [
+      {
+        id: "expo",
+        name: "Expo",
+        description: "Expo managed and dev-client apps",
+        package: "@bugwatch/react-native",
+        docsUrl: "/docs/sdks/react-native",
+      },
+      {
+        id: "bare",
+        name: "Bare React Native",
+        description: "React Native CLI apps with native iOS and Android projects",
+        package: "@bugwatch/react-native",
+        docsUrl: "/docs/sdks/react-native",
       },
     ],
   },
@@ -1112,6 +1134,119 @@ fn main() {
 // Test your integration
 capture_error("Test error from Bugwatch");`,
     docsUrl: "/docs/sdks/rust",
+  },
+
+  // React Native - Expo
+  "react-native:expo": {
+    platform: "react-native",
+    framework: "expo",
+    packageName: "@bugwatch/react-native",
+    installCommands: {
+      npm: "npx expo install @bugwatch/react-native",
+      yarn: "yarn expo install @bugwatch/react-native",
+      pnpm: "pnpm dlx expo install @bugwatch/react-native",
+    },
+    configSteps: [
+      {
+        title: "Native Crash Capture (Dev Client / Prebuild)",
+        description:
+          "JavaScript errors work in Expo Go with no extra setup. Native crash capture requires a development build: run `npx expo prebuild` (or build with EAS) and use a dev client instead of Expo Go.",
+        code: `npx expo prebuild
+npx expo run:ios
+npx expo run:android`,
+        language: "bash",
+      },
+      {
+        title: "Initialize and Wrap Your App",
+        description: "Call init() before rendering and wrap the root component with BugwatchProvider",
+        filename: "App.tsx",
+        code: `import AsyncStorage from '@react-native-async-storage/async-storage';
+import { init, BugwatchProvider } from '@bugwatch/react-native';
+
+init({
+  apiKey: '{{API_KEY}}',
+  release: 'my-app@1.0.0',
+  dist: '1',
+  storage: AsyncStorage, // optional: persists the offline queue
+  enableNativeCrashes: true,
+});
+
+export default function App() {
+  return (
+    <BugwatchProvider>
+      <RootNavigator />
+    </BugwatchProvider>
+  );
+}`,
+        language: "typescript",
+      },
+      {
+        title: "Upload Source Maps",
+        description: "Upload the source map for each release so stack traces show original source",
+        code: `npx bugwatch sourcemaps upload --release <release> --bundle index.android.bundle ./path.map`,
+        language: "bash",
+      },
+    ],
+    verificationCode: `import { captureException } from '@bugwatch/react-native';
+
+// Test your integration
+captureException(new Error('Test error from Bugwatch'));`,
+    docsUrl: "/docs/sdks/react-native",
+  },
+
+  // React Native - Bare
+  "react-native:bare": {
+    platform: "react-native",
+    framework: "bare",
+    packageName: "@bugwatch/react-native",
+    installCommands: {
+      npm: "npm install @bugwatch/react-native",
+      yarn: "yarn add @bugwatch/react-native",
+      pnpm: "pnpm add @bugwatch/react-native",
+    },
+    configSteps: [
+      {
+        title: "Install iOS Pods",
+        description: "The native crash module is autolinked. Install pods for iOS (Android needs no extra step)",
+        code: `cd ios && pod install`,
+        language: "bash",
+      },
+      {
+        title: "Initialize and Wrap Your App",
+        description: "Call init() before rendering and wrap the root component with BugwatchProvider",
+        filename: "App.tsx",
+        code: `import AsyncStorage from '@react-native-async-storage/async-storage';
+import { init, BugwatchProvider } from '@bugwatch/react-native';
+
+init({
+  apiKey: '{{API_KEY}}',
+  release: 'my-app@1.0.0',
+  dist: '1',
+  storage: AsyncStorage, // optional: persists the offline queue
+  enableNativeCrashes: true,
+});
+
+export default function App() {
+  return (
+    <BugwatchProvider>
+      <RootNavigator />
+    </BugwatchProvider>
+  );
+}`,
+        language: "typescript",
+      },
+      {
+        title: "Upload Source Maps",
+        description: "Upload the source map for each release so stack traces show original source",
+        code: `npx bugwatch sourcemaps upload --release <release> --bundle index.android.bundle ./path.map`,
+        language: "bash",
+      },
+    ],
+    verificationCode: `import { captureException } from '@bugwatch/react-native';
+
+// Test your integration
+captureException(new Error('Test error from Bugwatch'));`,
+    docsUrl: "/docs/sdks/react-native",
   },
 };
 

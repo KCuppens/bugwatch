@@ -1,6 +1,7 @@
 import * as fs from "fs/promises";
 import * as path from "path";
 import * as os from "os";
+import { setTimeout as sleep } from "timers/promises";
 
 const CONFIG_DIR = path.join(os.homedir(), ".bugwatch");
 const CONFIG_PATH = path.join(CONFIG_DIR, "config.json");
@@ -71,8 +72,8 @@ function getApiKey(config: Config | null): string {
 /**
  * Get the API base URL from env or config file. Rejects non-http/https schemes to prevent SSRF.
  */
-function getBaseUrl(config: Config | null): string {
-  const raw = process.env.BUGWATCH_URL || config?.url || DEFAULT_URL;
+function getBaseUrl(config: Config | null, override?: string): string {
+  const raw = override || process.env.BUGWATCH_URL || config?.url || DEFAULT_URL;
   const scheme = raw.split(":")[0]?.toLowerCase();
   if (scheme !== "http" && scheme !== "https") {
     throw new Error(`Invalid API URL scheme "${scheme}": only http and https are allowed.`);
@@ -339,4 +340,97 @@ export async function listAlerts(projectId?: string): Promise<Alert[]> {
   // Cross-project returns { data: Alert[] }
   const resp = await request<{ data: Alert[] }>("/api/v1/alerts/across-projects");
   return resp.data;
+}
+
+export interface SourceMapMeta {
+  id: string;
+  project_id: string;
+  release: string;
+  dist: string;
+  bundle: string;
+  size: number;
+  compressed_size: number;
+  created_at: string;
+}
+
+export interface UploadSourceMapParams {
+  /** Project SDK API key (bw_live_...). Agent keys are not accepted by the ingest-side endpoint. */
+  apiKey: string;
+  /** Overrides BUGWATCH_URL / the saved config URL. */
+  baseUrl?: string;
+  release: string;
+  dist?: string;
+  /** Bundle basename, e.g. index.android.bundle */
+  bundle: string;
+  /** Raw source map JSON. */
+  sourcemap: Uint8Array;
+}
+
+function extractServerMessage(text: string, status: number, statusText: string): string {
+  try {
+    const json: unknown = JSON.parse(text);
+    if (typeof json === "object" && json !== null && "error" in json) {
+      const err = (json as Record<string, unknown>).error;
+      if (typeof err === "string" && err) return err;
+      if (typeof err === "object" && err !== null) {
+        const msg = (err as Record<string, unknown>).message;
+        if (typeof msg === "string" && msg) return msg;
+      }
+    }
+    if (typeof json === "object" && json !== null && "message" in json) {
+      const msg = (json as Record<string, unknown>).message;
+      if (typeof msg === "string" && msg) return msg;
+    }
+  } catch {
+    // not JSON; fall through
+  }
+  return `Request failed (${status}${statusText ? ` ${statusText}` : ""})`;
+}
+
+/**
+ * Upload a source map via multipart/form-data. The endpoint is an idempotent upsert, so
+ * network failures and 5xx responses are retried like GET requests.
+ */
+export async function uploadSourceMap(params: UploadSourceMapParams): Promise<SourceMapMeta> {
+  const config = await getCachedConfig();
+  const url = new URL("/api/v1/sourcemaps", getBaseUrl(config, params.baseUrl));
+
+  const form = new FormData();
+  form.set("release", params.release);
+  if (params.dist) form.set("dist", params.dist);
+  form.set("bundle", params.bundle);
+  form.set("sourcemap", new Blob([new Uint8Array(params.sourcemap)], { type: "application/json" }), params.bundle + ".map");
+
+  let lastError: Error | undefined;
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    let response: Response;
+    try {
+      response = await fetch(url.toString(), {
+        method: "POST",
+        headers: { "X-API-Key": params.apiKey },
+        body: form,
+      });
+    } catch (networkErr) {
+      lastError = networkErr instanceof Error ? networkErr : new Error(String(networkErr));
+      if (attempt < MAX_RETRIES) {
+        await sleep(200 * 2 ** (attempt - 1));
+        continue;
+      }
+      throw lastError;
+    }
+
+    if (!response.ok) {
+      if (attempt < MAX_RETRIES && response.status >= 500) {
+        await sleep(200 * 2 ** (attempt - 1));
+        continue;
+      }
+      const text = await response.text().catch(() => "");
+      throw new Error(extractServerMessage(text, response.status, response.statusText));
+    }
+
+    const resp = (await response.json()) as ApiResponse<SourceMapMeta>;
+    return resp.data;
+  }
+
+  throw lastError ?? new Error("Request failed after retries");
 }

@@ -1,0 +1,10 @@
+{
+  "platforms": ["ios", "android"],
+  "ios": {
+    "podspecPath": "BugwatchNative.podspec",
+    "modules": ["BugwatchNativeExpoModule"]
+  },
+  "android": {
+    "modules": ["io.bugwatch.reactnative.BugwatchNativeExpoModule"]
+  }
+}

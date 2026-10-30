@@ -512,6 +512,22 @@ pub struct LogSavedSearch {
     pub created_at: crate::db::types::Timestamp,
 }
 
+/// Metadata for an uploaded source map (the compressed payload is never
+/// returned by list/delete queries). `size` is the uncompressed JSON size and
+/// `compressed_size` the stored bytea size.
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+#[sqlx(rename_all = "snake_case")]
+pub struct SourceMapMeta {
+    pub id: String,
+    pub project_id: String,
+    pub release: String,
+    pub dist: String,
+    pub bundle: String,
+    pub size: i64,
+    pub compressed_size: i64,
+    pub created_at: crate::db::types::Timestamp,
+}
+
 /// An alert rule that fires when log volume matching criteria exceeds a threshold
 /// within a rolling time window.
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]

@@ -9,6 +9,7 @@ import { ignoreCommand } from "./commands/ignore";
 import { statusCommand } from "./commands/status";
 import { monitorsCommand } from "./commands/monitors";
 import { alertsCommand } from "./commands/alerts";
+import { sourcemapsUploadCommand } from "./commands/sourcemaps";
 
 const program = new Command();
 
@@ -88,5 +89,21 @@ program
   .option("--project <id>", "Filter by project ID")
   .option("--json", "Output raw JSON")
   .action(alertsCommand);
+
+const sourcemaps = program
+  .command("sourcemaps")
+  .description("Manage source maps used to symbolicate JavaScript / React Native stack traces");
+
+sourcemaps
+  .command("upload")
+  .description("Upload source map(s) for a release")
+  .argument("[path]", "Path to a source map file (omit when using --dir)")
+  .requiredOption("--release <release>", "Release identifier (must match the release the SDK reports)")
+  .option("--dist <dist>", "Build identifier (must match the SDK dist option)")
+  .option("--bundle <name>", "Bundle basename, e.g. index.android.bundle or main.jsbundle")
+  .option("--dir <directory>", "Upload every *.map file below this directory; bundle names come from the file names")
+  .option("--api-key <key>", "Project API key (or set BUGWATCH_API_KEY env var)")
+  .option("--url <url>", "API base URL (or set BUGWATCH_URL env var)")
+  .action(sourcemapsUploadCommand);
 
 program.parse();

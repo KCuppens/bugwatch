@@ -121,6 +121,17 @@ export interface SanitizeOptions {
 }
 
 /**
+ * Minimal async key-value storage used to persist the offline queue on
+ * platforms without IndexedDB (e.g. React Native). Compatible with
+ * AsyncStorage and thin MMKV wrappers.
+ */
+export interface QueueStorage {
+  getItem(key: string): Promise<string | null>;
+  setItem(key: string, value: string): Promise<void>;
+  removeItem(key: string): Promise<void>;
+}
+
+/**
  * Offline event queue configuration
  */
 export interface OfflineOptions {
@@ -128,6 +139,11 @@ export interface OfflineOptions {
   enabled?: boolean;
   /** Maximum events to persist (default: 100, oldest evicted) */
   maxEvents?: number;
+  /**
+   * Custom storage adapter. When provided it replaces IndexedDB / in-memory
+   * storage and the queue is enabled by default.
+   */
+  storage?: QueueStorage;
 }
 
 /**

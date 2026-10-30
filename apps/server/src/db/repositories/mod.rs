@@ -14,6 +14,7 @@ pub mod projects;
 pub mod replay;
 pub mod server_metrics;
 pub mod sessions;
+pub mod source_maps;
 pub mod users;
 
 pub use agent_keys::{AgentAuditLogRepository, AgentKeyRepository};
@@ -32,4 +33,5 @@ pub use projects::ProjectRepository;
 pub use replay::ReplayRepository;
 pub use server_metrics::{ServerMetricsRepository, ServerRepository};
 pub use sessions::SessionRepository;
+pub use source_maps::SourceMapRepository;
 pub use users::UserRepository;

@@ -17,6 +17,7 @@ import {
   updateIssue,
   listMonitors,
   countIssues,
+  uploadSourceMap,
 } from "./api.js";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -260,5 +261,81 @@ describe("Error handling", () => {
     vi.stubGlobal("fetch", fetchSpy);
 
     await expect(listIssues("proj1")).rejects.toThrow(/Request failed \(500\)/);
+  });
+});
+
+describe("uploadSourceMap", () => {
+  const params = {
+    apiKey: "bw_live_projectkey",
+    release: "1.2.3",
+    dist: "42",
+    bundle: "index.android.bundle",
+    sourcemap: new TextEncoder().encode('{"version":3}'),
+  };
+
+  beforeEach(() => {
+    vi.mocked(fsPromises.readFile).mockRejectedValue(new Error("ENOENT"));
+    delete process.env.BUGWATCH_URL;
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("POSTs multipart form data to /api/v1/sourcemaps with the project key", async () => {
+    const meta = { id: "sm1", release: "1.2.3", dist: "42", bundle: "index.android.bundle", size: 13 };
+    const fetchSpy = mockFetchResponse({ data: meta });
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const result = await uploadSourceMap({ ...params, baseUrl: "https://bw.example.com" });
+
+    expect(result).toEqual(meta);
+    const [url, opts] = fetchSpy.mock.calls[0]!;
+    expect(url).toBe("https://bw.example.com/api/v1/sourcemaps");
+    expect(opts.method).toBe("POST");
+    expect(opts.headers["X-API-Key"]).toBe("bw_live_projectkey");
+    expect(opts.headers["Content-Type"]).toBeUndefined();
+    const form = opts.body as FormData;
+    expect(form.get("release")).toBe("1.2.3");
+    expect(form.get("dist")).toBe("42");
+    expect(form.get("bundle")).toBe("index.android.bundle");
+    const file = form.get("sourcemap") as File;
+    expect(await file.text()).toBe('{"version":3}');
+  });
+
+  it("omits dist when empty", async () => {
+    const fetchSpy = mockFetchResponse({ data: {} });
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await uploadSourceMap({ ...params, dist: "", baseUrl: "https://bw.example.com" });
+
+    const form = fetchSpy.mock.calls[0]![1].body as FormData;
+    expect(form.has("dist")).toBe(false);
+  });
+
+  it("surfaces the server error message and does not retry 4xx", async () => {
+    const fetchSpy = mockFetchResponse({ error: { code: "validation", message: "not a valid source map" } }, 422, "Unprocessable");
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await expect(uploadSourceMap({ ...params, baseUrl: "https://bw.example.com" })).rejects.toThrow(
+      "not a valid source map"
+    );
+    expect(fetchSpy).toHaveBeenCalledOnce();
+  });
+
+  it("retries 5xx responses", async () => {
+    const fail = { ok: false, status: 503, statusText: "Unavailable", text: () => Promise.resolve("") };
+    const ok = { ok: true, status: 200, statusText: "OK", json: () => Promise.resolve({ data: { id: "sm1" } }) };
+    const fetchSpy = vi.fn().mockResolvedValueOnce(fail).mockResolvedValueOnce(ok);
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const result = await uploadSourceMap({ ...params, baseUrl: "https://bw.example.com" });
+    expect(result).toEqual({ id: "sm1" });
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects non-http base URLs", async () => {
+    vi.stubGlobal("fetch", vi.fn());
+    await expect(uploadSourceMap({ ...params, baseUrl: "file:///etc/passwd" })).rejects.toThrow(/only http and https/);
   });
 });

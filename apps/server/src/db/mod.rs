@@ -196,6 +196,10 @@ pub(crate) async fn run_migrations(pool: &sqlx::PgPool) -> Result<()> {
             "036_project_organization_backfill",
             include_str!("../../migrations/036_project_organization_backfill_pg.sql"),
         ),
+        (
+            "037_source_maps",
+            include_str!("../../migrations/037_source_maps_pg.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {

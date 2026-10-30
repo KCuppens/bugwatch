@@ -30,6 +30,8 @@ const PLATFORM_ICON: Record<string, LucideIcon> = {
   rails: Boxes,
   php: Code2,
   laravel: Boxes,
+  "react-native": Boxes,
+  expo: Boxes,
   dotnet: Code2,
   csharp: Code2,
   browser: Globe,

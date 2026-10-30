@@ -107,6 +107,19 @@ pub struct StackFrame {
     pub pre_context: Option<Vec<String>>,
     pub post_context: Option<Vec<String>>,
     pub in_app: bool,
+    /// Original (bundled/minified) location, set by server-side source map
+    /// symbolication so the raw frame data is not lost.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minified: Option<MinifiedFrame>,
+}
+
+/// The pre-symbolication form of a stack frame.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct MinifiedFrame {
+    pub filename: String,
+    pub function: String,
+    pub lineno: u32,
+    pub colno: u32,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -370,6 +383,10 @@ pub async fn ingest(
             exc.value = unminified;
         }
     }
+
+    // 5b. Symbolicate JS / React Native frames with uploaded source maps. Must
+    //     run before fingerprinting so issues group on original source frames.
+    crate::processing::symbolicate::symbolicate_event(&state.db, &project.id, &mut event).await;
 
     // 6. Generate fingerprint and title
     let (fingerprint, title) = if let Some(ref exc) = event.exception {

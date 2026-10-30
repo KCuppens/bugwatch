@@ -1,4 +1,6 @@
-use axum::{routing::delete, routing::get, routing::patch, routing::post, Router};
+use axum::{
+    extract::DefaultBodyLimit, routing::delete, routing::get, routing::patch, routing::post, Router,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::{auth::AuthIdentity, AppError, AppResult, AppState};
@@ -43,6 +45,7 @@ pub mod monitors;
 pub mod performance;
 pub mod projects;
 pub mod replay;
+pub mod sourcemaps;
 #[cfg(feature = "saas")]
 pub mod webhooks;
 
@@ -74,6 +77,14 @@ pub fn router() -> Router<AppState> {
         .route("/metrics", post(metrics::ingest_metrics))
         // Log ingestion (SDK → server, API key auth)
         .route("/logs", post(logs::ingest))
+        // Source map upload / management (CLI -> server, API key auth)
+        .route(
+            "/sourcemaps",
+            post(sourcemaps::upload)
+                .layer(DefaultBodyLimit::max(sourcemaps::MAX_UPLOAD_BODY_BYTES))
+                .get(sourcemaps::list),
+        )
+        .route("/sourcemaps/:id", delete(sourcemaps::delete))
         // Log monitoring (dashboard, JWT auth, tier gated)
         .route("/projects/:project_id/logs", get(logs::list_logs))
         .route("/projects/:project_id/logs/stats", get(logs::get_stats))

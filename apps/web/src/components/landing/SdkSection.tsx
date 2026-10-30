@@ -6,6 +6,7 @@ const frameworks = [
   { name: "TypeScript", icon: "TS" },
   { name: "React", icon: "⚛️" },
   { name: "Next.js", icon: "▲" },
+  { name: "React Native", icon: "📱" },
   { name: "Node.js", icon: "⬢" },
   { name: "Python", icon: "🐍" },
   { name: "Rust", icon: "🦀" },

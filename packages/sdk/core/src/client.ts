@@ -70,7 +70,7 @@ class RingBuffer<T> {
 }
 
 const SDK_NAME = "@bugwatch/core";
-const SDK_VERSION = "0.4.1";
+const SDK_VERSION = "0.4.2";
 
 /**
  * Generate a unique event ID
@@ -557,6 +557,10 @@ export class Bugwatch implements BugwatchClient {
    * Detect the current platform
    */
   private detectPlatform(): string {
+    // React Native defines `window`, so it must be checked first.
+    if (typeof navigator !== "undefined" && navigator.product === "ReactNative") {
+      return "react-native";
+    }
     if (typeof window !== "undefined") {
       return "javascript";
     }

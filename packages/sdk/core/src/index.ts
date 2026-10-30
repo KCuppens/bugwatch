@@ -44,6 +44,7 @@ export { scrubEvent } from "./scrubbing";
 
 // Offline event queue
 export { createPersistentQueue, type PersistentQueue } from "./persistent-queue";
+export type { QueueStorage, OfflineOptions } from "./types";
 
 // Utilities
 export { parseStackTrace, extractErrorInfo, isBrowserExtensionError } from "./stacktrace";

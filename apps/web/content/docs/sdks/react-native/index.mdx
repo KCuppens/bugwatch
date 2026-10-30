@@ -1,0 +1,97 @@
+---
+title: React Native SDK
+description: Install and configure @bugwatch/react-native to capture JavaScript errors and native crashes in Expo and bare React Native apps, with source map symbolication.
+---
+
+# React Native SDK
+
+`@bugwatch/react-native` captures unhandled JavaScript errors, promise rejections, and native crashes (iOS and Android) from Expo and bare React Native apps.
+
+## Installation
+
+Expo:
+
+```bash
+npx expo install @bugwatch/react-native
+```
+
+Bare React Native:
+
+```bash
+npm install @bugwatch/react-native
+cd ios && pod install
+```
+
+<Callout type="info">
+JavaScript error capture works in Expo Go with no config plugin. Native crash capture needs the native module, so use a development build (`npx expo prebuild` or EAS Build with a dev client). Without the native module, native crash capture is skipped silently.
+</Callout>
+
+## Quick Start
+
+```tsx
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { init, BugwatchProvider } from "@bugwatch/react-native";
+
+init({
+  apiKey: "bw_live_xxxxx",
+  release: "my-app@1.0.0",
+  dist: "1",
+  storage: AsyncStorage,
+  enableNativeCrashes: true,
+});
+
+export default function App() {
+  return (
+    <BugwatchProvider>
+      <RootNavigator />
+    </BugwatchProvider>
+  );
+}
+```
+
+## Options
+
+| Option | Type | Description |
+|---|---|---|
+| `release` | string | Release identifier. Also the source map lookup key. |
+| `dist` | string | Build number or distribution. Sent as the `dist` tag and part of the source map lookup key. |
+| `storage` | `{ getItem, setItem, removeItem }` | Async storage adapter (AsyncStorage, MMKV wrapper) used to persist the offline event queue. Defaults to in-memory. |
+| `enableNativeCrashes` | boolean | Capture native crashes and report them on the next launch. Default `true`. |
+
+## Capturing Errors
+
+```tsx
+import { captureException, captureMessage, addBreadcrumb, setUser, setTag } from "@bugwatch/react-native";
+
+captureException(new Error("Something went wrong"));
+captureMessage("Checkout started", "info");
+addBreadcrumb({ category: "ui", message: "Tapped pay" });
+setUser({ id: "123" });
+setTag("plan", "pro");
+```
+
+Use `BugwatchErrorBoundary` to catch render errors in a component tree.
+
+## Navigation Breadcrumbs
+
+```tsx
+import { createNavigationIntegration } from "@bugwatch/react-native";
+
+const navigation = createNavigationIntegration();
+```
+
+Or call `useNavigationBreadcrumbs` from a component under your React Navigation container.
+
+## Source Maps
+
+Upload the source map for every release so stack traces resolve to original source. The lookup key is the release, `dist`, and bundle name (for example `index.android.bundle` or `main.jsbundle`).
+
+```bash
+npx bugwatch sourcemaps upload --release <release> --bundle index.android.bundle ./path.map
+```
+
+Events without a matching map keep their original frames.
+
+## Native Crashes
+
+Native crashes are written to disk by the crash handler and reported on the next app launch with raw native frames (no dSYM or ProGuard symbolication).

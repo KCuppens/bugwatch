@@ -29,6 +29,10 @@ const SECTIONS = [
     ],
   },
   {
+    title: "React Native SDK",
+    pages: ["sdks/react-native/index.mdx"],
+  },
+  {
     title: "Python SDK",
     pages: [
       "sdks/python/index.mdx",

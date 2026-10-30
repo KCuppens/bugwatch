@@ -16,6 +16,7 @@ const PLATFORM_INSTALL: Record<string, string> = {
   java: "# See docs for Maven/Gradle",
   ruby: "gem install bugwatch",
   php: "composer require bugwatch/bugwatch",
+  "react-native": "npm install @bugwatch/react-native",
 };
 
 export function OnboardingEmptyState({ project }: OnboardingEmptyStateProps) {

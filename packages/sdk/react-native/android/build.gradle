@@ -1,0 +1,69 @@
+// Library module for @bugwatch/react-native native crash capture.
+// Plugins (AGP / Kotlin) come from the host project's root build, as for any autolinked RN library.
+
+def safeExtGet(prop, fallback) {
+    rootProject.ext.has(prop) ? rootProject.ext.get(prop) : fallback
+}
+
+def supportsNamespace() {
+    def parsed = com.android.Version.ANDROID_GRADLE_PLUGIN_VERSION.tokenize('.')
+    def major = parsed[0].toInteger()
+    def minor = parsed[1].toInteger()
+    return (major == 7 && minor >= 3) || major >= 8
+}
+
+// Present when the host project uses Expo autolinking. Enables the Expo Modules API wrapper.
+def expoAvailable = findProject(":expo-modules-core") != null
+
+apply plugin: 'com.android.library'
+apply plugin: 'kotlin-android'
+
+android {
+    if (supportsNamespace()) {
+        namespace "io.bugwatch.reactnative"
+        sourceSets {
+            main {
+                manifest.srcFile "src/main/AndroidManifestNew.xml"
+            }
+        }
+    }
+
+    compileSdkVersion safeExtGet("compileSdkVersion", 34)
+
+    defaultConfig {
+        minSdkVersion safeExtGet("minSdkVersion", 23)
+        targetSdkVersion safeExtGet("targetSdkVersion", 34)
+    }
+
+    // Inline functions from expo-modules-core are built for JVM 17; plain RN libraries stay on 1.8.
+    def jvmVersion = expoAvailable ? JavaVersion.VERSION_17 : JavaVersion.VERSION_1_8
+    compileOptions {
+        sourceCompatibility jvmVersion
+        targetCompatibility jvmVersion
+    }
+    kotlinOptions {
+        jvmTarget = jvmVersion.toString()
+    }
+
+    if (expoAvailable) {
+        sourceSets {
+            main {
+                java.srcDirs += "src/expo/java"
+            }
+        }
+    }
+}
+
+repositories {
+    google()
+    mavenCentral()
+}
+
+dependencies {
+    // Resolved to the project's React Native by the RN Gradle plugin's dependency substitution.
+    implementation "com.facebook.react:react-native:+"
+
+    if (expoAvailable) {
+        implementation project(":expo-modules-core")
+    }
+}

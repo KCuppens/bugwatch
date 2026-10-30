@@ -541,7 +541,7 @@ export interface Project {
   logo_url: string | null;
 }
 
-export type Platform = "javascript" | "python" | "rust" | "go" | "java" | "ruby" | "php";
+export type Platform = "javascript" | "python" | "rust" | "go" | "java" | "ruby" | "php" | "react-native";
 
 export type JavaScriptFramework = "nextjs" | "react" | "node" | "express" | "fastify" | "core";
 export type PythonFramework = "django" | "flask" | "fastapi" | "celery";
@@ -550,6 +550,7 @@ export type GoFramework = "net_http" | "gin" | "echo";
 export type JavaFramework = "spring";
 export type RubyFramework = "rack" | "rails" | "sidekiq";
 export type PhpFramework = "laravel" | "symfony";
+export type ReactNativeFramework = "expo" | "bare";
 export type Framework =
   | JavaScriptFramework
   | PythonFramework
@@ -557,7 +558,8 @@ export type Framework =
   | GoFramework
   | JavaFramework
   | RubyFramework
-  | PhpFramework;
+  | PhpFramework
+  | ReactNativeFramework;
 
 export interface Issue {
   id: string;
