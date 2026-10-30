@@ -768,9 +768,10 @@ mod tests {
     async fn symbolicate_event_uses_release_dist_and_bundle_key() {
         use crate::db::repositories::ProjectRepository;
         let pool = crate::db::test_helpers::test_any_pool().await;
-        let project = ProjectRepository::create(&pool, "RN", "sym-event", "owner-sym", None, None, None)
-            .await
-            .unwrap();
+        let project =
+            ProjectRepository::create(&pool, "RN", "sym-event", "owner-sym", None, None, None)
+                .await
+                .unwrap();
 
         let raw = json!({
             "version": 3,
@@ -817,9 +818,10 @@ mod tests {
         }
 
         // Another project never sees this project's map.
-        let other = ProjectRepository::create(&pool, "RN2", "sym-event-2", "owner-sym", None, None, None)
-            .await
-            .unwrap();
+        let other =
+            ProjectRepository::create(&pool, "RN2", "sym-event-2", "owner-sym", None, None, None)
+                .await
+                .unwrap();
         let mut ev = event("react-native", Some("1.2.0"), Some("42"));
         symbolicate_event(&pool, &other.id, &mut ev).await;
         assert!(ev.exception.as_ref().unwrap().stacktrace[0]
