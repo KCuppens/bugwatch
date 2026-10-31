@@ -132,7 +132,7 @@ impl AlertingService {
         payload: &AlertPayload,
         rule_id: &str,
     ) -> Result<Option<String>> {
-        use rand::Rng;
+        use rand::RngExt;
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
         let mut last_err = anyhow::anyhow!("no attempts made");
         for attempt in 0u32..3 {
@@ -146,7 +146,7 @@ impl AlertingService {
             }
             if attempt > 0 {
                 let base_ms = 500u64 * (1 << (attempt - 1));
-                let jitter_ms = rand::thread_rng().gen_range(0u64..=100);
+                let jitter_ms = rand::rng().random_range(0u64..=100);
                 tokio::time::sleep(std::time::Duration::from_millis(base_ms + jitter_ms)).await;
             }
             match tokio::time::timeout(

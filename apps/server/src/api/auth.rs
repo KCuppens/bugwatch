@@ -902,11 +902,13 @@ pub async fn reset_password(
 // ---- helpers ----------------------------------------------------------------
 
 /// Generate a cryptographically secure 32-byte random token encoded as a 64-char hex string.
-/// Uses the OS CSPRNG (via rand::rngs::OsRng backed by getrandom) — NOT a seeded PRNG.
+/// Uses the OS CSPRNG (via rand::rngs::SysRng backed by getrandom) — NOT a seeded PRNG.
 fn generate_reset_token() -> String {
-    use rand::RngCore;
+    use rand::TryRng;
     let mut bytes = [0u8; 32];
-    rand::rngs::OsRng.fill_bytes(&mut bytes);
+    rand::rngs::SysRng
+        .try_fill_bytes(&mut bytes)
+        .expect("OS CSPRNG unavailable");
     hex::encode(bytes)
 }
 
