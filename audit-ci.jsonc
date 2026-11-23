@@ -3,10 +3,6 @@
   // Fail on any high or critical advisory except the ones allowlisted below.
   "high": true,
   "allowlist": [
-    // braces: no patched release exists. Reached only through build and lint
-    // tooling (tailwindcss 3, eslint-config-next, lint-staged) that expands
-    // glob patterns written in this repo, never user input.
-    "GHSA-vfj7-8cjw-p6xm",
     // image-size: fumadocs-core 14 requires ^1.2.0 and 1.x has no fix (2.0.3
     // has it, through the fumadocs 15 major). It only reads the repo's own
     // docs images at build time.
