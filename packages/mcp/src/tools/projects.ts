@@ -24,6 +24,17 @@ export const projectToolDefinitions = [
       required: ["name"],
     },
   },
+  {
+    name: "list_projects",
+    description:
+      "List Bugwatch projects (id, name, platform; never the ingest key). Use the id with search_issues, get_issue and the other project tools.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        page: { type: "number", description: "Page number (100 projects per page, default 1)" },
+      },
+    },
+  },
 ];
 
 export async function handleProjectTool(
@@ -56,6 +67,15 @@ export async function handleProjectTool(
         };
       }
 
+      case "list_projects": {
+        const page = typeof args.page === "number" ? args.page : undefined;
+        const res = await client.listProjects(page, 100);
+        const projects = res.data.map((p) => ({ id: p.id, name: p.name, platform: p.platform }));
+        return {
+          content: [{ type: "text", text: JSON.stringify({ projects, pagination: res.pagination }, null, 2) }],
+        };
+      }
+
       default:
         return {
           content: [{ type: "text", text: `Unknown tool: ${toolName}` }],
@@ -80,7 +100,7 @@ export async function handleProjectTool(
     }
     const message = error instanceof Error ? error.message : String(error);
     return {
-      content: [{ type: "text", text: `Error creating project: ${message}` }],
+      content: [{ type: "text", text: `Error ${toolName === "list_projects" ? "listing projects" : "creating project"}: ${message}` }],
       isError: true,
     };
   }

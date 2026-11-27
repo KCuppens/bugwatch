@@ -85,7 +85,13 @@ export interface EventDetail {
 
 export interface IssueDetail extends Issue {
   latest_event?: EventDetail;
-  tags?: Record<string, string[]>;
+  /** The server returns the latest event's context flat on the issue (GET /issues/:id). */
+  exception?: { type: string; value: string; stacktrace: StackFrame[] } | null;
+  recent_events?: { id: string; timestamp: string; user_id?: string | null; release?: string | null }[];
+  request?: EventDetail["request"] | null;
+  user?: EventDetail["user"] | null;
+  extra?: Record<string, unknown> | null;
+  tags?: Record<string, string>;
 }
 
 export interface Monitor {

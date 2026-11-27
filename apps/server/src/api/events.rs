@@ -247,6 +247,18 @@ pub async fn ingest(
         }
     }
 
+    // Browsers cannot report their own version reliably; fill `browser` and `os` from the ingest
+    // request's User-Agent when the SDK did not send them. Non-browser clients are skipped.
+    if let Some(ua) = headers.get("user-agent").and_then(|v| v.to_str().ok()) {
+        let (browser, os) = browser_and_os(ua);
+        let tags = event.tags.get_or_insert_with(Default::default);
+        for (key, value) in [("browser", browser), ("os", os)] {
+            if let Some(value) = value {
+                tags.entry(key.to_string()).or_insert(value);
+            }
+        }
+    }
+
     // Validate exception and event field bounds to prevent storage exhaustion.
     if let Some(ref exc) = event.exception {
         if exc.stacktrace.len() > 200 {
@@ -615,6 +627,44 @@ pub fn extract_api_key(headers: &HeaderMap) -> AppResult<String> {
         return Err(AppError::Unauthorized("API key too long".to_string()));
     }
     Ok(key)
+}
+
+/// Browser ("Chrome 126") and OS ("Windows") from a browser User-Agent; `None` for anything else.
+/// Order matters: Edge and Opera also say Chrome, and Chrome also says Safari.
+fn browser_and_os(ua: &str) -> (Option<String>, Option<String>) {
+    if !ua.starts_with("Mozilla/") {
+        return (None, None);
+    }
+    let major = |marker: &str| -> Option<String> {
+        let rest = &ua[ua.find(marker)? + marker.len()..];
+        let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+        (!digits.is_empty()).then_some(digits)
+    };
+    let browser = [
+        ("Edg/", "Edge"),
+        ("OPR/", "Opera"),
+        ("Firefox/", "Firefox"),
+        ("FxiOS/", "Firefox"),
+        ("CriOS/", "Chrome"),
+        ("Chrome/", "Chrome"),
+        ("Version/", "Safari"),
+    ]
+    .iter()
+    .find_map(|(marker, name)| major(marker).map(|v| format!("{name} {v}")));
+    let os = if ua.contains("Windows") {
+        Some("Windows")
+    } else if ua.contains("Android") {
+        Some("Android")
+    } else if ua.contains("iPhone") || ua.contains("iPad") {
+        Some("iOS")
+    } else if ua.contains("Mac OS X") {
+        Some("macOS")
+    } else if ua.contains("Linux") || ua.contains("X11") {
+        Some("Linux")
+    } else {
+        None
+    };
+    (browser, os.map(str::to_string))
 }
 
 /// SHA-256 fingerprint (16 hex chars) for non-exception events.
@@ -1151,5 +1201,18 @@ mod tests {
             app.oneshot(req).await.unwrap().status(),
             StatusCode::ACCEPTED
         );
+    }
+
+    #[test]
+    fn browser_and_os_read_the_major_version_and_skip_non_browsers() {
+        let chrome = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
+        assert_eq!(browser_and_os(chrome), (Some("Chrome 126".into()), Some("Windows".into())));
+        let edge = format!("{chrome} Edg/125.0.2535.67");
+        assert_eq!(browser_and_os(&edge).0.as_deref(), Some("Edge 125"));
+        let safari = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1";
+        assert_eq!(browser_and_os(safari), (Some("Safari 17".into()), Some("iOS".into())));
+        let firefox = "Mozilla/5.0 (X11; Linux x86_64; rv:127.0) Gecko/20100101 Firefox/127.0";
+        assert_eq!(browser_and_os(firefox), (Some("Firefox 127".into()), Some("Linux".into())));
+        assert_eq!(browser_and_os("reqwest/0.12"), (None, None));
     }
 }

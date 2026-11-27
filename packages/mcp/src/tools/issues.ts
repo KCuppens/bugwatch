@@ -150,6 +150,32 @@ function formatEventDiagnostic(event: EventDetail): string {
   return sections.join("\n\n");
 }
 
+/**
+ * GET /issues/:id returns the latest event's exception, tags, request and user
+ * flat on the issue rather than as `latest_event`. Fold them into an event.
+ */
+function latestEventOf(detail: IssueDetail): EventDetail | undefined {
+  if (detail.latest_event) return detail.latest_event;
+  if (!detail.exception) return undefined;
+  const recent = detail.recent_events?.[0];
+  return {
+    id: recent?.id ?? detail.id,
+    issue_id: detail.id,
+    project_id: detail.project_id,
+    title: detail.title,
+    level: detail.level,
+    message: detail.exception.value,
+    timestamp: recent?.timestamp ?? detail.last_seen,
+    environment: detail.environment,
+    release: recent?.release ?? undefined,
+    stacktrace: { frames: detail.exception.stacktrace ?? [] },
+    request: detail.request ?? undefined,
+    tags: detail.tags,
+    extra: detail.extra ?? undefined,
+    user: detail.user ?? undefined,
+  };
+}
+
 /** Compose the full issue diagnostic: issue summary + latest event detail. */
 function formatIssueDiagnostic(detail: IssueDetail): string {
   const summary = [
@@ -158,11 +184,12 @@ function formatIssueDiagnostic(detail: IssueDetail): string {
     `first_seen=${detail.first_seen} last_seen=${detail.last_seen}`,
   ].join("\n");
 
-  if (!detail.latest_event) {
+  const event = latestEventOf(detail);
+  if (!event) {
     return `${summary}\n\n(No event payload available for this issue.)`;
   }
 
-  return `${summary}\n\n${formatEventDiagnostic(detail.latest_event)}`;
+  return `${summary}\n\n${formatEventDiagnostic(event)}`;
 }
 
 export const issueToolDefinitions = [

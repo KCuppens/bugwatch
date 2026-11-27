@@ -130,6 +130,41 @@ describe("issue tools", () => {
       expect(res.isError).toBeFalsy();
       expect(res.content[0]!.text).toContain("No event payload");
     });
+
+    it("renders the flat exception/tags/user the server returns instead of latest_event", async () => {
+      const mockFetch = mockFetchResponse({
+        data: {
+          id: "issue-3",
+          project_id: "proj-1",
+          title: "Error: boom",
+          level: "error",
+          status: "unresolved",
+          first_seen: "2026-09-10T00:00:00Z",
+          last_seen: "2026-09-17T10:00:00Z",
+          count: 1,
+          user_count: 1,
+          environment: "production",
+          exception: {
+            type: "Error",
+            value: "boom",
+            stacktrace: [{ filename: "src/a.ts", function: "f", lineno: 3, colno: 4, in_app: true }],
+          },
+          recent_events: [{ id: "ev-1", timestamp: "2026-09-17T10:00:00Z", user_id: "u-1", release: "1.0.0" }],
+          tags: { surface: "web" },
+          request: null,
+          user: { id: "u-1" },
+          extra: null,
+        },
+      });
+      vi.stubGlobal("fetch", mockFetch);
+
+      const res = await handleIssueTool("get_issue", { projectId: "proj-1", issueId: "issue-3" }, client);
+      const text = res.content[0]!.text;
+      expect(text).toContain("src/a.ts:3:4");
+      expect(text).toContain("release: 1.0.0");
+      expect(text).toContain("surface=web");
+      expect(text).toContain("id=u-1");
+    });
   });
 
   describe("get_event", () => {
