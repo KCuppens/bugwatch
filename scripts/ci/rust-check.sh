@@ -36,6 +36,9 @@ ci_step "cargo audit"
 # RUSTSEC-2026-0387 (crypto-bigint 0.5.5, fixed in >=0.7.6): saas-only aws-config / aws-sdk-sesv2 ->
 # aws-runtime -> aws-sigv4, whose latest release (1.6.3) still requires crypto-bigint ^0.5.4 for
 # SigV4a. The default build has no crypto-bigint.
+# RUSTSEC-2026-0459 (libsqlite3-sys 0.30.1, fixed in >=0.39.0): pulled in by sqlx 0.8's sqlite driver,
+# which pins libsqlite3-sys ^0.30, so no compatible fix exists. Production refuses SQLite
+# (config.rs panics on a sqlite: DATABASE_URL), so only dev and the test pool run it.
 cargo audit \
   --ignore RUSTSEC-2023-0071 \
   --ignore RUSTSEC-2026-0098 \
@@ -48,4 +51,5 @@ cargo audit \
   --ignore RUSTSEC-2026-0346 \
   --ignore RUSTSEC-2026-0349 \
   --ignore RUSTSEC-2026-0382 \
-  --ignore RUSTSEC-2026-0387
+  --ignore RUSTSEC-2026-0387 \
+  --ignore RUSTSEC-2026-0459
